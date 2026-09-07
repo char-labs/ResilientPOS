@@ -2,6 +2,48 @@
 
 ResilientPOS는 네트워크 단절과 부분 실패 속에서도 주문·결제 상태가 중복 없이 수렴하는 Offline-First POS 플랫폼입니다.
 
+## 기술 스택
+
+현재 빌드에 선언된 기술입니다. 버전은 [빌드 설정](build.gradle.kts)과 [Gradle Wrapper](gradle/wrapper/gradle-wrapper.properties)를 기준으로 합니다.
+
+| 영역 | 기술 |
+|---|---|
+| 언어 / JVM | Kotlin 2.4.10 / Java 25 toolchain |
+| 프레임워크 | Spring Boot 4.1.1 |
+| 웹 / 데이터 접근 | Spring MVC, Spring Data JPA, Jackson Kotlin |
+| 데이터베이스 드라이버 | PostgreSQL, H2 |
+| 운영 상태 확인 | Spring Boot Actuator |
+| 테스트 | Kotlin Test, JUnit 5, Spring Boot Test |
+| 빌드 | Gradle Wrapper 9.7.1, Kotlin DSL |
+| 개발 하네스 | Python 3 표준 라이브러리 기반 로컬 PR 검사 |
+
+현재는 단일 Gradle 프로젝트의 애플리케이션 초기 구조입니다. PostgreSQL 연결 구성과 도메인 구현은 아직 완료되지 않았습니다.
+Spring Modulith, Kotlin JDSL, Redis, Kafka, OpenTelemetry는 설계상 도입 방향이며 현재 의존성에는 없습니다. [구현 현황](docs/wiki/current-state.md)에서 계획과 실제 상태를 구분합니다.
+
+## 개발 방법론
+
+### SDD — Spec-Driven Development
+
+ResilientPOS는 **PR 단위로 명세를 먼저 작성하고 구현·검증하는 SDD**를 적용합니다.
+개발 의도와 완료 기준을 명세에 남기고, 구현 중 결정이 바뀌면 명세와 프로젝트 지식을 함께 갱신합니다.
+
+1. **명세**: 개발 전에 `docs/spec/yyyy-mm-dd-slug.md`에 목적, 범위, 제외 항목, 인수 조건과 검증 방법을 작성하고 독립 커밋으로 기록합니다.
+2. **구현**: 한 PR은 하나의 목표로 제한합니다. 범위가 커지면 후속 PR과 새 spec으로 분리합니다.
+3. **검증**: 인수 조건에 따라 관련 테스트와 로컬 PR 검사를 실행하고 결과를 spec에 기록합니다.
+4. **지식 갱신**: 요구사항·설계 변경은 `docs/wiki` 본문에 반영하고, 변경 기록에서 해당 spec으로 연결합니다.
+
+별도 plan 문서 대신 spec에 범위 조정과 개발 이력을 남깁니다. 상세 절차와 PR 분할 기준은 [개발 규칙](docs/wiki/development-workflow.md), 작성 형식은 [spec 템플릿](docs/spec-template.md)에서 관리합니다.
+
+### 설계와 검증 방식
+
+- **도메인 중심 설계**: 업무 경계와 데이터 소유권을 기준으로 모듈을 나누고, Aggregate / Value Object에 불변식을 둡니다.
+- **모듈형 모놀리스**: 단일 배포 구조에서 모듈 경계를 먼저 검증하고, 독립 배포 필요성이 확인될 때 분리합니다.
+- **CQRS**: 쓰기 명령과 읽기 조회의 계약을 분리하는 설계 방향을 따릅니다.
+- **실패 시나리오 기반 검증**: 정상 흐름과 함께 중복 요청, 응답 유실, 오프라인 복구, 재처리 등 해당 변경에 관련된 실패 조건을 확인합니다.
+- **LLM 공통 문서화**: Claude·Codex·Gemini가 같은 spec과 wiki를 참조하며, 상세 문서는 작업에 필요한 범위에서 읽습니다.
+
+아래 원칙은 도메인 구현 시 적용할 설계 기준입니다. 초기 코드에 모두 구현되었다는 의미는 아닙니다.
+
 ## Engineering Principles
 
 - **정합성/복구 가능성/관측 가능성 우선**: 기능보다 데이터 정합성과 장애 복구, 운영 가시성을 우선합니다.
@@ -35,14 +77,9 @@ ResilientPOS는 네트워크 단절과 부분 실패 속에서도 주문·결제
   - 정상 흐름 + 실패 시나리오 검증 포함
   - duplicate, timeout, offline sync gap, event replay, Redis/Kafka 장애 테스트 포함
 
-## New Work Item Template
+## 문서
 
-새 작업 생성 시 아래 항목을 반드시 채웁니다.
-
-1. 문제 정의 (Problem)
-2. Owning module (`order`/`payment`/`sync`/`reconciliation`/`fulfillment`)
-3. Command / Query / Event 설계
-4. 데이터 정합성 규칙 (idempotency, source of truth, 불변식)
-5. 실패·재시도·복구 방식 (timeout, replay, reconciliation 경로 포함)
-6. 관측 지표 (trace/log/metric/alert/runbook)
-7. 테스트/완료 기준 (정상 + duplicate/timeout/offline sync gap/event replay/Redis-Kafka 장애)
+- [공통 wiki](docs/wiki/README.md): 현재 지식과 주제별 문서
+- [개발 규칙](docs/wiki/development-workflow.md): SDD 절차, PR 범위와 로컬 검증
+- [Spec 이력](docs/spec): PR별 명세와 검증 기록
+- [요구사항 원문](docs/references/README.md): 제공된 기획·설계 자료
