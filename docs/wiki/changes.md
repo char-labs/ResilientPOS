@@ -15,3 +15,8 @@
 - Spec: [tdd-agent](../spec/2026-09-07-tdd-agent.md)
 - 요구사항 영향: 비즈니스·도메인·Controller 개발에 단위/통합 TDD를 적용하고 Repository 자체 테스트는 제외한다. REST Docs와 Fixture Monkey를 채택하며 의존성 설치는 최초 기능 PR에서 수행한다.
 - 갱신: [테스트 전략](testing-strategy.md), [개발 규칙](development-workflow.md), [현재 상태](current-state.md), spec 템플릿과 README.
+
+## 2026-09-07 — fleta 워크플로우 차용
+- Spec: [fleta-workflow-adoption](../spec/2026-09-07-fleta-workflow-adoption.md)
+- 요구사항 영향: workflow 점검, commit/push 범위 분리, 읽기 전용 지침 리뷰를 추가했다. 기존 SDD/TDD와 작은 PR 원칙은 유지한다.
+- 갱신: [차용 내역](borrowed-workflows.md), [리뷰 기준](workflow-review.md), [개발 규칙](development-workflow.md), 공통 지침과 도구별 진입점.

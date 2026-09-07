@@ -41,4 +41,9 @@ fleta CLI/전체 플러그인 설치, 전역 설정/hook 변경, GitHub workflow
 기준 chore/tdd-agent의 7007f54 위에 별도 브랜치로 분리한다. 두 스킬·리뷰어 한 역할로 한정하며 18개 파일/450줄 이내를 예상한다. 자율 orchestration, 충돌 해결, 이슈/PR 리뷰 자동화는 필요 시 후속 PR로 다룬다.
 
 ## 결과
-개발 전 작성. 문서·설정 변경이므로 업무 TDD는 적용하지 않는다. 검증 결과는 구현 후 기록한다.
+- spec 독립 첫 커밋 1d4b12b, 기준 7007f54. 문서·설정 변경이므로 업무 TDD는 적용하지 않았다.
+- 공통 스킬 두 개와 Claude 진입점 두 개의 quick_validate, Claude agent validator, Codex read-only TOML 필수 필드/문법 검사 통과.
+- 저장소 상대 링크, 공통 스킬 참조, Obsidian 원문 해시 8개 일치 확인.
+- 독립 리뷰에서 commit-only/staged 범위, clean tree의 미전송 커밋, stacked PR base/upstream 구분, spec-only 첫 커밋 시나리오를 확인했다.
+- spec 선작성 조건을 “PR 기준 이후 기존 커밋 없음”으로 보완하고 읽기 전용 리뷰어에 diff를 전달하도록 수정한 뒤 공통 스킬 검사를 재실행했다.
+- 로컬 PR 검사와 git diff --check 통과. 실제 remote push/PR 생성과 새 세션의 네이티브 자동 탐색은 실행하지 않았다.

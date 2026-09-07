@@ -48,3 +48,7 @@ LLM이 파일을 편집한 실제 시각이나 요구사항 해석의 정확성�
 명시 실행 방식이며, GitHub Actions workflow나 브랜치 보호 설정은 사용하지 않는다.
 검사를 실행하지 않은 커밋이나 병합을 자동 차단하지는 않는다.
 하네스 자체 변경은 검사 우회가 없는지 별도로 리뷰한다.
+
+## 지침 점검과 변경 전달
+지침/컨벤션 개선에는 [workflow 스킬](../../.agents/skills/resilientpos-workflow/SKILL.md)을 사용한다.
+커밋/push 요청에는 [commit-push 스킬](../../.agents/skills/resilientpos-commit-push/SKILL.md)을 사용하며, commit-only 요청을 원격 전송으로 확대하지 않는다.
