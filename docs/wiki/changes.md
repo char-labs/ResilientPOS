@@ -20,3 +20,5 @@
 - Spec: [fleta-workflow-adoption](../spec/2026-09-07-fleta-workflow-adoption.md)
 - 요구사항 영향: workflow 점검, commit/push 범위 분리, 읽기 전용 지침 리뷰를 추가했다. 기존 SDD/TDD와 작은 PR 원칙은 유지한다.
 - 갱신: [차용 내역](borrowed-workflows.md), [리뷰 기준](workflow-review.md), [개발 규칙](development-workflow.md), 공통 지침과 도구별 진입점.
+- 요구사항 영향: 다른 PC에서의 개발을 위해 차용 문서의 개인 절대 경로를 제거했다. 출처 식별자는 패키지 내부 경로와 해시로 유지하며 실행 참조는 저장소 내부로 한정한다.
+- 요구사항 영향: commit-push가 변경 의도별로 spec·wiki·개발 도구를 분리하고, 도메인 개발은 요구사항별 구현과 테스트를 묶도록 보완했다.

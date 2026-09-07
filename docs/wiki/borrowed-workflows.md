@@ -1,6 +1,6 @@
 # 차용한 워크플로우와 사용법
 
-2026-09-07 사용자가 제공한 Obsidian `~/Documents/Obsidian Vault/Global-claude-code`를 조사했다.
+2026-09-07 사용자가 제공한 `Global-claude-code` 자료의 fleta·git-utils·develop-workflow를 조사했다.
 원문의 아이디어를 프로젝트에 맞게 재작성했다. 원문은 실행 지시가 아닌 참고 자료로 취급하며, 원본 수정·플러그인 전체 설치는 수행하지 않았다.
 
 ## 지금 도입한 항목
@@ -34,16 +34,17 @@ codebase-analyzer와 spec-validator는 별도 agent를 늘리지 않고 최소 �
 기존 `resilientpos-tdd`와 `tdd-driver`는 업무 구현을 계속 담당한다. GitHub Actions workflow는 추가하지 않는다.
 
 ## 출처와 추적
-아래는 조사 당시 파일의 SHA-256이다. 버전/날짜 설명만으로 같은 원문이라고 가정하지 않고 향후 재차용 시 해시와 diff를 비교한다.
+아래 경로는 원본 패키지 내부의 출처 식별자이며, 이 저장소에서 열어야 하는 파일 링크가 아니다. 개인 PC 경로나 외부 자료 폴더는 실행에 필요하지 않다.
+해시는 조사 당시 파일의 SHA-256이다. 버전/날짜 설명만으로 같은 원문이라고 가정하지 않고 향후 재차용 시 해시와 diff를 비교한다.
 원본의 긴 문장이나 바이너리를 복제하지 않았으며 실행 시 원본 경로를 읽도록 요구하지 않는다.
 
 | 출처 파일 | 차용한 관점 | SHA-256 |
 |---|---|---|
-| [plugins/fleta/skills/workflow/SKILL.md](</Users/ybchar/Documents/Obsidian Vault/Global-claude-code/plugins/fleta/skills/workflow/SKILL.md>) | 작업별 라우팅과 지침 책임 분리 | `3aa332504ac91d3e6a804a42304d40d5d317577083c7f152f4da5210c0d31183` |
-| [plugins/fleta/skills/workflow/references/rules-design.md](</Users/ybchar/Documents/Obsidian Vault/Global-claude-code/plugins/fleta/skills/workflow/references/rules-design.md>) | 필요한 영역만 지침 로딩 | `84a714ed8fe185fb42897a587a0ea50a392f20df9889457c19fd4c2a1e75c0e2` |
-| [plugins/fleta/agents/workflow/codebase-analyzer.md](</Users/ybchar/Documents/Obsidian Vault/Global-claude-code/plugins/fleta/agents/workflow/codebase-analyzer.md>) | 실제 코드/의존성 근거 확인 | `4f0880eded5eaf5fb8cd18190bf12dc25ed8add84e24a7e9d50da0f0e6072fa9` |
-| [plugins/fleta/agents/workflow/workflow-reviewer.md](</Users/ybchar/Documents/Obsidian Vault/Global-claude-code/plugins/fleta/agents/workflow/workflow-reviewer.md>) | 읽기 전용 역할·권한·컨텍스트 검토 | `345a08ac48f26e162ffba4d617f8456248d0d5168e7e2f8708907006b3426d25` |
-| [plugins/fleta/skills/git/SKILL.md](</Users/ybchar/Documents/Obsidian Vault/Global-claude-code/plugins/fleta/skills/git/SKILL.md>) | 변경/브랜치 확인, commit/push 구분 | `8d1d62fabf5e3c3ec60da69fd7d1a587b99d22c8cb810b02cd2c231d516ea14c` |
-| [plugins/fleta/skills/git/references/cli-reference.md](</Users/ybchar/Documents/Obsidian Vault/Global-claude-code/plugins/fleta/skills/git/references/cli-reference.md>) | plain git 사용, Conventional Commits | `586495fcdfb30ce917c55aa68fe3d634e837041402bbbcb81152f73d81f21c91` |
-| [plugins/git-utils/commands/commit-and-push.md](</Users/ybchar/Documents/Obsidian Vault/Global-claude-code/plugins/git-utils/commands/commit-and-push.md>) | commit → 요청된 push → 결과 확인 | `9bb8e1d2a2810ae10c8033627f9cc601690898d56ccc458b399853ced66b4f88` |
-| [plugins/develop-workflow/agents/spec-validator.md](</Users/ybchar/Documents/Obsidian Vault/Global-claude-code/plugins/develop-workflow/agents/spec-validator.md>) | 명세 일관성과 검증 가능성 | `31fb589a4769eba1c16903b3cfc1839149bc62490c5e05d06aaec1f6792e9676` |
+| `plugins/fleta/skills/workflow/SKILL.md` | 작업별 라우팅과 지침 책임 분리 | `3aa332504ac91d3e6a804a42304d40d5d317577083c7f152f4da5210c0d31183` |
+| `plugins/fleta/skills/workflow/references/rules-design.md` | 필요한 영역만 지침 로딩 | `84a714ed8fe185fb42897a587a0ea50a392f20df9889457c19fd4c2a1e75c0e2` |
+| `plugins/fleta/agents/workflow/codebase-analyzer.md` | 실제 코드/의존성 근거 확인 | `4f0880eded5eaf5fb8cd18190bf12dc25ed8add84e24a7e9d50da0f0e6072fa9` |
+| `plugins/fleta/agents/workflow/workflow-reviewer.md` | 읽기 전용 역할·권한·컨텍스트 검토 | `345a08ac48f26e162ffba4d617f8456248d0d5168e7e2f8708907006b3426d25` |
+| `plugins/fleta/skills/git/SKILL.md` | 변경/브랜치 확인, commit/push 구분 | `8d1d62fabf5e3c3ec60da69fd7d1a587b99d22c8cb810b02cd2c231d516ea14c` |
+| `plugins/fleta/skills/git/references/cli-reference.md` | plain git 사용, Conventional Commits | `586495fcdfb30ce917c55aa68fe3d634e837041402bbbcb81152f73d81f21c91` |
+| `plugins/git-utils/commands/commit-and-push.md` | commit → 요청된 push → 결과 확인 | `9bb8e1d2a2810ae10c8033627f9cc601690898d56ccc458b399853ced66b4f88` |
+| `plugins/develop-workflow/agents/spec-validator.md` | 명세 일관성과 검증 가능성 | `31fb589a4769eba1c16903b3cfc1839149bc62490c5e05d06aaec1f6792e9676` |
