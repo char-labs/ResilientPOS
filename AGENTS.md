@@ -18,4 +18,5 @@
 - 비즈니스·도메인·Controller 개발: [TDD 스킬](.agents/skills/resilientpos-tdd/SKILL.md)을 사용하고 지원 환경에서는 `tdd-driver`에 한 동작의 구현/테스트를 맡긴다. Repository 자체 테스트는 제외한다.
 - 애플리케이션/빌드 변경 검증: `./gradlew test`로 검증한다. 특정 테스트는 `./gradlew test --tests 'com.resilientpos.테스트클래스'`로 좁혀 실행할 수 있다.
 - 하네스 코드 변경: `python3 -m unittest discover -s scripts -p 'test_*.py'`를 실행한다. Python 3 표준 라이브러리만 사용한다.
+- 지침/컨벤션 점검은 [workflow 스킬](.agents/skills/resilientpos-workflow/SKILL.md), 커밋/push 요청은 [commit-push 스킬](.agents/skills/resilientpos-commit-push/SKILL.md)을 사용한다.
 - 개발 중/PR 제출 전: `python3 scripts/check_pr.py --base <PR-기준커밋> --worktree`를 실행한다. 문서만 바뀌면 링크·내용과 이 검사를 확인한다.
