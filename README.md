@@ -34,6 +34,12 @@ ResilientPOS는 **PR 단위로 명세를 먼저 작성하고 구현·검증하�
 
 별도 plan 문서 대신 spec에 범위 조정과 개발 이력을 남깁니다. 상세 절차와 PR 분할 기준은 [개발 규칙](docs/wiki/development-workflow.md), 작성 형식은 [spec 템플릿](docs/spec-template.md)에서 관리합니다.
 
+### TDD — Test-Driven Development
+
+SDD의 인수 조건을 **실패하는 테스트 → 최소 구현 → 리팩터링**으로 구체화합니다. 비즈니스·도메인은 단위 테스트를 기본으로 하고, 트랜잭션·이벤트 연결은 필요한 통합 테스트로 검증합니다. Repository 자체 테스트는 대상에서 제외합니다.
+Controller는 MockMvc와 Spring REST Docs로 HTTP 계약을 검증하며, fixture 객체는 Fixture Monkey로 생성하고 경계값과 문서 예시는 고정합니다. 두 라이브러리의 실제 의존성 설치는 최초 기능 적용 PR에서 진행합니다.
+저장소의 `resilientpos-tdd` 스킬과 `tdd-driver` 에이전트가 이 과정을 주도하고 결과를 spec에 남깁니다. [테스트 전략](docs/wiki/testing-strategy.md)
+
 ### 설계와 검증 방식
 
 - **도메인 중심 설계**: 업무 경계와 데이터 소유권을 기준으로 모듈을 나누고, Aggregate / Value Object에 불변식을 둡니다.
