@@ -8,6 +8,8 @@
 - 개발 시작/PR 제출: [개발 규칙](development-workflow.md)과 해당 PR의 `docs/spec/yyyy-mm-dd-slug.md`.
 - 애플리케이션/빌드 수정: [현재 상태](current-state.md). 필요한 도메인 원문만 [원문 목록](../references/README.md)에서 찾는다.
 - 이전 결정 추적: [변경 기록](changes.md)에서 관련 spec을 찾아 읽는다.
+- 비즈니스·도메인·Controller 개발: [TDD 테스트 전략](testing-strategy.md)과 [공통 스킬](../../.agents/skills/resilientpos-tdd/SKILL.md).
+- 워크플로우 점검·커밋/push: [차용한 스킬과 사용법](borrowed-workflows.md).
 - LLM 지침 수정: [공식 문서 조사와 적용 근거](agent-instructions.md).
 
 ## 문서 역할
