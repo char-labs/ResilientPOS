@@ -22,3 +22,7 @@
 - 제공된 요구사항 문서 7개는 [원문 목록](../references/README.md)에 보관했다. 요구사항 재정리와 원문 간 정합성 검토는 아직 수행하지 않았다.
 - 애플리케이션 작업에는 [기존 설계 원칙](../../README.md#engineering-principles)을 참고하되 도입 완료 여부는 코드로 확인한다.
 - 개발 기준은 [개발 규칙](development-workflow.md)이다. 공통 LLM 지침과 로컬 검사로 운영한다.
+
+## 테스트 개발 방식
+비즈니스·도메인·Controller는 [TDD 전략](testing-strategy.md)을 따른다. Repository 자체 테스트는 대상에서 제외한다.
+TDD 스킬과 Claude/Codex 에이전트를 저장소에 구성했다. Fixture Monkey와 REST Docs는 채택한 테스트 도구이며 아직 빌드 의존성에는 추가하지 않았다.
