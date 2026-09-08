@@ -20,6 +20,40 @@ ResilientPOS는 네트워크 단절과 부분 실패 속에서도 주문·결제
 현재는 단일 Gradle 프로젝트의 애플리케이션 초기 구조입니다. PostgreSQL 연결 구성과 도메인 구현은 아직 완료되지 않았습니다.
 Spring Modulith, Kotlin JDSL, Redis, Kafka, OpenTelemetry는 설계상 도입 방향이며 현재 의존성에는 없습니다. [구현 현황](docs/wiki/current-state.md)에서 계획과 실제 상태를 구분합니다.
 
+## 시작하기
+
+클론 직후 한 번 실행합니다. 스킬·에이전트 정본은 Obsidian 볼트에 있고, 저장소에는 링크만 만듭니다.
+
+```sh
+make bootstrap
+```
+
+볼트가 없으면 안내만 출력하고 정상 종료하므로 CI와 볼트 없는 머신에서도 안전합니다.
+볼트 경로가 다르면 `RESILIENTPOS_VAULT` 환경 변수로 재정의합니다.
+
+## 명령어
+
+모든 작업은 `make` 로 수행합니다. `make help` 로 전체 목록을 확인할 수 있습니다.
+
+| 명령 | 설명 |
+| --- | --- |
+| `make bootstrap` | 클론 직후 1회. Obsidian 볼트로 `.claude`·`.codex` 링크 생성 |
+| `make build` | 애플리케이션 빌드 |
+| `make test` | 애플리케이션 테스트 |
+| `make harness` | 로컬 하네스 테스트 (Python 표준 라이브러리) |
+| `make check` | PR 규칙 검사. 기준 커밋은 `BASE` 로 지정 (`make check BASE=main`) |
+
+### 자동완성 (선택)
+
+`make` 탭 자동완성을 위 명령 목록으로만 제한하려면 `~/.zshrc` 에 다음을 추가하고 새 셸을 엽니다.
+
+```sh
+source "<저장소 경로>/scripts/make-completion.zsh"
+```
+
+현재 디렉터리의 Makefile 에서 `## ` 주석이 달린 타깃만 완성하며, 해당 컨벤션이 없는 다른
+프로젝트에서는 기본 동작으로 폴백합니다.
+
 ## 개발 방법론
 
 ### SDD — Spec-Driven Development

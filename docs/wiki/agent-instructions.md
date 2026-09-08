@@ -17,6 +17,16 @@
 - 두 도구의 로딩/우선순위를 동일하다고 가정하지 않는다. 특히 Codex는 실행 디렉터리 기준 탐색을 확인하고, Claude 지침은 서로 충돌하지 않게 작성한다.
 - spec 선작성·PR 크기·wiki 갱신은 사용자 요청에 따른 프로젝트 규칙이다. 공식 문서에서 강제하는 수치나 절차가 아니다.
 
+## 스킬·에이전트 정본의 위치
+정본은 Obsidian 볼트의 `ResilientPOS/` 아래 `skills`, `agents`, `codex/agents`에 두고 저장소의
+`.claude/skills`, `.claude/agents`, `.codex/agents`를 심볼릭 링크로 연결한다. 지침 변경이 제품 PR
+diff를 오염시키지 않고, 볼트 동기화로 기기 간에 공유되며, Obsidian에서 읽고 편집할 수 있다.
+링크가 저장소 안에 있으므로 스킬은 이 저장소에서 작업할 때만 적용된다.
+링크는 `make bootstrap`이 부르는 `scripts/link_claude.py`가 실행 시점에 홈 경로를 풀어 만든다.
+커밋되는 파일에 기기별 절대 경로가 들어가지 않고, 볼트가 없으면 안내만 남기고 정상 종료한다.
+세 경로는 `.gitignore` 대상이며, 로컬 검사는 추적하지 않는 경로를 제외하므로 심볼릭 링크 오류가
+발생하지 않는다. 링크를 gitignore에서 빼면 검사가 즉시 실패한다.
+
 ## 유지와 확인
 지침 변경 시 중복·충돌·폐기된 명령을 제거하고 관련 wiki를 갱신한다. 사용자 전역 지침을 프로젝트 규칙으로 복제하지 않는다.
 새 Codex 세션에서 활성 지침을 요약하게 하고, Claude에서는 `/context`로 Memory files의 로딩을 확인할 수 있다. [OpenAI 검증 안내](https://learn.chatgpt.com/docs/agent-configuration/agents-md#verify-your-setup), [Claude 로딩 확인](https://code.claude.com/docs/en/memory#set-up-a-project-claudemd)

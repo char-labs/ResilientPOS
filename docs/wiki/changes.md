@@ -22,3 +22,10 @@
 - 갱신: [차용 내역](borrowed-workflows.md), [리뷰 기준](workflow-review.md), [개발 규칙](development-workflow.md), 공통 지침과 도구별 진입점.
 - 요구사항 영향: 다른 PC에서의 개발을 위해 차용 문서의 개인 절대 경로를 제거했다. 출처 식별자는 패키지 내부 경로와 해시로 유지하며 실행 참조는 저장소 내부로 한정한다.
 - 요구사항 영향: commit-push가 변경 의도별로 spec·wiki·개발 도구를 분리하고, 도메인 개발은 요구사항별 구현과 테스트를 묶도록 보완했다.
+
+## 2026-09-08 — 스킬 정본을 볼트로 이전
+- Spec: [vault-canonical-skills](../spec/2026-09-08-vault-canonical-skills.md)
+- 요구사항 영향: 제품 요구사항은 변경하지 않았다. 스킬·에이전트 정본의 보관 위치를 Obsidian 볼트로 옮기고 저장소는 심볼릭 링크로 연결하도록 개발 환경 구성만 바꿨다. 새 머신에서는 clone 후 `make bootstrap`을 실행해야 스킬이 붙는다.
+- 요구사항 영향: `.agents`, `.claude`, `.codex` 세 경로를 통째로 추적에서 제외했다. 지침 변경이 제품 PR diff에 나타나지 않으면서, 링크가 저장소 안에 있어 스킬은 이 저장소에서만 적용된다. Codex 에이전트 toml도 볼트로 옮기고 `.codex/agents`를 링크로 연결한다.
+- 요구사항 영향: 개발 명령 진입점을 `Makefile`로 모으고 README에 명령 표와 자동완성 안내를 추가했다. 기존 명령의 동작은 바뀌지 않았다.
+- 갱신: [지침 설계 근거](agent-instructions.md), [현재 상태](current-state.md), [개발 규칙](development-workflow.md), 공통 지침, README, Makefile.
