@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
-"""`.claude/skills`와 `.claude/agents`를 Obsidian 볼트로 심볼릭 링크한다.
+"""저장소의 LLM 도구 디렉터리를 Obsidian 볼트로 심볼릭 링크한다.
 
-Claude Code가 읽는 스킬과 에이전트 정본은 Obsidian 볼트에 두고 저장소에서는 추적하지 않는다.
-이 스크립트가 새 머신에서 링크를 다시 만든다. 실행 시점에 홈 경로를 풀기 때문에 사용자 이름이나
-저장소 위치에 의존하지 않는다. 볼트가 없으면 안내만 남기고 정상 종료하므로 CI에서도 안전하다.
+스킬·에이전트 정본은 Obsidian 볼트에 두고 저장소는 추적하지 않는다. `.claude`와 `.codex`는
+`.gitignore` 대상이며 이 스크립트가 새 머신에서 링크를 다시 만든다. 링크가 저장소 안에 있으므로
+스킬은 이 저장소에서 작업할 때만 적용된다.
 
+실행 시점에 홈 경로를 풀기 때문에 사용자 이름이나 저장소 위치에 의존하지 않는다. 볼트가 없으면
+안내만 남기고 정상 종료하므로 CI와 새 머신에서 안전하다.
+
+    make bootstrap
     python3 scripts/link_claude.py
     RESILIENTPOS_VAULT=/다른/볼트/경로 python3 scripts/link_claude.py
 """
@@ -12,10 +16,14 @@ import os
 from pathlib import Path
 import sys
 
-LINK_NAMES = ('skills', 'agents')
+# (저장소 안 링크 경로, 볼트 안 원본 경로)
+LINKS = (
+    ('.claude/skills', 'skills'),
+    ('.claude/agents', 'agents'),
+    ('.codex/agents', 'codex/agents'),
+)
 VAULT_ENV = 'RESILIENTPOS_VAULT'
 DEFAULT_VAULT_PARTS = ('Documents', 'Obsidian Vault', 'ResilientPOS')
-CLAUDE_DIR = '.claude'
 
 
 def resolve_vault(vault=None):
@@ -35,7 +43,8 @@ def link_one(link, target):
             return True, None
         link.unlink()
     elif link.exists():
-        return False, f'  (중단) {link} 가 실제 디렉터리입니다. 옮기거나 지운 뒤 다시 실행하세요.'
+        return False, f'  (중단) {link} 가 이미 실제 디렉터리입니다. 옮기거나 지운 뒤 다시 실행하세요.'
+    link.parent.mkdir(parents=True, exist_ok=True)
     link.symlink_to(target, target_is_directory=True)
     return True, None
 
@@ -48,22 +57,13 @@ def main(root=None, vault=None):
         print(f'  (건너뜀) Obsidian 볼트 없음: {vault}')
         return 0
 
-    targets = []
-    for name in LINK_NAMES:
-        target = vault / name
-        if target.is_dir():
-            targets.append((name, target))
-        else:
-            print(f'  (건너뜀) {target} 없음')
-    if not targets:
-        return 0
-
-    claude = root / CLAUDE_DIR
-    claude.mkdir(parents=True, exist_ok=True)
-
     linked, errors = 0, []
-    for name, target in targets:
-        ok, error = link_one(claude / name, target)
+    for name, source in LINKS:
+        target = vault / source
+        if not target.is_dir():
+            print(f'  (건너뜀) {target} 없음')
+            continue
+        ok, error = link_one(root / name, target)
         if error:
             errors.append(error)
         elif ok:
@@ -71,7 +71,7 @@ def main(root=None, vault=None):
 
     for error in errors:
         print(error)
-    print(f'  linked {linked}/{len(LINK_NAMES)} -> {vault}')
+    print(f'  linked {linked}/{len(LINKS)} -> {vault}')
     return 1 if errors else 0
 
 

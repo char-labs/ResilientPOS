@@ -5,7 +5,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from link_claude import LINK_NAMES, VAULT_ENV, main
+from link_claude import LINKS, VAULT_ENV, main
 
 
 def run(**kwargs):
@@ -22,29 +22,36 @@ class LinkClaudeTest(unittest.TestCase):
         self.root = Path(self.tmp.name) / 'repo'
         self.vault = Path(self.tmp.name) / 'vault'
         self.root.mkdir()
-        for name in LINK_NAMES:
-            (self.vault / name).mkdir(parents=True)
+        for link, source in LINKS:
+            (self.vault / source).mkdir(parents=True)
+            (self.vault / source / 'placeholder.md').write_text('x\n')
 
     def tearDown(self):
         self.tmp.cleanup()
 
-    def link(self, name):
-        return self.root / '.claude' / name
-
-    def test_links_every_vault_directory(self):
+    def test_links_every_configured_directory(self):
         code, _ = run(root=self.root, vault=self.vault)
 
         self.assertEqual(code, 0)
-        for name in LINK_NAMES:
-            self.assertTrue(self.link(name).is_symlink(), name)
-            self.assertEqual(self.link(name).resolve(), (self.vault / name).resolve())
+        for link, source in LINKS:
+            path = self.root / link
+            self.assertTrue(path.is_symlink(), link)
+            self.assertEqual(path.resolve(), (self.vault / source).resolve())
+            self.assertTrue((path / 'placeholder.md').exists(), link)
+
+    def test_links_cover_claude_and_codex(self):
+        names = {link for link, _ in LINKS}
+
+        self.assertIn('.claude/skills', names)
+        self.assertIn('.claude/agents', names)
+        self.assertIn('.codex/agents', names)
 
     def test_running_twice_keeps_the_same_links(self):
         run(root=self.root, vault=self.vault)
-        before = {name: os.readlink(self.link(name)) for name in LINK_NAMES}
+        before = {link: os.readlink(self.root / link) for link, _ in LINKS}
 
         code, _ = run(root=self.root, vault=self.vault)
-        after = {name: os.readlink(self.link(name)) for name in LINK_NAMES}
+        after = {link: os.readlink(self.root / link) for link, _ in LINKS}
 
         self.assertEqual(code, 0)
         self.assertEqual(before, after)
@@ -54,16 +61,19 @@ class LinkClaudeTest(unittest.TestCase):
 
         self.assertEqual(code, 0)
         self.assertIn('absent', output)
-        self.assertFalse((self.root / '.claude').exists())
+        self.assertEqual(list(self.root.iterdir()), [])
 
     def test_skips_a_directory_the_vault_does_not_have(self):
-        (self.vault / LINK_NAMES[0]).rmdir()
+        first, rest = LINKS[0], LINKS[1:]
+        (self.vault / first[1] / 'placeholder.md').unlink()
+        (self.vault / first[1]).rmdir()
 
         code, _ = run(root=self.root, vault=self.vault)
 
         self.assertEqual(code, 0)
-        self.assertFalse(self.link(LINK_NAMES[0]).exists())
-        self.assertTrue(self.link(LINK_NAMES[1]).is_symlink())
+        self.assertFalse((self.root / first[0]).exists())
+        for link, _ in rest:
+            self.assertTrue((self.root / link).is_symlink(), link)
 
     def test_environment_variable_overrides_the_default_vault(self):
         previous = os.environ.get(VAULT_ENV)
@@ -77,20 +87,20 @@ class LinkClaudeTest(unittest.TestCase):
                 os.environ[VAULT_ENV] = previous
 
         self.assertEqual(code, 0)
-        self.assertTrue(self.link(LINK_NAMES[0]).is_symlink())
+        self.assertTrue((self.root / LINKS[0][0]).is_symlink())
 
     def test_refuses_to_replace_a_real_directory(self):
-        existing = self.link(LINK_NAMES[0])
+        existing = self.root / LINKS[0][0]
         existing.mkdir(parents=True)
         (existing / 'keep.md').write_text('keep\n')
 
         code, output = run(root=self.root, vault=self.vault)
 
         self.assertNotEqual(code, 0)
-        self.assertIn(LINK_NAMES[0], output)
+        self.assertIn(LINKS[0][0], output)
         self.assertFalse(existing.is_symlink())
         self.assertTrue((existing / 'keep.md').exists())
-        self.assertFalse((existing / LINK_NAMES[0]).exists())
+        self.assertTrue((self.root / LINKS[1][0]).is_symlink())
 
 
 if __name__ == '__main__':
