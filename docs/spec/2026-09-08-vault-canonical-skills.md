@@ -110,12 +110,15 @@ RED와 GREEN은 모두 `python3 -m unittest discover -s scripts -p 'test_link_cl
 
 | 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
 |---|---|---|---|
-| test_links_every_vault_directory | 위 RED 명령, `ModuleNotFoundError: link_claude` | 위 GREEN 명령, ok | 위 회귀 명령, 21개 OK |
-| test_running_twice_keeps_the_same_links | 같은 이유로 수집 실패 | ok | 21개 OK |
-| test_skips_when_vault_is_missing | 같은 이유로 수집 실패 | ok | 21개 OK |
-| test_environment_variable_overrides_the_default_vault | 같은 이유로 수집 실패 | ok | 21개 OK |
-| test_skips_a_directory_the_vault_does_not_have | 같은 이유로 수집 실패 | ok | 21개 OK |
-| test_refuses_to_replace_a_real_directory | 같은 이유로 수집 실패 | ok | 21개 OK |
+| test_links_every_configured_directory | 위 RED 명령, `ModuleNotFoundError: link_claude` | 위 GREEN 명령, ok | 위 회귀 명령, 22개 OK |
+| test_links_cover_claude_and_codex | 링크 목록에 `.codex/agents` 없음 | ok | 22개 OK |
+| test_running_twice_keeps_the_same_links | 같은 이유로 수집 실패 | ok | 22개 OK |
+| test_skips_when_vault_is_missing | 같은 이유로 수집 실패 | ok | 22개 OK |
+| test_skips_a_directory_the_vault_does_not_have | 같은 이유로 수집 실패 | ok | 22개 OK |
+| test_environment_variable_overrides_the_default_vault | 같은 이유로 수집 실패 | ok | 22개 OK |
+| test_refuses_to_replace_a_real_directory | 같은 이유로 수집 실패 | ok | 22개 OK |
+
+설계가 두 번 바뀌면서 테스트도 두 번 다시 썼다. 각 회차 모두 테스트를 먼저 실패시키고 구현했다.
 
 ## 변경 이력
 - 구현 중 `.agents/skills` 참조가 `docs/wiki` 5개 파일과 과거 spec 2개에도 있음을 확인했다. 과거
@@ -129,6 +132,9 @@ RED와 GREEN은 모두 `python3 -m unittest discover -s scripts -p 'test_link_cl
   `.claude`와 `.codex`를 통째로 gitignore하고 `make bootstrap`이 링크를 재생성하는 방식으로 바꿨다.
   git에는 들어가지 않으면서 스킬이 이 저장소에서만 적용된다. 참고한 선례는 사용자가 제시한 다른
   저장소의 동일 구성이다.
+- 최종적으로 파일 수가 하드 상한 25개에 도달했다. 더 줄이려면 Makefile과 자동완성, README 명령
+  표를 후속 PR로 빼야 하는데 그러면 `make bootstrap`을 참조하는 문서를 함께 되돌려야 한다.
+  사용자와 협의해 이번 PR을 이대로 마무리하고 분할은 별도로 검토하기로 했다.
 - 분할 계획은 경고선 도달 시 wiki 갱신을 후속 PR로 옮긴다고 적었으나, 실제 wiki 변경의 대부분이
   끊어진 스킬 링크의 수정이라 미루면 문서가 깨진다. `docs/wiki/changes.md`도 하네스가 이번 PR에서
   요구한다. 미룰 수 있는 부분은 설명 추가 2개 파일뿐이라 실익이 없어 이번 PR에 유지했다. 파일 수
@@ -137,9 +143,13 @@ RED와 GREEN은 모두 `python3 -m unittest discover -s scripts -p 'test_link_cl
 ## 결과
 개발 전 spec을 독립 커밋으로 작성했다. 구현 후 아래를 확인했다.
 
-- 하네스 테스트 21개가 통과한다. 부트스트랩 신규 6개를 포함하며 기존 15개에 회귀가 없다.
+- `make harness`로 22개가 통과한다. 부트스트랩 신규 7개를 포함하며 기존 15개에 회귀가 없다.
 - `python3 scripts/check_pr.py --base main --worktree`가 PASS다. 분할 경고 1건은 아래에 판단을 남겼다.
-- 저장소가 `.claude/skills`, `.claude/agents`, `.agents`를 하나도 추적하지 않는다.
+- 저장소가 `.agents`, `.claude`, `.codex` 세 경로의 파일을 하나도 추적하지 않는다. `.agents`는
+  디스크에서도 사라졌고 나머지 둘은 링크로만 존재한다.
+- `make bootstrap`이 링크 3개를 만들고 두 번 실행해도 결과가 같다. `make help`가 정의된 타깃 6개를
+  설명과 함께 출력하며 README의 명령 표와 일치한다.
+- 링크를 통해 스킬 3개, 에이전트 2개, Codex toml 2개가 모두 열린다.
 - `AGENTS.md`, `.codex/`, `docs/wiki/`에 `.agents/skills` 참조가 남지 않았다. 과거 spec 2개는 기록으로 보존했다.
 - 추적 대상 파일에 사용자 홈 절대 경로가 없다. 이 spec의 서술만 예외다.
 - 정본 이동 전후 바이트 대조 결과, 의도한 4줄 외에는 차이가 없다. 상대 링크 3줄과 에이전트 참조 1줄이다.
@@ -151,6 +161,11 @@ RED와 GREEN은 모두 `python3 -m unittest discover -s scripts -p 'test_link_cl
 - 컨텍스트 연결 검증: 볼트의 SKILL.md 경로 하나만 제공한 읽기 전용 에이전트가 저장소 루트 기준으로
   `AGENTS.md`와 `docs/wiki/testing-strategy.md`를 열고 본문을 인용했다. 해소되지 않은 참조는 특정
   파일이 아닌 "해당 PR spec"뿐이며, 이는 작업 중인 PR에 따라 달라지는 서술이라 경로 실패가 아니다.
+
+최종 PR 규모는 일반 25개 파일/667줄이다. 하드 상한 25개 파일과 정확히 같아 검사는 통과하지만
+여유가 없다. 설계가 두 번 바뀌며 분할 계획의 예상치를 넘었고, 되돌리면 문서 정합이 깨지는 변경만
+남아 이번 PR에 유지했다. 이 PR에는 더 이상 파일을 추가하지 않는다. Makefile과 자동완성, README
+명령 표를 후속 PR로 분리하는 안은 별도로 검토한다.
 
 플러그인 전환은 이번 범위에 넣지 않았다. 사전 조사에서 플러그인 매니페스트의 `skills` 항목이
 플러그인 루트 밖을 가리킬 수 없음을 확인했고, 루트를 볼트에 두면 매니페스트가 숨김 경로라
