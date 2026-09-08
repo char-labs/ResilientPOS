@@ -1,7 +1,7 @@
 # 테스트 전략 — SDD와 TDD
 
 SDD는 PR의 범위·인수 조건을 정하고, TDD는 그 안의 동작을 RED → GREEN → REFACTOR로 구현한다.
-업무 개발을 시작할 때만 [공통 TDD 스킬](../../.agents/skills/resilientpos-tdd/SKILL.md)을 읽는다.
+업무 개발을 시작할 때만 [공통 TDD 스킬](../../.claude/skills/resilientpos-tdd/SKILL.md)을 읽는다.
 
 ## 대상과 테스트 수준
 
