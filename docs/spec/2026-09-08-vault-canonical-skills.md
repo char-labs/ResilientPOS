@@ -10,14 +10,21 @@ LLM 스킬과 에이전트 정본이 저장소에 있어 세 가지 문제가 �
 ## 범위
 - `.agents/skills/` 정본 3개와 `.claude/agents/` 정의 2개의 본문을 Obsidian vault의
   `ResilientPOS/skills/`와 `ResilientPOS/agents/`로 옮기고 저장소에서 제거한다.
-- `scripts/link_claude.py`를 추가한다. 실행 시점에 홈 경로를 풀어 `.claude/skills`와
-  `.claude/agents`를 vault로 심볼릭 링크한다. 볼트가 없으면 안내만 출력하고 정상 종료한다.
-  볼트 경로는 환경 변수 `RESILIENTPOS_VAULT`로 재정의할 수 있다. 여러 번 실행해도 결과가 같다.
-- `.gitignore`에 `.claude/skills`, `.claude/agents`, `.agents/`를 추가해 링크와 정본을 추적하지
-  않는다. 하네스는 추적하지 않는 경로를 검사 대상에서 제외하므로 심볼릭 링크 오류가 나지 않는다.
-- 저장소에 남는 `.codex/agents/*.toml`과 `AGENTS.md`의 본문 참조를 `.agents/skills/...`에서
-  `.claude/skills/...`로 바꾼다. 심볼릭 링크를 통해 해소되므로 커밋되는 문서에 절대 경로를 남기지
-  않는다.
+- `scripts/link_claude.py`를 추가한다. 실행 시점에 홈 경로를 풀어 저장소의 `.claude/skills`,
+  `.claude/agents`, `.codex/agents`를 vault로 심볼릭 링크한다. 볼트가 없으면 안내만 출력하고
+  정상 종료한다. 볼트 경로는 환경 변수 `RESILIENTPOS_VAULT`로 재정의할 수 있다. 여러 번 실행해도
+  결과가 같다.
+- `Makefile`을 추가해 `make bootstrap`으로 링크를 만든다. clone 직후의 진입점을 한 곳으로 모으고,
+  기존에 문서로만 있던 빌드·테스트·검사 명령도 같은 자리에 노출한다. 타깃마다 `## ` 주석으로
+  설명을 달아 `make help`가 그 목록을 그대로 출력한다.
+- `scripts/make-completion.zsh`를 추가한다. `## ` 주석이 달린 타깃만 자동완성하고 그 컨벤션이 없는
+  프로젝트에서는 기본 동작으로 폴백한다. 사용자가 `~/.zshrc`에서 직접 source하는 선택 사항이다.
+- README에 명령 표와 자동완성 안내를 추가한다.
+- `.gitignore`에 `.agents/`, `.claude/`, `.codex/`를 넣어 세 경로를 통째로 추적에서 제외한다.
+  링크는 로컬에만 존재하고 git에는 들어가지 않는다.
+- `.codex/agents/*.toml`의 정본을 vault `ResilientPOS/codex/agents/`로 옮긴다. 저장소의
+  `.codex/agents`는 그 디렉터리를 가리키는 링크가 된다.
+- `AGENTS.md`와 wiki의 스킬 참조 경로는 `.claude/skills/...`로 유지한다. 링크를 통해 해소된다.
 - 정본 안의 상대 링크 3개를 저장소 기준 경로 표기로 바꾼다. vault에서는 그 깊이가 해소되지 않고,
   마크다운 링크로 두면 잘못된 위치를 가리키기 때문이다.
 - vault 레이아웃을 Claude Code 플러그인 규약과 호환되게 잡는다. 후속 PR에서 매니페스트 한 개만
@@ -25,12 +32,14 @@ LLM 스킬과 에이전트 정본이 저장소에 있어 세 가지 문제가 �
 - vault에 `ResilientPOS/README.md` 진입점을 두어 스킬과 에이전트 목록, 저장소 위치를 안내한다.
 
 ## 제외
-플러그인 매니페스트 작성과 마켓플레이스 등록, 세션 시작 시 자동 설치, `docs/references`와
-`docs/spec`과 `docs/wiki`의 이전, `scripts/check_pr.py`의 동작 변경, git 이력 재작성,
-애플리케이션 기능 변경, 원격 PR 생성 및 병합.
+플러그인 매니페스트 작성과 마켓플레이스 등록, 세션 시작 시 자동 설치, Codex 에이전트 재배선,
+`docs/references`와 `docs/spec`과 `docs/wiki`의 이전, `scripts/check_pr.py`의 동작 변경,
+git 이력 재작성, 애플리케이션 기능 변경.
 
 ## 변경 경로
 - AGENTS.md
+- Makefile
+- README.md
 - .gitignore
 - .agents/**
 - .claude/**
@@ -39,7 +48,10 @@ LLM 스킬과 에이전트 정본이 저장소에 있어 세 가지 문제가 �
 - docs/**
 
 ## 인수 조건
-- 저장소가 `.agents/`를 추적하지 않고, `.claude/skills`와 `.claude/agents`도 추적하지 않는다.
+- git이 `.agents`, `.claude`, `.codex` 경로의 파일을 하나도 추적하지 않는다.
+- `.agents`는 디스크에서도 사라진다. `.claude`와 `.codex`는 로컬 링크로만 존재한다.
+- `make bootstrap`이 세 링크를 만들고, 저장소를 clone만 한 상태에서는 세 경로가 없다.
+- `make help`가 정의된 모든 타깃과 설명을 출력하고, README의 명령 표와 내용이 일치한다.
 - vault로 옮긴 SKILL.md 3개와 에이전트 정의 2개가 이동 전과 바이트 단위로 같다. 단, 상대 링크
   3개를 저장소 기준 표기로 바꾼 줄만 다르다.
 - 에이전트가 따라가는 활성 참조에 `.agents/skills` 문자열이 남지 않는다. 대상은 `AGENTS.md`,
@@ -49,7 +61,9 @@ LLM 스킬과 에이전트 정본이 저장소에 있어 세 가지 문제가 �
   실행 시점에 홈을 푸는 형태로 둔다.
 - `scripts/link_claude.py`를 두 번 실행해도 오류 없이 같은 결과가 되고, 볼트가 없으면 종료 코드 0으로
   안내만 출력한다.
-- 링크 생성 후 `.claude/skills`와 `.claude/agents`가 vault의 실제 디렉터리로 해소된다.
+- 링크 생성 후 `.claude/skills`의 스킬 3개, `.claude/agents`의 에이전트 2개, `.codex/agents`의
+  toml 2개가 vault의 실제 파일로 해소된다.
+- 사용자의 기존 전역 스킬과 에이전트를 건드리지 않는다.
 - 스킬 이름과 description frontmatter가 이동 전후로 같아 도구의 탐색 결과가 바뀌지 않는다.
 - 스킬 본문이 참조하는 `docs/wiki` 문서 3개가 저장소 루트 기준으로 실제 파일로 존재한다.
 
@@ -107,6 +121,14 @@ RED와 GREEN은 모두 `python3 -m unittest discover -s scripts -p 'test_link_cl
 - 구현 중 `.agents/skills` 참조가 `docs/wiki` 5개 파일과 과거 spec 2개에도 있음을 확인했다. 과거
   spec은 그 PR이 한 일의 기록이므로 고치지 않기로 하고, 참조 제거 대상을 에이전트가 실제로
   따라가는 활성 경로로 좁혔다. 인수 조건과 검증을 그에 맞춰 수정했다.
+- 사용자 요청으로 `.claude`와 `.codex`를 저장소 디스크에서도 제거하기로 했다. 스킬과 에이전트는
+  사용자 레벨 `~/.claude`에서 vault를 가리킨다. 프로젝트 한정 적용을 잃고 모든 프로젝트에서
+  로딩되지만, 저장소에 개발 도구 흔적을 남기지 않는 쪽을 택했다. Codex 전용 에이전트는 배선 없이
+  vault에 보관만 한다.
+- 사용자 레벨 등록은 프로젝트 한정 적용을 잃는다는 문제가 있어 철회했다. 대신 저장소의
+  `.claude`와 `.codex`를 통째로 gitignore하고 `make bootstrap`이 링크를 재생성하는 방식으로 바꿨다.
+  git에는 들어가지 않으면서 스킬이 이 저장소에서만 적용된다. 참고한 선례는 사용자가 제시한 다른
+  저장소의 동일 구성이다.
 - 분할 계획은 경고선 도달 시 wiki 갱신을 후속 PR로 옮긴다고 적었으나, 실제 wiki 변경의 대부분이
   끊어진 스킬 링크의 수정이라 미루면 문서가 깨진다. `docs/wiki/changes.md`도 하네스가 이번 PR에서
   요구한다. 미룰 수 있는 부분은 설명 추가 2개 파일뿐이라 실익이 없어 이번 PR에 유지했다. 파일 수
