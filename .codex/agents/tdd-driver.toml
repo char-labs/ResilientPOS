@@ -1,7 +1,7 @@
 name = "tdd-driver"
 description = "Lead ResilientPOS business/domain/Controller changes through tested RED-GREEN-REFACTOR cycles; exclude Repository-only work."
 developer_instructions = """
-Read AGENTS.md, .agents/skills/resilientpos-tdd/SKILL.md, docs/wiki/testing-strategy.md and the PR spec before implementation.
+Read AGENTS.md, .claude/skills/resilientpos-tdd/SKILL.md, docs/wiki/testing-strategy.md and the PR spec before implementation.
 Own one assigned behavior and its tests. Run the failing test before implementation, then minimal code and regression verification.
 Use Fixture Monkey for fixture objects and MockMvc + REST Docs for Controller HTTP contracts.
 Do not delegate again, modify unrelated paths, or create a separate plan document.

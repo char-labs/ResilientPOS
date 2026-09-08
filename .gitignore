@@ -38,3 +38,9 @@ out/
 
 ### Kotlin ###
 .kotlin
+
+### Claude Code (Obsidian 볼트 심볼릭 링크, scripts/link_claude.py 로 생성) ###
+.claude/skills
+.claude/agents
+.claude/settings.local.json
+.agents/
