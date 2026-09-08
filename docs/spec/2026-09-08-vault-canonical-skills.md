@@ -162,6 +162,26 @@ RED와 GREEN은 모두 `python3 -m unittest discover -s scripts -p 'test_link_cl
   `AGENTS.md`와 `docs/wiki/testing-strategy.md`를 열고 본문을 인용했다. 해소되지 않은 참조는 특정
   파일이 아닌 "해당 PR spec"뿐이며, 이는 작업 중인 PR에 따라 달라지는 서술이라 경로 실패가 아니다.
 
+링크를 지우고 처음부터 다시 설치하는 전 과정을 검증했다. `.claude`와 `.codex`를 디스크에서 지워
+clone 직후 상태로 만든 뒤 `make bootstrap`으로 복구했고, 볼트 정본 8개와 git 작업 트리는 그대로였다.
+
+탐색과 본문 로드에 그치지 않고 실제 호출까지 도구 이벤트로 확인했다. 자기 보고가 아니라 실행
+기록이다.
+
+| 대상 | 근거 |
+|---|---|
+| Claude 스킬 | `stream-json`에 `tool_use: Skill {"skill": "resilientpos-tdd"}` 기록 |
+| Claude 에이전트 | `tool_use: Agent workflow-reviewer` 후 해당 에이전트가 `Read`로 검토하고 판정 반환 |
+| Codex 에이전트 | `PreToolUse` → `collab: Wait` → `PostToolUse` 순서로 spawn과 대기 기록 |
+
+대조군도 세웠다. 부트스트랩 전 Claude 세션은 같은 질문에 `NONE`을 답했고, `.codex` 링크를 뗀
+Codex는 같은 질문에 정의가 로드되지 않았다고 답했다. 링크가 원인임이 양쪽에서 확인된다.
+`workflow-reviewer`는 `AGENTS.md`에 등장하지 않는데도 Codex가 역할을 정확히 서술해, 링크가 유일한
+출처임을 보여준다.
+
+`make bootstrap`은 세 번 연속 실행해도 결과가 같았고, 볼트 경로를 없는 곳으로 재정의하면 안내만
+출력하고 종료 코드 0으로 끝나며 기존 링크를 손상시키지 않았다.
+
 최종 PR 규모는 일반 25개 파일/667줄이다. 하드 상한 25개 파일과 정확히 같아 검사는 통과하지만
 여유가 없다. 설계가 두 번 바뀌며 분할 계획의 예상치를 넘었고, 되돌리면 문서 정합이 깨지는 변경만
 남아 이번 PR에 유지했다. 이 PR에는 더 이상 파일을 추가하지 않는다. Makefile과 자동완성, README
