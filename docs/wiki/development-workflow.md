@@ -4,7 +4,7 @@
 명세 → 구현 → 검증 → wiki 갱신을 하나의 개발 단위로 관리하며, 프로젝트 소개는 [README](../../README.md#개발-방법론)에 둔다.
 
 ## 개발 시작
-1. 대상 브랜치 최신 상태에서 작업 브랜치를 만든다. PR 기준 커밋을 확인한다.
+1. 대상 브랜치 최신 상태에서 작업 브랜치를 만든다. PR 기준 커밋을 확인한다. 새 머신이면 먼저 `make bootstrap`으로 스킬·에이전트 링크를 만든다.
 2. `docs/spec-template.md`를 `docs/spec/yyyy-mm-dd-slug.md`로 복사한다. 날짜는 실제 작성일, slug는 영문 소문자/숫자/하이픈이다.
 3. 단일 목표, 제외 범위, 변경 경로, 인수 조건, 검증, wiki 영향, 분할 계획을 작성한다.
 4. **다른 파일을 수정하기 전에 spec 파일 하나만 첫 커밋한다.** 개발 중 spec 변경은 후속 커밋에 남긴다.
@@ -50,7 +50,7 @@ LLM이 파일을 편집한 실제 시각이나 요구사항 해석의 정확성�
 하네스 자체 변경은 검사 우회가 없는지 별도로 리뷰한다.
 
 ## 지침 점검과 변경 전달
-지침/컨벤션 개선에는 [workflow 스킬](../../.agents/skills/resilientpos-workflow/SKILL.md)을 사용한다.
-커밋/push 요청에는 [commit-push 스킬](../../.agents/skills/resilientpos-commit-push/SKILL.md)을 사용하며, commit-only 요청을 원격 전송으로 확대하지 않는다.
+지침/컨벤션 개선에는 [workflow 스킬](../../.claude/skills/resilientpos-workflow/SKILL.md)을 사용한다.
+커밋/push 요청에는 [commit-push 스킬](../../.claude/skills/resilientpos-commit-push/SKILL.md)을 사용하며, commit-only 요청을 원격 전송으로 확대하지 않는다.
 
 커밋은 변경 의도별로 나눈다. spec 범위 조정은 구현 전에, wiki 갱신은 wiki 전용 커밋으로 기록한다. 도메인 개발은 요구사항 하나의 구현과 관련 테스트를 검증 가능한 단위로 묶고 커밋 본문에서 실제 spec/인수 조건을 참조한다. 작은 커밋 여러 개로 PR 총량 제한을 우회하지 않는다.

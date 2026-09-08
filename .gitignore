@@ -38,3 +38,8 @@ out/
 
 ### Kotlin ###
 .kotlin
+
+### LLM 개발 도구 (정본은 Obsidian 볼트, make bootstrap 으로 링크 생성) ###
+.agents/
+.claude/
+.codex/
