@@ -25,4 +25,4 @@
 
 ## 테스트 개발 방식
 비즈니스·도메인·Controller는 [TDD 전략](testing-strategy.md)을 따른다. Repository 자체 테스트는 대상에서 제외한다.
-TDD 스킬과 Claude/Codex 에이전트를 구성했다. 스킬·에이전트 정본은 Obsidian 볼트에 있고 저장소는 심볼릭 링크로 연결한다. Codex 진입점 `.codex/agents/*.toml`만 저장소가 추적한다. Fixture Monkey와 REST Docs는 채택한 테스트 도구이며 아직 빌드 의존성에는 추가하지 않았다.
+TDD 스킬과 Claude/Codex 에이전트를 구성했다. 정본은 Obsidian 볼트에 있고 저장소는 `.claude`와 `.codex` 심볼릭 링크로 연결하며 둘 다 추적하지 않는다. 링크 생성은 `make bootstrap`이 담당한다. Fixture Monkey와 REST Docs는 채택한 테스트 도구이며 아직 빌드 의존성에는 추가하지 않았다.
