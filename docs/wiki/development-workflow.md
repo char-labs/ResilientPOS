@@ -4,14 +4,32 @@
 명세 → 구현 → 검증 → wiki 갱신을 하나의 개발 단위로 관리하며, 프로젝트 소개는 [README](../../README.md#개발-방법론)에 둔다.
 
 ## 개발 시작
-1. 대상 브랜치 최신 상태에서 작업 브랜치를 만든다. PR 기준 커밋을 확인한다. 새 머신이면 먼저 `make bootstrap`으로 스킬·에이전트 링크를 만든다.
-2. `docs/spec-template.md`를 `docs/spec/yyyy-mm-dd-slug.md`로 복사한다. 날짜는 실제 작성일, slug는 영문 소문자/숫자/하이픈이다.
-3. 단일 목표, 제외 범위, 변경 경로, 인수 조건, 검증, wiki 영향, 분할 계획을 작성한다.
-4. **다른 파일을 수정하기 전에 spec 파일 하나만 첫 커밋한다.** 개발 중 spec 변경은 후속 커밋에 남긴다.
-5. 업무 동작 변경은 [TDD 전략](testing-strategy.md)에 따라 테스트 실패를 먼저 확인하고 최소 구현·리팩터링·회귀 검증을 수행한다. 새로운 요구사항이나 설계 변경이 생기면 먼저 같은 spec에 이유를 추가하고 관련 wiki를 갱신한다.
+1. 요구사항이 아직 합의되지 않았으면 [grill 스킬](../../.claude/skills/resilientpos-grill/SKILL.md)로 한 번에 한 질문씩 심문해 의도를 맞춘다. 합의 전에는 코드를 쓰지 않는다. 합의된 결정 목록이 spec의 입력이다.
+2. 대상 브랜치 최신 상태에서 작업 브랜치를 만든다. PR 기준 커밋을 확인한다. 새 머신이면 먼저 `make bootstrap`으로 스킬·에이전트·규칙 링크를 만든다.
+3. `docs/spec-template.md`를 `docs/spec/yyyy-mm-dd-slug.md`로 복사한다. 날짜는 실제 작성일, slug는 영문 소문자/숫자/하이픈이다.
+4. 단일 목표, 제외 범위, 변경 경로, 인수 조건, 검증, wiki 영향, 분할 계획을 작성한다. 관련 장기 스펙 문서가 있으면 "관련 문서"에 링크한다.
+5. **다른 파일을 수정하기 전에 spec 파일 하나만 첫 커밋한다.** 개발 중 spec 변경은 후속 커밋에 남긴다.
+6. 업무 동작 변경은 [TDD 전략](testing-strategy.md)에 따라 테스트 실패를 먼저 확인하고 최소 구현·리팩터링·회귀 검증을 수행한다. 새로운 요구사항이나 설계 변경이 생기면 먼저 같은 spec에 이유를 추가하고 관련 wiki를 갱신한다.
 
 업무 기능 spec은 소유 모듈, Command/Query/Event, 정합성 불변식, 실패/재시도/복구,
 관측성 및 정상/실패 검증도 포함한다. 관련 없는 항목은 이유를 적는다.
+
+## 장기 스펙 계층과 PR spec
+PR spec(`docs/spec/yyyy-mm-dd-slug.md`)은 PR 한 개의 계약이다. 여러 PR에 걸쳐 살아 있는 설계는
+[spec-write 스킬](../../.claude/skills/resilientpos-spec-write/SKILL.md)의 계층으로 따로 둔다.
+
+| 문서 | 위치 | 역할 |
+|---|---|---|
+| DESIGN | `docs/spec/DESIGN.md` | 시스템 큰 그림과 라우팅 진입점 |
+| concern | `docs/spec/concerns/*.md` | 컴포넌트 하나의 관심사 |
+| flow | `docs/spec/flows/*.md` | 시간축 유스케이스 시퀀스 |
+
+- 계층 문서는 날짜형 파일이 아니므로 `check_pr.py`가 PR spec으로 세지 않는다. 대신 해당 PR spec의 변경 경로에
+  `docs/spec/DESIGN.md`나 `docs/spec/concerns/**`처럼 선언해야 범위 밖 변경으로 걸리지 않는다.
+- PR spec은 "관련 문서" 항목에서 DESIGN/concern/flow를 링크하고, 계층 문서는 `related_paths`로 코드와 PR spec을 가리킨다.
+- 계층 문서를 새로 쓰거나 고치는 것도 PR이므로 그 PR의 날짜형 spec은 따로 있어야 한다.
+- [design](../../.claude/skills/resilientpos-design/SKILL.md)·[implement](../../.claude/skills/resilientpos-implement/SKILL.md) 스킬의 Contract(Interface + Test)와 Checkpoint는
+  별도 파일로 커밋하지 않는다. PR spec의 인수 조건과 분할 계획에 Checkpoint 이름·검증 명령·의존성을 옮겨 적는다.
 
 ## 크기와 분할
 - 일반 변경: 추가+삭제 600줄 또는 20개 파일에서 경고, 800줄 또는 25개 파일 초과 시 실패.
@@ -22,6 +40,22 @@
 - 서로 다른 목표, 도메인/API와 무관한 리팩터링, 별도 검증이 가능한 변경은 한도 이하에서도 나눈다.
 - 경고가 나오면 남은 범위를 후속 PR로 이동한다. 현재 spec의 분할 계획에 후속 목표/의존성을 적는다.
   한도 초과 시 현재 변경을 줄인다. 한도 변경을 해당 기능 PR에 섞지 않는다.
+
+### epic 브랜치와 PR 단위
+[orchestrator 스킬](../../.claude/skills/resilientpos-orchestrator/SKILL.md)과 [git 스킬](../../.claude/skills/resilientpos-git/SKILL.md)은
+"사용자 요청 1건 = 외부로 나가는 PR 1개" 원칙으로 동작한다.
+
+```
+main
+  └─ epic/<name>              ← 요청 1건의 수렴점. PR은 여기서만 만든다
+       ├─ worktree 브랜치 A   (sub-agent 격리 작업, epic으로 머지 후 삭제, PR 없음)
+       └─ worktree 브랜치 B
+```
+
+- 내부 분해 단위(worktree 브랜치, Task)는 PR을 만들지 않는다. PR 권한은 요청 단위 한 곳에만 있다.
+- epic 브랜치의 PR도 위 한도를 그대로 받는다. 한도를 넘을 것 같으면 epic 안에서 목표별 stacked PR로 나누고,
+  각 PR에 날짜형 spec을 하나씩 둔다. 이때 앞선 PR 브랜치가 다음 PR의 `--base`다.
+- 한 사람이 직접 작업하는 작은 변경은 epic 없이 feature 브랜치 하나로 진행해도 된다. epic은 위임·병렬이 있을 때 쓴다.
 
 ## Wiki 유지
 매 PR `docs/wiki/changes.md`에 spec의 상대 링크와 요구사항 영향/무영향 근거를 남긴다.
@@ -40,6 +74,29 @@ python3 -m unittest discover -s scripts -p 'test_*.py'
 PR 대상 브랜치의 기준 커밋을 지정해 로컬에서 검사한다. squash/rebase 전에는 spec 첫 커밋을 보존한다.
 병합 시 squash는 가능하지만 개발 브랜치를 미리 squash하면 선작성 증거가 없어져 검사에 실패한다.
 변경 경로는 spec의 `## 변경 경로` 아래 저장소 상대 경로/glob 목록으로 선언한다.
+
+### rebase와 force-push
+- 개발 브랜치를 base 위로 rebase 하는 것은 허용한다. rebase 뒤에도 spec 첫 커밋이 base 이후 첫 커밋이어야 하며,
+  spec 커밋을 다른 커밋과 합치거나 순서를 바꾸지 않는다. 충돌 해결은 [git 스킬의 conflict-resolution](../../.claude/skills/resilientpos-git/references/conflict-resolution.md)을 따른다.
+- `git push --force`는 쓰지 않는다. `--force-with-lease`는 이미 push된 개발 브랜치를 rebase 한 직후 한 가지 경우에만 쓴다.
+- 기본 브랜치(`main`)에는 어떤 형태의 force-push도 하지 않는다. 그 외 이력 재작성이 필요하면 `git revert`나 새 커밋을 먼저 검토한다.
+- 에이전트가 사용자 확인 없이 rebase·force-with-lease를 실행하지 않는다. 필요한 명령을 정리해 제안한다.
+
+### 커밋 메시지
+- 형식은 `type(scope): description`이다. type은 `feat`, `fix`, `refactor`, `docs`, `test`, `chore`, `ci`, `perf`,
+  scope는 변경 대상 모듈·디렉터리(`domain`, `api`, `spec`, `wiki`, `scripts`, `skills` 등)다.
+- description은 한국어를 기본으로 쓴다(현재 이력과 일치). 마침표 없이 명령형·현재형으로 50자 안쪽에 맞춘다.
+- `(#PR번호)`는 squash merge 시 GitHub가 붙이므로 로컬 커밋에 넣지 않는다.
+- 커밋 본문에는 관련 spec 경로와 인수 조건을 적는다. 없는 티켓 번호를 만들지 않는다.
+
+### PR 본문
+PR 본문은 왜 / 무엇을 / 어떻게 / 확인 방법 4단으로 쓴다([communicate 스킬](../../.claude/skills/resilientpos-communicate/SKILL.md) 기준, 양식은 [git 스킬 cli-reference](../../.claude/skills/resilientpos-git/references/cli-reference.md)).
+"확인 방법"에는 spec 링크, `check_pr.py` 결과, 실행한 테스트 명령을 넣는다. 이 저장소는 GitHub Actions를 쓰지 않으므로 로컬 검증 결과가 CI를 대신한다.
+
+### 워크플로우 산출물과 설정 파일
+- `.develop-workflow/`, `.review/`, `.review-output/`, `.orchestrator/`, `.plans/`는 스킬이 만드는 휘발성 산출물이며 `.gitignore` 대상이다. 커밋하지 않는다.
+- `.develop-workflow.yaml`(develop 계열 스킬의 설정 파일)은 이 저장소에 두지 않고 기본값만 쓴다. 파싱·검증 코드가 없는 설정 파일은
+  오타를 조용히 삼키기 때문이다(볼트 `rules/engineering-principles.md`의 책임 경계). 도입하려면 검증 스크립트를 함께 넣는 별도 PR로 한다.
 
 ## 로컬 검사와 적용 범위
 개발 에이전트는 개발 중과 PR 제출 전에 로컬 검사기를 실행하고 실패 항목을 수정한다.
