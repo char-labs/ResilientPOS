@@ -89,4 +89,4 @@ orchestrator·grill·spec-write·rules 생성기·CLI/hook을 "보류"로 적고
   이 PR을 먼저 병합하면 3번 spec 링크만 그 PR 병합 전까지 비어 있다.
 - `wc -l AGENTS.md` = 24(200 미만). `git grep "$HOME"` 결과 없음.
 - 커밋은 wiki 본문·인덱스·변경 기록 / 공통 지침 진입점 / spec 결과 기록 세 묶음으로 나눴다.
-- 병합 충돌 예방을 위해 이 브랜치를 `chore/rules-link-and-ignores` 위로 rebase 해 stacked PR로 바꿨다(2026-09-13). spec 첫 커밋은 base 이후 첫 커밋으로 유지되고, `python3 scripts/check_pr.py --base chore/rules-link-and-ignores`가 PASS다. 위 결과의 `--base main` 검사는 rebase 전 기록이다. 가 가리키는 `rules-link-and-ignores` spec은 이제 base에 포함되어 해소되고, `development-rules-original-first` spec 링크만 다음 PR 병합 전까지 비어 있다.
+- 병합 충돌 예방을 위해 이 브랜치를 `chore/rules-link-and-ignores` 위로 rebase 해 stacked PR로 바꿨다(2026-09-13). spec 첫 커밋은 base 이후 첫 커밋으로 유지되고, `python3 scripts/check_pr.py --base chore/rules-link-and-ignores`가 PASS다. 위 결과의 `--base main` 검사는 rebase 전 기록이다. `borrowed-workflows.md`가 가리키는 `rules-link-and-ignores` spec은 이제 base에 포함되어 해소되고, `development-rules-original-first` spec 링크만 다음 PR 병합 전까지 비어 있다.
