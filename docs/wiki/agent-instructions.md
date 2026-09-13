@@ -18,13 +18,15 @@
 - spec 선작성·PR 크기·wiki 갱신은 사용자 요청에 따른 프로젝트 규칙이다. 공식 문서에서 강제하는 수치나 절차가 아니다.
 
 ## 스킬·에이전트 정본의 위치
-정본은 Obsidian 볼트의 `ResilientPOS/` 아래 `skills`, `agents`, `codex/agents`에 두고 저장소의
-`.claude/skills`, `.claude/agents`, `.codex/agents`를 심볼릭 링크로 연결한다. 지침 변경이 제품 PR
+정본은 Obsidian 볼트의 `ResilientPOS/` 아래 `skills`, `agents`, `rules`, `codex/agents`에 두고 저장소의
+`.claude/skills`, `.claude/agents`, `.claude/rules`, `.codex/agents`를 심볼릭 링크로 연결한다.
+`.claude/rules`는 2026-09-13에 추가했다. 볼트 `rules/*.md`는 Claude가 항상 적용하는 규칙(설계 원칙 바인딩,
+엔지니어링 원칙)이며 링크가 있어야 자동 로드된다. 지침 변경이 제품 PR
 diff를 오염시키지 않고, 볼트 동기화로 기기 간에 공유되며, Obsidian에서 읽고 편집할 수 있다.
 링크가 저장소 안에 있으므로 스킬은 이 저장소에서 작업할 때만 적용된다.
 링크는 `make bootstrap`이 부르는 `scripts/link_claude.py`가 실행 시점에 홈 경로를 풀어 만든다.
 커밋되는 파일에 기기별 절대 경로가 들어가지 않고, 볼트가 없으면 안내만 남기고 정상 종료한다.
-세 경로는 `.gitignore` 대상이며, 로컬 검사는 추적하지 않는 경로를 제외하므로 심볼릭 링크 오류가
+네 경로는 `.gitignore` 대상이며, 로컬 검사는 추적하지 않는 경로를 제외하므로 심볼릭 링크 오류가
 발생하지 않는다. 링크를 gitignore에서 빼면 검사가 즉시 실패한다.
 
 ## 유지와 확인

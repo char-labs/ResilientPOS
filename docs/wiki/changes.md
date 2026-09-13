@@ -29,3 +29,8 @@
 - 요구사항 영향: `.agents`, `.claude`, `.codex` 세 경로를 통째로 추적에서 제외했다. 지침 변경이 제품 PR diff에 나타나지 않으면서, 링크가 저장소 안에 있어 스킬은 이 저장소에서만 적용된다. Codex 에이전트 toml도 볼트로 옮기고 `.codex/agents`를 링크로 연결한다.
 - 요구사항 영향: 개발 명령 진입점을 `Makefile`로 모으고 README에 명령 표와 자동완성 안내를 추가했다. 기존 명령의 동작은 바뀌지 않았다.
 - 갱신: [지침 설계 근거](agent-instructions.md), [현재 상태](current-state.md), [개발 규칙](development-workflow.md), 공통 지침, README, Makefile.
+
+## 2026-09-13 — 볼트 rules 링크와 워크플로우 산출물 추적 제외
+- Spec: [rules-link-and-ignores](../spec/2026-09-13-rules-link-and-ignores.md)
+- 요구사항 영향: 제품 요구사항은 변경하지 않았다. `make bootstrap`이 `.claude/rules`도 볼트 `rules/`로 링크해 항상 적용되는 규칙 파일이 자동 로드되고, 이식된 워크플로우 스킬의 휘발성 산출물 경로(`.develop-workflow/`, `.review/`, `.review-output/`, `.orchestrator/`, `.plans/`)를 추적에서 제외했다.
+- 갱신: [지침 설계 근거](agent-instructions.md), 공통 지침, `.gitignore`, `scripts/link_claude.py`와 테스트.
