@@ -14,10 +14,11 @@
 - 스킬과 에이전트 정본은 Obsidian 볼트에 두고 저장소는 `.claude/skills`, `.claude/agents`, `.claude/rules`, `.codex/agents` 심볼릭 링크로 연결한다. 네 경로는 `.gitignore` 대상이라 추적하지 않는다. 새 머신에서는 clone 후 `make bootstrap`을 한 번 실행한다. 볼트가 없으면 링크 없이 동작하며 스킬도 없다.
 
 ## 작업별로 읽기와 검증
+- 새 기능·변경 요청: 요구사항이 합의되지 않았으면 [grill 스킬](.claude/skills/resilientpos-grill/SKILL.md)로 먼저 심문한다. 설계 → 리뷰 → 구현 → 머지를 한 번에 진행하려면 [develop 스킬](.claude/skills/resilientpos-develop/SKILL.md), 여러 작업을 나눠 위임하려면 [orchestrator 스킬](.claude/skills/resilientpos-orchestrator/SKILL.md)을 사용한다.
 - 개발 시작: 해당 PR spec과 [개발 규칙](docs/wiki/development-workflow.md)을 읽는다. 지식 탐색은 [wiki 인덱스](docs/wiki/README.md)에서 관련 페이지만 선택한다.
 - 애플리케이션/빌드 변경: [현재 상태](docs/wiki/current-state.md)와 [README의 Engineering Principles](README.md#engineering-principles)를 확인한다.
 - 비즈니스·도메인·Controller 개발: [TDD 스킬](.claude/skills/resilientpos-tdd/SKILL.md)을 사용하고 지원 환경에서는 `tdd-driver`에 한 동작의 구현/테스트를 맡긴다. Repository 자체 테스트는 제외한다.
 - 애플리케이션/빌드 변경 검증: `./gradlew test`로 검증한다. 특정 테스트는 `./gradlew test --tests 'com.resilientpos.테스트클래스'`로 좁혀 실행할 수 있다.
 - 하네스 코드 변경: `python3 -m unittest discover -s scripts -p 'test_*.py'`를 실행한다. Python 3 표준 라이브러리만 사용한다.
-- 지침/컨벤션 점검은 [workflow 스킬](.claude/skills/resilientpos-workflow/SKILL.md), 커밋/push 요청은 [commit-push 스킬](.claude/skills/resilientpos-commit-push/SKILL.md)을 사용한다.
+- 지침/컨벤션 점검은 [workflow 스킬](.claude/skills/resilientpos-workflow/SKILL.md)을 사용한다. Git 작업(브랜치·커밋·push·PR·충돌·리뷰 조회)은 [git 스킬](.claude/skills/resilientpos-git/SKILL.md)을 쓰고, 커밋/push 범위 판단은 [commit-push 스킬](.claude/skills/resilientpos-commit-push/SKILL.md)을 함께 적용한다. 전체 스킬·에이전트 목록과 모델 배정은 [차용 내역](docs/wiki/borrowed-workflows.md)과 [지침 설계 근거](docs/wiki/agent-instructions.md)에 있다.
 - 개발 중/PR 제출 전: `python3 scripts/check_pr.py --base <PR-기준커밋> --worktree`를 실행한다. 문서만 바뀌면 링크·내용과 이 검사를 확인한다.
