@@ -92,7 +92,21 @@ PR 템플릿 파일(`.github/PULL_REQUEST_TEMPLATE.md`) 신설, GitHub Actions �
 
 | 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
 |---|---|---|---|
-| test_non_dated_spec_file_is_not_counted_as_new_spec | 미실행 | 미실행 | 미실행 |
+| test_non_dated_spec_file_is_not_counted_as_new_spec | 현재 구현에서 통과(회귀 고정 목적). `SPEC` 정규식을 임시로 모든 `docs/spec/*.md`를 잡게 바꿔 실행하면 `정확히 한 개 필요합니다`로 실패함을 관측한 뒤 되돌림 | `python3 -m unittest discover -s scripts -p 'test_check_pr.py'`, OK | `python3 -m unittest discover -s scripts -p 'test_*.py'`, 23개 OK |
 
 ## 결과
-개발 전 작성. 개발 후 실행 결과와 변경 이유를 추가한다.
+개발 전 spec을 독립 커밋으로 작성했다. 구현 후 아래를 확인했다.
+
+- 하네스 23개 통과(이 브랜치 기준; 회귀 테스트 1개 추가). `check_pr.py` 본문은 바꾸지 않았다.
+- 템플릿 호환: `docs/spec-template.md`의 필수 항목 placeholder만 치환한 문서가 `check_pr.sections` 기준 필수 9개 절 검사를 통과한다.
+  새 "관련 문서" 절과 인수 조건 아래 "Checkpoint와 검증 명령 (선택)" 소절은 비워 두어도 검사에 걸리지 않는다.
+- `python3 scripts/check_pr.py --base main --worktree`: PASS, 일반 6개/188줄. 제출 전 `--base main`(브랜치 이력)도 마지막 커밋 뒤 확인했다.
+- 링크 검사: `development-workflow.md`, `AGENTS.md`, `spec-template.md`의 상대 링크가 모두 해소된다(`make bootstrap` 이후 상태).
+  `wc -l AGENTS.md` = 24.
+- 볼트 스킬 서술과 대조: `resilientpos-git`의 PR 단위 원칙(요청 1건 = PR 1개, 분할 시 사용자 확인)·force-push 정책(`--force-with-lease`는
+  push된 브랜치 rebase 직후만, main 금지), `resilientpos-orchestrator`의 토폴로지(메인 = epic 브랜치, worktree는 PR 없이 수렴, epic → main은
+  범위 밖), `resilientpos-develop`의 "저장소 계약과의 관계" 표(spec 첫 커밋을 Step 3.1에서, Contract는 spec 안에 기록)와 새 규칙이 모순되지 않는다.
+  한 가지 차이는 이 문서가 "에이전트가 사용자 확인 없이 rebase·force-with-lease를 실행하지 않는다"를 추가한 점이며, 이는 스킬 서술을 좁히는 방향이라 충돌이 아니다.
+- 결정 기록: PR 크기 한도(600/800줄, 20/25개 파일)는 유지하고 epic이 한도를 넘으면 stacked PR로 나눈다. 커밋 description 언어는 한국어 기본.
+  `.develop-workflow.yaml`은 미도입. 이 세 판단은 spec 작성 시 사용자 확인을 받았다.
+- 커밋은 wiki·템플릿·변경 기록 / 공통 지침 / 회귀 테스트 / spec 결과 네 묶음으로 나눴다.
