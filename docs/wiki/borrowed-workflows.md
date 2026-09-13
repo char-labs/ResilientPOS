@@ -11,7 +11,7 @@ statusline, coding-style, workflow-guide)를 두 차례에 걸쳐 이 프로젝�
 - **원본 방식 우선**: 원본 절차(epic 브랜치, DESIGN→concerns→flows 스펙 계층, 요청 1건 = PR 1개, 자율 주행 오케스트레이션,
   Multi-LLM 설계·리뷰)와 저장소 계약이 어긋나면 원본을 유지하고, 바뀌어야 할 계약은 후속 PR
   [development-rules-original-first](../spec/2026-09-13-development-rules-original-first.md)에서 조정한다.
-- **모델은 역할별 가성비**: 검토·설계·게이트·TDD 구현은 `opus`, 절차가 정해진 분석·생성·진단은 `sonnet`, 외부 CLI 결과를
+- **모델은 역할별 가성비**: 검토·설계·게이트는 `opus`, 구현 실행자(`tdd-driver`)와 절차가 정해진 분석·생성·진단은 `sonnet`, 외부 CLI 결과를
   포장만 하는 래퍼는 `haiku`. 배정표는 [지침 설계 근거](agent-instructions.md#에이전트-모델-배정과-스킬-선행-규칙).
 - **누락 없이, 중복 없이**: 원본 111개 파일 전부가 볼트 어딘가에 대응한다. `workflow-guide`는 fleta에 흡수된 구버전이라
   파일을 복제하지 않고 유일 내용만 병합했다. 대응표는 볼트 `ResilientPOS/MIGRATION.md`에 있다.
