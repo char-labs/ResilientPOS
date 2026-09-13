@@ -9,6 +9,9 @@
 ## 제외
 <명시적인 비목표>
 
+## 관련 문서
+선택 항목. 이 PR이 따르는 장기 스펙 문서(`docs/spec/DESIGN.md`, `docs/spec/concerns/*.md`, `docs/spec/flows/*.md`)를 링크한다. 없으면 "없음"이라 적는다.
+
 ## 변경 경로
 - src/main/<구체적 경로>/**
 - src/test/<구체적 경로>/**
@@ -16,6 +19,9 @@
 
 ## 인수 조건
 <검증 가능한 완료 조건>
+
+### Checkpoint와 검증 명령 (선택)
+design·implement 스킬의 Contract를 썼다면 Checkpoint 이름, 검증 명령(예: `./gradlew test --tests 'com.resilientpos.order.*'`), 의존 Checkpoint를 표로 적는다. 별도 checkpoints 파일은 커밋하지 않는다.
 
 ## 검증
 <실행할 명령과 정상/실패 시나리오>
