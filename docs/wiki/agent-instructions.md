@@ -35,9 +35,11 @@ diff를 오염시키지 않고, 볼트 동기화로 기기 간에 공유되며, 
 
 | 등급 | 기준 | 에이전트 |
 |---|---|---|
-| `opus` | 판단 오류의 대가가 큰 검토·설계·게이트와 TDD 구현 | `tdd-driver`, `architect-claude`, `outline-claude`, `reviewer-claude`, `code-reviewer`, `spec-validator`, `workflow-reviewer`, `complexity-reducer`, `conflict-analyzer` |
-| `sonnet` | 절차가 정해진 분석·생성·진단 | `test-oracle`, `codebase-analyzer`, `document-analyzer`, `rules-generator` |
+| `opus` | 판단 오류의 대가가 큰 검토·설계·게이트 | `architect-claude`, `outline-claude`, `reviewer-claude`, `code-reviewer`, `spec-validator`, `workflow-reviewer`, `complexity-reducer`, `conflict-analyzer` |
+| `sonnet` | 구현 실행자, 절차가 정해진 분석·생성·진단 | `tdd-driver`, `test-oracle`, `codebase-analyzer`, `document-analyzer`, `rules-generator` |
 | `haiku` | 외부 CLI 결과를 포장만 하는 래퍼 | `architect-codex/gemini`, `outline-codex/gemini`, `reviewer-codex/gemini` |
+
+배정의 근거는 [Anthropic 어드바이저 도구 문서](https://platform.claude.com/docs/ko/agents-and-tools/tool-use/advisor-tool)의 측정이다. 값싼 실행자 모델에 상위 어드바이저 모델을 붙이면 상위 모델 단독과 비슷한 품질을 같거나 낮은 비용으로 내고, 실행자 역량이 어드바이저에 가까울수록 이점이 줄어든다. 이 저장소의 오케스트레이션은 구현 앞뒤에 `opus` 게이트(설계 검증 `spec-validator`·`architect-*`, 사후 검토 `code-reviewer`·QA)를 두므로 그 게이트가 어드바이저 역할이고, 구현 실행자 `tdd-driver`는 `sonnet`이다(2026-09-13, 처음 `opus`로 정했던 것을 문서 근거로 조정). 게이트 없이 `tdd-driver`를 단독 호출하는 되돌리기 비용이 큰 변경이면 호출자가 dispatch 시 `model`을 `opus`로 올린다. 볼트 `resilientpos-orchestrator`의 자문 경로도 같은 문서를 원형으로 삼아 단발 자문 허용, 권고 80단어 상한, 메인 tier 조건부 시작/종료 자문으로 맞췄다.
 
 스킬 description이 같은 요청에 경합할 때의 선행 규칙:
 - 요구사항·설계가 아직 합의되지 않았으면 `resilientpos-grill`이 먼저다. `resilientpos-develop`·`resilientpos-orchestrator`는 합의 뒤에 진입한다.

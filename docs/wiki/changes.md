@@ -42,3 +42,8 @@
 - Spec: [development-rules-original-first](../spec/2026-09-13-development-rules-original-first.md)
 - 요구사항 영향: 제품 요구사항은 변경하지 않았다. 개발 절차 규칙을 이식된 원본 워크플로우에 맞췄다: grill 선행, 장기 스펙 계층(`docs/spec/DESIGN.md`·`concerns/`·`flows/`) 위치, epic 브랜치와 "요청 1건 = PR 1개"(크기 한도는 유지, 초과 시 stacked PR), rebase 허용과 force-push 금지, 커밋 형식(`type(scope): 한국어 description`), PR 본문 4단, Contract/Checkpoint는 spec 안에만 기록, `.develop-workflow.yaml` 미도입.
 - 갱신: [개발 규칙](development-workflow.md), [spec 템플릿](../spec-template.md)(관련 문서·Checkpoint 선택 항목), 공통 지침, `scripts/test_check_pr.py`(비날짜형 spec 파일 회귀 테스트).
+
+## 2026-09-13 — 어드바이저 문서 기준 모델 배정 근거 갱신
+- Spec: [advisor-model-policy](../spec/2026-09-13-advisor-model-policy.md)
+- 요구사항 영향: 제품 요구사항은 변경하지 않았다. Anthropic 어드바이저 도구 문서의 측정("값싼 실행자 + 상위 어드바이저 ≈ 상위 단독 품질, 비용은 같거나 낮음")을 근거로 구현 실행자 `tdd-driver`를 `opus`에서 `sonnet`으로 내렸다. 설계 검증·코드 리뷰 게이트가 어드바이저 역할이며, 게이트 없는 단독 호출은 dispatch 시 `opus`로 올린다. 볼트의 자문 경로는 단발 자문 허용·권고 길이 상한·메인 tier 조건부 시작/종료 자문으로 조정했다.
+- 갱신: [지침 설계 근거](agent-instructions.md), [차용 내역](borrowed-workflows.md).
