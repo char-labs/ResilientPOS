@@ -52,4 +52,13 @@ Anthropic 어드바이저 도구 문서(platform.claude.com, agents-and-tools/to
 | 해당 없음(문서 전용) | 미실행 | 미실행 | 미실행 |
 
 ## 결과
-개발 전 작성. 개발 후 실행 결과와 변경 이유를 추가한다.
+개발 전 spec을 독립 커밋으로 작성했다. 구현 후 아래를 확인했다.
+
+- 이름·모델 대조: 볼트 `agents/*.md` 19개의 `model:`과 wiki 표가 일치한다(불일치 0). `tdd-driver`는 `sonnet` 행에 있다.
+- `docs/wiki/`에 "TDD 구현 = opus" 계열 옛 문장이 남지 않았다. 변경한 wiki 3개 파일의 상대 링크는 모두 해소된다.
+- `python3 -m unittest discover -s scripts -p 'test_*.py'`: OK. `python3 scripts/check_pr.py --base main --worktree`: PASS, 일반 4개/68줄.
+  제출 전 `--base main`(브랜치 이력)도 마지막 커밋 뒤 확인했다.
+- 같은 날 볼트 정본에 적용한 변경(참고): `agents/tdd-driver.md` model `opus`→`sonnet`과 실행자/게이트 관계 문장, `README.md`·`MIGRATION.md`
+  배정 근거, `resilientpos-orchestrator`의 `advisory-consult.md`(단발 자문 허용, 트리거 5, 모델 절, 길이 상한, 안티패턴 11·12),
+  `SKILL.md`(자문 조회 선호 등급, tier "메인 이상", 원형 문서 링크), `autonomous-driving.md`(자율 계약의 자문 항목),
+  `delegation-patterns.md`(실행자/어드바이저 구조 해설).
