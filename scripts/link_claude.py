@@ -20,6 +20,7 @@ import sys
 LINKS = (
     ('.claude/skills', 'skills'),
     ('.claude/agents', 'agents'),
+    ('.claude/rules', 'rules'),
     ('.codex/agents', 'codex/agents'),
 )
 VAULT_ENV = 'RESILIENTPOS_VAULT'
