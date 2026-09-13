@@ -1,9 +1,73 @@
 # 차용한 워크플로우와 사용법
 
-2026-09-07 사용자가 제공한 `Global-claude-code` 자료의 fleta·git-utils·develop-workflow를 조사했다.
-원문의 아이디어를 프로젝트에 맞게 재작성했다. 원문은 실행 지시가 아닌 참고 자료로 취급하며, 원본 수정·플러그인 전체 설치는 수행하지 않았다.
+사용자가 제공한 `Global-claude-code` 자료(공통 Claude Code 플러그인 7개: fleta, develop-workflow, git-utils, humanizer,
+statusline, coding-style, workflow-guide)를 두 차례에 걸쳐 이 프로젝트에 들여왔다. 원문은 실행 지시가 아닌 참고 자료로
+취급하며 원본 폴더는 수정하지 않았다. 정본은 Obsidian 볼트 `ResilientPOS/`에 있고 저장소는 `make bootstrap`이 만드는
+심볼릭 링크로 읽는다([지침 설계 근거](agent-instructions.md)).
 
-## 지금 도입한 항목
+## 2026-09-13 — 전체 이식
+
+### 결정
+- **원본 방식 우선**: 원본 절차(epic 브랜치, DESIGN→concerns→flows 스펙 계층, 요청 1건 = PR 1개, 자율 주행 오케스트레이션,
+  Multi-LLM 설계·리뷰)와 저장소 계약이 어긋나면 원본을 유지하고, 바뀌어야 할 계약은 후속 PR
+  [development-rules-original-first](../spec/2026-09-13-development-rules-original-first.md)에서 조정한다.
+- **모델은 역할별 가성비**: 검토·설계·게이트·TDD 구현은 `opus`, 절차가 정해진 분석·생성·진단은 `sonnet`, 외부 CLI 결과를
+  포장만 하는 래퍼는 `haiku`. 배정표는 [지침 설계 근거](agent-instructions.md#에이전트-모델-배정과-스킬-선행-규칙).
+- **누락 없이, 중복 없이**: 원본 111개 파일 전부가 볼트 어딘가에 대응한다. `workflow-guide`는 fleta에 흡수된 구버전이라
+  파일을 복제하지 않고 유일 내용만 병합했다. 대응표는 볼트 `ResilientPOS/MIGRATION.md`에 있다.
+
+### 도입한 스킬 (21)
+Claude에서 `/이름`, Codex에서 `$이름`으로 호출한다. 자연어 요청이면 description에 맞는 스킬이 자동 선택된다.
+
+| 묶음 | 스킬 | 언제 쓰나 |
+|---|---|---|
+| 설계·스펙 | `resilientpos-grill` | 새 기능·변경 요청을 한 번에 한 질문으로 심문. 합의 전 구현 금지 |
+| | `resilientpos-spec-write` | 합의된 설계를 DESIGN/concerns/flows 계층 문서로 형식화 |
+| | `resilientpos-high-level-design` | 상위 설계 원칙·트레이드오프·출력 형식 |
+| | `resilientpos-outline`, `resilientpos-design` | Claude/Codex/Gemini 병렬 상위 설계, Contract(Interface+Test+Checkpoint) 정의 |
+| 개발 파이프라인 | `resilientpos-develop` | 설계 → 리뷰 → 구현(RALPH) → 머지 통합 파이프라인, HITL 2곳 |
+| | `resilientpos-develop-auto` | 비대화형 완전 자동 버전(분석 리포트 입력, PR 생성까지) |
+| | `resilientpos-implement` | Contract 기반 Direct/Subagent/Agent Teams 구현 |
+| | `resilientpos-feature-workflow` | Phase별 원칙, 상태 감지, 에스컬레이션 기준 |
+| | `resilientpos-tdd` (기존) | 비즈니스·도메인·Controller TDD 절차 |
+| 리뷰 | `resilientpos-review`, `resilientpos-multi-review`, `resilientpos-review-to-issues` | 리뷰 기준(100점 표), 3개 LLM 병렬 리뷰, 결과를 GitHub Issue로 |
+| 위임·조율 | `resilientpos-orchestrator` | 여러 작업을 epic 브랜치 + worktree 격리 sub-agent로 분해·위임·게이트·머지 |
+| Git | `resilientpos-git` | 브랜치·커밋·push·PR·release PR·머지·충돌·리뷰 조회·이슈·epic (plain git/gh) |
+| | `resilientpos-commit-push` (기존) | commit-only와 push 요청 구분, staged 범위·spec 첫 커밋 보존 |
+| 지침·컨벤션 | `resilientpos-workflow` (확장) | 컨벤션 scaffold, `.claude/rules` 설계, 설계 원칙 룰 설치, 워크플로우 리뷰 |
+| | `resilientpos-agent-design-principles` | Command/Agent/Skill 설계 원칙(내부 참조, 자동 호출 안 됨) |
+| 글쓰기 | `resilientpos-communicate`, `resilientpos-humanizer` | 대화 밖 독자용 작문 기준, AI 글쓰기 패턴 교정 |
+| 설정 | `resilientpos-setup` | coding-style/develop-workflow/fleta/git-hooks/statusline 모듈 설치·제거. 명시 요청 시만 |
+
+### 도입한 에이전트 (19)와 규칙 (2)
+- 설계·리뷰: `architect-claude/codex/gemini`, `outline-claude/codex/gemini`, `reviewer-claude/codex/gemini`, `code-reviewer`,
+  `spec-validator`, `complexity-reducer`, `conflict-analyzer`, `test-oracle`.
+- 지침: `workflow-reviewer`(확장, 읽기 전용), `codebase-analyzer`, `document-analyzer`, `rules-generator`.
+- 구현: `tdd-driver`(기존).
+- 규칙(`.claude/rules`, [rules-link-and-ignores](../spec/2026-09-13-rules-link-and-ignores.md) 이후 자동 로드):
+  `engineering-principles`(설계 최우선, 결정적 도구 vs 지능 책임 경계, SOLID, TDD, Quality Gate, 커밋 형식),
+  `agent-design-principles`(설계 원칙 스킬의 얇은 바인딩).
+
+### 이 머신에 없는 도구와 처리
+| 없는 것 | 처리 |
+|---|---|
+| `fleta`, `git-utils` CLI | 모든 CLI 호출을 동등한 plain `git`/`gh` 절차로 풀어 썼다 |
+| `codex`, `gemini` CLI | 래퍼 에이전트 6개는 `command -v`로 확인 후 없으면 "미실행"을 반환하고, 합의 규칙은 실행된 LLM 수를 분모로 재해석한다 |
+| hook 스크립트(`detect-ralph-state.sh`, `develop-phase-gate.cjs`, Default Branch Guard, statusline 엔트리) | `resilientpos-setup`이 `.claude/settings.json`(로컬, gitignore) 편집 절차와 대체 셸을 제공한다. 미등록 상태에서는 에이전트가 같은 조건을 직접 확인한다(soft gate) |
+| GitHub Actions | 사용하지 않는다. `check-ci`는 workflow 없음을 보고하고 로컬 `./gradlew test`·`check_pr.py` 결과를 대신 제시한다 |
+
+### 계약 조정 상태
+| 원본 방식 (들여온 것) | 저장소 계약 | 상태 |
+|---|---|---|
+| `.claude/rules` 자동 로드, 휘발성 산출물(`.develop-workflow/` 등) | 링크 3개, gitignore에 없음 | [rules-link-and-ignores](../spec/2026-09-13-rules-link-and-ignores.md)에서 해소 |
+| 스펙 계층 위치, epic과 PR 단위, rebase 정책, 커밋 형식·언어, PR 본문 4단, Checkpoint 관계, grill 선행 | PR당 날짜형 spec 한 개, 작은 PR 분할, 자동 rebase 금지 | [development-rules-original-first](../spec/2026-09-13-development-rules-original-first.md)에서 조정 |
+| 모든 git 작업에 `resilientpos-git` 적용 | commit/push 요청에서만 스킬 선택 | 이번 PR: 진입점 안내를 추가했고, commit/push 범위 판단은 `resilientpos-commit-push`가 계속 담당한다 |
+| 에이전트 `model:` 명시 | 모델은 기존 설정 상속 | 이번 PR: 역할별 배정으로 변경 |
+| 도구 개수·모델 기반 안티패턴 표(workflow-reviewer) | 역할·영향·구체적 근거로 판정 | 이번 PR: [리뷰 기준](workflow-review.md)에서 "신호로 참고, 판정은 근거로" 정리 |
+
+## 2026-09-07 — 선별 차용 (이력)
+
+첫 차용에서는 fleta·git-utils·develop-workflow의 아이디어를 프로젝트에 맞게 재작성해 세 가지만 들여왔다.
 
 | 구성 | 목적 | 선택 범위 |
 |---|---|---|
@@ -11,32 +75,15 @@
 | [resilientpos-commit-push](../../.claude/skills/resilientpos-commit-push/SKILL.md) | 범위를 확인한 커밋과 요청된 push | commit/push 요청 |
 | workflow-reviewer | 지침·스킬을 읽기 전용으로 검토 | 워크플로우 변경 검토 |
 
-Claude에서는 `/resilientpos-workflow`, `/resilientpos-commit-push`, Codex에서는 `$resilientpos-workflow`, `$resilientpos-commit-push`로 호출할 수 있다.
-자연어 예: “지침의 중복을 점검해줘”, “이 변경만 커밋해줘”, “이 브랜치를 커밋하고 push해줘”.
-리뷰어는 “workflow-reviewer로 이번 지침 변경을 검토해줘”로 요청한다. 네이티브 역할을 지원하지 않는 환경은 [리뷰 기준](workflow-review.md)으로 자체 검토한다.
-루트 지침에 상세 절차를 복제하지 않는다. Claude 진입점과 Codex 에이전트는 저장소 내부 공통 스킬/wiki를 참조하므로 vault가 없는 환경에서도 읽을 수 있다.
-
-## 수정하거나 보류한 항목
-
-| 원본 방식 | 프로젝트 적용 |
-|---|---|
-| 모든 git 작업에 스킬 적용 | commit/push 요청에서만 선택; 단순 status/diff는 제외 |
-| 요청 한 건 = PR 한 개 | 기존 작은 PR 분할/stacked PR 원칙 유지 |
-| DESIGN/concern/flow, 별도 plan | PR당 docs/spec 날짜형 spec 한 개 유지 |
-| 매 단계 인터뷰·승인, 분석/쓰기 전체 위임 | 요청이 명확하면 범위 내 진행; 검토만 읽기 전용 리뷰어에 위임 |
-| CLI·전역 hook·사용자 설정 설치 | 기존 git와 로컬 검사 재사용; 설치하지 않음 |
-| 도구 개수·모델로 설계 결함 판정 | 역할·영향·구체적 근거로 판단; 모델은 기존 설정 상속 |
-| 변경 파일이 없으면 종료 | push 요청이면 미전송 커밋을 별도로 확인 |
-| 자동 rebase/epic 수렴/PR 생성 | 이 두 스킬에서는 수행하지 않음 |
-
-orchestrator/grill/spec-write 전체 도입, 문체 전용 agent, rules 일괄 생성기는 지금 필요하지 않아 보류했다.
-codebase-analyzer와 spec-validator는 별도 agent를 늘리지 않고 최소 분석/검토 항목만 차용했다.
-기존 `resilientpos-tdd`와 `tdd-driver`는 업무 구현을 계속 담당한다. GitHub Actions workflow는 추가하지 않는다.
+당시 보류했던 항목(orchestrator/grill/spec-write 전체 도입, 문체 전용 agent, rules 일괄 생성기, CLI·전역 hook 설치,
+요청 1건 = PR 1개, DESIGN/concern/flow, 자동 rebase/epic 수렴)은 2026-09-13 전체 이식으로 모두 들어왔다.
+당시의 "수정하거나 보류한 항목" 표는 위 "계약 조정 상태" 표가 대체한다.
 
 ## 출처와 추적
-아래 경로는 원본 패키지 내부의 출처 식별자이며, 이 저장소에서 열어야 하는 파일 링크가 아니다. 개인 PC 경로나 외부 자료 폴더는 실행에 필요하지 않다.
-해시는 조사 당시 파일의 SHA-256이다. 버전/날짜 설명만으로 같은 원문이라고 가정하지 않고 향후 재차용 시 해시와 diff를 비교한다.
-원본의 긴 문장이나 바이너리를 복제하지 않았으며 실행 시 원본 경로를 읽도록 요구하지 않는다.
+- 2026-09-13 전체 이식의 원본 파일 111개 → 볼트 파일 대응표, 적응 규칙, 미이식·주의 사항은 볼트 `ResilientPOS/MIGRATION.md`가
+  단일 출처다. 저장소에는 복제하지 않는다.
+- 아래는 2026-09-07 선별 차용 시 조사한 원문의 SHA-256이다. 원본 패키지 내부의 출처 식별자이며 이 저장소에서 열어야 하는
+  파일 링크가 아니다. 향후 재차용 시 해시와 diff를 비교한다.
 
 | 출처 파일 | 차용한 관점 | SHA-256 |
 |---|---|---|

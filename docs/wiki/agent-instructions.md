@@ -29,6 +29,22 @@ diff를 오염시키지 않고, 볼트 동기화로 기기 간에 공유되며, 
 네 경로는 `.gitignore` 대상이며, 로컬 검사는 추적하지 않는 경로를 제외하므로 심볼릭 링크 오류가
 발생하지 않는다. 링크를 gitignore에서 빼면 검사가 즉시 실패한다.
 
+## 에이전트 모델 배정과 스킬 선행 규칙
+2026-09-13 전체 이식 시 사용자가 정한 기준이다. 원본 플러그인은 대부분 `model: opus` 고정이었으나 역할별 가성비로 바꿨다.
+정본은 볼트 `agents/*.md`의 `model:`이고, `resilientpos-orchestrator`가 dispatch 할 때는 "집행 위임 tier ≤ 메인 tier" 상한이 우선한다.
+
+| 등급 | 기준 | 에이전트 |
+|---|---|---|
+| `opus` | 판단 오류의 대가가 큰 검토·설계·게이트와 TDD 구현 | `tdd-driver`, `architect-claude`, `outline-claude`, `reviewer-claude`, `code-reviewer`, `spec-validator`, `workflow-reviewer`, `complexity-reducer`, `conflict-analyzer` |
+| `sonnet` | 절차가 정해진 분석·생성·진단 | `test-oracle`, `codebase-analyzer`, `document-analyzer`, `rules-generator` |
+| `haiku` | 외부 CLI 결과를 포장만 하는 래퍼 | `architect-codex/gemini`, `outline-codex/gemini`, `reviewer-codex/gemini` |
+
+스킬 description이 같은 요청에 경합할 때의 선행 규칙:
+- 요구사항·설계가 아직 합의되지 않았으면 `resilientpos-grill`이 먼저다. `resilientpos-develop`·`resilientpos-orchestrator`는 합의 뒤에 진입한다.
+- 커밋/push 요청은 `resilientpos-git`이 절차를, `resilientpos-commit-push`가 범위 판단(commit-only vs push, staged 범위, spec 첫 커밋 보존)을 맡아 함께 로드된다.
+- 지침·스킬 파일 검토는 `workflow-reviewer`, 구현 코드 검토는 `code-reviewer`·`resilientpos-review`다.
+- `resilientpos-setup`과 `resilientpos-develop-auto`는 사용자가 명시 호출할 때만 실행한다.
+
 ## 유지와 확인
 지침 변경 시 중복·충돌·폐기된 명령을 제거하고 관련 wiki를 갱신한다. 사용자 전역 지침을 프로젝트 규칙으로 복제하지 않는다.
 새 Codex 세션에서 활성 지침을 요약하게 하고, Claude에서는 `/context`로 Memory files의 로딩을 확인할 수 있다. [OpenAI 검증 안내](https://learn.chatgpt.com/docs/agent-configuration/agents-md#verify-your-setup), [Claude 로딩 확인](https://code.claude.com/docs/en/memory#set-up-a-project-claudemd)

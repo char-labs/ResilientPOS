@@ -34,3 +34,7 @@
 - Spec: [rules-link-and-ignores](../spec/2026-09-13-rules-link-and-ignores.md)
 - 요구사항 영향: 제품 요구사항은 변경하지 않았다. `make bootstrap`이 `.claude/rules`도 볼트 `rules/`로 링크해 항상 적용되는 규칙 파일이 자동 로드되고, 이식된 워크플로우 스킬의 휘발성 산출물 경로(`.develop-workflow/`, `.review/`, `.review-output/`, `.orchestrator/`, `.plans/`)를 추적에서 제외했다.
 - 갱신: [지침 설계 근거](agent-instructions.md), 공통 지침, `.gitignore`, `scripts/link_claude.py`와 테스트.
+## 2026-09-13 — 볼트 전체 이식에 맞춘 wiki·공통 지침 진입점 갱신
+- Spec: [wiki-vault-migration-sync](../spec/2026-09-13-wiki-vault-migration-sync.md)
+- 요구사항 영향: 제품 요구사항은 변경하지 않았다. `Global-claude-code` 공통 노하우 전체(스킬 21개·에이전트 19개·rules 2개)가 볼트에 들어온 사실과 원본 방식 우선 결정, 역할별 모델 배정(opus/sonnet/haiku), 스킬 선행 규칙(합의 전이면 grill 먼저)을 wiki와 공통 지침에 반영했다. 2026-09-07의 보류 항목은 모두 도입되었고 개발 규칙 조정은 후속 spec으로 연결했다.
+- 갱신: [차용 내역](borrowed-workflows.md) 전면, [지침 설계 근거](agent-instructions.md), [리뷰 기준](workflow-review.md), [wiki 인덱스](README.md), 공통 지침.

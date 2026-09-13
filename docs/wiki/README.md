@@ -9,8 +9,13 @@
 - 애플리케이션/빌드 수정: [현재 상태](current-state.md). 필요한 도메인 원문만 [원문 목록](../references/README.md)에서 찾는다.
 - 이전 결정 추적: [변경 기록](changes.md)에서 관련 spec을 찾아 읽는다.
 - 비즈니스·도메인·Controller 개발: [TDD 테스트 전략](testing-strategy.md)과 [공통 스킬](../../.claude/skills/resilientpos-tdd/SKILL.md).
-- 워크플로우 점검·커밋/push: [차용한 스킬과 사용법](borrowed-workflows.md).
-- LLM 지침 수정: [공식 문서 조사와 적용 근거](agent-instructions.md).
+- 새 기능·변경 요청의 설계 합의: [grill 스킬](../../.claude/skills/resilientpos-grill/SKILL.md). 합의 뒤 장기 스펙은 [spec-write 스킬](../../.claude/skills/resilientpos-spec-write/SKILL.md).
+- 설계 → 리뷰 → 구현 → 머지 파이프라인: [develop 스킬](../../.claude/skills/resilientpos-develop/SKILL.md). 여러 작업의 분해·위임·머지: [orchestrator 스킬](../../.claude/skills/resilientpos-orchestrator/SKILL.md).
+- Git 작업(브랜치·커밋·push·PR·충돌·리뷰 조회): [git 스킬](../../.claude/skills/resilientpos-git/SKILL.md). commit/push 범위 판단은 [commit-push 스킬](../../.claude/skills/resilientpos-commit-push/SKILL.md)과 함께.
+- 워크플로우 점검·차용 이력·전체 스킬/에이전트 목록: [차용한 스킬과 사용법](borrowed-workflows.md).
+- 대화 밖 독자를 위한 글(wiki·PR 본문·보고): [communicate 스킬](../../.claude/skills/resilientpos-communicate/SKILL.md). AI 글쓰기 티 제거: [humanizer 스킬](../../.claude/skills/resilientpos-humanizer/SKILL.md).
+- Claude Code 부속 설정(hook·statusline) 설치·제거: [setup 스킬](../../.claude/skills/resilientpos-setup/SKILL.md). 명시 요청 시만.
+- LLM 지침 수정·에이전트 모델 배정: [공식 문서 조사와 적용 근거](agent-instructions.md).
 
 ## 문서 역할
 - `docs/wiki/`: 현재 합의된 지식. 변경 시 해당 페이지를 고치고 변경 기록에서 spec과 연결한다.
