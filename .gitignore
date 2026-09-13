@@ -43,3 +43,10 @@ out/
 .agents/
 .claude/
 .codex/
+
+### 워크플로우 스킬의 휘발성 산출물 (커밋하지 않음) ###
+.develop-workflow/
+.review/
+.review-output/
+.orchestrator/
+.plans/

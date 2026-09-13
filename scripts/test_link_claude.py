@@ -103,5 +103,27 @@ class LinkClaudeTest(unittest.TestCase):
         self.assertTrue((self.root / LINKS[1][0]).is_symlink())
 
 
+    def test_links_rules_directory(self):
+        names = {link for link, _ in LINKS}
+        self.assertIn('.claude/rules', names)
+
+        code, _ = run(root=self.root, vault=self.vault)
+
+        self.assertEqual(code, 0)
+        path = self.root / '.claude/rules'
+        self.assertTrue(path.is_symlink())
+        self.assertEqual(path.resolve(), (self.vault / 'rules').resolve())
+
+    def test_skips_rules_when_vault_lacks_it(self):
+        (self.vault / 'rules' / 'placeholder.md').unlink()
+        (self.vault / 'rules').rmdir()
+
+        code, _ = run(root=self.root, vault=self.vault)
+
+        self.assertEqual(code, 0)
+        self.assertFalse((self.root / '.claude/rules').exists())
+        self.assertTrue((self.root / '.claude/skills').is_symlink())
+
+
 if __name__ == '__main__':
     unittest.main()
