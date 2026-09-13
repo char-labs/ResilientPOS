@@ -72,8 +72,17 @@ wiki 계약 갱신과 개발 규칙 조정은 처음부터 별도 spec으로 분
 
 | 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
 |---|---|---|---|
-| test_links_rules_directory | 미실행 | 미실행 | 미실행 |
-| test_skips_rules_when_vault_lacks_it | 미실행 | 미실행 | 미실행 |
+| test_links_rules_directory | `python3 -m unittest discover -s scripts -p 'test_link_claude.py'`, `'.claude/rules' not found in {...}` | 같은 명령, 9개 OK | `python3 -m unittest discover -s scripts -p 'test_*.py'`, 24개 OK |
+| test_skips_rules_when_vault_lacks_it | 같은 명령, setUp이 rules 디렉터리를 만들지 않아 `FileNotFoundError` | 같은 명령, 9개 OK | 같은 회귀 명령, 24개 OK |
 
 ## 결과
-개발 전 작성. 개발 후 실행 결과와 변경 이유를 추가한다.
+개발 전 spec을 독립 커밋으로 작성했다. 구현 후 아래를 확인했다.
+
+- 하네스 24개 통과(신규 2개 포함, 기존 22개 회귀 없음).
+- `python3 scripts/link_claude.py` 2회 연속 실행 모두 `linked 4/4`, `readlink .claude/rules`가 볼트 `ResilientPOS/rules`를 가리키고
+  아래 `agent-design-principles.md`·`engineering-principles.md`가 열린다.
+- `RESILIENTPOS_VAULT=/nonexistent/vault`로 실행하면 안내만 출력하고 종료 코드 0.
+- `git check-ignore -v`가 `.develop-workflow/`, `.review/`, `.review-output/`, `.orchestrator/`, `.plans/` 다섯 경로를 모두 새 규칙으로 무시한다.
+  `.claude/rules` 아래는 `.claude/` 규칙으로 이미 제외되며 `git ls-files .claude`가 비어 있다.
+- `python3 scripts/check_pr.py --base main --worktree`: PASS, 일반 7개/124줄. 제출 전 `--base main`(브랜치 이력) 결과는 마지막 커밋 뒤 확인했다.
+- `Makefile`의 bootstrap 설명은 링크 개수를 나열하지 않아 고칠 문장이 없었다. 변경 경로에는 남겨 두었으나 실제 변경은 없다.
