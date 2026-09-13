@@ -140,6 +140,15 @@ class HarnessTest(unittest.TestCase):
         self.write('docs/references/source.md', 'modified')
         self.assertIn('신규 Markdown', self.errors(True))
 
+    def test_non_dated_spec_file_is_not_counted_as_new_spec(self):
+        self.start()
+        self.implementation()
+        self.write('docs/spec/DESIGN.md', '# 장기 스펙\n')
+        self.write('docs/spec/concerns/order.md', '# concern\n')
+        self.assertEqual('', self.errors(True))
+        self.commit()
+        self.assertEqual('', self.errors())
+
     def test_first_spec_must_be_filled(self):
         self.write(self.spec, '# empty')
         self.commit()
