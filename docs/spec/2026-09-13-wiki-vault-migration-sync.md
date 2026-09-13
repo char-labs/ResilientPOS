@@ -77,4 +77,15 @@ orchestrator·grill·spec-write·rules 생성기·CLI/hook을 "보류"로 적고
 | 해당 없음(문서 전용) | 미실행 | 미실행 | 미실행 |
 
 ## 결과
-개발 전 작성. 개발 후 실행 결과와 변경 이유를 추가한다.
+개발 전 spec을 독립 커밋으로 작성했다. 구현 후 아래를 확인했다.
+
+- `python3 scripts/check_pr.py --base main --worktree`: PASS, 일반 7개/219줄. 제출 전 `--base main`(브랜치 이력)도 마지막 커밋 뒤 확인했다.
+- `python3 -m unittest discover -s scripts -p 'test_*.py'`: 통과(문서 PR, 회귀 없음).
+- 이름 대조: 볼트 `skills/*`(21개)와 `agents/*`(19개)의 이름·`model:`을 스크립트로 뽑아 `borrowed-workflows.md` 스킬 표와
+  `agent-instructions.md` 모델 표와 대조했다. 누락·불일치 0.
+- 링크 검사: `AGENTS.md`, `docs/wiki/README.md`, `agent-instructions.md`, `workflow-review.md`의 상대 링크는 모두 해소된다.
+  `borrowed-workflows.md`가 가리키는 형제 spec 두 개(`rules-link-and-ignores`, `development-rules-original-first`)는 각각
+  다른 브랜치에 있어 이 브랜치 단독으로는 깨진 링크로 보이며, 권장 병합 순서(1 → 2 → 3)대로 합치면 해소된다.
+  이 PR을 먼저 병합하면 3번 spec 링크만 그 PR 병합 전까지 비어 있다.
+- `wc -l AGENTS.md` = 24(200 미만). `git grep "$HOME"` 결과 없음.
+- 커밋은 wiki 본문·인덱스·변경 기록 / 공통 지침 진입점 / spec 결과 기록 세 묶음으로 나눴다.
