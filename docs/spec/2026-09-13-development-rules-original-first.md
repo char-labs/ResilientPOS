@@ -110,3 +110,4 @@ PR 템플릿 파일(`.github/PULL_REQUEST_TEMPLATE.md`) 신설, GitHub Actions �
 - 결정 기록: PR 크기 한도(600/800줄, 20/25개 파일)는 유지하고 epic이 한도를 넘으면 stacked PR로 나눈다. 커밋 description 언어는 한국어 기본.
   `.develop-workflow.yaml`은 미도입. 이 세 판단은 spec 작성 시 사용자 확인을 받았다.
 - 커밋은 wiki·템플릿·변경 기록 / 공통 지침 / 회귀 테스트 / spec 결과 네 묶음으로 나눴다.
+- 병합 충돌 예방을 위해 이 브랜치를 `docs/wiki-vault-migration-sync` 위로 rebase 해 stacked PR로 바꿨다(2026-09-13). spec 첫 커밋은 base 이후 첫 커밋으로 유지되고, `python3 scripts/check_pr.py --base docs/wiki-vault-migration-sync`가 PASS다. 위 결과의 `--base main` 검사는 rebase 전 기록이다.
