@@ -29,6 +29,21 @@ diff를 오염시키지 않고, 볼트 동기화로 기기 간에 공유되며, 
 네 경로는 `.gitignore` 대상이며, 로컬 검사는 추적하지 않는 경로를 제외하므로 심볼릭 링크 오류가
 발생하지 않는다. 링크를 gitignore에서 빼면 검사가 즉시 실패한다.
 
+## Codex 에이전트
+볼트 `codex/agents/*.toml` 6개(`tdd_driver`, `test_oracle`, `workflow_reviewer`, `code_reviewer`, `spec_validator`,
+`complexity_reducer`)를 두고 저장소 `.codex/agents` 링크로 연결한다. Codex는 프로젝트 스코프 `.codex/agents`를
+심볼릭 링크를 통해 그대로 읽는다 — 2026-09-14에 `codex exec`로 `workflow_reviewer`를 실제 스폰해 AGENTS.md를
+읽히고 결과를 받아 확인했다.
+
+Claude 정의(`agents/*.md`)와 역할은 같고 형식만 다르다. Codex TOML의 필수 필드는 `name`, `description`,
+`developer_instructions`이고 선택 필드로 `model`, `model_reasoning_effort`, `sandbox_mode`를 쓴다. Claude의 모델
+배정은 Codex에서 추론 노력으로 옮긴다 — `opus` 역할은 `high`, `sonnet` 역할은 `medium`이며 모델은 모두
+`gpt-5.3-codex`다. 읽기 전용 검토자는 `sandbox_mode = "read-only"`, 구현·테스트 실행이 필요한 `tdd_driver`와
+`test_oracle`만 `workspace-write`다.
+
+스킬은 `[[skills.config]]`로 물리지 않는다. `developer_instructions` 안에서 저장소 경로(`.claude/skills/...`,
+`docs/wiki/testing-strategy.md`)를 읽게 해 스킬 정본이 하나로 유지된다.
+
 ## 에이전트 모델 배정과 스킬 선행 규칙
 2026-09-13 전체 이식 시 사용자가 정한 기준이다. 원본 플러그인은 대부분 `model: opus` 고정이었으나 역할별 가성비로 바꿨다.
 정본은 볼트 `agents/*.md`의 `model:`이고, `resilientpos-orchestrator`가 dispatch 할 때는 "집행 위임 tier ≤ 메인 tier" 상한이 우선한다.
