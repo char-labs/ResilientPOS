@@ -59,4 +59,19 @@ effort 대응), `docs/wiki/changes.md`(기록). 제품 요구사항은 바뀌지
 | 해당 없음(문서 전용) | 미실행 | 미실행 | 미실행 |
 
 ## 결과
-개발 전 작성. 개발 후 실행 결과와 변경 이유를 추가한다.
+개발 전 spec을 독립 커밋으로 작성했다. 구현 후 아래를 확인했다.
+
+- 이름 대조: 볼트 `codex/agents/*.toml` 6개의 `name`이 모두 `borrowed-workflows.md`에 등재되어 있다(불일치 0).
+- CLI 실측: `codex --version` → `codex-cli 0.154.0`, `command -v gemini` 실패. 표의 서술과 일치한다.
+- 잔존 검사: `docs/wiki/`에 남은 "codex ... 없다" 문장은 정정 사실을 설명하는 한 줄뿐이다.
+- 변경한 wiki 3개 파일의 상대 링크가 모두 해소된다.
+- `python3 scripts/check_pr.py --base main --worktree`: PASS, 일반 4개/97줄. 제출 전 `--base main`도 마지막 커밋 뒤 확인했다.
+- `python3 -m unittest discover -s scripts -p 'test_*.py'`: OK.
+
+같은 날 볼트에 반영한 변경(참고): `codex/agents/*.toml` 6개 신규, `README.md`에 Codex 에이전트 절과 연결 표 갱신,
+`MIGRATION.md`·`skills/resilientpos-{design,outline,multi-review,feature-workflow,develop-auto}`·
+`skills/resilientpos-review/references/prompt-template.md`의 CLI 부재 서술 정정, `agents/{architect,outline,reviewer}-codex.md`의
+현재 상태 각주와 `codex exec --sandbox read-only --skip-git-repo-check` 플래그 보강.
+
+검증 과정에서 첫 스폰 시도가 `unknown agent_type`으로 실패했으나, 임시 프로젝트로 심볼릭 링크 구조를 격리 검증해
+링크가 원인이 아님을 확인했고 재시도에서 정상 동작했다. 일시적 문제로 판단한다.
