@@ -47,3 +47,9 @@
 - Spec: [advisor-model-policy](../spec/2026-09-13-advisor-model-policy.md)
 - 요구사항 영향: 제품 요구사항은 변경하지 않았다. Anthropic 어드바이저 도구 문서의 측정("값싼 실행자 + 상위 어드바이저 ≈ 상위 단독 품질, 비용은 같거나 낮음")을 근거로 구현 실행자 `tdd-driver`를 `opus`에서 `sonnet`으로 내렸다. 설계 검증·코드 리뷰 게이트가 어드바이저 역할이며, 게이트 없는 단독 호출은 dispatch 시 `opus`로 올린다. 볼트의 자문 경로는 단발 자문 허용·권고 길이 상한·메인 tier 조건부 시작/종료 자문으로 조정했다.
 - 갱신: [지침 설계 근거](agent-instructions.md), [차용 내역](borrowed-workflows.md).
+
+## 2026-09-14 — Codex 에이전트 도입과 외부 CLI 가용성 정정
+- Spec: [codex-agents-and-cli-correction](../spec/2026-09-14-codex-agents-and-cli-correction.md)
+- 요구사항 영향: 제품 요구사항은 변경하지 않았다. 볼트 `codex/agents/`에 Codex 에이전트 6개(`tdd_driver`, `test_oracle`, `workflow_reviewer`, `code_reviewer`, `spec_validator`, `complexity_reducer`)를 만들어 저장소 `.codex/agents` 링크로 연결했고, 실제 스폰으로 로드를 검증했다. 2026-09-07 spec이 만들었다가 볼트 이전 중 유실된 2개를 포함한다.
+- 요구사항 영향: 2026-09-13 이식 당시 `codex` CLI를 "없음"으로 적은 것이 오판이었다. 실제로는 0.154.0이 설치되어 있어 `*-codex` 래퍼 3개가 동작하며, Multi-LLM 경로는 Claude 단독이 아니라 Claude + Codex 2개로 돈다. `gemini`만 여전히 없다. 래퍼의 `command -v` 확인 로직은 머신 이식성을 위해 그대로 둔다.
+- 갱신: [차용 내역](borrowed-workflows.md), [지침 설계 근거](agent-instructions.md).
