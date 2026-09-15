@@ -53,6 +53,20 @@ class MoneyTest {
     }
 
     @Test
+    fun `통화별 0 금액은 canonical scale을 가지고 덧셈의 항등원이다`() {
+        assertEquals(Money.of("0", krw), Money.zero(krw))
+        assertEquals(Money.of("0.00", usd), Money.zero(usd))
+        assertEquals(Money.of("1000", krw), Money.zero(krw) + Money.of("1000", krw))
+    }
+
+    @Test
+    fun `여러 금액을 0에서 시작해 합산한다`() {
+        val lines = listOf(Money.of("10.50", usd), Money.of("0.25", usd), Money.of("4.25", usd))
+
+        assertEquals(Money.of("15.00", usd), lines.fold(Money.zero(usd), Money::plus))
+    }
+
+    @Test
     fun `같은 통화 금액의 크기를 비교한다`() {
         assertEquals(1, Money.of("1001", krw).compareTo(Money.of("1000", krw)))
         assertEquals(0, Money.of("1000", krw).compareTo(Money.of("1000", krw)))

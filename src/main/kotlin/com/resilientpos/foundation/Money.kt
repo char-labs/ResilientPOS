@@ -34,6 +34,8 @@ data class Money(val amount: BigDecimal, val currency: Currency) {
         const val INVALID_MONEY_SCALE = "INVALID_MONEY_SCALE"
         const val CURRENCY_MISMATCH = "CURRENCY_MISMATCH"
 
+        fun zero(currency: Currency): Money = of("0", currency)
+
         fun of(raw: String, currency: Currency): Money {
             val canonical = try {
                 BigDecimal(raw).setScale(currency.defaultFractionDigits, RoundingMode.UNNECESSARY)
