@@ -53,3 +53,12 @@
 - 요구사항 영향: 제품 요구사항은 변경하지 않았다. 볼트 `codex/agents/`에 Codex 에이전트 6개(`tdd_driver`, `test_oracle`, `workflow_reviewer`, `code_reviewer`, `spec_validator`, `complexity_reducer`)를 만들어 저장소 `.codex/agents` 링크로 연결했고, 실제 스폰으로 로드를 검증했다. 2026-09-07 spec이 만들었다가 볼트 이전 중 유실된 2개를 포함한다.
 - 요구사항 영향: 2026-09-13 이식 당시 `codex` CLI를 "없음"으로 적은 것이 오판이었다. 실제로는 0.154.0이 설치되어 있어 `*-codex` 래퍼 3개가 동작하며, Multi-LLM 경로는 Claude 단독이 아니라 Claude + Codex 2개로 돈다. `gemini`만 여전히 없다. 래퍼의 `command -v` 확인 로직은 머신 이식성을 위해 그대로 둔다.
 - 갱신: [차용 내역](borrowed-workflows.md), [지침 설계 근거](agent-instructions.md).
+
+## 2026-09-15 — Spring Modulith 모듈 골격과 경계 검증
+- Spec: [module-skeleton](../spec/2026-09-15-module-skeleton.md)
+- 요구사항 영향: 제품 요구사항은 변경하지 않았다. [개발 가이드 1.1 Public API rule](../references/03_Development_Guide.md)과
+  [도메인 청사진 2절](../references/05_Domain_Development_Blueprint.md)의 bounded context 7개를 패키지 경계로 선언하고,
+  타 모듈 `internal` 참조 금지를 `ApplicationModules.verify()` 테스트로 강제했다. 도메인 타입·스키마·API는 없다.
+- 결정: Modulith starter는 `core`와 `test` 2개로 시작한다. 원문 2.2절의 baseline은 완성 시점의 조립 상태이므로
+  EPR(`starter-jpa`)은 도메인 이벤트가 생기는 checkout PR에서, `starter-insight`는 관측성 단계에서 추가한다.
+- 갱신: [현재 상태](current-state.md).
