@@ -47,14 +47,36 @@ def remote_is_ahead(base_ref, head):
         return True
 
 
+def tracked_paths(ref):
+    return {p for p in git('ls-tree', '-r', '--name-only', '-z', ref).decode().split('\0') if p}
+
+
+def migration_conflicts(paths):
+    """같은 버전 마이그레이션이 둘 이상 머지되면 배포된 애플리케이션이 기동에서 죽는다."""
+    versions = {}
+    for path in paths:
+        version = migration_version(path)
+        if version:
+            versions.setdefault(version, set()).add(path)
+    return [
+        f'Flyway 버전 {".".join(str(number) for number in version)} 마이그레이션이 여럿입니다: '
+        f'{", ".join(sorted(conflicting))}'
+        for version, conflicting in sorted(versions.items()) if len(conflicting) > 1
+    ]
+
+
 def sections(content):
     parts = re.split(r'^## (.+)\n', content, flags=re.M)
     return dict(zip(parts[1::2], parts[2::2]))
 
 
-def check(base, head='HEAD', worktree=False):
+def check(base, head='HEAD', worktree=False, migrations_only=False):
     os.chdir(git('rev-parse', '--show-toplevel').decode().strip())
     base_ref = base
+    if migrations_only:
+        # 워크플로는 머지 결과 위에서 돌아 spec 첫 커밋 판정이 달라진다. 버전 중복만 본다.
+        conflicts = migration_conflicts(tracked_paths(head) | tracked_paths(base_ref))
+        return conflicts, [], f'마이그레이션 버전 검사 전용 (기준 {base_ref})'
     base = git('merge-base', base, head).decode().strip()
     before, after = tree(base), tree(head)
     errors, warnings = [], []
@@ -112,18 +134,7 @@ def check(base, head='HEAD', worktree=False):
             before.get(log, b'').decode('utf-8').splitlines(), new_log.splitlines()) if line.startswith('+ '))
         if log not in changed or f'../spec/{Path(spec).name}' not in added or '요구사항 영향:' not in added:
             errors.append('wiki 변경 기록에 이번 spec 링크와 요구사항 영향: 설명을 추가하세요.')
-    # 같은 버전 마이그레이션이 둘 이상 머지되면 배포된 애플리케이션이 기동에서 죽는다.
-    # 이번 PR이 추가한 파일만으로는 중복이 아닐 수 있으므로 기준 브랜치의 파일과 함께 본다.
-    base_paths = git('ls-tree', '-r', '--name-only', '-z', base_ref).decode().split('\0')
-    versions = {}
-    for path in set(after) | {p for p in base_paths if p}:
-        version = migration_version(path)
-        if version:
-            versions.setdefault(version, set()).add(path)
-    for version, paths in sorted(versions.items()):
-        if len(paths) > 1:
-            label = '.'.join(str(number) for number in version)
-            errors.append(f'Flyway 버전 {label} 마이그레이션이 여럿입니다: {", ".join(sorted(paths))}')
+    errors.extend(migration_conflicts(set(after) | tracked_paths(base_ref)))
     if remote_is_ahead(base_ref, head):
         warnings.append(f'기준의 원격 origin/{base_ref}이 head에 없습니다. fetch/rebase 후 다시 실행하세요.')
     regular_files = regular_lines = source_files = source_lines = 0
@@ -160,9 +171,11 @@ def main():
     parser.add_argument('--base', required=True, help='PR base ref/SHA')
     parser.add_argument('--head', default='HEAD')
     parser.add_argument('--worktree', action='store_true')
+    parser.add_argument('--migrations-only', action='store_true',
+                        help='Flyway 버전 중복만 검사 (워크플로용)')
     args = parser.parse_args()
     try:
-        errors, warnings, stats = check(args.base, args.head, args.worktree)
+        errors, warnings, stats = check(args.base, args.head, args.worktree, args.migrations_only)
     except (subprocess.CalledProcessError, UnicodeError, OSError) as exc:
         parser.exit(1, f'검사 실패: {exc}\n')
     print(stats)
@@ -171,7 +184,7 @@ def main():
     for message in errors:
         print(f'FAIL: {message}')
     if not errors:
-        print('PASS: PR contract')
+        print('PASS: 마이그레이션 버전' if args.migrations_only else 'PASS: PR contract')
     return bool(errors)
 
 

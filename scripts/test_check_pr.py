@@ -229,3 +229,23 @@ class MigrationVersionTest(HarnessTest):
         self.assertIn('원격', self.warnings())
 
 
+class MigrationsOnlyModeTest(HarnessTest):
+    """워크플로는 머지 커밋 위에서 돌기 때문에 spec 이력 규칙 없이 버전만 본다."""
+
+    def test_reports_duplicates_without_spec_rules(self):
+        self.migration('V002__order_create_orders.sql')
+        self.migration('V2__payment_create_attempts.sql')
+        self.commit()
+        errors, _, _ = check(self.base, migrations_only=True)
+
+        self.assertEqual(1, len(errors), errors)
+        self.assertIn('Flyway 버전 2', errors[0])
+
+    def test_ignores_missing_spec_and_size_rules(self):
+        self.write('src/example.txt', 'spec 없이 큰 변경\n')
+        self.migration('V002__order_create_orders.sql')
+        self.commit()
+        errors, _, _ = check(self.base, migrations_only=True)
+
+        self.assertEqual([], errors)
+        self.assertIn('정확히 한 개', '\n'.join(check(self.base)[0]))
