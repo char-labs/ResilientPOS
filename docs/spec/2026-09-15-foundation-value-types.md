@@ -74,6 +74,7 @@ python3 scripts/check_pr.py --base feature/module-skeleton --worktree
 | `덧셈과 뺄셈과 정수 배수가 scale을 유지하고 원본을 바꾸지 않는다` / `같은 통화 금액의 크기를 비교한다` | `./gradlew test --tests 'com.resilientpos.foundation.*'` — 최소 선언의 `TODO()`가 `NotImplementedError`를 던져 실패 (10개 전부) | `./gradlew test --tests 'com.resilientpos.foundation.*'` — BUILD SUCCESSFUL | `./gradlew test` — BUILD SUCCESSFUL, 13 tests |
 | `version 7 식별자를 만든다` / `시간 성분이 뒤로 가지 않는다` / `중복이 없다` / `시간 성분은 생성 시각을 담는다` | `./gradlew test --tests 'com.resilientpos.foundation.*'` — 최소 선언의 `TODO()`가 `NotImplementedError`를 던져 실패 (10개 전부) | `./gradlew test --tests 'com.resilientpos.foundation.*'` — BUILD SUCCESSFUL, UuidV7IdentifierGeneratorTest 4개 통과 | `./gradlew test` — BUILD SUCCESSFUL, 13 tests |
 | `같은 통화 금액의 크기를 비교한다`에 부등호 연산자 단언 추가 | RED 없음. `Comparable` 제거는 동작 변경이 아니라 타입 노출 축소라 실패하는 실행 경로를 만들 수 없다. 대신 `listOf(...).sorted()` 임시 코드로 `Unresolved reference ... receiver type mismatch` 컴파일 차단을 확인하고 제거했다 | `./gradlew test` — BUILD SUCCESSFUL | `./gradlew test` — BUILD SUCCESSFUL, 13 tests |
+| `통화별 0 금액은 canonical scale을 가지고 덧셈의 항등원이다` / `여러 금액을 0에서 시작해 합산한다` | `./gradlew test --tests 'com.resilientpos.foundation.MoneyTest'` — `zero`를 `TODO()`로 선언해 `NotImplementedError`로 2개 실패 | 같은 명령 통과 | `./gradlew test` — BUILD SUCCESSFUL, 15 tests |
 | `bounded context 7개와 foundation을 application module로 인식한다` | `./gradlew test --tests 'com.resilientpos.ModuleStructureTest'` — `expected: <[fulfillment, order, ...]> but was: <[foundation, fulfillment, order, ...]>`. foundation 패키지가 생기면서 모듈이 8개가 됨 | `package-info.java` 선언과 기대값 갱신 후 같은 명령 통과 | `./gradlew test` — BUILD SUCCESSFUL, 13 tests |
 
 ## 결과
@@ -106,3 +107,19 @@ open/shared 모듈 설정이 필요 없다.
 
 wiki 본문은 고치지 않았다. `current-state.md`가 적은 `Money`의 성질(canonical scale 유지, scale 초과와 통화 불일치 거절)은
 그대로이고, `Comparable` 구현 여부는 wiki에 적은 적이 없다.
+
+### 범위 조정 - zero 추가 (개발 후)
+다른 프로젝트의 `Money` 구현을 참고 자료로 받아 `ZERO` 상수 아이디어를 가져왔다. 주문 라인 합계를 `fold`로 계산하려면
+시작값이 필요하고, 그때 없으면 `reduce`와 빈 목록 예외 처리로 우회하게 된다.
+
+통화가 있으므로 상수 하나가 아니라 `zero(currency)` 팩토리로 뒀다. 원화는 scale 0, 달러는 scale 2의 0을 돌려준다.
+
+같은 참고 자료에서 가져오지 않은 것과 이유를 남긴다.
+
+- `Double`/`Long`/`Int` 생성자와 `toDouble`/`toLong`/`toInt` 변환: 부동소수점 값이 금액 타입 안으로 들어오는 경로이고
+  정수 변환은 소수부를 조용히 버린다. 개발 가이드 3.2가 금지한다.
+- `multiply(money: Money)`: 금액끼리 곱하면 차원이 맞지 않는다. 수량은 스칼라이므로 `times(multiplier: Int)`를 유지한다.
+- `equals`/`hashCode` 직접 구현: 참고 구현은 읽는 시점에 scale 차이를 흡수하지만, 이 프로젝트는 생성 시점에 canonical
+  scale을 강제하므로 `data class` 기본 구현으로 충분하다.
+- `isGreaterThan`/`isLessThan` 이름 메서드: `compareTo` 연산자로 부등호가 이미 동작한다. 같은 일을 하는 API를 두 벌
+  두지 않는다.
