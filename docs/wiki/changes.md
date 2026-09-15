@@ -113,4 +113,7 @@
   식별자 `uuid`, 테이블 `t_` + 단수 명사. 모두 원문과 DB 설계 리뷰에서 정한 것을 처음 wiki에 적었다.
 - 미확정: 모듈 공개 타입의 위치(ADR-002의 모듈 루트 vs 청사진 §6.1의 `api/`)와 공유 도메인 타입(`Transition`·`DomainEvent`)의 위치.
   첫 도메인 PR에서 정한다.
+- 참고 사례의 도식 6장에서 가져온 규약: 상태 변경과 이력을 한 aggregate에 두는 기준(aggregate 안의 구성 표), 경계마다 타입
+  접미사를 고정하는 표, DESIGN 컨텍스트 맵·flow 시퀀스 도식 규약. 사례와 달리 use case는 컨텍스트 안에 두고 트랜잭션이
+  컨텍스트를 넘지 않게 한 이유(독립 배포 경로)를 적었다. 볼트 spec-write 템플릿(DESIGN·flow)에 규약 링크 한 줄씩 추가.
 - 갱신: [도메인 모델](domain-model.md) 신설, [wiki 인덱스](README.md), `AGENTS.md`, README 설계 절.

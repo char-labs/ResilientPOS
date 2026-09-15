@@ -9,7 +9,7 @@ Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰�
 원문 근거는 [도메인 청사진](../references/05_Domain_Development_Blueprint.md), [개발 가이드](../references/03_Development_Guide.md),
 [시스템 설계](../references/02_System_Design.md)다. 원문은 참고 자료라 이 페이지가 정본이고, 원문과 다르게 정한 것은 §4에 적는다.
 용어 정의의 골격은 [카카오페이 여신코어 DDD 사례](https://tech.kakaopay.com/post/backend-domain-driven-design/)를 참고했고,
-그 사례와 다르게 가는 점은 §6에 있다.
+사례의 도식 여섯 장에서 가져온 규약은 §2·§5·§6에, 사례와 다르게 가는 점은 §8에 있다.
 
 ## 1. 용어 정의
 
@@ -51,10 +51,26 @@ Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰�
 - `sync`는 접수·중복·순서만 판정하고, 받아들인 명령은 소유 컨텍스트의 Command Facade로 넘긴다. `SyncOperationApplied`는 기술 감사 이벤트이며 `OrderCreated`를 대체하지 않는다.
 - `foundation`은 프레임워크 없는 값 타입(`Money`, 식별자 생성기)만 공유한다. 공유 도메인 모델을 두는 곳이 아니다.
 
+### aggregate 안의 구성
+루트가 바뀔 때 같은 트랜잭션에서 함께 남겨야 하는 것은 별도 컨텍스트가 아니라 그 aggregate의 자식 엔티티다. 사례의 컨텍스트 맵에서 자식 엔티티 대부분이 이력·기록(잔액 변경이력, 청구내역 변경이력)이고, 저자가 "한도 변경과 잔액 변경이력 생성이 따로 구현되면 이력이 누락된다"를 경계의 근거로 든 것과 같은 이유다. 아래는 [청사진 §2·§6.2](../references/05_Domain_Development_Blueprint.md)와 2026-09-15 DB 설계 리뷰의 설계안이며, 각 모듈의 첫 마이그레이션이 정본이 된다.
+
+| 루트 | 자식 엔티티 (같은 트랜잭션) | 왜 같은 aggregate인가 |
+|---|---|---|
+| `Order` | `OrderLine`(판매 시점 상품 코드·이름·단가·수량), checkout(회차별 확정 금액), 상태 전이 이력 | line 변경과 금액, checkout 확정과 상태 전이가 한 커밋으로 맞아야 한다 |
+| `PaymentAttempt` | provider idempotency 기록, 승인·취소 시도 결과 | "provider 결과를 한 번만 적용했다"를 같은 트랜잭션의 기록이 증명한다 |
+| `Terminal` | credential rotation 이력 | 회전과 이력이 따로 커밋되면 어느 자격증명이 유효한지 알 수 없다 |
+| `TerminalSyncState` | operation 접수 기록(`t_sync_operation`) | watermark 전진과 접수 기록이 함께 커밋돼야 gap을 건너뛰지 않는다 |
+| `ReconciliationCase` | evidence, 조치·승인 감사 기록 | "근거·감사 없이 해결하지 않는다"는 불변식이 자식과 루트를 묶는다 |
+| `Store` | policy 버전 | 과거 주문에 적용된 정책을 추적하려면 버전이 루트와 함께 남아야 한다 |
+| `KitchenTicket`, `ReceiptDelivery` | 없음(단독 루트) | natural key 한 건이면 충분하다 |
+
+자식 엔티티는 루트를 통해서만 만들고 바꾼다. 다른 aggregate의 사실(예: 결제 승인)이 필요하면 자식으로 끌어오지 않고 이벤트로 받는다. 한 컨텍스트에 루트가 여럿일 수 있다(`fulfillment`). 루트 하나가 곧 컨텍스트는 아니다.
+
 ## 3. 유비쿼터스 언어 용어집
 
 코드 식별자, 테이블·컬럼 이름, 이벤트 이름, spec 본문은 이 표의 단어를 쓴다. 화면 라벨은 현장 용어("포스기")를 써도 되지만 도메인·스키마 이름은 바꾸지 않는다.
 새 단어가 필요하면 PR spec에서 제안하고 머지 시 이 표에 추가한다. 이미 있는 단어에 다른 뜻을 붙이지 않는다.
+영어 이름은 직역이 아니라 업무 의미를 담는다. 사례가 납부를 Payment가 아니라 Recovery(한도를 복원한다)로 부른 것처럼, 이 저장소의 `reconciliation`(불일치를 근거로 해소한다), `fulfillment`(주문 이후를 이행한다)도 같은 기준이다.
 
 | 용어 (코드·스키마) | 뜻 | 기각한 대안 | 이유 |
 |---|---|---|---|
@@ -106,21 +122,49 @@ Spring Modulith 기본은 모듈 루트만 공개이므로 `api/`를 쓰려면 `
 ### 4.5 미확정 — 공유 도메인 타입의 위치
 전이 결과를 담는 `Transition<A>`(바뀐 aggregate + 발생한 이벤트)와 이벤트 표시 타입 `DomainEvent`는 모든 컨텍스트가 쓴다. `foundation`에 두면 §2의 "공유 도메인 모델을 두지 않는다"와 부딪히고, 모듈마다 두면 같은 타입이 일곱 번 생긴다. 첫 도메인 PR에서 정하고 이 절을 갱신한다. 볼트 규칙은 형태만 정하고 위치는 이 절을 따른다.
 
-## 5. 도메인 설계 체크리스트
+## 5. 레이어 경계를 넘는 타입
+
+접미사만 보고 어느 레이어의 객체인지 읽혀야 한다. 사례의 레이어 도식이 화살표마다 `***Request`, `***Command`, `***DomainEntity`, `***JPAEntity`를 적어 경계마다 넘어가는 타입을 고정한 것과 같은 의도다.
+
+| 경계 | 넘어가는 타입 | 넘어가지 않는 것 |
+|---|---|---|
+| HTTP ↔ Controller | `*Request` / `*Response` | Command, aggregate |
+| Controller·이벤트 리스너·스케줄러 ↔ Facade | `*Command`, `*Query`/`*Criteria` → `*Result`, `*View` | Request DTO, JPA 엔티티 |
+| Facade ↔ Service·aggregate | aggregate, Value Object, `*Policy`, `Transition` | DTO |
+| Service·aggregate ↔ Repository | aggregate, ID 값 타입 | Spring Data 타입, JPA 엔티티 |
+| Repository 구현 ↔ JPA | `*Entity` — adapter 안에서만 | — |
+| 모듈 ↔ 모듈 | 공개 Facade의 Command/Result, 도메인 이벤트, ID 값 타입 | `internal` 아래 전부, 테이블 |
+
+## 6. 도식 규약
+
+장기 스펙의 [DESIGN·flow 계층](development-workflow.md#장기-스펙-계층과-pr-spec)에 그림을 넣을 때 지킨다. 사례가 컨텍스트 맵과 승인 시퀀스를 그린 방식에서 가져왔다.
+
+**컨텍스트 맵 (DESIGN)**
+- 컨텍스트마다 상자 하나. 안에 aggregate 루트와 자식 엔티티를 구분해 적고, 화살표는 루트 → 자식만 긋는다.
+- 컨텍스트 사이에는 화살표를 긋지 않는다. 컨텍스트 간 관계는 이벤트 이름 목록(§2 소유 규칙)으로 따로 적는다. 그림에 교차 화살표가 필요해지면 경계가 의심스럽다는 신호다.
+
+**유스케이스 시퀀스 (flow)**
+- 참여자는 호출자, Facade, 관여 컨텍스트, DB, 이벤트 전달(EPR), 소비자 순으로 놓는다. 컨텍스트 lifeline에 닿는 메시지 하나가 그 컨텍스트가 제공해야 하는 공개 기능 하나다. 팀이 그림을 보며 각자 맡은 컨텍스트의 기능 목록을 확인한다.
+- 전제 조건 확인(조회)은 트랜잭션 상자 **앞에** 두고, 실패 분기는 그 자리에서 끝낸다. 사례의 승인 시퀀스는 조회 4건과 실패 3건을 모두 상자 앞에 두었다.
+- 트랜잭션 상자는 쓰기만 감싼다. 상자 안이 한 커밋으로 맞아야 하는 전부다. provider 호출·외부 전송은 상자 밖이다.
+- 커밋 뒤에 발행되는 이벤트와 그 소비자(다른 컨텍스트의 후속 쓰기)를 같은 그림 아래쪽에 그린다. 호출자 응답은 커밋 직후이고 소비자보다 먼저다.
+- 실패 시퀀스(중복·응답 유실·`UNKNOWN`·gap)는 flow 템플릿대로 같은 파일에 둔다.
+
+## 7. 도메인 설계 체크리스트
 
 grill 심문과 업무 기능 spec의 "소유 모듈 / Command·Query·Event / 불변식" 항목을 채울 때 순서대로 묻는다.
 
 1. **소유** — 이 데이터를 소유하는 bounded context는 하나인가? 둘 이상이면 경계가 잘못됐거나 한쪽이 이벤트로 받아야 한다.
 2. **루트와 트랜잭션** — aggregate 루트는 무엇이고, 한 트랜잭션에서 함께 맞아야 하는 것은 무엇인가? 그 밖은 ID로만 참조한다.
 3. **유일한 진입점** — 이 기능을 다른 컨텍스트에서 수행할 수 있는가? 있다면 안 된다. 소유 컨텍스트의 Facade나 이벤트로만 한다.
-4. **규칙의 위치** — 계산·검증이 데이터 가까이(Aggregate·Value Object·Policy) 있는가? Service에 `amount + discount`, `status = ...`, validation if-else가 늘면 옮긴다.
+4. **규칙의 위치** — 계산·검증이 데이터 가까이(Aggregate·Value Object·Policy) 있는가? Service에 `amount + discount`, `status = ...`, validation if-else가 늘면 옮긴다. 루트가 바뀔 때 남겨야 하는 이력은 자식 엔티티로 같은 트랜잭션에 있는가(§2)?
 5. **단어** — 새 단어가 생겼는가? §3에 있는 단어인가, 같은 단어를 다른 뜻으로 쓰고 있지 않은가?
 6. **사실** — 발행하는 이벤트는 과거형 한 가지 사실인가? "완료"처럼 여러 사실이 섞이면 나눈다.
 7. **실패** — 중복 요청, 응답 유실, `UNKNOWN`, gap, 재처리가 상태 모델에 있는가? [README 완료 조건](../../README.md#engineering-principles)의 실패 시나리오와 맞춘다.
 
-## 6. 참고 사례와 다르게 가는 결정
+## 8. 참고 사례와 다르게 가는 결정
 
-[카카오페이 사례](https://tech.kakaopay.com/post/backend-domain-driven-design/)의 용어 정의와 "도메인 기능은 그 도메인을 통해서만"이라는 원칙은 그대로 따른다. 구조는 다음 세 곳에서 다르다.
+[카카오페이 사례](https://tech.kakaopay.com/post/backend-domain-driven-design/)에서 가져온 것: 용어 정의(§1), "도메인 기능은 그 도메인을 통해서만"(§7의 3번), 상태 변경과 이력을 한 aggregate에 두는 기준(§2), 경계마다 타입 접미사를 고정하는 레이어 도식(§5), 구현 전에 팀이 함께 보는 시퀀스(§6). 사례가 그렇게 한 이유는 "정책이 명확하고 복잡한 도메인을 견고하게 만들고, 여신 전문가·기획·개발이 같은 말을 쓰기 위해서"였다. 오프라인 정합성과 결제 모호성이 핵심인 이 프로젝트도 같은 조건이다. 구조는 다음에서 다르다.
 
 | 사례 | 이 저장소 | 이유 |
 |---|---|---|
@@ -128,6 +172,8 @@ grill 심문과 업무 기능 spec의 "소유 모듈 / Command·Query·Event / �
 | Kotlin `internal` 가시성으로 JPA 엔티티를 숨김 | `internal` **패키지** + Modulith 검증 | 단일 Gradle 프로젝트에서 Kotlin `internal`은 전체에 보여 경계가 되지 않는다. 사례 스스로 배치용 JPA 엔티티를 중복 생성한 부작용을 기록했다 |
 | Command를 aggregate 안의 중첩 클래스로, 상태는 `var … internal set` | Command는 Facade의 공개 입력, aggregate는 불변(§4.1) | CQRS 규약상 Command는 모듈 공개 계약이다. 불변 전이는 기존 Kotlin 규칙과 일치한다 |
 | API·배치 공통 로직을 Biz-component 패키지로 | Controller·이벤트 리스너·스케줄러가 같은 Command Facade를 호출 | Facade가 이미 use case 단위의 공통 진입점이다. 별도 레이어를 두지 않는다 |
+| 도메인 모듈에는 use case가 없고, 별도 `core_app`이 여러 도메인을 한 트랜잭션으로 조합(가입 = 회원 + 계좌 + 한도) | use case(Facade)는 컨텍스트 안에 있고, 컨텍스트를 넘는 변경은 이벤트로 수렴한다. 다른 모듈의 공개 Facade 동기 호출은 항목별 즉시 결과가 필요할 때만(`sync` → `order`/`payment`) | 컨텍스트별로 독립 배포로 뽑아내는 경로([시스템 설계 §6](../references/02_System_Design.md))를 열어 두려면 트랜잭션이 컨텍스트를 넘지 않아야 한다. 사례는 단일 배포 코어라 한 트랜잭션으로 묶을 수 있었다 |
+| 자식 엔티티 이름에 `snapshot`(계좌 Snapshot, 연체 snapshot) | checkout 확정 금액에는 쓰지 않는다(§3) | 사례의 snapshot은 시점 복사본이라는 구현 사실이고, 우리의 checkout은 "N회차 확정 금액"이라는 업무 사실이다. 시점 복사본이 정말 필요해지면 그때 `snapshot`을 그 뜻으로만 쓴다 |
 
 ## 관련 문서
 - [README Engineering Principles](../../README.md#engineering-principles) — 역할 분리·CQRS·데이터 정본 원칙
