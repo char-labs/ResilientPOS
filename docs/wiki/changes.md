@@ -100,3 +100,17 @@
 - 한계: 판정은 검사를 실행한 시점의 기준 브랜치 기준이다. 병렬 PR에서 뒤에 머지되는 쪽은 예전 통과 결과가
   낡을 수 있다. 브랜치 보호로 재실행을 강제할 수 없는 환경이라 머지 직전 재실행을 규칙으로 정했다.
 - 갱신: [개발 규칙](development-workflow.md).
+
+## 2026-09-15 — 도메인 모델 용어와 유비쿼터스 언어 용어집
+- Spec: [domain-model-glossary](../spec/2026-09-15-domain-model-glossary.md)
+- 요구사항 영향: 제품 요구사항은 변경하지 않았다. [도메인 청사진](../references/05_Domain_Development_Blueprint.md)과
+  [시스템 설계](../references/02_System_Design.md)에 흩어진 모델을 정본 wiki 한 페이지로 옮기고, DB 설계 리뷰에서 정한
+  어휘(`terminal` 유지, `operation`, `watermark`, `checkout`)를 처음 저장소에 기록했다.
+- 결정: Aggregate 상태 전이는 불변 객체가 새 인스턴스를 반환한다(청사진 §1.1의 제자리 변경 예시를 대체). Aggregate와
+  JPA 엔티티는 별개 클래스이고 변환은 persistence adapter가 소유한다. Kotlin 형태 규칙은 볼트 `rules/domain-modeling-kotlin.md`에
+  두었다(저장소 밖, `.claude/rules` 링크로 로드).
+- 결정(기록): 모듈 안 이벤트 전달은 Event Publication Registry이고 outbox·processed-event 테이블은 만들지 않는다. 금액 `NUMERIC(19,4)`,
+  식별자 `uuid`, 테이블 `t_` + 단수 명사. 모두 원문과 DB 설계 리뷰에서 정한 것을 처음 wiki에 적었다.
+- 미확정: 모듈 공개 타입의 위치(ADR-002의 모듈 루트 vs 청사진 §6.1의 `api/`)와 공유 도메인 타입(`Transition`·`DomainEvent`)의 위치.
+  첫 도메인 PR에서 정한다.
+- 갱신: [도메인 모델](domain-model.md) 신설, [wiki 인덱스](README.md), `AGENTS.md`, README 설계 절.
