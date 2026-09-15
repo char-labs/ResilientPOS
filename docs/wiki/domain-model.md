@@ -29,7 +29,7 @@ Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰�
 | 명령 / 조회 / 결과 / 뷰 | 쓰기 의도(`*Command`)와 그 결과(`*Result`), 읽기 의도(`*Query`/`*Criteria`)와 그 투영(`*View`). 규약은 [README](../../README.md#engineering-principles) | 상태를 바꾸면 Command, 바꾸지 않으면 Query. Command는 Facade의 공개 입력이라 aggregate 안에 중첩하지 않는다 | `CreateOrderCommand → CreateOrderResult`, `FindOrdersQuery(OrderSearchCriteria) → OrderSummaryView`. 전체 카탈로그는 [청사진 §4](../references/05_Domain_Development_Blueprint.md) |
 | 도메인 이벤트 (Domain Event) | 이미 일어난 한 가지 사실. 불변이고 과거형이다 | aggregate가 상태 전이의 결과로 만들고, Facade가 커밋 안에서 발행하고, Event Publication Registry가 전달한다 | `OrderPaymentRequested`, `PaymentApproved`, `PaymentUnknown`, `SyncGapDetected`, `KitchenTicketCreated`. `OrderCompleted`처럼 여러 사실을 뭉친 이름은 쓰지 않는다 |
 | 리포지토리 (Repository) | aggregate 단위로 읽고 저장하는 port | aggregate 전체를 다루면 Repository, 화면용 투영을 만들면 Query repository(§4.2) | `OrderRepository.findById(OrderId): Order?`, `save(Order)` |
-| 공개 API (module public surface) | 다른 모듈이 import할 수 있는 것. Facade·ID 값 타입·이벤트만 | `internal` 패키지 아래는 비공개. Modulith 검증이 위반을 빌드 실패로 만든다 | `payment/PaymentManagement.kt`, `PaymentId.kt`, `PaymentApproved.kt`. 위치는 §4.4 미확정 항목 참고 |
+| 공개 API (module public surface) | 다른 모듈이 import할 수 있는 것. Facade·ID 값 타입·이벤트만 | `internal` 패키지 아래는 비공개. Modulith 검증이 위반을 빌드 실패로 만든다 | `payment/PaymentManagement.kt`, `PaymentId.kt`, `PaymentApproved.kt`처럼 모듈 루트(§4.4) |
 
 ## 2. Bounded context 요약
 
@@ -49,7 +49,7 @@ Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰�
 - `payment`만 결제 정본 상태를 바꾼다. `reconciliation`은 case와 근거를 소유하고 결론을 `PaymentManagement.resolveFromReconciliation(command)` 같은 좁은 공개 command로 요청한다.
 - `order`와 `payment`는 서로의 테이블·엔티티·repository를 읽거나 쓰지 않는다. 사실은 이벤트로 건너간다(`OrderPaymentRequested` → payment, `PaymentApproved` → order·reconciliation, `OrderPaid` → fulfillment).
 - `sync`는 접수·중복·순서만 판정하고, 받아들인 명령은 소유 컨텍스트의 Command Facade로 넘긴다. `SyncOperationApplied`는 기술 감사 이벤트이며 `OrderCreated`를 대체하지 않는다.
-- `foundation`은 프레임워크 없는 값 타입(`Money`, 식별자 생성기)만 공유한다. 공유 도메인 모델을 두는 곳이 아니다.
+- `foundation`은 프레임워크 없는 값 타입(`Money`, 식별자 생성기)과 모델링 원시 타입(`Transition`, `DomainEvent`, §4.5)만 공유한다. 주문·결제 같은 업무 개념을 두는 곳이 아니다.
 
 ### aggregate 안의 구성
 루트가 바뀔 때 같은 트랜잭션에서 함께 남겨야 하는 것은 별도 컨텍스트가 아니라 그 aggregate의 자식 엔티티다. 상태 변경과 그 기록이 따로 구현되면 기록이 누락되거나 중복된다. 아래는 [청사진 §2·§6.2](../references/05_Domain_Development_Blueprint.md)를 바탕으로 이 PR에서 정리한 설계안이며, 각 모듈의 첫 마이그레이션이 정본이 된다.
@@ -114,13 +114,15 @@ Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰�
 - 모듈 안 이벤트 전달은 Spring Modulith Event Publication Registry(`EVENT_PUBLICATION` 테이블)를 쓴다. 별도 outbox 테이블과 processed-event 보조 테이블은 만들지 않는다. 멱등성은 `(orderId, attemptNo)` 같은 natural unique key가 담당한다. 근거는 [ADR-004](../references/01_ResilientPOS_PRD_Backend_Requirements.md)이고, 보조 테이블을 두지 않는 것은 이 PR에서 정했다. [README](../../README.md#engineering-principles)의 "Event Publication Registry 또는 outbox/inbox"에서 outbox는 외부 전달(Kafka)을 붙일 때의 이야기다.
 - 금액은 `NUMERIC(19,4)` + 통화 코드 컬럼, 식별자는 PostgreSQL native `uuid`다([개발 가이드 §3.1·§3.2](../references/03_Development_Guide.md)). 테이블 이름은 `t_` + 단수 명사(`t_order`, `t_payment_attempt`)다.
 
-### 4.4 미확정 — 공개 타입의 위치
-원문 둘이 다르다. [ADR-002](../references/01_ResilientPOS_PRD_Backend_Requirements.md)는 모듈 루트(`order/OrderManagement.kt`)에, [청사진 §6.1](../references/05_Domain_Development_Blueprint.md)은 `order/api/` 하위에 둔다.
-Spring Modulith 기본은 모듈 루트만 공개이므로 `api/`를 쓰려면 `@NamedInterface`가 필요하다. [모듈 골격 spec](../spec/2026-09-15-module-skeleton.md)은 `@NamedInterface`를 공개 surface가 실제로 커진 뒤로 미뤘다.
-첫 도메인 PR의 spec에서 하나로 정하고 이 절을 갱신한다.
+### 4.4 공개 타입은 모듈 루트에 둔다
+- Facade, `*Command`/`*Result`, `*Query`/`*Criteria`/`*View`, 도메인 이벤트, ID 값 타입은 모듈 기본 패키지(`com.resilientpos.order`)에 두고, 그 밖은 전부 `internal/` 아래다. [ADR-002](../references/01_ResilientPOS_PRD_Backend_Requirements.md)를 따르고 [청사진 §6.1](../references/05_Domain_Development_Blueprint.md)의 `api/` 하위 패키지는 쓰지 않는다.
+- 근거: Spring Modulith는 모듈 기본 패키지만 공개로 보므로 애너테이션 없이 지금의 `ModuleStructureTest`가 그대로 경계를 지킨다. `api/`를 쓰려면 모듈마다 `@NamedInterface`가 필요하다.
+- 다시 볼 조건: 한 모듈의 루트 파일이 20개를 넘거나 공개 surface를 `api`/`events`처럼 나눠 의존을 허용해야 할 때 `@NamedInterface`로 옮긴다. 그때도 패키지 이름만 바뀌는 파일 이동이다.
 
-### 4.5 미확정 — 공유 도메인 타입의 위치
-전이 결과를 담는 `Transition<A>`(바뀐 aggregate + 발생한 이벤트)와 이벤트 표시 타입 `DomainEvent`는 모든 컨텍스트가 쓴다. `foundation`에 두면 §2의 "공유 도메인 모델을 두지 않는다"와 부딪히고, 모듈마다 두면 같은 타입이 일곱 번 생긴다. 첫 도메인 PR에서 정하고 이 절을 갱신한다. 볼트 규칙은 형태만 정하고 위치는 이 절을 따른다.
+### 4.5 `Transition`과 `DomainEvent`는 `foundation`에 둔다
+- `data class Transition<A, E : DomainEvent>(val aggregate: A, val events: List<E>)`와 `interface DomainEvent { val eventId: UUID; val occurredAt: Instant }`를 `Money` 옆에 둔다. 둘 다 프레임워크 의존이 없어 `DependencyDirectionTest`의 `foundation` 규칙 안에 있다.
+- `eventId`는 소비자 멱등성 기록 `(consumer, eventId)`([개발 가이드 §4.2](../references/03_Development_Guide.md))의 키다. 모듈별 이벤트는 `sealed interface OrderEvent : DomainEvent`처럼 닫아 `when` 누락을 컴파일러가 잡게 한다.
+- 이것은 §2의 "업무 개념을 두지 않는다"에 어긋나지 않는다. 주문·결제를 모르는 모델링 원시 타입이며, 모듈마다 복제하면 이벤트 공통 필드를 강제할 수 없다. 처음 필요한 도메인 PR에서 추가한다.
 
 ### 4.6 미확정 — 컨텍스트 사이 Facade 동기 호출
 원문이 서로 다르다. [청사진 §1](../references/05_Domain_Development_Blueprint.md)은 "Facade끼리 호출하지 않는다"고 조건 없이 금지하고, [시스템 설계 §1.3](../references/02_System_Design.md)은 "단일 즉시 결과와 강한 일관성이 필요한 경우에만 다른 모듈의 public facade를 동기 호출한다"고 조건부로 허용한다. 청사진 자신도 §3.2에서 `sync`가 받아들인 명령을 소유 컨텍스트의 Command Facade로 넘긴다.
@@ -134,7 +136,7 @@ Spring Modulith 기본은 모듈 루트만 공개이므로 `api/`를 쓰려면 `
 |---|---|---|
 | HTTP ↔ Controller | `*Request` / `*Response` | Command, aggregate |
 | Controller·이벤트 리스너·스케줄러 ↔ Facade | `*Command`, `*Query`/`*Criteria` → `*Result`, `*View` | Request DTO, JPA 엔티티 |
-| Facade ↔ Service·aggregate | `*Command`, aggregate, Value Object, `*Policy`, `Transition`(위치는 §4.5) | `*Request`/`*Response`, `*View` |
+| Facade ↔ Service·aggregate | `*Command`, aggregate, Value Object, `*Policy`, `Transition`(`foundation`, §4.5) | `*Request`/`*Response`, `*View` |
 | Facade ↔ Repository | aggregate, ID 값 타입 | Spring Data 타입, JPA 엔티티 |
 | Repository 구현 ↔ JPA | `*Entity` — adapter 안에서만 | — |
 | 모듈 ↔ 모듈 | 공개 Facade의 `*Command`/`*Result`와 `*Query`/`*Criteria`/`*View`, 도메인 이벤트, ID 값 타입 | `internal` 아래 전부, 테이블 |
