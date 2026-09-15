@@ -62,10 +62,20 @@ python3 scripts/check_pr.py --base main --worktree
 
 | 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
 |---|---|---|---|
-| `ModuleStructureTest` — 모듈 경계 위반 탐지: `order`가 `payment.internal`을 참조하면 verify가 실패한다 | 미실행 | 미실행 | 미실행 |
-| `ModuleStructureTest` — 정상 구조에서 모듈 7개가 인식된다 | 미실행 | 미실행 | 미실행 |
+| `모듈은 다른 모듈의 internal 패키지에 의존하지 않는다` | `./gradlew test` — `order`에 `payment.internal.PaymentInternalProbe` 참조를 주입해 실패. `Violations: Module 'order' depends on non-exposed type com.resilientpos.payment.internal.PaymentInternalProbe within module 'payment'!` | `./gradlew test` — 주입 코드 제거 후 통과 | `./gradlew test` — BUILD SUCCESSFUL, 3 tests |
+| `bounded context 7개를 application module로 인식한다` | `./gradlew test` — `fulfillment/package-info.java`를 임시로 빼고 실행해 `AssertionFailedError`로 실패 | `./gradlew test` — 파일 복구 후 통과 | `./gradlew test` — BUILD SUCCESSFUL, 3 tests |
 
 ## 결과
-개발 전 작성. 실행 결과는 개발 후 추가한다.
+`./gradlew test` BUILD SUCCESSFUL (3 tests: contextLoads 1개, 모듈 구조 2개). 인수 조건 4개를 모두 만족했다.
+
+개발 중 조정한 두 가지를 기록한다.
+
+1. **모듈 이름 접근자**: Spring Modulith 2.x에는 `ApplicationModule.getName()`이 없다. `getIdentifier()`가 이름을
+   가지므로 테스트는 `it.identifier.toString()`으로 비교한다. 1.x 예제를 그대로 쓰면 컴파일되지 않는다.
+2. **Kotlin의 `internal` 패키지**: 위반 주입 실험에서 `package com.resilientpos.payment.internal`이 Kotlin에서
+   그대로 컴파일되는 것을 확인했다. 개발 가이드 1.1의 `internal` 하위 패키지 구조를 Kotlin으로 쓸 수 있다.
+
+`@ApplicationModule`에 `allowedDependencies`를 선언하지 않았다. 모듈이 비어 있어 허용 목록이 근거 없는 추측이 되기
+때문이다. 모듈 간 의존이 실제로 생기는 PR에서 해당 모듈부터 선언한다.
 
 근거 기록: Spring Modulith 2.1.1의 `spring-modulith-core`가 `spring-boot-autoconfigure 4.1.1`·`spring-data-commons 4.1.1`에 대해 빌드되어 현재 Boot 4.1.1과 세대가 일치한다(Maven Central pom 확인). 1.x는 Boot 3 세대라 사용하지 않는다.
