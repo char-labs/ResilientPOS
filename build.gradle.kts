@@ -23,7 +23,6 @@ repositories {
 dependencies {
     implementation(platform("org.springframework.modulith:spring-modulith-bom:2.1.1"))
 
-    implementation("org.springframework.boot:spring-boot-h2console")
     implementation("org.springframework.boot:spring-boot-starter-actuator")
     implementation("org.springframework.boot:spring-boot-starter-data-jpa")
     implementation("org.springframework.boot:spring-boot-starter-webmvc")
@@ -31,7 +30,8 @@ dependencies {
     implementation("tools.jackson.module:jackson-module-kotlin")
     implementation("org.springframework.modulith:spring-modulith-starter-core")
     implementation("com.github.f4b6a3:uuid-creator:6.1.1")
-    runtimeOnly("com.h2database:h2")
+    implementation("org.springframework.boot:spring-boot-flyway")
+    runtimeOnly("org.flywaydb:flyway-database-postgresql")
     runtimeOnly("org.postgresql:postgresql")
     testImplementation("org.springframework.boot:spring-boot-starter-actuator-test")
     testImplementation("org.springframework.boot:spring-boot-starter-data-jpa-test")
@@ -39,6 +39,9 @@ dependencies {
     testImplementation("org.jetbrains.kotlin:kotlin-test-junit5")
     testImplementation("org.springframework.modulith:spring-modulith-starter-test")
     testImplementation("com.tngtech.archunit:archunit:1.4.2")
+    testImplementation("org.springframework.boot:spring-boot-testcontainers")
+    testImplementation("org.testcontainers:testcontainers-postgresql")
+    testImplementation("org.testcontainers:testcontainers-junit-jupiter")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
