@@ -77,3 +77,5 @@ python3 scripts/check_pr.py --base main --worktree
 납부를 Recovery로 부른 어휘 결정은 §3의 "영어 이름은 업무 의미" 원칙으로, `snapshot` 자식 엔티티는 §8의 차이 행으로 남겼다.
 
 2차 `workflow-reviewer` 검토(HIGH 3, MEDIUM 9, LOW 8)에서 반영한 것: 컨텍스트 사이 Facade 동기 호출은 청사진 §1(금지)과 시스템 설계 §1.3(조건부 허용)이 충돌하는 지점이라 §4.6 미확정으로 올리고 작업 가정만 적었다. §5 표에 `*Command`와 Query/View를 넣고 Repository 경계를 Facade로 고쳤다. 취소는 [외부 연동 전략](../references/04_External_Integration_Strategy.md)대로 별도 attempt로 바로잡고, provider idempotency 기록의 위치와 주문 상태 전이 이력은 해당 PR로 미뤘다. 저장소에 없는 회의를 출처로 쓴 문장을 "이 PR에서 정리한 설계안"으로 바꿨다. 청사진 §1.1의 `CheckoutSnapshot`을 `Checkout`으로 대체한다고 §3에 명시했다. 볼트 템플릿의 규약 요약은 링크 한 줄로 줄였다.
+
+3차 — 미확정 3건 중 2건을 사용자 결정으로 확정했다. 공개 타입은 모듈 루트(§4.4), `Transition`·`DomainEvent`는 `foundation`(§4.5). §4.6(컨텍스트 사이 동기 호출)은 사용자가 "동기 호출 + 커밋 분리는 정합성이 걱정되니 EPR AFTER_COMMIT 이벤트로 넘기고 나중에 Kafka relay"를 제안해 sync 응답 계약(APPLIED → ACCEPTED) 변화를 확인 중이다.
