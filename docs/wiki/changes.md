@@ -72,3 +72,13 @@
   반올림이 실제 요구가 될 때 `store` 정책으로 만든다. UUID의 단조 증가도 요구하지 않는다. 동기화 순서의 증거는
   단말의 durable sequence다.
 - 갱신: [현재 상태](current-state.md).
+
+## 2026-09-15 — 의존성 방향 가드와 Gradle 분할 조건 기록
+- Spec: [dependency-direction-guard](../spec/2026-09-15-dependency-direction-guard.md)
+- 요구사항 영향: 제품 요구사항은 변경하지 않았다. [개발 가이드 2.1 의존성 governance](../references/03_Development_Guide.md)의
+  `foundation` 행을 ArchUnit 테스트로 강제했다. Modulith 경계 검증은 모듈 간 internal 참조와 순환만 보고 프레임워크
+  의존 방향은 보지 않아 생긴 빈틈이다.
+- 결정: Gradle subproject 분할은 하지 않는다. 가이드 1절의 조건(패키지 경계 안정, 독립 build/test/dependency 필요,
+  외부 contract artifact 필요)이 하나도 충족되지 않았고 모듈 7개가 비어 있다. 트리거 조건을 현재 상태 문서에 적어
+  조건부로 미룬 결정으로 남겼다.
+- 갱신: [현재 상태](current-state.md).
