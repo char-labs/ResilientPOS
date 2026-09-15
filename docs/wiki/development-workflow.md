@@ -75,6 +75,24 @@ PR 대상 브랜치의 기준 커밋을 지정해 로컬에서 검사한다. squ
 병합 시 squash는 가능하지만 개발 브랜치를 미리 squash하면 선작성 증거가 없어져 검사에 실패한다.
 변경 경로는 spec의 `## 변경 경로` 아래 저장소 상대 경로/glob 목록으로 선언한다.
 
+### Flyway 마이그레이션 버전
+마이그레이션 버전은 저장소 전체에서 유일해야 한다. 같은 버전이 둘 이상 머지되면 배포된 애플리케이션이
+기동 단계에서 죽는다. Flyway는 버전을 숫자로 비교하므로 `V001`과 `V1`은 같은 버전이다.
+
+`check_pr.py`가 이번 PR의 파일과 기준 브랜치의 파일을 함께 보고 중복을 막는다. 새 마이그레이션 번호는
+기준 브랜치의 마지막 번호 다음으로 붙인다.
+
+**이 판정은 검사를 실행한 시점의 기준 브랜치에 대한 것이다.** 병렬 PR 둘이 각각 같은 번호를 잡으면 먼저
+머지된 쪽이 반영된 뒤 나중 PR의 예전 통과 결과는 더 이상 유효하지 않다. 그래서 머지 직전에 다음을 다시 실행한다.
+
+```sh
+git fetch origin
+python3 scripts/check_pr.py --base origin/main
+```
+
+기준의 원격이 head에 없으면 검사가 경고한다. 이 저장소는 브랜치 보호와 GitHub Actions를 쓰지 않으므로
+머지 직전 재실행이 유일한 방어선이다.
+
 ### rebase와 force-push
 - 개발 브랜치를 base 위로 rebase 하는 것은 허용한다. rebase 뒤에도 spec 첫 커밋이 base 이후 첫 커밋이어야 하며,
   spec 커밋을 다른 커밋과 합치거나 순서를 바꾸지 않는다. 충돌 해결은 [git 스킬의 conflict-resolution](../../.claude/skills/resilientpos-git/references/conflict-resolution.md)을 따른다.
