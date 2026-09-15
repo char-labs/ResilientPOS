@@ -82,3 +82,13 @@
   외부 contract artifact 필요)이 하나도 충족되지 않았고 모듈 7개가 비어 있다. 트리거 조건을 현재 상태 문서에 적어
   조건부로 미룬 결정으로 남겼다.
 - 갱신: [현재 상태](current-state.md).
+
+## 2026-09-15 — PostgreSQL 단일 엔진과 Flyway 스키마 소유
+- Spec: [postgres-flyway-baseline](../spec/2026-09-15-postgres-flyway-baseline.md)
+- 요구사항 영향: 제품 요구사항은 변경하지 않았다. [시스템 설계 2.1](../references/02_System_Design.md)의 "PostgreSQL이 주문·결제의 정본"과
+  [개발 가이드 2.5 Migration ownership](../references/03_Development_Guide.md)을 실행 기반으로 옮겼다. H2를 제거하고
+  통합 테스트를 실제 PostgreSQL 컨테이너에서 돌린다.
+- 결정: 테스트 DB는 H2 호환 모드가 아니라 Testcontainers의 실제 PostgreSQL을 쓴다. 요구사항이 DB unique 제약을
+  정확성의 마지막 방어선으로 규정하므로 엔진이 다르면 그 방어선을 검증할 수 없다. 대신 `./gradlew test`에 Docker가
+  필요해졌다.
+- 갱신: [현재 상태](current-state.md).

@@ -8,15 +8,17 @@
 | 프레임워크 | Spring Boot 4.1.1, dependency-management plugin 1.1.7 |
 | 빌드 | Gradle Wrapper 9.7.1, Kotlin DSL, 단일 root project |
 | 서버/데이터 | Spring MVC, Spring Data JPA, Actuator, Jackson Kotlin |
-| DB | H2와 PostgreSQL runtime 드라이버, H2 console 의존성 |
+| DB | PostgreSQL 전용. Flyway가 스키마를 소유하고 JPA는 validate만 한다 |
 | 모듈 경계 | Spring Modulith 2.1.1 (BOM + `starter-core`, 테스트는 `starter-test`) |
 | 식별자 | `uuid-creator` 6.1.1 (UUID v7) |
 | 구조 검증 | Spring Modulith 경계 검증, ArchUnit 1.4.2 의존성 방향 가드 |
-| 테스트 | Kotlin Test/JUnit 5, Spring Boot 테스트 starter; 총 16개 (contextLoads 1, 모듈 구조 2, 의존성 방향 1, Money 8, 식별자 4) |
+| 통합 테스트 | Testcontainers 2.0.5 PostgreSQL 18. `./gradlew test` 실행에 Docker가 필요하다 |
+| 테스트 | Kotlin Test/JUnit 5, Spring Boot 테스트 starter; 총 19개 (컨텍스트 1, 스키마 3, 모듈 구조 2, 의존성 방향 1, Money 8, 식별자 4) |
 | 로컬 하네스 | Python 3 표준 라이브러리 |
 
 근거: [build.gradle.kts](../../build.gradle.kts), [Gradle Wrapper](../../gradle/wrapper/gradle-wrapper.properties), [애플리케이션 설정](../../src/main/resources/application.yaml).
-현재 설정에는 애플리케이션 이름만 있다. PostgreSQL 연결 설정이나 운영 DB 사용이 완료됐다고 해석하지 않는다.
+애플리케이션 설정에 PostgreSQL 접속과 Flyway, JPA validate가 있다. 접속 값은 환경 변수로 주입하며 비밀값을
+하드코딩하지 않는다. 운영 배포 설정과 커넥션 풀 튜닝은 아직 없다.
 이 표는 빌드 선언을 확인한 결과이며, 의존성 다운로드·앱 실행 검증 결과를 의미하지 않는다.
 
 ## 계획과 구현 구분
@@ -60,3 +62,16 @@ build/test/dependency 또는 외부 contract artifact가 실제로 필요할 때
 
 도메인 레이어 규칙(`internal/domain`이 Spring이나 repository에 의존하지 않는다)은 아직 없다. 해당 패키지가 생기지 않아
 검사 대상이 0건이고, 빈 규칙은 활성 여부를 알 수 없다. 첫 도메인 PR에서 같은 파일에 추가한다.
+
+## 데이터베이스와 스키마 소유
+PostgreSQL이 유일한 엔진이다. H2는 제거했다. 테스트가 운영과 다른 엔진에서 돌면 unique 제약, 타입, 잠금 동작처럼
+정확성의 마지막 방어선을 검증하지 못한다.
+
+스키마의 유일한 소유자는 `src/main/resources/db/migration`의 Flyway 마이그레이션이다. JPA는 `validate`라서
+애플리케이션이 테이블을 만들거나 바꾸지 않는다. 마이그레이션이 실패하면 애플리케이션이 뜨지 않는다.
+
+파일명은 `V(번호)__(소유 모듈)_(변경 내용).sql`이다. `V001__baseline.sql`은 의도적으로 비어 있고, 업무 테이블은 각
+모듈이 후속 마이그레이션으로 추가한다.
+
+통합 테스트는 Testcontainers로 실제 PostgreSQL 18을 띄운다. **`./gradlew test`에 Docker가 필요하다.** 컨테이너는
+JVM당 한 번만 뜨고 Spring 컨텍스트 캐시와 수명을 맞춘다.
