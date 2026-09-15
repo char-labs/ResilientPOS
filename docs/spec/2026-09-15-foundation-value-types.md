@@ -5,7 +5,8 @@
 
 ## 범위
 - `com.resilientpos.foundation` 모듈을 만들고 `@ApplicationModule`로 선언한다. 다른 모듈이 의존하는 공개 값 타입만 둔다.
-- `Money`: `BigDecimal` 금액과 `java.util.Currency`를 가지는 불변 값 타입. 통화의 표준 소수 자릿수를 canonical scale로 쓰고, 덧셈·뺄셈·정수 배수·크기 비교를 제공한다.
+- `Money`: `BigDecimal` 금액과 `java.util.Currency`를 가지는 불변 값 타입. 통화의 표준 소수 자릿수를 canonical scale로 쓰고,
+  덧셈·뺄셈·정수 배수·크기 비교를 제공한다. 비교는 `compareTo` 연산자 함수로만 제공하고 `Comparable`은 구현하지 않는다.
 - `IdentifierGenerator` 인터페이스와 `UuidV7IdentifierGenerator` 구현. `uuid-creator` 6.1.1을 사용한다.
 - 소유 모듈: `foundation`. 계약: 위 두 타입의 public API. 불변식: 금액의 scale은 통화 기준으로 canonical하고, 통화가 다른 금액은 연산하지 않으며, 식별자는 UUID version 7이다.
 - 복구·관측성: 해당 없다. 이 PR은 프레임워크·저장소·외부 호출이 없는 순수 값 타입이라 재시도·복구 경로와 metric이 생기지 않는다.
@@ -14,6 +15,7 @@
 - 나눗셈, 퍼센트 할인, 세금 계산. 반올림 정책은 매장 규칙이므로 `store` 정책과 `CheckoutPolicy`가 생길 때 다룬다.
 - 금액의 음수 금지 같은 업무 불변식. `Money`는 음수를 표현할 수 있고, 허용 여부는 각 Aggregate가 판단한다.
 - 통화별 예외 scale 테이블(`CurrencyScalePolicy`). `java.util.Currency`의 표준 자릿수로 충분한 동안 만들지 않는다.
+- `Comparable<Money>` 구현. 통화가 다른 금액에는 순서가 없으므로 전순서를 전제하는 표준 정렬 API에 넘기지 않는다.
 - JPA 매핑, DB 컬럼(`NUMERIC(19,4)`), API 직렬화 형식. 각각 persistence·web adapter가 생기는 PR에서 정한다.
 - 단말(pos-client)의 UUID v7 생성기. 서버 구현을 wire 계약으로 삼지 않는다.
 
