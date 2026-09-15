@@ -68,6 +68,8 @@ python3 scripts/check_pr.py --base main --worktree
 ## 분할 계획
 예상 규모: 하네스 약 25줄, 테스트 약 60줄, 문서 약 90줄로 총 180줄 내외다.
 초과하면 기준 브랜치 뒤처짐 경고를 후속 PR로 옮기고 중복 검사만 남긴다. 후속 순서는 order `CreateOrder` 수직 절단이다.
+배포 이미지는 별도 Dockerfile PR에서 Amazon Corretto alpine 기반으로 만든다. CI 러너의 JDK는 빌드 도구일 뿐이라
+alpine 이점이 없지만, 배포 이미지에서는 크기 이점이 실제로 있다.
 
 ## TDD 검증 기록
 | 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
