@@ -55,4 +55,14 @@ python3 scripts/check_pr.py --base main --worktree
 문서 전용 변경이라 적용하지 않는다. 업무 동작과 테스트 대상 코드가 없다.
 
 ## 결과
-개발 전 작성. 개발 후 실행 결과와 변경 이유를 추가한다.
+`python3 scripts/check_pr.py --base main --worktree` PASS(일반 6개/213줄). 새 페이지와 포인터의 상대 링크는 모두 실재한다. 인수 조건 6개를 만족했다.
+
+`workflow-reviewer` 검토(CRITICAL 0, HIGH 2, MEDIUM 5, LOW 4)에서 반영한 것:
+1. 원문이 `PaymentConfirmed`와 `PaymentApproved`를 섞어 쓰는 것을 확인하고 provider 승인은 `PaymentApproved`로 용어집에 고정했다. reconciliation 해결 결과의 이벤트 이름은 payment PR로 미뤘다.
+2. 전이 결과 타입 `Transition`과 `DomainEvent`를 `foundation`에 두려던 초안은 "foundation은 공유 도메인 모델을 두지 않는다"와 부딪혀 위치를 미확정(§4.5)으로 올렸다. 볼트 규칙은 형태만 정한다.
+3. wiki 용어 정의 표에서 README 역할 표를 다시 쓰던 규칙 문장을 줄이고 링크로 바꿨다. 타입 이름이 목표 모델임을 표 앞에 밝혔다.
+4. 볼트 규칙에만 있던 결정(outbox 테이블 없음, `NUMERIC(19,4)`·`uuid`·`t_` 접두어)을 wiki §4.3으로 올렸다. `Money` 생성자가 public인 실제 코드에 맞게 값 객체 규칙 문장을 고쳤다.
+
+반영하지 않은 것: README·`AGENTS.md`의 낡은 스택 문장(Spring Modulith 미도입, H2, 모듈 5개)은 사실과 다르지만 이 PR의 목표 밖이라 별도 문서 PR로 뺐다.
+
+볼트 `rules/domain-modeling-kotlin.md`(98줄)는 저장소 밖에 작성했고 `.claude/rules` 링크로 로드되는 것을 확인했다.
