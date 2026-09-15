@@ -58,7 +58,7 @@ Claude에서 `/이름`, Codex에서 `$이름`으로 호출한다. 자연어 요�
 | `codex` CLI | **있음** (0.154.0) | 2026-09-14에 `codex exec`로 프로젝트 서브에이전트 스폰까지 검증했다. `architect-codex`·`outline-codex`·`reviewer-codex`가 실제로 실행되므로 Multi-LLM 경로는 Claude + Codex 2개로 돈다 |
 | `gemini` CLI | 없음 | `*-gemini` 래퍼 3개는 "미실행"을 반환한다. 합의 규칙은 실행된 LLM 수를 분모로 재해석하므로 현재는 2개 기준이다 |
 | hook 스크립트(`detect-ralph-state.sh`, `develop-phase-gate.cjs`, Default Branch Guard, statusline 엔트리) | `resilientpos-setup`이 `.claude/settings.json`(로컬, gitignore) 편집 절차와 대체 셸을 제공한다. 미등록 상태에서는 에이전트가 같은 조건을 직접 확인한다(soft gate) |
-| GitHub Actions | 사용하지 않는다. `check-ci`는 workflow 없음을 보고하고 로컬 `./gradlew test`·`check_pr.py` 결과를 대신 제시한다 |
+| GitHub Actions | PR 게이트로 빌드와 Flyway 버전 검사만 사용한다. `check-ci`는 이 워크플로 결과를 조회하고, spec 이력·크기·wiki 기록은 로컬 `check_pr.py` 결과를 함께 제시한다 |
 
 ### 계약 조정 상태
 | 원본 방식 (들여온 것) | 저장소 계약 | 상태 |

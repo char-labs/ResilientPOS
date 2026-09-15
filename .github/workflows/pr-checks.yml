@@ -1,0 +1,64 @@
+name: PR checks
+
+# dev 흐름은 main 단일 브랜치다. main으로 향하는 PR에서 빌드와 Flyway 버전 검사를 게이트로 둔다.
+# 로컬 check_pr.py는 실행 시점의 기준으로만 판정하므로, 병렬 PR에서 먼저 머지된 변경을 반영한
+# 재판정 주체가 필요하다. 이 워크플로가 머지 결과 위에서 다시 돈다.
+on:
+  # main에서도 빌드를 돌린다. setup-gradle은 기본 브랜치 job에서만 캐시를 쓰므로,
+  # 이 트리거가 없으면 PR 실행이 매번 빈 캐시로 시작한다.
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - ready_for_review
+
+jobs:
+  build:
+    name: Gradle build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Setup JDK 25
+        uses: actions/setup-java@v6
+        with:
+          distribution: corretto
+          java-version: '25'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      # 통합 테스트는 Testcontainers로 실제 PostgreSQL을 띄운다.
+      # ubuntu-latest 러너에 Docker가 있어 별도 설치 단계가 필요 없다.
+      - name: Build and test
+        run: ./gradlew build --console=plain
+
+  migration_version_check:
+    name: Flyway version gate
+    # push에는 비교할 기준 브랜치가 없다. PR에서만 의미가 있다.
+    if: github.event_name == 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      # 기준 브랜치와 비교해야 하므로 전체 이력을 받는다.
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      # checkout이 remote-tracking ref를 만들지 않으므로 기준 브랜치를 직접 가져온다.
+      - name: Fetch base branch
+        run: |
+          git fetch --no-tags origin \
+            "+refs/heads/${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}"
+
+      # spec 이력·크기 검사는 머지 결과 위에서 의미가 달라지므로 로컬 검사가 계속 담당한다.
+      - name: Detect duplicate migration versions
+        run: python3 scripts/check_pr.py --base "origin/${{ github.base_ref }}" --migrations-only
