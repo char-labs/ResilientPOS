@@ -6,6 +6,7 @@ DDD 용어(Bounded Context, Aggregate, Entity, Value Object, Policy, Facade, Ser
 ## 범위
 - `docs/wiki/domain-model.md` 신설: 용어 정의 표(각 용어에 한 줄 정의와 ResilientPOS 예시), bounded context 7개의 aggregate·소유·불변식 요약(원문 blueprint 링크), 유비쿼터스 언어 용어집(채택어·기각어·이유), 도메인 설계 체크리스트, 참고 사례와 다르게 가는 결정.
 - 설계 결정 두 가지를 정본으로 확정한다. (1) Aggregate 상태 전이는 불변 객체가 새 인스턴스를 반환한다. (2) Aggregate와 JPA 엔티티는 별개 클래스이고 변환은 persistence adapter가 소유한다.
+- 참고 사례의 도식 6장(컨텍스트 맵, 납부 도메인 정의, 승인 시퀀스, 레이어 구조, 가입 Application, Biz-component)을 읽고 세 절을 더한다: aggregate 안의 구성(루트와 이력 자식 엔티티), 레이어 경계를 넘는 타입, DESIGN·flow 도식 규약. 사례와 다르게 가는 결정에 트랜잭션 범위와 `snapshot` 어휘 행을 추가한다. 볼트 spec-write 템플릿(DESIGN·flow)에는 도식 규약 링크 한 줄만 둔다.
 - 포인터: `AGENTS.md`의 비즈니스·도메인 개발 항목, wiki README, README Engineering Principles에서 새 페이지를 링크한다. 역할 표를 네 번째로 복제하지 않는다.
 - 소유 모듈: 없음(전 모듈 공통 지식). 계약/불변식/복구/관측성: 문서 PR이라 실행 경로가 없다. 문서가 고정하는 불변식은 "Aggregate 상태 전이는 새 인스턴스, JPA 엔티티는 adapter 안"이며, 첫 도메인 PR의 ArchUnit 도메인 레이어 규칙이 후자를 검사한다.
 
@@ -48,7 +49,7 @@ python3 scripts/check_pr.py --base main --worktree
 - [변경 기록](../wiki/changes.md)에 이 spec 링크와 요구사항 영향을 남긴다. 제품 요구사항은 바뀌지 않는다. 원문 blueprint의 모델을 정본 지식으로 옮기고 설계 결정 두 가지를 확정한 것이다.
 
 ## 분할 계획
-예상 규모: wiki 본문 약 250줄, spec 약 80줄, 포인터 약 10줄, 변경 기록 약 10줄로 총 350줄 내외. 경고 한도(600줄) 안이다.
+예상 규모: wiki 본문 약 250줄(도식 분석 반영 후 약 200줄), spec 약 100줄, 포인터 약 10줄, 변경 기록 약 15줄로 총 350줄 내외. 경고 한도(600줄) 안이다.
 초과하면 용어집의 Command/Event 이름 절을 후속 PR로 옮기고 정의 표·결정·체크리스트만 남긴다.
 
 ## TDD 검증 기록
