@@ -52,16 +52,16 @@ Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰�
 - `foundation`은 프레임워크 없는 값 타입(`Money`, 식별자 생성기)만 공유한다. 공유 도메인 모델을 두는 곳이 아니다.
 
 ### aggregate 안의 구성
-루트가 바뀔 때 같은 트랜잭션에서 함께 남겨야 하는 것은 별도 컨텍스트가 아니라 그 aggregate의 자식 엔티티다. 사례의 컨텍스트 맵에서 자식 엔티티 대부분이 이력·기록(잔액 변경이력, 청구내역 변경이력)이고, 저자가 "한도 변경과 잔액 변경이력 생성이 따로 구현되면 이력이 누락된다"를 경계의 근거로 든 것과 같은 이유다. 아래는 [청사진 §2·§6.2](../references/05_Domain_Development_Blueprint.md)와 2026-09-15 DB 설계 리뷰의 설계안이며, 각 모듈의 첫 마이그레이션이 정본이 된다.
+루트가 바뀔 때 같은 트랜잭션에서 함께 남겨야 하는 것은 별도 컨텍스트가 아니라 그 aggregate의 자식 엔티티다. 상태 변경과 그 기록이 따로 구현되면 기록이 누락되거나 중복된다. 아래는 [청사진 §2·§6.2](../references/05_Domain_Development_Blueprint.md)를 바탕으로 이 PR에서 정리한 설계안이며, 각 모듈의 첫 마이그레이션이 정본이 된다.
 
 | 루트 | 자식 엔티티 (같은 트랜잭션) | 왜 같은 aggregate인가 |
 |---|---|---|
-| `Order` | `OrderLine`(판매 시점 상품 코드·이름·단가·수량), checkout(회차별 확정 금액), 상태 전이 이력 | line 변경과 금액, checkout 확정과 상태 전이가 한 커밋으로 맞아야 한다 |
-| `PaymentAttempt` | provider idempotency 기록, 승인·취소 시도 결과 | "provider 결과를 한 번만 적용했다"를 같은 트랜잭션의 기록이 증명한다 |
+| `Order` | `OrderLine`(판매 시점 상품 코드·이름·단가·수량), checkout(회차별 확정 금액·통화·정책 버전) | line 변경과 금액, checkout 확정과 상태 전이가 한 커밋으로 맞아야 한다 |
+| `PaymentAttempt` | provider 요청·응답 결과. provider idempotency 기록이 attempt의 자식인지 컨텍스트 공용 테이블인지는 payment PR spec에서 정한다 | "provider 결과를 한 번만 적용했다"를 같은 트랜잭션의 기록이 증명한다. 취소는 별도 attempt다([외부 연동 전략](../references/04_External_Integration_Strategy.md)) |
 | `Terminal` | credential rotation 이력 | 회전과 이력이 따로 커밋되면 어느 자격증명이 유효한지 알 수 없다 |
 | `TerminalSyncState` | operation 접수 기록(`t_sync_operation`) | watermark 전진과 접수 기록이 함께 커밋돼야 gap을 건너뛰지 않는다 |
 | `ReconciliationCase` | evidence, 조치·승인 감사 기록 | "근거·감사 없이 해결하지 않는다"는 불변식이 자식과 루트를 묶는다 |
-| `Store` | policy 버전 | 과거 주문에 적용된 정책을 추적하려면 버전이 루트와 함께 남아야 한다 |
+| `Store` | policy 버전 | 정책을 바꿀 때 새 버전 행이 함께 커밋되지 않으면 이미 발행된 checkout이 가리키는 버전이 없어진다 |
 | `KitchenTicket`, `ReceiptDelivery` | 없음(단독 루트) | natural key 한 건이면 충분하다 |
 
 자식 엔티티는 루트를 통해서만 만들고 바꾼다. 다른 aggregate의 사실(예: 결제 승인)이 필요하면 자식으로 끌어오지 않고 이벤트로 받는다. 한 컨텍스트에 루트가 여럿일 수 있다(`fulfillment`). 루트 하나가 곧 컨텍스트는 아니다.
@@ -78,8 +78,8 @@ Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰�
 | `operation` (sync) | 단말이 오프라인에서 만든 명령 한 건. 식별자는 `operationId`(UUID v7) | `receipt` | 한 스키마에서 receipt가 접수증과 고객 영수증 두 뜻으로 쓰였다. 봉투의 `operationId`와 어휘를 맞췄다. 테이블은 `t_sync_operation` |
 | `watermark` | 단말별로 서버가 확정한 마지막 sequence(`lastAckedSequence`) | `terminal sync state` | state는 모든 테이블에 해당해 아무 말도 하지 않는다. 기획 문서가 이미 쓰는 단어다. 테이블은 `t_sync_watermark` |
 | `sequence` (terminal sequence) | 한 단말 안에서 단조 증가하는 명령 순번. 누락(gap) 탐지의 근거 | — | UUID 생성 순서, Kafka 순서, aggregate version과 다르다. 서로 대체하지 않는다 |
-| `checkout` | 결제 시도 회차에 대해 확정한 금액·통화·정책 버전 | `checkout snapshot` | snapshot은 구현 용어다. 이 값은 "N회차 결제 시도의 확정 금액"이라는 업무 사실이다. 테이블은 `t_order_checkout` |
-| `attempt` (payment) | 한 주문에 대한 결제 시도 1회. `(orderId, attemptNo)` | `payment`, `transaction` | 승인·취소·`UNKNOWN`을 한 회차 안에 묶어야 한다. transaction은 DB 용어와 충돌한다 |
+| `checkout` | 결제 시도 회차에 대해 확정한 금액·통화·정책 버전 | `checkout snapshot` | snapshot은 구현 용어다. 이 값은 "N회차 결제 시도의 확정 금액"이라는 업무 사실이다. 테이블은 `t_order_checkout`. [청사진 §1.1](../references/05_Domain_Development_Blueprint.md)의 `CheckoutSnapshot`·`snapshotOf`는 `Checkout`·`checkoutOf`로 대체한다 |
+| `attempt` (payment) | 한 주문에 대한 provider 요청 1회. `(orderId, attemptNo)`. 승인과 취소는 각각 별도 attempt다 | `payment`, `transaction` | 한 요청의 결과(승인·거절·`UNKNOWN`)를 한 회차에 담아야 한다. transaction은 DB 용어와 충돌한다 |
 | `UNKNOWN` | provider 결과를 아직 확인하지 못한 결제 상태. 실패가 아니다 | `FAILED`, `TIMEOUT` | timeout은 전송 관찰의 실패이고 결제 결과의 실패가 아니다. `UNKNOWN`에서 새 승인 요청을 재시도하지 않고 provider 조회 → reconciliation으로 수렴한다 |
 | `gap` / `duplicate` / `conflict` | sync 판정 결과. 순번 누락 / 이미 접수한 operation의 재전송 / 같은 키에 다른 내용 | 일반 `error`, HTTP 500 | 세 가지는 각각 다른 복구 경로를 가진 업무 결과다. 항목 단위 결과로 돌려주고 부분 성공을 200 하나로 숨기지 않는다 |
 | `case` (reconciliation) | 불일치 한 건의 근거·규칙 버전·조치·감사 기록 | `issue`, `ticket` | ticket은 fulfillment의 `KitchenTicket`과 충돌한다 |
@@ -111,7 +111,7 @@ Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰�
 - 비용: aggregate마다 클래스가 둘이고 변환기가 붙는다. 그 대신 도메인 테스트에 DB가 없고, JPA 엔티티 규칙(`data class` 금지, 프록시, 지연 로딩)이 도메인에 새지 않는다.
 
 ### 4.3 이벤트 전달과 저장 형식
-- 모듈 안 이벤트 전달은 Spring Modulith Event Publication Registry(`EVENT_PUBLICATION` 테이블)를 쓴다. 별도 outbox 테이블과 processed-event 보조 테이블은 만들지 않는다. 멱등성은 `(orderId, attemptNo)` 같은 natural unique key가 담당한다. 근거는 [ADR-004](../references/01_ResilientPOS_PRD_Backend_Requirements.md)와 2026-09-15 DB 설계 리뷰 결정이다. [README](../../README.md#engineering-principles)의 "Event Publication Registry 또는 outbox/inbox"에서 outbox는 외부 전달(Kafka)을 붙일 때의 이야기다.
+- 모듈 안 이벤트 전달은 Spring Modulith Event Publication Registry(`EVENT_PUBLICATION` 테이블)를 쓴다. 별도 outbox 테이블과 processed-event 보조 테이블은 만들지 않는다. 멱등성은 `(orderId, attemptNo)` 같은 natural unique key가 담당한다. 근거는 [ADR-004](../references/01_ResilientPOS_PRD_Backend_Requirements.md)이고, 보조 테이블을 두지 않는 것은 이 PR에서 정했다. [README](../../README.md#engineering-principles)의 "Event Publication Registry 또는 outbox/inbox"에서 outbox는 외부 전달(Kafka)을 붙일 때의 이야기다.
 - 금액은 `NUMERIC(19,4)` + 통화 코드 컬럼, 식별자는 PostgreSQL native `uuid`다([개발 가이드 §3.1·§3.2](../references/03_Development_Guide.md)). 테이블 이름은 `t_` + 단수 명사(`t_order`, `t_payment_attempt`)다.
 
 ### 4.4 미확정 — 공개 타입의 위치
@@ -122,30 +122,34 @@ Spring Modulith 기본은 모듈 루트만 공개이므로 `api/`를 쓰려면 `
 ### 4.5 미확정 — 공유 도메인 타입의 위치
 전이 결과를 담는 `Transition<A>`(바뀐 aggregate + 발생한 이벤트)와 이벤트 표시 타입 `DomainEvent`는 모든 컨텍스트가 쓴다. `foundation`에 두면 §2의 "공유 도메인 모델을 두지 않는다"와 부딪히고, 모듈마다 두면 같은 타입이 일곱 번 생긴다. 첫 도메인 PR에서 정하고 이 절을 갱신한다. 볼트 규칙은 형태만 정하고 위치는 이 절을 따른다.
 
+### 4.6 미확정 — 컨텍스트 사이 Facade 동기 호출
+원문이 서로 다르다. [청사진 §1](../references/05_Domain_Development_Blueprint.md)은 "Facade끼리 호출하지 않는다"고 조건 없이 금지하고, [시스템 설계 §1.3](../references/02_System_Design.md)은 "단일 즉시 결과와 강한 일관성이 필요한 경우에만 다른 모듈의 public facade를 동기 호출한다"고 조건부로 허용한다. 청사진 자신도 §3.2에서 `sync`가 받아들인 명령을 소유 컨텍스트의 Command Facade로 넘긴다.
+지금의 작업 가정: 컨텍스트를 넘는 변경은 이벤트가 기본이고, `sync` → `order`/`payment`처럼 항목별 즉시 결과와 강한 일관성이 모두 필요할 때만 공개 Facade를 동기 호출한다. 같은 모듈 안에서 Facade가 Facade를 부르지는 않는다. 동기 호출 시 트랜잭션 전파(호출자 트랜잭션에 합류하는지, 항목 단위로 따로 커밋하는지)는 첫 sync PR의 flow spec에서 정하고 이 절을 갱신한다. 시스템 설계 §1.3이 열어 둔 `checkout` orchestration module도 그때 함께 판단한다.
+
 ## 5. 레이어 경계를 넘는 타입
 
-접미사만 보고 어느 레이어의 객체인지 읽혀야 한다. 사례의 레이어 도식이 화살표마다 `***Request`, `***Command`, `***DomainEntity`, `***JPAEntity`를 적어 경계마다 넘어가는 타입을 고정한 것과 같은 의도다.
+접미사만 보고 어느 레이어의 객체인지 읽혀야 한다. 표의 타입 이름은 §1과 같이 목표 모델이다.
 
 | 경계 | 넘어가는 타입 | 넘어가지 않는 것 |
 |---|---|---|
 | HTTP ↔ Controller | `*Request` / `*Response` | Command, aggregate |
 | Controller·이벤트 리스너·스케줄러 ↔ Facade | `*Command`, `*Query`/`*Criteria` → `*Result`, `*View` | Request DTO, JPA 엔티티 |
-| Facade ↔ Service·aggregate | aggregate, Value Object, `*Policy`, `Transition` | DTO |
-| Service·aggregate ↔ Repository | aggregate, ID 값 타입 | Spring Data 타입, JPA 엔티티 |
+| Facade ↔ Service·aggregate | `*Command`, aggregate, Value Object, `*Policy`, `Transition`(위치는 §4.5) | `*Request`/`*Response`, `*View` |
+| Facade ↔ Repository | aggregate, ID 값 타입 | Spring Data 타입, JPA 엔티티 |
 | Repository 구현 ↔ JPA | `*Entity` — adapter 안에서만 | — |
-| 모듈 ↔ 모듈 | 공개 Facade의 Command/Result, 도메인 이벤트, ID 값 타입 | `internal` 아래 전부, 테이블 |
+| 모듈 ↔ 모듈 | 공개 Facade의 `*Command`/`*Result`와 `*Query`/`*Criteria`/`*View`, 도메인 이벤트, ID 값 타입 | `internal` 아래 전부, 테이블 |
 
 ## 6. 도식 규약
 
-장기 스펙의 [DESIGN·flow 계층](development-workflow.md#장기-스펙-계층과-pr-spec)에 그림을 넣을 때 지킨다. 사례가 컨텍스트 맵과 승인 시퀀스를 그린 방식에서 가져왔다.
+장기 스펙의 [DESIGN·flow 계층](development-workflow.md#장기-스펙-계층과-pr-spec)에 그림을 넣을 때 지킨다.
 
 **컨텍스트 맵 (DESIGN)**
-- 컨텍스트마다 상자 하나. 안에 aggregate 루트와 자식 엔티티를 구분해 적고, 화살표는 루트 → 자식만 긋는다.
-- 컨텍스트 사이에는 화살표를 긋지 않는다. 컨텍스트 간 관계는 이벤트 이름 목록(§2 소유 규칙)으로 따로 적는다. 그림에 교차 화살표가 필요해지면 경계가 의심스럽다는 신호다.
+- 컨텍스트마다 상자 하나. 안에 aggregate 루트를 적는다. 자식 엔티티는 concern의 ERD가 맡는다.
+- 컨텍스트 맵 안에서는 컨텍스트 사이에 화살표를 긋지 않는다. 이벤트 관계는 [청사진 §2.1](../references/05_Domain_Development_Blueprint.md)처럼 별도 목록이나 그림으로 적는다. 컨텍스트 맵에 동기 호출 화살표가 필요해지면 경계가 의심스럽다는 신호다(§4.6).
 
 **유스케이스 시퀀스 (flow)**
-- 참여자는 호출자, Facade, 관여 컨텍스트, DB, 이벤트 전달(EPR), 소비자 순으로 놓는다. 컨텍스트 lifeline에 닿는 메시지 하나가 그 컨텍스트가 제공해야 하는 공개 기능 하나다. 팀이 그림을 보며 각자 맡은 컨텍스트의 기능 목록을 확인한다.
-- 전제 조건 확인(조회)은 트랜잭션 상자 **앞에** 두고, 실패 분기는 그 자리에서 끝낸다. 사례의 승인 시퀀스는 조회 4건과 실패 3건을 모두 상자 앞에 두었다.
+- 참여자는 호출자, Facade, 관여 컨텍스트, DB, 이벤트 전달(EPR), 소비자 순으로 놓는다. 컨텍스트 lifeline에 닿는 메시지 하나가 그 컨텍스트가 제공해야 하는 공개 기능 하나다.
+- 전제 조건 확인(조회)은 트랜잭션 상자 **앞에** 두고, 실패 분기는 그 자리에서 끝낸다.
 - 트랜잭션 상자는 쓰기만 감싼다. 상자 안이 한 커밋으로 맞아야 하는 전부다. provider 호출·외부 전송은 상자 밖이다.
 - 커밋 뒤에 발행되는 이벤트와 그 소비자(다른 컨텍스트의 후속 쓰기)를 같은 그림 아래쪽에 그린다. 호출자 응답은 커밋 직후이고 소비자보다 먼저다.
 - 실패 시퀀스(중복·응답 유실·`UNKNOWN`·gap)는 flow 템플릿대로 같은 파일에 둔다.
@@ -172,7 +176,7 @@ grill 심문과 업무 기능 spec의 "소유 모듈 / Command·Query·Event / �
 | Kotlin `internal` 가시성으로 JPA 엔티티를 숨김 | `internal` **패키지** + Modulith 검증 | 단일 Gradle 프로젝트에서 Kotlin `internal`은 전체에 보여 경계가 되지 않는다. 사례 스스로 배치용 JPA 엔티티를 중복 생성한 부작용을 기록했다 |
 | Command를 aggregate 안의 중첩 클래스로, 상태는 `var … internal set` | Command는 Facade의 공개 입력, aggregate는 불변(§4.1) | CQRS 규약상 Command는 모듈 공개 계약이다. 불변 전이는 기존 Kotlin 규칙과 일치한다 |
 | API·배치 공통 로직을 Biz-component 패키지로 | Controller·이벤트 리스너·스케줄러가 같은 Command Facade를 호출 | Facade가 이미 use case 단위의 공통 진입점이다. 별도 레이어를 두지 않는다 |
-| 도메인 모듈에는 use case가 없고, 별도 `core_app`이 여러 도메인을 한 트랜잭션으로 조합(가입 = 회원 + 계좌 + 한도) | use case(Facade)는 컨텍스트 안에 있고, 컨텍스트를 넘는 변경은 이벤트로 수렴한다. 다른 모듈의 공개 Facade 동기 호출은 항목별 즉시 결과가 필요할 때만(`sync` → `order`/`payment`) | 컨텍스트별로 독립 배포로 뽑아내는 경로([시스템 설계 §6](../references/02_System_Design.md))를 열어 두려면 트랜잭션이 컨텍스트를 넘지 않아야 한다. 사례는 단일 배포 코어라 한 트랜잭션으로 묶을 수 있었다 |
+| 도메인 모듈에는 use case가 없고, 별도 `core_app`이 여러 도메인을 한 트랜잭션으로 조합(가입 = 회원 + 계좌 + 한도) | use case(Facade)는 컨텍스트 안에 있고, 컨텍스트를 넘는 변경은 이벤트가 기본이다. 동기 호출의 허용 조건과 트랜잭션 전파는 §4.6 | 컨텍스트별로 독립 배포로 뽑아내는 경로([시스템 설계 §6](../references/02_System_Design.md))를 열어 두려면 컨텍스트를 넘는 트랜잭션을 기본값으로 삼을 수 없다. 사례는 단일 배포 코어라 한 트랜잭션으로 묶을 수 있었다 |
 | 자식 엔티티 이름에 `snapshot`(계좌 Snapshot, 연체 snapshot) | checkout 확정 금액에는 쓰지 않는다(§3) | 사례의 snapshot은 시점 복사본이라는 구현 사실이고, 우리의 checkout은 "N회차 확정 금액"이라는 업무 사실이다. 시점 복사본이 정말 필요해지면 그때 `snapshot`을 그 뜻으로만 쓴다 |
 
 ## 관련 문서
