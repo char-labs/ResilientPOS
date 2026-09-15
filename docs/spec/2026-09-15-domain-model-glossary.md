@@ -1,7 +1,7 @@
 # PR spec: 도메인 모델 용어와 유비쿼터스 언어 용어집
 
 ## 목적
-DDD 용어(Bounded Context, Aggregate, Entity, Value Object, Policy, Facade, Service, Command, Event, Repository)의 정의와 이 프로젝트에서의 예시가 정본 문서에 없다. [README](../../README.md#engineering-principles)와 원문 [도메인 청사진](../references/05_Domain_Development_Blueprint.md)에 역할 표만 흩어져 있고, 원문은 규칙상 참고 자료라 정본이 아니다. 이미 내린 어휘 결정(`terminal` 유지, `sync_operation`, `watermark`, `checkout`)은 저장소 어디에도 기록되지 않았다. 첫 도메인 PR 전에 용어 정의·용어집·설계 체크리스트를 wiki 한 페이지로 고정해 Claude·Codex·Gemini와 사람이 같은 말을 쓰게 한다.
+DDD 용어(Bounded Context, Aggregate, Entity, Value Object, Policy, Facade, Service, Command, Event, Repository)의 정의와 이 프로젝트에서의 예시가 정본 문서에 없다. [README](../../README.md#engineering-principles)와 원문 [도메인 청사진](../references/05_Domain_Development_Blueprint.md)에 역할 표만 흩어져 있고, 원문은 규칙상 참고 자료라 정본이 아니다. 이미 내린 어휘 결정(`terminal` 유지, `operation`, `watermark`, `checkout`)은 저장소 어디에도 기록되지 않았다. 첫 도메인 PR 전에 용어 정의·용어집·설계 체크리스트를 wiki 한 페이지로 고정해 Claude·Codex·Gemini와 사람이 같은 말을 쓰게 한다.
 
 ## 범위
 - `docs/wiki/domain-model.md` 신설: 용어 정의 표(각 용어에 한 줄 정의와 ResilientPOS 예시), bounded context 7개의 aggregate·소유·불변식 요약(원문 blueprint 링크), 유비쿼터스 언어 용어집(채택어·기각어·이유), 도메인 설계 체크리스트, 참고 사례와 다르게 가는 결정.
@@ -29,7 +29,7 @@ DDD 용어(Bounded Context, Aggregate, Entity, Value Object, Policy, Facade, Ser
 
 ## 인수 조건
 1. `docs/wiki/domain-model.md`에 용어 정의 표가 있고, 각 용어에 이 프로젝트의 실제 이름(bounded context 7개의 aggregate·command·event)이 예시로 붙어 있다.
-2. 용어집에 이미 결정한 어휘 4건(`terminal`, `sync_operation`, `watermark`, `checkout`)이 채택어·기각어·이유와 함께 있다.
+2. 용어집에 이미 결정한 어휘 4건(`terminal`, `operation`, `watermark`, `checkout`)이 채택어·기각어·이유와 함께 있다.
 3. 상태 전이 스타일과 JPA 분리 결정이 명시되고, 기존 rules(`effective-java-for-kotlin.md` Item 17)와 blueprint 예시 중 어느 쪽을 따르는지 적혀 있다.
 4. `AGENTS.md`·wiki README·README에서 새 페이지로 가는 링크가 있고, README의 역할 분리 절은 복제하지 않는다.
 5. 새 페이지의 상대 링크가 모두 실재 파일을 가리킨다.
@@ -39,7 +39,7 @@ DDD 용어(Bounded Context, Aggregate, Entity, Value Object, Policy, Facade, Ser
 ```sh
 python3 scripts/check_pr.py --base main --worktree
 ```
-- 상대 링크: 새 페이지의 `](...)` 대상 경로가 존재하는지 확인한다.
+- 상대 링크: 새 페이지의 링크 대상 경로가 존재하는지 확인한다.
 - `workflow-reviewer`에게 spec·wiki·포인터를 읽기 전용으로 검토시킨다.
 - 실패 시나리오: 링크 대상이 없거나 README 역할 표가 중복되면 수정 후 재확인한다.
 
