@@ -112,8 +112,27 @@ python3 scripts/check_pr.py --base main --worktree
 - **판정 규칙을 YAML에 복제하지 않는다**: 워크플로는 `check_pr.py`를 호출만 한다. 규칙이 두 곳에 있으면 갈라진다.
 - **액션 선택**: 요청받은 `gradle/gradle-build-action`은 2024년 7월이 마지막 릴리스이고 `gradle/actions/setup-gradle`로
   대체됐다. 후속 액션의 현재 메이저를 쓴다.
+- **JDK 배포본**: 요청에 따라 Amazon Corretto 25를 쓴다. alpine 변형은 적용하지 않았다. `actions/setup-java`에는
+  alpine 선택지가 없고, alpine은 job 컨테이너 이미지로만 들어온다. 빌드 job은 Testcontainers로 Docker를 쓰는데
+  컨테이너 안에서 돌리면 호스트 Docker 소켓 마운트와 host override 설정이 추가로 필요해 실패 지점이 늘어난다.
+  러너의 JDK는 빌드 도구일 뿐 배포 이미지가 아니라서 alpine으로 얻는 것도 없다.
 - **브랜치 보호는 넣지 못했다**: 저장소 설정이라 코드로 넣을 수 없다. 머지 전 최신 상태 요구를 켜야 낡은 통과 표시가
   완전히 막힌다. 소유자 조치가 필요하다.
 
 개발 중에 이 검사의 경고가 실제로 동작하는 것을 확인했다. 작업 도중 기준 브랜치에 다른 PR이 머지되자
 `기준의 원격 origin/main이 head에 없습니다`가 떴고, 실제로 `origin/main`이 앞서 있었다.
+
+### 워크플로 첫 실행 결과
+PR 17에서 실행을 확인했다. 실행 번호 34921818798.
+
+| Job | 결과 | 시간 |
+|---|---|---|
+| Gradle build | success | 2분 25초 |
+| Flyway version gate | success | 6초 |
+
+Corretto 25 설치, Gradle 빌드, Testcontainers 통합 테스트가 러너에서 모두 통과했다. ubuntu-latest에 Docker가 있어
+별도 설치 단계 없이 실제 PostgreSQL 컨테이너가 떴다. 버전 검사는 기준 브랜치를 가져와 `--migrations-only`로 판정했고
+현재 마이그레이션은 `V001` 하나뿐이라 중복이 없다.
+
+저장소 소유자가 브랜치 보호에서 상태 검사 통과와 머지 전 최신 상태 요구를 켰다. 이로써 로컬 검사만으로는 닫히지 않던
+낡은 통과 판정 경로가 실제로 막혔다. 워크플로가 머지 시점 기준으로 다시 돌고, 기준이 오래되면 머지가 막힌다.
