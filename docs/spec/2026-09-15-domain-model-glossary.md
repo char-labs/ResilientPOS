@@ -67,3 +67,11 @@ python3 scripts/check_pr.py --base main --worktree
 반영하지 않은 것: README·`AGENTS.md`의 낡은 스택 문장(Spring Modulith 미도입, H2, 모듈 5개)은 사실과 다르지만 이 PR의 목표 밖이라 별도 문서 PR로 뺐다.
 
 볼트 `rules/domain-modeling-kotlin.md`(98줄)는 저장소 밖에 작성했고 `.claude/rules` 링크로 로드되는 것을 확인했다.
+
+2차 — 참고 사례의 도식 6장 분석 반영. `check_pr.py --base main --worktree` PASS(일반 6개/273줄), 링크 실재 확인.
+도식에서만 읽히는 근거 네 가지를 규약으로 옮겼다.
+1. 컨텍스트 맵: 컨텍스트 사이 화살표가 없고 자식 엔티티 대부분이 이력·기록이다 → §2 "aggregate 안의 구성" 표와 §6 컨텍스트 맵 규약.
+2. 승인 시퀀스: 전제 조건 조회와 실패 분기를 트랜잭션 상자 앞에, 상자 안은 쓰기 2건, 응답 뒤 Kafka 소비자 → §6 시퀀스 규약. 볼트 spec-write 템플릿(DESIGN·flow)에 링크 한 줄씩.
+3. 레이어 도식: 화살표마다 타입 접미사 → §5 "레이어 경계를 넘는 타입" 표.
+4. 가입 Application: 도메인 모듈에 use case가 없고 `core_app`이 세 도메인을 한 트랜잭션으로 묶는다 → §8에 "우리는 Facade가 컨텍스트 안, 교차는 이벤트, 동기 호출은 즉시 결과 필요 시만" 행과 이유(독립 배포 경로). 볼트 규칙의 Facade 호출 문장도 같은 뜻으로 고쳤다.
+납부를 Recovery로 부른 어휘 결정은 §3의 "영어 이름은 업무 의미" 원칙으로, `snapshot` 자식 엔티티는 §8의 차이 행으로 남겼다.
