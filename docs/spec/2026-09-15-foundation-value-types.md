@@ -15,7 +15,7 @@
 - 나눗셈, 퍼센트 할인, 세금 계산. 반올림 정책은 매장 규칙이므로 `store` 정책과 `CheckoutPolicy`가 생길 때 다룬다.
 - 금액의 음수 금지 같은 업무 불변식. `Money`는 음수를 표현할 수 있고, 허용 여부는 각 Aggregate가 판단한다.
 - 통화별 예외 scale 테이블(`CurrencyScalePolicy`). `java.util.Currency`의 표준 자릿수로 충분한 동안 만들지 않는다.
-- `Comparable<Money>` 구현. 통화가 다른 금액에는 순서가 없으므로 전순서를 전제하는 표준 정렬 API에 넘기지 않는다.
+- `Comparable` 인터페이스 구현. 통화가 다른 금액에는 순서가 없으므로 전순서를 전제하는 표준 정렬 API에 넘기지 않는다.
 - JPA 매핑, DB 컬럼(`NUMERIC(19,4)`), API 직렬화 형식. 각각 persistence·web adapter가 생기는 PR에서 정한다.
 - 단말(pos-client)의 UUID v7 생성기. 서버 구현을 wire 계약으로 삼지 않는다.
 
@@ -71,6 +71,7 @@ python3 scripts/check_pr.py --base feature/module-skeleton --worktree
 | `통화가 다른 금액은 더하지 않는다` / `비교하지 않는다` | `./gradlew test --tests 'com.resilientpos.foundation.*'` — 최소 선언의 `TODO()`가 `NotImplementedError`를 던져 실패 (10개 전부) | `./gradlew test --tests 'com.resilientpos.foundation.*'` — BUILD SUCCESSFUL | `./gradlew test` — BUILD SUCCESSFUL, 13 tests |
 | `덧셈과 뺄셈과 정수 배수가 scale을 유지하고 원본을 바꾸지 않는다` / `같은 통화 금액의 크기를 비교한다` | `./gradlew test --tests 'com.resilientpos.foundation.*'` — 최소 선언의 `TODO()`가 `NotImplementedError`를 던져 실패 (10개 전부) | `./gradlew test --tests 'com.resilientpos.foundation.*'` — BUILD SUCCESSFUL | `./gradlew test` — BUILD SUCCESSFUL, 13 tests |
 | `version 7 식별자를 만든다` / `시간 성분이 뒤로 가지 않는다` / `중복이 없다` / `시간 성분은 생성 시각을 담는다` | `./gradlew test --tests 'com.resilientpos.foundation.*'` — 최소 선언의 `TODO()`가 `NotImplementedError`를 던져 실패 (10개 전부) | `./gradlew test --tests 'com.resilientpos.foundation.*'` — BUILD SUCCESSFUL, UuidV7IdentifierGeneratorTest 4개 통과 | `./gradlew test` — BUILD SUCCESSFUL, 13 tests |
+| `같은 통화 금액의 크기를 비교한다`에 부등호 연산자 단언 추가 | RED 없음. `Comparable` 제거는 동작 변경이 아니라 타입 노출 축소라 실패하는 실행 경로를 만들 수 없다. 대신 `listOf(...).sorted()` 임시 코드로 `Unresolved reference ... receiver type mismatch` 컴파일 차단을 확인하고 제거했다 | `./gradlew test` — BUILD SUCCESSFUL | `./gradlew test` — BUILD SUCCESSFUL, 13 tests |
 | `bounded context 7개와 foundation을 application module로 인식한다` | `./gradlew test --tests 'com.resilientpos.ModuleStructureTest'` — `expected: <[fulfillment, order, ...]> but was: <[foundation, fulfillment, order, ...]>`. foundation 패키지가 생기면서 모듈이 8개가 됨 | `package-info.java` 선언과 기대값 갱신 후 같은 명령 통과 | `./gradlew test` — BUILD SUCCESSFUL, 13 tests |
 
 ## 결과
@@ -89,3 +90,17 @@ python3 scripts/check_pr.py --base feature/module-skeleton --worktree
 
 `foundation`은 `@ApplicationModule`로 선언한 일반 모듈이다. 공개 타입만 가지므로 다른 모듈이 기본 규칙으로 의존할 수 있고,
 open/shared 모듈 설정이 필요 없다.
+
+### 범위 조정 - Comparable 제거 (개발 후)
+리뷰 질문에서 `Comparable` 인터페이스 구현 근거가 약하다는 지적을 받고 범위를 줄였다.
+
+`Comparable` 구현은 그 타입의 모든 값에 전순서가 있다는 선언이다. `Money`는 통화가 다르면 순서가 없으므로 이 선언이 사실이 아니다.
+구현해 두면 `sorted()`, `maxOrNull()`, `TreeMap`처럼 전순서를 전제하는 표준 API가 컴파일되고 통화가 섞인 순간 런타임에
+`CURRENCY_MISMATCH`로 터진다. JDK 계약은 대칭적으로 던지는 것까지 허용하지만, 컴파일러가 막을 수 있는 실수를 런타임으로 미룬다.
+
+`Comparable` 구현만 빼고 `operator fun compareTo`는 남겼다. Kotlin의 부등호 연산자는 인터페이스가 아니라 연산자 함수에
+붙으므로 편의는 그대로고, 표준 정렬 API 호출은 컴파일 단계에서 막힌다. 실제로 `listOf(...).sorted()`가
+`Unresolved reference ... receiver type mismatch`로 거절되는 것을 확인했다.
+
+wiki 본문은 고치지 않았다. `current-state.md`가 적은 `Money`의 성질(canonical scale 유지, scale 초과와 통화 불일치 거절)은
+그대로이고, `Comparable` 구현 여부는 wiki에 적은 적이 없다.
