@@ -10,7 +10,8 @@
 | 서버/데이터 | Spring MVC, Spring Data JPA, Actuator, Jackson Kotlin |
 | DB | H2와 PostgreSQL runtime 드라이버, H2 console 의존성 |
 | 모듈 경계 | Spring Modulith 2.1.1 (BOM + `starter-core`, 테스트는 `starter-test`) |
-| 테스트 | Kotlin Test/JUnit 5, Spring Boot 테스트 starter; contextLoads 1개와 모듈 구조 테스트 2개 |
+| 식별자 | `uuid-creator` 6.1.1 (UUID v7) |
+| 테스트 | Kotlin Test/JUnit 5, Spring Boot 테스트 starter; 총 13개 (contextLoads 1, 모듈 구조 2, Money 6, 식별자 4) |
 | 로컬 하네스 | Python 3 표준 라이브러리 |
 
 근거: [build.gradle.kts](../../build.gradle.kts), [Gradle Wrapper](../../gradle/wrapper/gradle-wrapper.properties), [애플리케이션 설정](../../src/main/resources/application.yaml).
@@ -25,7 +26,10 @@
 - Spring Modulith는 2.1.1로 도입했다. `spring-modulith-core` 2.1.1이 `spring-boot-autoconfigure` 4.1.1에 대해
   빌드되어 현재 Boot 버전과 세대가 맞는다. Event Publication Registry(`starter-jpa`)와 `starter-insight`는 아직 없다.
 - Kafka, Redis, Kotlin JDSL, OpenTelemetry는 참고 문서의 설계 방향이며 현재 빌드 의존성에는 없다.
-- `foundation`과 `platform` 패키지는 아직 만들지 않았다. 실제 타입이 생기는 후속 PR에서 추가한다.
+- `foundation` 모듈에 `Money`와 `IdentifierGenerator`/`UuidV7IdentifierGenerator`가 있다. 프레임워크 의존성은 없다.
+  `Money`는 통화의 표준 소수 자릿수를 canonical scale로 쓰고, scale 초과 입력과 통화 불일치 연산을 거절한다.
+  나눗셈·퍼센트 할인·세금 계산은 없다. 반올림 정책은 매장 규칙이므로 `store` 정책과 checkout에서 다룬다.
+- `platform` 패키지는 아직 만들지 않았다. 실제 adapter가 생기는 후속 PR에서 추가한다.
 - 제공된 요구사항 문서 7개는 [원문 목록](../references/README.md)에 보관했다. 요구사항 재정리와 원문 간 정합성 검토는 아직 수행하지 않았다.
 - 애플리케이션 작업에는 [기존 설계 원칙](../../README.md#engineering-principles)을 참고하되 도입 완료 여부는 코드로 확인한다.
 - 개발 기준은 [개발 규칙](development-workflow.md)이다. 공통 LLM 지침과 로컬 검사로 운영한다.

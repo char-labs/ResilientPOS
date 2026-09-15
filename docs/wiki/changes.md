@@ -62,3 +62,13 @@
 - 결정: Modulith starter는 `core`와 `test` 2개로 시작한다. 원문 2.2절의 baseline은 완성 시점의 조립 상태이므로
   EPR(`starter-jpa`)은 도메인 이벤트가 생기는 checkout PR에서, `starter-insight`는 관측성 단계에서 추가한다.
 - 갱신: [현재 상태](current-state.md).
+
+## 2026-09-15 — foundation 값 타입 Money와 UUID v7 식별자
+- Spec: [foundation-value-types](../spec/2026-09-15-foundation-value-types.md)
+- 요구사항 영향: 제품 요구사항은 변경하지 않았다. [개발 가이드 3.1 IDs / 3.2 Money](../references/03_Development_Guide.md)의
+  규약을 코드로 옮겼다. 금액은 통화 표준 자릿수를 canonical scale로 쓰고 암묵적 반올림과 통화 불일치 연산을 거절한다.
+  식별자는 UUID v7이며 애플리케이션이 저장 전에 만든다.
+- 결정: `CurrencyScalePolicy`는 만들지 않았다. `java.util.Currency`의 표준 자릿수로 충분하며, 매장·국가별 예외
+  반올림이 실제 요구가 될 때 `store` 정책으로 만든다. UUID의 단조 증가도 요구하지 않는다. 동기화 순서의 증거는
+  단말의 durable sequence다.
+- 갱신: [현재 상태](current-state.md).
