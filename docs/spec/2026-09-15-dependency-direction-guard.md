@@ -63,7 +63,19 @@ python3 scripts/check_pr.py --base feature/foundation-value-types --worktree
 
 | 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
 |---|---|---|---|
-| `DependencyDirectionTest` — foundation이 프레임워크에 의존하면 실패한다 | 미실행 | 미실행 | 미실행 |
+| `foundation은 프레임워크에 의존하지 않는다` | `./gradlew test --tests 'com.resilientpos.DependencyDirectionTest'` — `foundation`에 JPA 애너테이션을 붙인 임시 클래스를 넣어 실패. `Class com.resilientpos.foundation.FrameworkLeakProbe is annotated with jakarta.persistence.Entity` | 임시 클래스 제거 후 같은 명령 통과 | `./gradlew test` — BUILD SUCCESSFUL, 16 tests |
 
 ## 결과
-개발 전 작성. 실행 결과는 개발 후 추가한다.
+`./gradlew test` BUILD SUCCESSFUL (16 tests). 인수 조건 6개를 모두 만족했다.
+
+개발 중 확인한 것 두 가지를 기록한다.
+
+1. **`package-info`가 규칙에 걸린다**: 예외 없이 규칙을 먼저 돌리니 `foundation`에서 위반 2건이 나왔다. 둘 다
+   `package-info`의 Modulith 애너테이션이었다. 모듈 선언은 코드가 아니라 메타데이터이므로 이름으로 제외했다.
+   실제 타입에 같은 애너테이션이 붙으면 그대로 잡힌다.
+2. **ArchUnit 버전은 이미 해석된 값과 같다**: `spring-modulith-core`가 끌어오던 1.4.2를 그대로 명시 선언했다.
+   충돌이 없고, 앞으로 Modulith를 올릴 때 이 선언도 함께 확인해야 한다.
+
+Gradle subproject 분할은 하지 않았다. 가이드 1절의 조건이 하나도 충족되지 않았고, 모듈 7개가 비어 있어 담길 코드보다
+빌드 코드가 많아진다. 분할이 주는 효과 중 지금 실제로 필요한 의존성 방향 검사만 가져왔다. 트리거 조건은 현재 상태
+문서에 적었다.
