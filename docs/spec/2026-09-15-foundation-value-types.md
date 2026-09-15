@@ -64,12 +64,26 @@ python3 scripts/check_pr.py --base feature/module-skeleton --worktree
 ## TDD 검증 기록
 | 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
 |---|---|---|---|
-| `MoneyTest` — 통화 표준 자릿수로 canonical scale을 만든다 | 미실행 | 미실행 | 미실행 |
-| `MoneyTest` — 자릿수를 넘는 소수 입력을 거절한다 | 미실행 | 미실행 | 미실행 |
-| `MoneyTest` — 통화가 다르면 연산을 거절한다 | 미실행 | 미실행 | 미실행 |
-| `MoneyTest` — 덧셈·뺄셈·정수 배수가 scale을 유지하고 원본을 바꾸지 않는다 | 미실행 | 미실행 | 미실행 |
-| `UuidV7IdentifierGeneratorTest` — version 7이고 시간 성분이 뒤로 가지 않으며 중복이 없다 | 미실행 | 미실행 | 미실행 |
-| `ModuleStructureTest` — foundation을 포함한 모듈 8개를 인식한다 | 미실행 | 미실행 | 미실행 |
+| `통화의 표준 자릿수를 canonical scale로 쓴다` | `./gradlew test --tests 'com.resilientpos.foundation.*'` — 최소 선언의 `TODO()`가 `NotImplementedError`를 던져 실패 (10개 전부) | `./gradlew test --tests 'com.resilientpos.foundation.*'` — BUILD SUCCESSFUL, MoneyTest 6개 통과 | `./gradlew test` — BUILD SUCCESSFUL, 13 tests |
+| `통화 자릿수를 넘는 소수 입력을 거절한다` | `./gradlew test --tests 'com.resilientpos.foundation.*'` — 최소 선언의 `TODO()`가 `NotImplementedError`를 던져 실패 (10개 전부) | `./gradlew test --tests 'com.resilientpos.foundation.*'` — BUILD SUCCESSFUL | `./gradlew test` — BUILD SUCCESSFUL, 13 tests |
+| `통화가 다른 금액은 더하지 않는다` / `비교하지 않는다` | `./gradlew test --tests 'com.resilientpos.foundation.*'` — 최소 선언의 `TODO()`가 `NotImplementedError`를 던져 실패 (10개 전부) | `./gradlew test --tests 'com.resilientpos.foundation.*'` — BUILD SUCCESSFUL | `./gradlew test` — BUILD SUCCESSFUL, 13 tests |
+| `덧셈과 뺄셈과 정수 배수가 scale을 유지하고 원본을 바꾸지 않는다` / `같은 통화 금액의 크기를 비교한다` | `./gradlew test --tests 'com.resilientpos.foundation.*'` — 최소 선언의 `TODO()`가 `NotImplementedError`를 던져 실패 (10개 전부) | `./gradlew test --tests 'com.resilientpos.foundation.*'` — BUILD SUCCESSFUL | `./gradlew test` — BUILD SUCCESSFUL, 13 tests |
+| `version 7 식별자를 만든다` / `시간 성분이 뒤로 가지 않는다` / `중복이 없다` / `시간 성분은 생성 시각을 담는다` | `./gradlew test --tests 'com.resilientpos.foundation.*'` — 최소 선언의 `TODO()`가 `NotImplementedError`를 던져 실패 (10개 전부) | `./gradlew test --tests 'com.resilientpos.foundation.*'` — BUILD SUCCESSFUL, UuidV7IdentifierGeneratorTest 4개 통과 | `./gradlew test` — BUILD SUCCESSFUL, 13 tests |
+| `bounded context 7개와 foundation을 application module로 인식한다` | `./gradlew test --tests 'com.resilientpos.ModuleStructureTest'` — `expected: <[fulfillment, order, ...]> but was: <[foundation, fulfillment, order, ...]>`. foundation 패키지가 생기면서 모듈이 8개가 됨 | `package-info.java` 선언과 기대값 갱신 후 같은 명령 통과 | `./gradlew test` — BUILD SUCCESSFUL, 13 tests |
 
 ## 결과
-개발 전 작성. 실행 결과는 개발 후 추가한다.
+`./gradlew test` BUILD SUCCESSFUL (13 tests). 인수 조건 7개를 모두 만족했다.
+
+개발 중 정한 것 세 가지를 기록한다.
+
+1. **private constructor 대신 `init` 불변식**: 개발 가이드 3.2 예시는 `data class Money private constructor`지만,
+   Kotlin data class는 private 생성자여도 `copy()`가 공개라 우회 경로가 남는다. `init`에서 canonical scale을 검사하면
+   생성자·`copy()`·`of()` 모든 경로에 같은 불변식이 걸리므로 생성자를 열어 두고 `init`으로 막았다.
+2. **`CurrencyScalePolicy`를 만들지 않았다**: `java.util.Currency.getDefaultFractionDigits()`가 KRW 0, USD 2를 준다.
+   매장·국가별 예외 반올림 규칙이 실제로 필요해질 때 `store` 모듈의 정책으로 만든다.
+3. **UUID 단조 증가를 요구하지 않는다**: `UuidCreator.getTimeOrderedEpoch()`는 같은 밀리초 안에서 난수 부분의 순서를
+   보장하지 않는다. 테스트는 상위 48비트 시간 성분이 뒤로 가지 않는 것까지만 검증한다. 동기화 순서의 증거는
+   기획 문서대로 단말의 durable sequence이지 UUID의 시간순이 아니다.
+
+`foundation`은 `@ApplicationModule`로 선언한 일반 모듈이다. 공개 타입만 가지므로 다른 모듈이 기본 규칙으로 의존할 수 있고,
+open/shared 모듈 설정이 필요 없다.
