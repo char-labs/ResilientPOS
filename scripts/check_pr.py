@@ -11,6 +11,7 @@ from pathlib import Path
 
 SPEC = re.compile(r"docs/spec/(\d{4}-\d{2}-\d{2})-[a-z0-9]+(?:-[a-z0-9]+)*\.md$")
 SECTIONS = ('목적', '범위', '제외', '변경 경로', '인수 조건', '검증', 'Wiki 영향', '분할 계획', '결과')
+MIGRATION = re.compile(r'(?:^|/)db/migration/V([0-9._]+)__[^/]*\.sql$')
 
 
 def git(*args):
@@ -22,6 +23,30 @@ def tree(ref):
     return {p: git('show', f'{ref}:{p}') for p in paths if p}
 
 
+def migration_version(path):
+    """Flyway는 버전을 숫자로 비교한다. V001과 V1은 같은 버전이다."""
+    matched = MIGRATION.search(path)
+    if not matched:
+        return None
+    try:
+        return tuple(int(part) for part in re.split(r'[._]', matched.group(1)) if part)
+    except ValueError:
+        return None
+
+
+def remote_is_ahead(base_ref, head):
+    """기준 브랜치의 원격이 head에 반영되지 않았으면 이 검사 결과는 낡은 기준 위에서 나온 것이다."""
+    try:
+        remote = git('rev-parse', '--verify', f'origin/{base_ref}').decode().strip()
+    except subprocess.CalledProcessError:
+        return False
+    try:
+        git('merge-base', '--is-ancestor', remote, head)
+        return False
+    except subprocess.CalledProcessError:
+        return True
+
+
 def sections(content):
     parts = re.split(r'^## (.+)\n', content, flags=re.M)
     return dict(zip(parts[1::2], parts[2::2]))
@@ -29,6 +54,7 @@ def sections(content):
 
 def check(base, head='HEAD', worktree=False):
     os.chdir(git('rev-parse', '--show-toplevel').decode().strip())
+    base_ref = base
     base = git('merge-base', base, head).decode().strip()
     before, after = tree(base), tree(head)
     errors, warnings = [], []
@@ -86,6 +112,20 @@ def check(base, head='HEAD', worktree=False):
             before.get(log, b'').decode('utf-8').splitlines(), new_log.splitlines()) if line.startswith('+ '))
         if log not in changed or f'../spec/{Path(spec).name}' not in added or '요구사항 영향:' not in added:
             errors.append('wiki 변경 기록에 이번 spec 링크와 요구사항 영향: 설명을 추가하세요.')
+    # 같은 버전 마이그레이션이 둘 이상 머지되면 배포된 애플리케이션이 기동에서 죽는다.
+    # 이번 PR이 추가한 파일만으로는 중복이 아닐 수 있으므로 기준 브랜치의 파일과 함께 본다.
+    base_paths = git('ls-tree', '-r', '--name-only', '-z', base_ref).decode().split('\0')
+    versions = {}
+    for path in set(after) | {p for p in base_paths if p}:
+        version = migration_version(path)
+        if version:
+            versions.setdefault(version, set()).add(path)
+    for version, paths in sorted(versions.items()):
+        if len(paths) > 1:
+            label = '.'.join(str(number) for number in version)
+            errors.append(f'Flyway 버전 {label} 마이그레이션이 여럿입니다: {", ".join(sorted(paths))}')
+    if remote_is_ahead(base_ref, head):
+        warnings.append(f'기준의 원격 origin/{base_ref}이 head에 없습니다. fetch/rebase 후 다시 실행하세요.')
     regular_files = regular_lines = source_files = source_lines = 0
     for p in changed:
         old, new = before.get(p, b''), after.get(p, b'')
