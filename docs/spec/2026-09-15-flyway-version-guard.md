@@ -62,11 +62,27 @@ python3 scripts/check_pr.py --base main --worktree
 ## TDD 검증 기록
 | 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
 |---|---|---|---|
-| 같은 버전이 둘이면 실패한다 | 미실행 | 미실행 | 미실행 |
-| 앞자리 0만 다른 버전을 같게 본다 | 미실행 | 미실행 | 미실행 |
-| 기준 브랜치의 버전과 겹치면 실패한다 | 미실행 | 미실행 | 미실행 |
-| 버전이 다르면 통과한다 | 미실행 | 미실행 | 미실행 |
-| 기준 브랜치가 원격보다 뒤처지면 경고한다 | 미실행 | 미실행 | 미실행 |
+| `test_duplicate_version_fails` | `python3 -m unittest discover -s scripts -p 'test_*.py'` — `AssertionError: 'Flyway 버전 2' not found in ''`. 검사가 없어 중복을 통과시킴 | 같은 명령 통과 | 같은 명령 — 46 tests OK |
+| `test_leading_zero_is_same_version` | `python3 -m unittest discover -s scripts -p 'test_*.py'` — 같은 이유로 실패 | 같은 명령 통과 | 같은 명령 — 46 tests OK |
+| `test_collision_with_base_branch_fails` | `python3 -m unittest discover -s scripts -p 'test_*.py'` — 같은 이유로 실패 | 같은 명령 통과 | 같은 명령 — 46 tests OK |
+| `test_distinct_versions_pass` | RED 없음. 검사 추가 전에도 통과했다. 중복 검사가 정상 파일을 막지 않는다는 회귀 증거로 남긴다 | 같은 명령 통과 | 같은 명령 — 46 tests OK |
+| `test_stale_base_warns` | `python3 -m unittest discover -s scripts -p 'test_*.py'` — 경고가 없어 실패 | 같은 명령 통과 | 같은 명령 — 46 tests OK |
 
 ## 결과
-개발 전 작성. 실행 결과는 개발 후 추가한다.
+`python3 -m unittest discover -s scripts -p 'test_*.py'` 46 tests OK. `python3 scripts/check_pr.py --base main` 통과.
+인수 조건 7개를 모두 만족했다.
+
+다른 프로젝트의 GitHub Actions 게이트를 참고 자료로 받아 이 저장소 방식으로 옮겼다. 옮기면서 정한 것을 남긴다.
+
+1. **워크플로가 아니라 하네스에 넣었다**: 이 저장소는 GitHub Actions와 브랜치 보호를 쓰지 않기로 이미 정했다.
+   PR마다 실행하는 `check_pr.py`가 그 자리를 대신하므로 검사도 거기에 둔다.
+2. **기준 브랜치의 파일을 함께 본다**: 이번 PR이 추가한 파일만 보면 중복이 없어도 기준 브랜치에 같은 번호가
+   있을 수 있다. merge-base가 아니라 `--base`로 준 ref의 트리를 읽어 최신 기준으로 판정한다.
+3. **앞자리 0을 무시한다**: Flyway는 버전을 숫자로 비교한다. `V001`과 `V1`은 같은 버전이라 둘 다 있으면 기동에
+   실패한다. 파일명만 비교하면 이 경우를 놓친다.
+
+닫지 못한 틈을 분명히 적는다. 이 검사의 판정은 실행한 순간의 기준 브랜치에 대한 것이다. 병렬 PR 둘이 각각 같은
+번호를 잡고 먼저 머지된 쪽이 반영되면, 나중 PR의 예전 통과 결과는 더 이상 유효하지 않다. 참고 자료의 프로젝트는
+브랜치 보호의 최신 상태 요구로 이 틈을 닫았지만 이 저장소는 그 설정을 쓰지 않는다. 그래서 머지 직전
+`git fetch` 후 `--base origin/main`으로 재실행하는 것을 개발 규칙에 넣었고, 기준의 원격이 head에 없으면 검사가
+경고하도록 했다. 경고는 실패가 아니다. 기준을 SHA로 주거나 원격이 없는 경우까지 막으면 정상 작업을 방해한다.
