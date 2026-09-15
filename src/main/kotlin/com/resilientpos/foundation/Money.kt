@@ -1,0 +1,43 @@
+package com.resilientpos.foundation
+
+import java.math.BigDecimal
+import java.math.RoundingMode
+import java.util.Currency
+
+/**
+ * 통화의 표준 소수 자릿수를 canonical scale로 유지하는 불변 금액이다.
+ * 음수 허용 여부 같은 업무 불변식은 각 Aggregate가 판단한다.
+ */
+data class Money(val amount: BigDecimal, val currency: Currency) : Comparable<Money> {
+
+    init {
+        require(amount.scale() == currency.defaultFractionDigits) { INVALID_MONEY_SCALE }
+    }
+
+    operator fun plus(other: Money): Money = Money(amount + other.amountIn(currency), currency)
+
+    operator fun minus(other: Money): Money = Money(amount - other.amountIn(currency), currency)
+
+    operator fun times(multiplier: Int): Money = Money(amount * BigDecimal(multiplier), currency)
+
+    override fun compareTo(other: Money): Int = amount.compareTo(other.amountIn(currency))
+
+    private fun amountIn(expected: Currency): BigDecimal {
+        require(currency == expected) { CURRENCY_MISMATCH }
+        return amount
+    }
+
+    companion object {
+        const val INVALID_MONEY_SCALE = "INVALID_MONEY_SCALE"
+        const val CURRENCY_MISMATCH = "CURRENCY_MISMATCH"
+
+        fun of(raw: String, currency: Currency): Money {
+            val canonical = try {
+                BigDecimal(raw).setScale(currency.defaultFractionDigits, RoundingMode.UNNECESSARY)
+            } catch (e: ArithmeticException) {
+                throw IllegalArgumentException(INVALID_MONEY_SCALE, e)
+            }
+            return Money(canonical, currency)
+        }
+    }
+}
