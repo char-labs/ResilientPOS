@@ -4,6 +4,11 @@ name: PR checks
 # 로컬 check_pr.py는 실행 시점의 기준으로만 판정하므로, 병렬 PR에서 먼저 머지된 변경을 반영한
 # 재판정 주체가 필요하다. 이 워크플로가 머지 결과 위에서 다시 돈다.
 on:
+  # main에서도 빌드를 돌린다. setup-gradle은 기본 브랜치 job에서만 캐시를 쓰므로,
+  # 이 트리거가 없으면 PR 실행이 매번 빈 캐시로 시작한다.
+  push:
+    branches:
+      - main
   pull_request:
     branches:
       - main
@@ -37,6 +42,8 @@ jobs:
 
   migration_version_check:
     name: Flyway version gate
+    # push에는 비교할 기준 브랜치가 없다. PR에서만 의미가 있다.
+    if: github.event_name == 'pull_request'
     needs: build
     runs-on: ubuntu-latest
     steps:

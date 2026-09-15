@@ -136,3 +136,21 @@ Corretto 25 설치, Gradle 빌드, Testcontainers 통합 테스트가 러너에�
 
 저장소 소유자가 브랜치 보호에서 상태 검사 통과와 머지 전 최신 상태 요구를 켰다. 이로써 로컬 검사만으로는 닫히지 않던
 낡은 통과 판정 경로가 실제로 막혔다. 워크플로가 머지 시점 기준으로 다시 돌고, 기준이 오래되면 머지가 막힌다.
+
+### 캐시 확인과 트리거 보완 (개발 후)
+첫 두 실행이 2분 25초와 2분 38초로 빨라지지 않아 로그를 확인했다. Gradle 캐시가 동작하지 않고 있었다.
+
+```
+cache-read-only: true
+Gradle User Home cache not found. Will initialize empty.
+Entry not saved: cache is read-only
+```
+
+`gradle/actions/setup-gradle`은 기본 브랜치에서 도는 job에서만 캐시를 저장한다. 워크플로 트리거가 `pull_request`뿐이라
+기본 브랜치에서 실행되는 job이 없었고, 그래서 아무도 캐시를 쓰지 않아 모든 PR 실행이 빈 캐시로 시작했다.
+
+`main` push 트리거를 추가해 기본 브랜치 실행이 캐시를 심게 했다. 버전 검사 job은 push에서 비교할 기준이 없으므로
+PR 이벤트에서만 돌도록 조건을 걸었다. 효과는 이 PR이 머지되어 `main`에서 한 번 돈 뒤부터 나타난다. 그 전까지는
+PR 실행이 계속 콜드 스타트다.
+
+부수 효과로 `main`의 빌드 상태를 상시 확인하게 된다. 머지된 변경이 실제로 빌드되는지 별도 신호가 생긴다.
