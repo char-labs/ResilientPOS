@@ -5,6 +5,7 @@ import java.util.Currency
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertTrue
 
 class MoneyTest {
 
@@ -55,5 +56,7 @@ class MoneyTest {
     fun `같은 통화 금액의 크기를 비교한다`() {
         assertEquals(1, Money.of("1001", krw).compareTo(Money.of("1000", krw)))
         assertEquals(0, Money.of("1000", krw).compareTo(Money.of("1000", krw)))
+        assertTrue(Money.of("1000", krw) < Money.of("1001", krw))
+        assertTrue(Money.of("1001", krw) > Money.of("1000", krw))
     }
 }

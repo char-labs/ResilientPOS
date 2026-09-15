@@ -7,8 +7,11 @@ import java.util.Currency
 /**
  * 통화의 표준 소수 자릿수를 canonical scale로 유지하는 불변 금액이다.
  * 음수 허용 여부 같은 업무 불변식은 각 Aggregate가 판단한다.
+ *
+ * 통화가 다른 금액에는 순서가 없으므로 `Comparable`을 구현하지 않는다. `compareTo` 연산자 함수만 두어
+ * `<`, `>` 연산자는 쓰되 `sorted()`처럼 전순서를 전제하는 표준 API에는 넘어가지 않게 한다.
  */
-data class Money(val amount: BigDecimal, val currency: Currency) : Comparable<Money> {
+data class Money(val amount: BigDecimal, val currency: Currency) {
 
     init {
         require(amount.scale() == currency.defaultFractionDigits) { INVALID_MONEY_SCALE }
@@ -20,7 +23,7 @@ data class Money(val amount: BigDecimal, val currency: Currency) : Comparable<Mo
 
     operator fun times(multiplier: Int): Money = Money(amount * BigDecimal(multiplier), currency)
 
-    override fun compareTo(other: Money): Int = amount.compareTo(other.amountIn(currency))
+    operator fun compareTo(other: Money): Int = amount.compareTo(other.amountIn(currency))
 
     private fun amountIn(expected: Currency): BigDecimal {
         require(currency == expected) { CURRENCY_MISMATCH }
