@@ -5,6 +5,9 @@
 
 ## 범위
 - `scripts/check_pr.py`에 마이그레이션 버전 중복 검사를 추가한다. PR이 추가한 파일과 기준 브랜치의 파일을 함께 본다.
+- GitHub Actions 워크플로로 PR마다 빌드와 버전 검사를 실행한다. 빌드가 통과해야 버전 검사가 돈다.
+- 워크플로가 부를 수 있도록 `--migrations-only` 모드를 추가한다. spec 이력 규칙은 머지 커밋 위에서 의미가 달라지므로
+  워크플로는 버전 검사만 수행한다.
 - Flyway가 버전을 숫자로 비교하는 규칙을 따른다. `V001`과 `V1`은 같은 버전이다.
 - 기준 브랜치가 원격보다 뒤처져 있으면 경고한다. 오래된 기준으로 통과한 결과를 최신 판정으로 착각하지 않게 한다.
 - 위 동작의 하네스 테스트를 추가한다. Python 3 표준 라이브러리만 쓴다.
@@ -12,7 +15,8 @@
 - 복구·관측성: 해당 없다. 저장소 상태를 읽는 정적 검사다.
 
 ## 제외
-- GitHub Actions 워크플로와 브랜치 보호 설정. 이 저장소는 명시 실행 방식이며 [개발 규칙](../wiki/development-workflow.md)이 그렇게 정했다.
+- 브랜치 보호 설정. 저장소 설정이라 코드로 넣을 수 없다. 머지 전 최신 상태 요구는 소유자가 직접 켜야 한다.
+- 워크플로에서의 spec 이력·크기 검사. 머지 커밋 위에서는 첫 커밋 판정이 달라진다. 로컬 검사가 계속 담당한다.
 - 마이그레이션 파일명 규칙 검사. Flyway는 반복 실행 마이그레이션 같은 다른 접두사도 지원하므로, 형식을 좁게 강제하면 나중에 막힌다.
 - 마이그레이션 내용 검사(되돌릴 수 있는 변경인지, 컬럼 추가가 안전한지).
 - checksum 불일치 검사. 지속 DB가 있어야 재현할 수 있어 배포 절차에서 다룬다.
@@ -21,6 +25,7 @@
 없음. 원문 근거는 [개발 가이드 2.5 Migration ownership](../references/03_Development_Guide.md), 선행 PR은 [postgres-flyway-baseline](2026-09-15-postgres-flyway-baseline.md)이다.
 
 ## 변경 경로
+- .github/workflows/**
 - scripts/check_pr.py
 - scripts/test_check_pr.py
 - docs/spec/2026-09-15-flyway-version-guard.md
@@ -35,6 +40,8 @@
 5. 마이그레이션이 없거나 버전이 모두 다르면 통과한다.
 6. `python3 -m unittest discover -s scripts -p 'test_*.py'`가 통과한다.
 7. `python3 scripts/check_pr.py --base main`이 통과한다.
+8. `--migrations-only` 모드가 spec·크기 검사 없이 버전 중복만 판정한다.
+9. PR에서 워크플로가 실행되어 빌드와 버전 검사가 모두 통과한다. 실행 결과를 spec에 기록한다.
 
 ### Checkpoint와 검증 명령
 | Checkpoint | 검증 명령 | 의존 |
@@ -52,7 +59,9 @@ python3 scripts/check_pr.py --base main --worktree
 - 실패: 같은 버전을 두 개 만들어 검사가 실패하는지, 기준 브랜치와 겹칠 때도 실패하는지 확인한다.
 
 ## Wiki 영향
-- [개발 규칙](../wiki/development-workflow.md): 병렬 PR에서 버전이 겹칠 수 있다는 점과 머지 직전 재실행 규칙을 추가한다.
+- [개발 규칙](../wiki/development-workflow.md): 병렬 PR에서 버전이 겹칠 수 있다는 점과 머지 직전 재실행 규칙을 추가하고,
+  "GitHub Actions를 쓰지 않는다"는 세 곳의 서술을 실제 상태로 바꾼다.
+- [차용 내역](../wiki/borrowed-workflows.md): workflow 없음을 전제로 한 `check-ci` 설명을 갱신한다.
 - [변경 기록](../wiki/changes.md): 이 spec 링크와 검사 범위의 한계를 남긴다.
 
 ## 분할 계획
