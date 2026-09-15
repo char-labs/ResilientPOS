@@ -75,6 +75,36 @@ PR 대상 브랜치의 기준 커밋을 지정해 로컬에서 검사한다. squ
 병합 시 squash는 가능하지만 개발 브랜치를 미리 squash하면 선작성 증거가 없어져 검사에 실패한다.
 변경 경로는 spec의 `## 변경 경로` 아래 저장소 상대 경로/glob 목록으로 선언한다.
 
+### Flyway 마이그레이션 버전
+마이그레이션 버전은 저장소 전체에서 유일해야 한다. 같은 버전이 둘 이상 머지되면 배포된 애플리케이션이
+기동 단계에서 죽는다. Flyway는 버전을 숫자로 비교하므로 `V001`과 `V1`은 같은 버전이다.
+
+`check_pr.py`가 이번 PR의 파일과 기준 브랜치의 파일을 함께 보고 중복을 막는다. 새 마이그레이션 번호는
+기준 브랜치의 마지막 번호 다음으로 붙인다.
+
+**이 판정은 검사를 실행한 시점의 기준 브랜치에 대한 것이다.** 병렬 PR 둘이 각각 같은 번호를 잡으면 먼저
+머지된 쪽이 반영된 뒤 나중 PR의 예전 통과 결과는 더 이상 유효하지 않다. 그래서 머지 직전에 다음을 다시 실행한다.
+
+```sh
+git fetch origin
+python3 scripts/check_pr.py --base origin/main
+```
+
+기준의 원격이 head에 없으면 로컬 검사가 경고한다. PR 워크플로도 머지 결과 위에서 같은 검사를 다시 돌린다.
+다만 브랜치 보호의 최신 상태 요구가 꺼져 있으면 워크플로의 통과 표시 역시 그 실행 시점의 기준에 대한 것이므로,
+머지 직전 재실행 습관은 그대로 유지한다.
+
+### PR 워크플로
+`.github/workflows/pr-checks.yml`이 main으로 향하는 PR에서 두 단계를 순서대로 돈다.
+
+| 단계 | 하는 일 | 실패하면 |
+|---|---|---|
+| Gradle build | `./gradlew build`. 통합 테스트가 Testcontainers로 실제 PostgreSQL을 띄운다 | 다음 단계를 돌지 않는다 |
+| Flyway version gate | `check_pr.py --base origin/(기준) --migrations-only` | 버전 중복을 머지 전에 막는다 |
+
+워크플로는 버전 중복만 본다. spec 첫 커밋 판정은 머지 결과 위에서 의미가 달라지므로 로컬 검사가 계속 담당한다.
+빌드를 앞에 두는 이유는 컴파일도 안 되는 변경에 대해 나머지 게이트를 돌릴 이유가 없기 때문이다.
+
 ### rebase와 force-push
 - 개발 브랜치를 base 위로 rebase 하는 것은 허용한다. rebase 뒤에도 spec 첫 커밋이 base 이후 첫 커밋이어야 하며,
   spec 커밋을 다른 커밋과 합치거나 순서를 바꾸지 않는다. 충돌 해결은 [git 스킬의 conflict-resolution](../../.claude/skills/resilientpos-git/references/conflict-resolution.md)을 따른다.
@@ -91,7 +121,8 @@ PR 대상 브랜치의 기준 커밋을 지정해 로컬에서 검사한다. squ
 
 ### PR 본문
 PR 본문은 왜 / 무엇을 / 어떻게 / 확인 방법 4단으로 쓴다([communicate 스킬](../../.claude/skills/resilientpos-communicate/SKILL.md) 기준, 양식은 [git 스킬 cli-reference](../../.claude/skills/resilientpos-git/references/cli-reference.md)).
-"확인 방법"에는 spec 링크, `check_pr.py` 결과, 실행한 테스트 명령을 넣는다. 이 저장소는 GitHub Actions를 쓰지 않으므로 로컬 검증 결과가 CI를 대신한다.
+"확인 방법"에는 spec 링크, `check_pr.py` 결과, 실행한 테스트 명령을 넣는다. PR 워크플로가 빌드와 마이그레이션 버전을
+검사하지만 spec 이력·크기·wiki 기록은 로컬 검사만 판정하므로 그 결과를 본문에 남긴다.
 
 ### 워크플로우 산출물과 설정 파일
 - `.develop-workflow/`, `.review/`, `.review-output/`, `.orchestrator/`, `.plans/`는 스킬이 만드는 휘발성 산출물이며 `.gitignore` 대상이다. 커밋하지 않는다.
@@ -102,8 +133,8 @@ PR 본문은 왜 / 무엇을 / 어떻게 / 확인 방법 4단으로 쓴다([comm
 개발 에이전트는 개발 중과 PR 제출 전에 로컬 검사기를 실행하고 실패 항목을 수정한다.
 로컬 검사기는 첫 spec 독립 커밋, 필수 항목, 선언 경로, 크기, wiki 기록을 검사한다.
 LLM이 파일을 편집한 실제 시각이나 요구사항 해석의 정확성까지 증명할 수는 없다. 이는 지침과 PR 리뷰로 확인한다.
-명시 실행 방식이며, GitHub Actions workflow나 브랜치 보호 설정은 사용하지 않는다.
-검사를 실행하지 않은 커밋이나 병합을 자동 차단하지는 않는다.
+spec 이력·크기·wiki 기록 검사는 명시 실행 방식이라 실행하지 않은 커밋이나 병합을 자동 차단하지 않는다.
+빌드와 마이그레이션 버전만 PR 워크플로가 자동으로 막는다. 브랜치 보호 설정은 아직 쓰지 않는다.
 하네스 자체 변경은 검사 우회가 없는지 별도로 리뷰한다.
 
 ## 지침 점검과 변경 전달
