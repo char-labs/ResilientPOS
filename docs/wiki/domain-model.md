@@ -124,9 +124,14 @@ Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰�
 - `eventId`는 소비자 멱등성 기록 `(consumer, eventId)`([개발 가이드 §4.2](../references/03_Development_Guide.md))의 키다. 모듈별 이벤트는 `sealed interface OrderEvent : DomainEvent`처럼 닫아 `when` 누락을 컴파일러가 잡게 한다.
 - 이것은 §2의 "업무 개념을 두지 않는다"에 어긋나지 않는다. 주문·결제를 모르는 모델링 원시 타입이며, 모듈마다 복제하면 이벤트 공통 필드를 강제할 수 없다. 처음 필요한 도메인 PR에서 추가한다.
 
-### 4.6 미확정 — 컨텍스트 사이 Facade 동기 호출
-원문이 서로 다르다. [청사진 §1](../references/05_Domain_Development_Blueprint.md)은 "Facade끼리 호출하지 않는다"고 조건 없이 금지하고, [시스템 설계 §1.3](../references/02_System_Design.md)은 "단일 즉시 결과와 강한 일관성이 필요한 경우에만 다른 모듈의 public facade를 동기 호출한다"고 조건부로 허용한다. 청사진 자신도 §3.2에서 `sync`가 받아들인 명령을 소유 컨텍스트의 Command Facade로 넘긴다.
-지금의 작업 가정: 컨텍스트를 넘는 변경은 이벤트가 기본이고, `sync` → `order`/`payment`처럼 항목별 즉시 결과와 강한 일관성이 모두 필요할 때만 공개 Facade를 동기 호출한다. 같은 모듈 안에서 Facade가 Facade를 부르지는 않는다. 동기 호출 시 트랜잭션 전파(호출자 트랜잭션에 합류하는지, 항목 단위로 따로 커밋하는지)는 첫 sync PR의 flow spec에서 정하고 이 절을 갱신한다. 시스템 설계 §1.3이 열어 둔 `checkout` orchestration module도 그때 함께 판단한다.
+### 4.6 컨텍스트 사이 동기 호출은 sync intake 한 곳만, 한 트랜잭션으로
+원문이 서로 다르다. [청사진 §1](../references/05_Domain_Development_Blueprint.md)은 "Facade끼리 호출하지 않는다"고 조건 없이 금지하고, [시스템 설계 §1.3](../references/02_System_Design.md)은 "단일 즉시 결과와 강한 일관성이 필요한 경우에만 다른 모듈의 public facade를 동기 호출한다"고 조건부로 허용하며, 청사진 자신도 §3.2에서 `sync`가 받아들인 명령을 소유 컨텍스트의 Command Facade로 넘긴다. 시스템 설계 §1.3을 따르되 허용 범위를 다음으로 좁힌다.
+
+- **허용되는 동기 호출은 `sync` → `order`/`payment`의 공개 Command Facade뿐이다.** 그 밖의 컨텍스트 간 변경은 이벤트다. 같은 모듈 안에서 Facade가 Facade를 부르지 않는다는 청사진 §1은 그대로 적용한다.
+- **항목 하나 = 로컬 트랜잭션 하나.** `sync` Command Facade가 트랜잭션을 소유하고, 호출된 `order`/`payment` Facade는 같은 트랜잭션에 합류한다(`REQUIRED`). `REQUIRES_NEW`로 커밋을 나누지 않는다. 중복·gap·conflict 판정, 소유 aggregate 쓰기, 접수 기록, watermark 전진, 도메인 이벤트의 Event Publication Registry 기록이 한 커밋이다. 응답은 청사진 §3.2대로 커밋된 항목만 `APPLIED`다.
+- **후속 처리는 커밋 뒤 이벤트다.** `OrderCreated`·`SyncOperationApplied`는 같은 커밋에 기록되고 `@ApplicationModuleListener`(AFTER_COMMIT)가 fulfillment·reconciliation을 처리한다. 외부 consumer가 생기면 같은 기록을 `@Externalized`로 Kafka에 relay한다(§4.3). provider 승인 호출은 트랜잭션 밖이며, `PAYMENT_REQUESTED` 항목은 attempt 생성까지만 트랜잭션 안이다.
+- 근거: 기획 PRD 3.2·PR-02는 항목별 수락·중복·충돌·누락 판정과 watermark를 응답으로 요구하고, 개발 가이드 §4.3은 "안전한 명령 하나를 트랜잭션으로 적용하고 항목별 결과를 반환"한다. 커밋을 나누면 크래시 창이 생기고, 순수 이벤트로 바꾸면 주문 상태에 기반한 충돌 판정을 응답에 실을 수 없다.
+- 다시 볼 조건: `order`나 `payment`를 독립 배포로 분리할 때다. [시스템 설계 §6.2](../references/02_System_Design.md) 2단계대로 이 경로를 먼저 "`ACCEPTED` 응답 + 이벤트 적용"으로 바꿔 원격 경계를 시뮬레이션하고 단말 계약을 함께 바꾼다. 시스템 설계 §1.3의 `checkout` orchestration module이 필요해지면 같은 조건(한 곳, 한 트랜잭션)으로 ADR을 쓴다.
 
 ## 5. 레이어 경계를 넘는 타입
 

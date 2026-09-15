@@ -112,7 +112,9 @@
 - 결정(기록): 모듈 안 이벤트 전달은 Event Publication Registry이고 outbox·processed-event 테이블은 만들지 않는다. 금액 `NUMERIC(19,4)`,
   식별자 `uuid`, 테이블 `t_` + 단수 명사. 모두 원문과 DB 설계 리뷰에서 정한 것을 처음 wiki에 적었다.
 - 결정: 공개 타입은 모듈 루트(ADR-002, 청사진 §6.1의 `api/`는 쓰지 않음). `Transition<A, E>`와 `DomainEvent{eventId, occurredAt}`는 `foundation`.
-- 미확정: 컨텍스트 사이 Facade 동기 호출의 허용 조건과 트랜잭션 전파(청사진 §1 금지 vs 시스템 설계 §1.3 조건부 허용)는 첫 sync PR에서 정한다.
+- 결정: 컨텍스트 사이 동기 호출은 `sync` intake → `order`/`payment` 한 곳만 허용하고 항목당 로컬 트랜잭션 하나로 묶는다(호출된 Facade는
+  `REQUIRED` 합류). 이벤트는 같은 커밋에 EPR로 기록되고 AFTER_COMMIT 리스너·향후 Kafka relay가 후속 처리한다. 청사진 §1의 무조건 금지와
+  시스템 설계 §1.3의 조건부 허용 사이에서 §1.3을 따르되 범위를 좁힌 것이다. 응답 계약은 청사진 §3.2의 `APPLIED`를 유지한다.
 - 참고 사례의 도식 6장에서 가져온 규약: 상태 변경과 이력을 한 aggregate에 두는 기준(aggregate 안의 구성 표), 경계마다 타입
   접미사를 고정하는 표, DESIGN 컨텍스트 맵·flow 시퀀스 도식 규약. 사례와 달리 use case는 컨텍스트 안에 두고 트랜잭션이
   컨텍스트를 넘지 않게 한 이유(독립 배포 경로)를 적었다. 볼트 spec-write 템플릿(DESIGN·flow)에 규약 링크 한 줄씩 추가.
