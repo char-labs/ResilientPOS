@@ -30,6 +30,7 @@
 - scripts/test_check_pr.py
 - docs/spec/2026-09-15-flyway-version-guard.md
 - docs/wiki/development-workflow.md
+- docs/wiki/borrowed-workflows.md
 - docs/wiki/changes.md
 
 ## 인수 조건
@@ -75,6 +76,7 @@ python3 scripts/check_pr.py --base main --worktree
 | `test_leading_zero_is_same_version` | `python3 -m unittest discover -s scripts -p 'test_*.py'` — 같은 이유로 실패 | 같은 명령 통과 | 같은 명령 — 46 tests OK |
 | `test_collision_with_base_branch_fails` | `python3 -m unittest discover -s scripts -p 'test_*.py'` — 같은 이유로 실패 | 같은 명령 통과 | 같은 명령 — 46 tests OK |
 | `test_distinct_versions_pass` | RED 없음. 검사 추가 전에도 통과했다. 중복 검사가 정상 파일을 막지 않는다는 회귀 증거로 남긴다 | 같은 명령 통과 | 같은 명령 — 46 tests OK |
+| `test_reports_duplicates_without_spec_rules` / `test_ignores_missing_spec_and_size_rules` | `python3 -m unittest discover -s scripts -p 'test_*.py'` — `check()`가 `migrations_only` 인자를 받지 못해 `TypeError`로 2개 실패 | 같은 명령 통과 | 같은 명령 — 64 tests OK |
 | `test_stale_base_warns` | `python3 -m unittest discover -s scripts -p 'test_*.py'` — 경고가 없어 실패 | 같은 명령 통과 | 같은 명령 — 46 tests OK |
 
 ## 결과
@@ -83,8 +85,9 @@ python3 scripts/check_pr.py --base main --worktree
 
 다른 프로젝트의 GitHub Actions 게이트를 참고 자료로 받아 이 저장소 방식으로 옮겼다. 옮기면서 정한 것을 남긴다.
 
-1. **워크플로가 아니라 하네스에 넣었다**: 이 저장소는 GitHub Actions와 브랜치 보호를 쓰지 않기로 이미 정했다.
-   PR마다 실행하는 `check_pr.py`가 그 자리를 대신하므로 검사도 거기에 둔다.
+1. **하네스에 검사를 넣고, 워크플로가 그 검사를 부른다**: 처음에는 저장소 결정에 따라 하네스에만 넣었다.
+   사용자 요청으로 GitHub Actions를 다시 도입하면서 판정 규칙은 한 곳(`check_pr.py`)에 두고 워크플로가 호출하게 했다.
+   규칙을 YAML에 복제하면 로컬과 CI의 판정이 갈라진다.
 2. **기준 브랜치의 파일을 함께 본다**: 이번 PR이 추가한 파일만 보면 중복이 없어도 기준 브랜치에 같은 번호가
    있을 수 있다. merge-base가 아니라 `--base`로 준 ref의 트리를 읽어 최신 기준으로 판정한다.
 3. **앞자리 0을 무시한다**: Flyway는 버전을 숫자로 비교한다. `V001`과 `V1`은 같은 버전이라 둘 다 있으면 기동에
@@ -95,3 +98,22 @@ python3 scripts/check_pr.py --base main --worktree
 브랜치 보호의 최신 상태 요구로 이 틈을 닫았지만 이 저장소는 그 설정을 쓰지 않는다. 그래서 머지 직전
 `git fetch` 후 `--base origin/main`으로 재실행하는 것을 개발 규칙에 넣었고, 기준의 원격이 head에 없으면 검사가
 경고하도록 했다. 경고는 실패가 아니다. 기준을 SHA로 주거나 원격이 없는 경우까지 막으면 정상 작업을 방해한다.
+
+### 범위 조정 - GitHub Actions 도입 (개발 후)
+사용자 요청으로 PR 게이트를 워크플로로 확장했다. 2026-09-07에 제거했던 결정을 뒤집는 변경이라 근거를 남긴다.
+
+로컬 `check_pr.py`는 실행한 순간의 기준으로만 판정한다. 병렬 PR 둘이 같은 번호를 잡으면 먼저 머지된 쪽이 반영된 뒤
+나중 PR의 통과 결과는 무효인데, 이를 알아차릴 주체가 사람뿐이었다. 머지 결과 위에서 다시 도는 실행 주체가 있어야
+이 틈이 줄어든다.
+
+- **단계 순서**: 빌드가 통과해야 버전 검사를 돈다. 컴파일도 안 되는 변경에 나머지 게이트를 돌릴 이유가 없다.
+- **워크플로는 버전 중복만 본다**: spec 첫 커밋 판정은 머지 결과 위에서 의미가 달라진다. 그래서
+  `--migrations-only` 모드를 따로 두고 spec 이력·크기·wiki 검사는 로컬에 남겼다.
+- **판정 규칙을 YAML에 복제하지 않는다**: 워크플로는 `check_pr.py`를 호출만 한다. 규칙이 두 곳에 있으면 갈라진다.
+- **액션 선택**: 요청받은 `gradle/gradle-build-action`은 2024년 7월이 마지막 릴리스이고 `gradle/actions/setup-gradle`로
+  대체됐다. 후속 액션의 현재 메이저를 쓴다.
+- **브랜치 보호는 넣지 못했다**: 저장소 설정이라 코드로 넣을 수 없다. 머지 전 최신 상태 요구를 켜야 낡은 통과 표시가
+  완전히 막힌다. 소유자 조치가 필요하다.
+
+개발 중에 이 검사의 경고가 실제로 동작하는 것을 확인했다. 작업 도중 기준 브랜치에 다른 PR이 머지되자
+`기준의 원격 origin/main이 head에 없습니다`가 떴고, 실제로 `origin/main`이 앞서 있었다.
