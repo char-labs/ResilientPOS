@@ -6,7 +6,8 @@
 ## 범위
 - `com.resilientpos.foundation` 모듈을 만들고 `@ApplicationModule`로 선언한다. 다른 모듈이 의존하는 공개 값 타입만 둔다.
 - `Money`: `BigDecimal` 금액과 `java.util.Currency`를 가지는 불변 값 타입. 통화의 표준 소수 자릿수를 canonical scale로 쓰고,
-  덧셈·뺄셈·정수 배수·크기 비교를 제공한다. 비교는 `compareTo` 연산자 함수로만 제공하고 `Comparable`은 구현하지 않는다.
+  덧셈·뺄셈·정수 배수·크기 비교와 통화별 0 금액(`zero`)을 제공한다. 비교는 `compareTo` 연산자 함수로만 제공하고
+  `Comparable`은 구현하지 않는다.
 - `IdentifierGenerator` 인터페이스와 `UuidV7IdentifierGenerator` 구현. `uuid-creator` 6.1.1을 사용한다.
 - 소유 모듈: `foundation`. 계약: 위 두 타입의 public API. 불변식: 금액의 scale은 통화 기준으로 canonical하고, 통화가 다른 금액은 연산하지 않으며, 식별자는 UUID version 7이다.
 - 복구·관측성: 해당 없다. 이 PR은 프레임워크·저장소·외부 호출이 없는 순수 값 타입이라 재시도·복구 경로와 metric이 생기지 않는다.
@@ -36,9 +37,10 @@
 2. 통화 자릿수를 넘는 소수 입력은 `INVALID_MONEY_SCALE`로 거절한다. 조용히 반올림하지 않는다.
 3. 통화가 다른 두 금액의 덧셈·뺄셈·비교는 `CURRENCY_MISMATCH`로 거절한다.
 4. 같은 통화의 덧셈·뺄셈·정수 배수는 canonical scale을 유지한 결과를 돌려주고 원본을 바꾸지 않는다.
-5. `UuidV7IdentifierGenerator.next()`는 version 7 UUID를 만들고, 연속 생성한 값의 시간 성분이 뒤로 가지 않으며, 중복이 없다.
-6. `ModuleStructureTest`가 `foundation`을 포함한 모듈 8개를 인식하고 경계 검증이 통과한다.
-7. `python3 scripts/check_pr.py --base feature/module-skeleton`이 통과한다.
+5. `Money.zero(currency)`는 해당 통화의 canonical scale을 가진 0 금액을 돌려주고 덧셈의 항등원으로 동작한다.
+6. `UuidV7IdentifierGenerator.next()`는 version 7 UUID를 만들고, 연속 생성한 값의 시간 성분이 뒤로 가지 않으며, 중복이 없다.
+7. `ModuleStructureTest`가 `foundation`을 포함한 모듈 8개를 인식하고 경계 검증이 통과한다.
+8. `python3 scripts/check_pr.py --base feature/module-skeleton`이 통과한다.
 
 ### Checkpoint와 검증 명령
 | Checkpoint | 검증 명령 | 의존 |
