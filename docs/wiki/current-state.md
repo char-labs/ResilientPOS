@@ -11,7 +11,8 @@
 | DB | H2와 PostgreSQL runtime 드라이버, H2 console 의존성 |
 | 모듈 경계 | Spring Modulith 2.1.1 (BOM + `starter-core`, 테스트는 `starter-test`) |
 | 식별자 | `uuid-creator` 6.1.1 (UUID v7) |
-| 테스트 | Kotlin Test/JUnit 5, Spring Boot 테스트 starter; 총 13개 (contextLoads 1, 모듈 구조 2, Money 6, 식별자 4) |
+| 구조 검증 | Spring Modulith 경계 검증, ArchUnit 1.4.2 의존성 방향 가드 |
+| 테스트 | Kotlin Test/JUnit 5, Spring Boot 테스트 starter; 총 16개 (contextLoads 1, 모듈 구조 2, 의존성 방향 1, Money 8, 식별자 4) |
 | 로컬 하네스 | Python 3 표준 라이브러리 |
 
 근거: [build.gradle.kts](../../build.gradle.kts), [Gradle Wrapper](../../gradle/wrapper/gradle-wrapper.properties), [애플리케이션 설정](../../src/main/resources/application.yaml).
@@ -37,3 +38,25 @@
 ## 테스트 개발 방식
 비즈니스·도메인·Controller는 [TDD 전략](testing-strategy.md)을 따른다. Repository 자체 테스트는 대상에서 제외한다.
 TDD 스킬과 Claude/Codex 에이전트를 구성했다. 정본은 Obsidian 볼트에 있고 저장소는 `.claude`와 `.codex` 심볼릭 링크로 연결하며 둘 다 추적하지 않는다. 링크 생성은 `make bootstrap`이 담당한다. Fixture Monkey와 REST Docs는 채택한 테스트 도구이며 아직 빌드 의존성에는 추가하지 않았다.
+
+## Gradle 프로젝트 구조와 분할 조건
+단일 Gradle 프로젝트를 유지한다. [개발 가이드 1절](../references/03_Development_Guide.md)은 패키지 경계가 안정되고 독립
+build/test/dependency 또는 외부 contract artifact가 실제로 필요할 때만 subproject를 추가하라고 정한다. 현재 모듈 7개는
+비어 있고 전체 테스트가 하나의 태스크로 끝난다. 지금 나누면 담길 코드보다 빌드 코드가 많아진다.
+
+아래 중 하나라도 충족하면 별도 PR로 분할을 검토한다.
+- `pos-client`처럼 별도 실행체가 생겨 domain이나 contract 코드를 공유해야 한다.
+- `contracts/`의 OpenAPI·AsyncAPI 아티팩트를 외부에 배포해야 한다.
+- 한 모듈에만 필요한 의존성(Kafka, Redis adapter 등)이 전체 classpath로 새는 것이 실제 문제가 된다.
+- 빌드·테스트 시간이 길어져 모듈 단위 증분 빌드가 필요하다.
+
+분할을 미뤄도 경계가 무너지지 않는다. Modulith 검증이 모듈 간 internal 참조와 순환을, ArchUnit 가드가 프레임워크
+의존을 막는다. 그래서 나중 분할은 패키지 이름이 바뀌지 않는 파일 이동이다.
+
+## 의존성 방향 가드
+`DependencyDirectionTest`가 `foundation`의 프로덕션 코드에서 Spring, JPA, Servlet, Jackson, Kafka 의존을 막는다.
+`package-info`의 Modulith 애너테이션은 코드가 아니라 모듈 메타데이터라 예외로 둔다. 같은 애너테이션이 실제 타입에
+붙으면 위반으로 잡힌다.
+
+도메인 레이어 규칙(`internal/domain`이 Spring이나 repository에 의존하지 않는다)은 아직 없다. 해당 패키지가 생기지 않아
+검사 대상이 0건이고, 빈 규칙은 활성 여부를 알 수 없다. 첫 도메인 PR에서 같은 파일에 추가한다.
