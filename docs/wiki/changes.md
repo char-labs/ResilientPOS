@@ -131,3 +131,13 @@
 - 결정: CreateOrder 수직 절단은 규모 한도 때문에 stacked PR로 나눈다. 이 PR은 도메인·계약까지이고 Facade 구현·JPA adapter·
   `V002` 마이그레이션·재시도 판정·Fixture Monkey는 다음 PR `order-create-order-persistence`, REST Controller는 그다음이다.
 - 갱신: [도메인 모델](domain-model.md) §8, [현재 상태](current-state.md).
+
+## 2026-09-16 — CreateOrder 영속화와 Facade 구현
+- Spec: [order-create-order-persistence](../spec/2026-09-16-order-create-order-persistence.md)
+- 요구사항 영향: 제품 요구사항은 변경하지 않았다. [기획 PRD 3.2](../references/01_Product_Planning_PRD.md)의 "exact retry는 이전 결과
+  반환"과 [개발 가이드 §6.2](../references/05_Domain_Development_Blueprint.md)의 "`(terminalId, clientOrderId)` unique가 마지막 방어선"을
+  Facade와 `V002` 마이그레이션으로 옮겼다.
+- 결정: `platform` 모듈을 만들어 `IdentifierGenerator`·`Clock` 빈을 둔다(개발 가이드 §1의 자리). `OrderCreated`는 plain Spring
+  이벤트로 발행하고 EPR은 첫 리스너 PR로 미룬다. `Order.restore`는 저장된 주문 재구성 전용이며 불변식을 다시 묻지 않는다.
+  주문 시각 컬럼은 `sync` intake가 envelope의 `occurredAt`을 넘기는 PR에서 Command와 함께 추가한다.
+- 갱신: [현재 상태](current-state.md).
