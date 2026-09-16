@@ -119,3 +119,15 @@
   접미사를 고정하는 표, DESIGN 컨텍스트 맵·flow 시퀀스 도식 규약. 사례와 달리 use case는 컨텍스트 안에 두고 트랜잭션이
   컨텍스트를 넘지 않게 한 이유(독립 배포 경로)를 적었다. 볼트 spec-write 템플릿(DESIGN·flow)에 규약 링크 한 줄씩 추가.
 - 갱신: [도메인 모델](domain-model.md) 신설, [wiki 인덱스](README.md), `AGENTS.md`, README 설계 절.
+
+## 2026-09-16 — order 도메인 모델과 CreateOrder 계약
+- Spec: [order-domain-model](../spec/2026-09-16-order-domain-model.md)
+- 요구사항 영향: 제품 요구사항은 변경하지 않았다. [도메인 청사진 §1.1·§2](../references/05_Domain_Development_Blueprint.md)의
+  `Order` aggregate와 `CreateOrder → OrderCreated` 계약을 첫 코드로 옮겼다. 생성 불변식(line 1개 이상, 수량 1 이상, 단가 0 이상,
+  통화 일치)은 원문에 흩어진 규칙을 이 PR에서 명시한 것이다.
+- 결정: `CreateOrder`의 첫 상태는 `OPEN`이고 오프라인·동기화 여부는 order 상태가 아니다. [시스템 설계 §5](../references/02_System_Design.md)의
+  `OFFLINE_CREATED → SYNCED`는 이 결정으로 대체한다. 청사진 §1.1의 `OrderService`는 만들지 않았다. 생성 규칙이 전부 `Order` 안에 있어
+  조율할 대상이 없다.
+- 결정: CreateOrder 수직 절단은 규모 한도 때문에 stacked PR로 나눈다. 이 PR은 도메인·계약까지이고 Facade 구현·JPA adapter·
+  `V002` 마이그레이션·재시도 판정·Fixture Monkey는 다음 PR `order-create-order-persistence`, REST Controller는 그다음이다.
+- 갱신: [도메인 모델](domain-model.md) §8, [현재 상태](current-state.md).
