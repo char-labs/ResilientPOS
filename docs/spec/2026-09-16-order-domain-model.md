@@ -32,7 +32,6 @@ DESIGN 계층은 없다. 원문 근거는 [도메인 청사진 §1.1·§2·§3.1
 - src/main/kotlin/com/resilientpos/order/internal/domain/**
 - src/test/kotlin/com/resilientpos/order/internal/domain/**
 - src/test/kotlin/com/resilientpos/DependencyDirectionTest.kt
-- src/test/kotlin/com/resilientpos/ModuleStructureTest.kt
 - docs/spec/2026-09-16-order-domain-model.md
 - docs/wiki/domain-model.md
 - docs/wiki/current-state.md
@@ -77,12 +76,21 @@ python3 scripts/check_pr.py --base main --worktree
 ## TDD 검증 기록
 | 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
 |---|---|---|---|
-| 유효한 명령으로 OPEN 주문과 OrderCreated를 만든다 | 미실행 | 미실행 | 미실행 |
-| 빈 line을 EMPTY_ORDER로 거절한다 | 미실행 | 미실행 | 미실행 |
-| 0 이하 수량과 음수 단가를 거절한다 | 미실행 | 미실행 | 미실행 |
-| 주문 통화와 다른 단가를 CURRENCY_MISMATCH로 거절한다 | 미실행 | 미실행 | 미실행 |
-| 합계는 line 단가 곱 수량의 합이다 | 미실행 | 미실행 | 미실행 |
-| 도메인 레이어는 Spring·JPA·adapter에 의존하지 않는다 | 미실행 | 미실행 | 미실행 |
+| `유효한 명령으로 OPEN 주문과 OrderCreated를 만든다` | RED 관측 없음. 공개 타입과 `Order.create`의 정상 경로를 컴파일을 맞추는 최소 선언으로 넣는 과정에서 정상 경로가 함께 완성되어 첫 실행에 통과했다. 이 행은 characterization 근거다 | `./gradlew test --tests 'com.resilientpos.order.internal.domain.OrderTest'` — 통과 | 같은 명령 통과 |
+| `빈 line을 EMPTY_ORDER로 거절한다` | 같은 명령 — `Expected an exception of class java.lang.IllegalArgumentException to be thrown, but was completed successfully with the result: Transition(...)`. `require` 미구현 | `Order.create`에 `require(lines.isNotEmpty()) { EMPTY_ORDER }` 추가 후 같은 명령 통과 | 같은 명령 통과 |
+| `0 이하 수량과 음수 단가를 거절한다` | 같은 명령 — 수량 0과 단가 -1000 두 사례 모두 예외 미발생으로 실패 | `OrderLine.init`에 `INVALID_QUANTITY`·`NEGATIVE_UNIT_PRICE` `require` 추가 후 같은 명령 통과 | 같은 명령 통과 |
+| `주문 통화와 다른 단가를 CURRENCY_MISMATCH로 거절한다` | 같은 명령 — 예외 미발생으로 실패 | `Order.create`에 line 통화 일치 `require` 추가 후 같은 명령 통과 | 같은 명령 통과 |
+| `합계는 line 단가 곱 수량의 합이다` | 같은 명령 — `expected: Money(amount=3500, currency=KRW) but was: Money(amount=0, currency=KRW)`. `total`이 `Money.zero` stub | `total`을 `lines.fold(Money.zero(currency)) { acc, line -> acc + line.amount }`로 교체 후 같은 명령 통과 | `./gradlew test --tests 'com.resilientpos.order.*'` — 5개 통과, `./gradlew test --tests 'com.resilientpos.foundation.*'` — 12개 통과 |
+| `도메인 레이어는 프레임워크와 adapter와 application에 의존하지 않는다` | 규칙 추가 후 `./gradlew test --tests 'com.resilientpos.DependencyDirectionTest'` 통과. RED 대신 부정 확인: `Order`에 `@org.springframework.stereotype.Component`를 임시로 붙이고 같은 명령 실행 → `DependencyDirectionTest > 도메인 레이어는 ... FAILED`, `2 tests completed, 1 failed`. 되돌린 뒤 통과 | 같은 명령 통과 | `./gradlew test` — BUILD SUCCESSFUL, 25 tests |
 
 ## 결과
-개발 전 작성. 개발 후 실행 결과와 변경 이유를 추가한다.
+`./gradlew test` BUILD SUCCESSFUL (25 tests, 기존 19 + `OrderTest` 5 + 도메인 레이어 규칙 1). 인수 조건 1~8을 만족했다.
+
+- `ModuleStructureTest`는 수정 없이 통과했다. `order`가 `store`·`terminal`·`foundation`의 공개 타입에만 의존하고 `internal.domain`은
+  모듈 밖에 노출되지 않는다. 변경 경로에서 이 파일을 뺐다.
+- `OrderLine`은 `Order.kt`가 아니라 별도 파일 `OrderLine.kt`에 두었다. 수량·단가 불변식을 line 자신의 `init`이 소유해 `Order.create`는
+  line 목록과 통화 일치만 본다.
+- `Order.CURRENCY_MISMATCH`는 `Money.CURRENCY_MISMATCH`와 같은 문자열이지만 뜻이 다르다. `Money`는 연산 두 항의 통화 불일치,
+  `Order`는 주문 통화와 line 단가 통화의 불일치다. 각자의 상수로 둔다.
+- 정상 경로 테스트는 RED를 관측하지 못했다. 공개 타입 7개를 먼저 만들어야 테스트가 컴파일되는데, 그 최소 선언 단계에서 생성 경로가
+  함께 완성됐다. 실패 사례 4개와 합계 계산은 RED→GREEN을 관측했다.
