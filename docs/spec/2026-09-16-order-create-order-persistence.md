@@ -9,7 +9,7 @@
 - `order/internal/adapter/persistence/command`: `OrderJpaEntity`(`@Version` 포함), `OrderLine`을 `@ElementCollection`·`@OrderColumn`으로 매핑하는 `OrderLineJpaValue`, Spring Data `OrderJpaRepository`, `OrderRepository` 구현 `OrderPersistenceAdapter`. 변환 `from(aggregate)`, `apply(aggregate)`, `toDomain()`은 엔티티의 `companion`과 메서드가 소유한다. 금액은 `NUMERIC(19,4)` 컬럼에서 통화 표준 자릿수로 되돌려 `Money`를 만든다.
 - Flyway `V002__order_create_order.sql`: `t_order`(id uuid PK, store_id uuid, terminal_id uuid, client_order_id uuid, currency char(3), status varchar(32), version bigint, unique `(terminal_id, client_order_id)`)와 `t_order_line`(order_id uuid FK → t_order, line_no int, product_code, product_name, unit_price numeric(19,4), quantity int, PK `(order_id, line_no)`). 합계 컬럼은 두지 않는다. 파생 값이다.
 - `platform` 패키지 신설과 `@ApplicationModule` 선언. `IdentifierGenerator`(UUID v7)와 `Clock`(UTC) 빈을 등록하는 `PlatformConfiguration`. [개발 가이드 §1](../references/03_Development_Guide.md)이 `platform`을 adapter·configuration 자리로 정했다. `ModuleStructureTest`의 모듈 목록에 `platform`을 추가한다.
-- Fixture Monkey 도입: `fixture-monkey-starter-kotlin` 최신 버전(작성 시점 1.1.11)을 `testImplementation`에 추가하고 `src/test/kotlin/com/resilientpos/order/OrderFixtures.kt`에 `CreateOrderCommand` 빌더를 둔다. 판단에 중요한 값(통화, line 단가·수량, ID)은 고정한다.
+- Fixture Monkey 도입: `fixture-monkey-starter-kotlin` 최신 버전(1.2.3)을 `testImplementation`에 추가하고 `src/test/kotlin/com/resilientpos/order/OrderFixtures.kt`에 `CreateOrderCommand` 빌더를 둔다. 판단에 중요한 값(통화, line 단가·수량, ID)은 고정한다.
 - `SchemaMigrationTest`의 기대값을 갱신한다. 적용 버전은 `001`, `002`이고 업무 테이블 `t_order`, `t_order_line`이 존재한다. 이 테스트의 의도("애플리케이션이 테이블을 만들지 않는다")는 유지하며, 테이블 목록이 마이그레이션이 만든 것과 정확히 같은지로 바꾼다.
 - 소유 모듈: `order`(Facade·adapter·마이그레이션), `platform`(공용 빈). 계약: `OrderCommandFacade.create`. 불변식: `(terminal_id, client_order_id)` DB unique가 중복 생성의 마지막 방어선이다. 복구: 재시도는 기존 결과 반환, 동시 경쟁은 unique 위반 예외로 실패하고 호출자가 재시도하면 기존 결과를 받는다. 관측성: 로그 속성·메트릭은 추가하지 않는다. Controller PR에서 `orderId`·`terminalId`·`storeId` 로그 속성을 붙인다.
 
@@ -90,7 +90,7 @@ Docker가 필요하다. 통합 테스트는 Testcontainers의 PostgreSQL 18에�
 - **범위 조정**: `Order`에 `restore(id, storeId, terminalId, clientOrderId, currency, status, lines)` 팩토리를 추가했다. 생성자가 private이라 adapter의 `toDomain()`이 저장된 주문을 재구성할 길이 없었다. `restore`는 생성 불변식을 다시 묻지 않는다(최초 `create`가 검증했고 DB가 그 상태를 보존한다). `OrderLine`은 실제 생성자로 만들어 line 불변식은 그대로 검사된다. 변경 경로에 `Order.kt`를 추가했다.
 - `currency char(3)` 컬럼은 Hibernate 기본 매핑(varchar)과 `validate`에서 충돌해 `@JdbcTypeCode(SqlTypes.CHAR)`를 붙였다. 스키마 정의를 바꾸지 않고 엔티티를 맞춘 것이다.
 - `ApplicationEvents`는 Spring이 테스트 메서드 파라미터로만 주입을 허용해 그 테스트에서만 파라미터로 받았다.
-- Fixture Monkey 1.1.11의 Kotlin API(`giveMeKotlinBuilder`, `setExp`)가 Kotlin 2.4·JDK 25에서 그대로 동작했다. `Money`는 `init` 불변식 때문에 무작위 생성 대상이 아니라 line과 통화를 고정값으로 넣는다.
+- Fixture Monkey 1.2.3의 Kotlin API(`giveMeKotlinBuilder`, `setExp`)가 Kotlin 2.4·JDK 25에서 그대로 동작했다. deprecation 경고는 없다. `Money`는 `init` 불변식 때문에 무작위 생성 대상이 아니라 line과 통화를 고정값으로 넣는다.
 - 통합 테스트 5개가 RED를 한 원인(`NoSuchBeanDefinitionException`)으로 함께 실패한 뒤 함께 GREEN이 됐다. Facade 구현 하나가 다섯 동작을 동시에 만족시키는 구조라 동작별 RED를 따로 관측하지 못했다. 재시도 반환과 이벤트 1회 발행은 구현의 분기 하나씩에 대응하므로 각 테스트가 그 분기를 고정한다.
 - `SchemaMigrationTest`의 테스트 이름을 `애플리케이션이 업무 테이블을 만들지 않는다`에서 `테이블은 마이그레이션이 만든 것뿐이다`로 바꿨다. 검사 내용(테이블 목록이 마이그레이션 산출과 정확히 같다)은 같고 이름이 새 기대값을 더 정확히 말한다.
 
@@ -98,3 +98,8 @@ Docker가 필요하다. 통합 테스트는 Testcontainers의 PostgreSQL 18에�
 [order-domain-model](2026-09-16-order-domain-model.md) PR이 squash 머지되어 base 브랜치 `feature/order-domain-model`이 삭제됐고 이 PR의 base가 `main`으로 재지정됐다. squash는 앞 PR의 커밋 6개를 하나로 합치므로 이 브랜치에 남은 원본 커밋 6개가 같은 변경을 두 번 적용해 충돌이 났다.
 
 `git rebase --onto origin/main 36c69f7`로 이 PR 고유 커밋 5개만 새 `main` 위로 옮겨 해결했다. 충돌 편집은 없었다. rebase 전후 트리가 같은 것을 `git diff`로 확인했고 spec 첫 커밋은 그대로 첫 커밋이다. 인수 조건 9와 검증 명령의 기준을 `main`으로 고쳤다. 위 결과의 `--base feature/order-domain-model` 검사는 rebase 전 기록이며, rebase 뒤 `--base main`으로 다시 PASS(일반 18개/585줄)와 `./gradlew test` 30개 통과를 확인했다.
+
+### 정정 - Fixture Monkey 버전 (개발 후)
+처음 1.1.11로 넣었는데 당시 최신은 1.2.3이었다. `search.maven.org`의 검색 API가 `latestVersion`을 1.1.11로 응답했고 그 값을 그대로 썼다. 권위 있는 출처는 `https://repo1.maven.org/maven2/.../maven-metadata.xml`의 `release` 태그이며, 거기에는 버전 96개와 `release` 1.2.3이 있다. 앞으로 의존성 최신 버전은 이 메타데이터로 확인한다.
+
+1.2.3으로 올린 뒤 `OrderFixtures`의 코드 변경 없이 `./gradlew test` 30개가 통과했고 `compileTestKotlin`에 deprecation 경고가 없다. `testRuntimeClasspath`에서 전이 의존성까지 1.2.3으로 해결되는 것을 확인했다.

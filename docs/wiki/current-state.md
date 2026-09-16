@@ -13,7 +13,7 @@
 | 식별자 | `uuid-creator` 6.1.1 (UUID v7) |
 | 구조 검증 | Spring Modulith 경계 검증, ArchUnit 1.4.2 의존성 방향 가드 |
 | 통합 테스트 | Testcontainers 2.0.5 PostgreSQL 18. `./gradlew test` 실행에 Docker가 필요하다 |
-| 테스트 | Kotlin Test/JUnit 5, Spring Boot 테스트 starter, Fixture Monkey 1.1.11; 총 30개 (컨텍스트 1, 스키마 3, 모듈 구조 2, 의존성 방향 2, Money 8, 식별자 4, Order 5, OrderCommandFacade 5) |
+| 테스트 | Kotlin Test/JUnit 5, Spring Boot 테스트 starter, Fixture Monkey 1.2.3; 총 30개 (컨텍스트 1, 스키마 3, 모듈 구조 2, 의존성 방향 2, Money 8, 식별자 4, Order 5, OrderCommandFacade 5) |
 | 로컬 하네스 | Python 3 표준 라이브러리 |
 
 근거: [build.gradle.kts](../../build.gradle.kts), [Gradle Wrapper](../../gradle/wrapper/gradle-wrapper.properties), [애플리케이션 설정](../../src/main/resources/application.yaml).
@@ -48,7 +48,7 @@
 
 ## 테스트 개발 방식
 비즈니스·도메인·Controller는 [TDD 전략](testing-strategy.md)을 따른다. Repository 자체 테스트는 대상에서 제외한다.
-TDD 스킬과 Claude/Codex 에이전트를 구성했다. 정본은 Obsidian 볼트에 있고 저장소는 `.claude`와 `.codex` 심볼릭 링크로 연결하며 둘 다 추적하지 않는다. 링크 생성은 `make bootstrap`이 담당한다. Fixture Monkey는 `fixture-monkey-starter-kotlin` 1.1.11로 도입했고 `OrderFixtures`가 첫 사용처다. REST Docs는 첫 Controller PR에서 추가한다.
+TDD 스킬과 Claude/Codex 에이전트를 구성했다. 정본은 Obsidian 볼트에 있고 저장소는 `.claude`와 `.codex` 심볼릭 링크로 연결하며 둘 다 추적하지 않는다. 링크 생성은 `make bootstrap`이 담당한다. Fixture Monkey는 `fixture-monkey-starter-kotlin` 1.2.3으로 도입했고 `OrderFixtures`가 첫 사용처다. REST Docs는 첫 Controller PR에서 추가한다.
 
 ## Gradle 프로젝트 구조와 분할 조건
 단일 Gradle 프로젝트를 유지한다. [개발 가이드 1절](../references/03_Development_Guide.md)은 패키지 경계가 안정되고 독립
