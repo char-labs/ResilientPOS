@@ -36,6 +36,20 @@ class Order private constructor(
         const val EMPTY_ORDER = "EMPTY_ORDER"
         const val CURRENCY_MISMATCH = "CURRENCY_MISMATCH"
 
+        /**
+         * 이미 저장된 주문을 그대로 재구성한다. 생성 불변식은 최초 `create` 때 검증됐으므로 다시 묻지 않는다.
+         * persistence adapter의 `toDomain()`만 부른다.
+         */
+        fun restore(
+            id: OrderId,
+            storeId: StoreId,
+            terminalId: TerminalId,
+            clientOrderId: ClientOrderId,
+            currency: Currency,
+            status: OrderStatus,
+            lines: List<OrderLine>,
+        ): Order = Order(id, storeId, terminalId, clientOrderId, currency, status, lines)
+
         fun create(command: CreateOrderCommand, ids: IdentifierGenerator, now: Instant): Transition<Order, OrderEvent> {
             require(command.lines.isNotEmpty()) { EMPTY_ORDER }
             require(command.lines.all { it.unitPrice.currency == command.currency }) { CURRENCY_MISMATCH }
