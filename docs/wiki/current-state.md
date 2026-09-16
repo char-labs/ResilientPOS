@@ -13,7 +13,7 @@
 | 식별자 | `uuid-creator` 6.1.1 (UUID v7) |
 | 구조 검증 | Spring Modulith 경계 검증, ArchUnit 1.4.2 의존성 방향 가드 |
 | 통합 테스트 | Testcontainers 2.0.5 PostgreSQL 18. `./gradlew test` 실행에 Docker가 필요하다 |
-| 테스트 | Kotlin Test/JUnit 5, Spring Boot 테스트 starter; 총 19개 (컨텍스트 1, 스키마 3, 모듈 구조 2, 의존성 방향 1, Money 8, 식별자 4) |
+| 테스트 | Kotlin Test/JUnit 5, Spring Boot 테스트 starter; 총 25개 (컨텍스트 1, 스키마 3, 모듈 구조 2, 의존성 방향 2, Money 8, 식별자 4, Order 5) |
 | 로컬 하네스 | Python 3 표준 라이브러리 |
 
 근거: [build.gradle.kts](../../build.gradle.kts), [Gradle Wrapper](../../gradle/wrapper/gradle-wrapper.properties), [애플리케이션 설정](../../src/main/resources/application.yaml).
@@ -23,13 +23,19 @@
 
 ## 계획과 구현 구분
 - `com.resilientpos`에 애플리케이션 진입점이 있다. bounded context 7개(`store`, `terminal`, `order`, `payment`,
-  `sync`, `reconciliation`, `fulfillment`)는 `package-info.java`의 `@ApplicationModule`로 선언만 했고 타입은 아직 없다.
+  `sync`, `reconciliation`, `fulfillment`)는 `package-info.java`의 `@ApplicationModule`로 선언했다. `order`에 첫 타입이 있고
+  `store`·`terminal`은 ID 값 타입(`StoreId`, `TerminalId`)만 있으며 나머지 4개는 비어 있다.
   `ModuleStructureTest`가 모듈 인식과 경계 위반을 검증한다. 위반 주입 시 `Module 'order' depends on non-exposed type ...`
   메시지로 실패하는 것을 확인했다.
 - Spring Modulith는 2.1.1로 도입했다. `spring-modulith-core` 2.1.1이 `spring-boot-autoconfigure` 4.1.1에 대해
   빌드되어 현재 Boot 버전과 세대가 맞는다. Event Publication Registry(`starter-jpa`)와 `starter-insight`는 아직 없다.
 - Kafka, Redis, Kotlin JDSL, OpenTelemetry는 참고 문서의 설계 방향이며 현재 빌드 의존성에는 없다.
-- `foundation` 모듈에 `Money`와 `IdentifierGenerator`/`UuidV7IdentifierGenerator`가 있다. 프레임워크 의존성은 없다.
+- `order` 모듈은 공개 계약(`OrderCommandFacade` 인터페이스, `CreateOrderCommand`·`CreateOrderResult`, `OrderId`·`ClientOrderId`,
+  `OrderStatus`, `OrderEvent`·`OrderCreated`)과 `internal/domain`의 `Order`·`OrderLine`이 있다. `Order.create`가 생성 불변식
+  (line 1개 이상, 수량 1 이상, 단가 0 이상, 통화 일치)을 검증하고 `Transition`을 돌려준다. 상태는 `OPEN` 하나다. Facade 구현,
+  Repository, JPA adapter, 마이그레이션은 아직 없다([order-domain-model](../spec/2026-09-16-order-domain-model.md)).
+- `foundation` 모듈에 `Money`, `IdentifierGenerator`/`UuidV7IdentifierGenerator`, 모델링 원시 타입 `DomainEvent`·`Transition`이
+  있다. 프레임워크 의존성은 없다.
   `Money`는 통화의 표준 소수 자릿수를 canonical scale로 쓰고, scale 초과 입력과 통화 불일치 연산을 거절한다.
   나눗셈·퍼센트 할인·세금 계산은 없다. 반올림 정책은 매장 규칙이므로 `store` 정책과 checkout에서 다룬다.
 - `platform` 패키지는 아직 만들지 않았다. 실제 adapter가 생기는 후속 PR에서 추가한다.
@@ -60,8 +66,9 @@ build/test/dependency 또는 외부 contract artifact가 실제로 필요할 때
 `package-info`의 Modulith 애너테이션은 코드가 아니라 모듈 메타데이터라 예외로 둔다. 같은 애너테이션이 실제 타입에
 붙으면 위반으로 잡힌다.
 
-도메인 레이어 규칙(`internal/domain`이 Spring이나 repository에 의존하지 않는다)은 아직 없다. 해당 패키지가 생기지 않아
-검사 대상이 0건이고, 빈 규칙은 활성 여부를 알 수 없다. 첫 도메인 PR에서 같은 파일에 추가한다.
+도메인 레이어 규칙도 같은 파일에 있다. `..internal.domain..`의 프로덕션 코드는 위 프레임워크 패키지와 같은 모듈의
+`..internal.adapter..`·`..internal.application..`에 의존하지 않는다. Modulith 검증은 모듈 사이만 보므로 모듈 안의 레이어
+방향은 이 규칙이 지킨다. `Order`에 `@Component`를 임시로 붙이면 실패하는 것을 확인했다.
 
 ## 데이터베이스와 스키마 소유
 PostgreSQL이 유일한 엔진이다. H2는 제거했다. 테스트가 운영과 다른 엔진에서 돌면 unique 제약, 타입, 잠금 동작처럼

@@ -185,6 +185,7 @@ grill 심문과 업무 기능 spec의 "소유 모듈 / Command·Query·Event / �
 | API·배치 공통 로직을 Biz-component 패키지로 | Controller·이벤트 리스너·스케줄러가 같은 Command Facade를 호출 | Facade가 이미 use case 단위의 공통 진입점이다. 별도 레이어를 두지 않는다 |
 | 도메인 모듈에는 use case가 없고, 별도 `core_app`이 여러 도메인을 한 트랜잭션으로 조합(가입 = 회원 + 계좌 + 한도) | use case(Facade)는 컨텍스트 안에 있고, 컨텍스트를 넘는 변경은 이벤트가 기본이다. 동기 호출의 허용 조건과 트랜잭션 전파는 §4.6 | 컨텍스트별로 독립 배포로 뽑아내는 경로([시스템 설계 §6](../references/02_System_Design.md))를 열어 두려면 컨텍스트를 넘는 트랜잭션을 기본값으로 삼을 수 없다. 사례는 단일 배포 코어라 한 트랜잭션으로 묶을 수 있었다 |
 | 자식 엔티티 이름에 `snapshot`(계좌 Snapshot, 연체 snapshot) | checkout 확정 금액에는 쓰지 않는다(§3) | 사례의 snapshot은 시점 복사본이라는 구현 사실이고, 우리의 checkout은 "N회차 확정 금액"이라는 업무 사실이다. 시점 복사본이 정말 필요해지면 그때 `snapshot`을 그 뜻으로만 쓴다 |
+| [시스템 설계 §5](../references/02_System_Design.md)의 order 상태 `OFFLINE_CREATED → SYNCED → PAYMENT_PENDING` | `CreateOrder`의 첫 상태는 `OPEN`이다. 오프라인 생성·동기화 여부는 `sync`가 소유하는 사실이라 order 상태에 넣지 않는다. 상태 열거값은 각 명령 PR이 추가한다([order-domain-model](../spec/2026-09-16-order-domain-model.md)) | order 상태는 line·금액을 바꿀 수 있는지(§2 불변식)만 뜻해야 한다. 생성 경로를 상태에 섞으면 같은 주문이 경로에 따라 다른 lifecycle을 가진다 |
 
 ## 관련 문서
 - [README Engineering Principles](../../README.md#engineering-principles) — 역할 분리·CQRS·데이터 정본 원칙
