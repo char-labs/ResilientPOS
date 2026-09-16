@@ -29,6 +29,7 @@ DESIGN 계층은 없다. 정본은 [도메인 모델 §4.2·§4.3](../wiki/domai
 - src/main/java/com/resilientpos/platform/package-info.java
 - src/main/kotlin/com/resilientpos/platform/PlatformConfiguration.kt
 - src/main/kotlin/com/resilientpos/order/internal/domain/OrderRepository.kt
+- src/main/kotlin/com/resilientpos/order/internal/domain/Order.kt
 - src/main/kotlin/com/resilientpos/order/internal/application/**
 - src/main/kotlin/com/resilientpos/order/internal/adapter/persistence/command/**
 - src/main/resources/db/migration/V002__order_create_order.sql
@@ -79,13 +80,16 @@ Docker가 필요하다. 통합 테스트는 Testcontainers의 PostgreSQL 18에�
 ## TDD 검증 기록
 | 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
 |---|---|---|---|
-| 주문을 저장하고 OPEN 결과를 돌려준다 | 미실행 | 미실행 | 미실행 |
-| 같은 clientOrderId 재시도는 기존 결과를 돌려주고 행을 늘리지 않는다 | 미실행 | 미실행 | 미실행 |
-| OrderCreated는 첫 호출에만 한 번 발행된다 | 미실행 | 미실행 | 미실행 |
-| 도메인이 거절한 명령은 행을 남기지 않는다 | 미실행 | 미실행 | 미실행 |
-| 같은 terminal_id와 client_order_id는 DB unique가 거절한다 | 미실행 | 미실행 | 미실행 |
-| 마이그레이션 002가 t_order와 t_order_line을 만든다 | 미실행 | 미실행 | 미실행 |
-| platform을 포함한 모듈 9개를 인식한다 | 미실행 | 미실행 | 미실행 |
+| `주문을 저장하고 OPEN 결과를 돌려준다` 외 통합 테스트 5개 | `./gradlew test --tests 'com.resilientpos.order.internal.application.OrderCommandFacadeIntegrationTest'` — `NoSuchBeanDefinitionException`(`OrderCommandFacade` 구현 빈 없음). 구현 중 중간 실패 2건: `SchemaManagementException: wrong column type ... found [bpchar], expecting [varchar]`(currency `char(3)`), `ApplicationEvents can only be injected into test and lifecycle methods`(생성자 주입 시도) | `@JdbcTypeCode(SqlTypes.CHAR)`와 테스트 메서드 파라미터 주입으로 해결 후 같은 명령 5개 통과 | `./gradlew test --tests 'com.resilientpos.order.*'` 통과 |
+| `테이블은 마이그레이션이 만든 것뿐이다` / `baseline 마이그레이션이 성공으로 기록된다` | `V002` 추가 뒤 기존 기대값으로 `./gradlew test --tests 'com.resilientpos.SchemaMigrationTest'` — 2건 `AssertionFailedError`(`[001 to true]`·`[flyway_schema_history]` 기대, 실제는 `002` 적용과 `t_order`·`t_order_line` 존재) | 기대값 갱신 후 같은 명령 통과 | `./gradlew test --rerun` — 30 tests, 실패 0 |
+| `bounded context 7개와 foundation과 platform을 application module로 인식한다` | `platform` 패키지 추가 뒤 `./gradlew test --tests 'com.resilientpos.ModuleStructureTest'` — `expected: [foundation, ..., payment, reconciliation, ...] but was: [..., payment, platform, reconciliation, ...]` | 기대 목록에 `platform` 추가 후 같은 명령 통과 | `./gradlew test` 통과 |
 
 ## 결과
-개발 전 작성. 개발 후 실행 결과와 변경 이유를 추가한다.
+`./gradlew test` BUILD SUCCESSFUL (30 tests, 앞 PR 25 + `OrderCommandFacadeIntegrationTest` 5). 인수 조건 1~9를 만족했다.
+
+- **범위 조정**: `Order`에 `restore(id, storeId, terminalId, clientOrderId, currency, status, lines)` 팩토리를 추가했다. 생성자가 private이라 adapter의 `toDomain()`이 저장된 주문을 재구성할 길이 없었다. `restore`는 생성 불변식을 다시 묻지 않는다(최초 `create`가 검증했고 DB가 그 상태를 보존한다). `OrderLine`은 실제 생성자로 만들어 line 불변식은 그대로 검사된다. 변경 경로에 `Order.kt`를 추가했다.
+- `currency char(3)` 컬럼은 Hibernate 기본 매핑(varchar)과 `validate`에서 충돌해 `@JdbcTypeCode(SqlTypes.CHAR)`를 붙였다. 스키마 정의를 바꾸지 않고 엔티티를 맞춘 것이다.
+- `ApplicationEvents`는 Spring이 테스트 메서드 파라미터로만 주입을 허용해 그 테스트에서만 파라미터로 받았다.
+- Fixture Monkey 1.1.11의 Kotlin API(`giveMeKotlinBuilder`, `setExp`)가 Kotlin 2.4·JDK 25에서 그대로 동작했다. `Money`는 `init` 불변식 때문에 무작위 생성 대상이 아니라 line과 통화를 고정값으로 넣는다.
+- 통합 테스트 5개가 RED를 한 원인(`NoSuchBeanDefinitionException`)으로 함께 실패한 뒤 함께 GREEN이 됐다. Facade 구현 하나가 다섯 동작을 동시에 만족시키는 구조라 동작별 RED를 따로 관측하지 못했다. 재시도 반환과 이벤트 1회 발행은 구현의 분기 하나씩에 대응하므로 각 테스트가 그 분기를 고정한다.
+- `SchemaMigrationTest`의 테스트 이름을 `애플리케이션이 업무 테이블을 만들지 않는다`에서 `테이블은 마이그레이션이 만든 것뿐이다`로 바꿨다. 검사 내용(테이블 목록이 마이그레이션 산출과 정확히 같다)은 같고 이름이 새 기대값을 더 정확히 말한다.
