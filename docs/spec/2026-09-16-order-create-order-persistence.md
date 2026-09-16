@@ -1,7 +1,7 @@
 # PR spec: CreateOrder 영속화와 Facade 구현
 
 ## 목적
-[order-domain-model](2026-09-16-order-domain-model.md)이 만든 `Order` aggregate와 `CreateOrder` 계약을 실제로 저장하고 결과를 돌려주는 use case로 완성한다. `OrderCommandFacade.create`가 트랜잭션 안에서 주문을 PostgreSQL에 저장하고 `OrderCreated`를 발행하며, 같은 `(terminalId, clientOrderId)` 재시도에는 기존 결과를 돌려준다. 이 PR이 끝나면 HTTP 없이도 주문 생성 경로가 DB까지 닿는다. 앞 PR 브랜치 `feature/order-domain-model` 위의 stacked PR이다.
+[order-domain-model](2026-09-16-order-domain-model.md)이 만든 `Order` aggregate와 `CreateOrder` 계약을 실제로 저장하고 결과를 돌려주는 use case로 완성한다. `OrderCommandFacade.create`가 트랜잭션 안에서 주문을 PostgreSQL에 저장하고 `OrderCreated`를 발행하며, 같은 `(terminalId, clientOrderId)` 재시도에는 기존 결과를 돌려준다. 이 PR이 끝나면 HTTP 없이도 주문 생성 경로가 DB까지 닿는다. 앞 PR 브랜치 `feature/order-domain-model` 위의 stacked PR로 시작했고, 그 PR이 머지된 뒤 base가 `main`이 됐다(결과 절).
 
 ## 범위
 - `order/internal/domain/OrderRepository`: `findById(OrderId): Order?`, `findByClientOrderId(TerminalId, ClientOrderId): Order?`, `save(Order): Order`. 시그니처에 aggregate와 ID 값 타입만 쓴다.
@@ -49,7 +49,7 @@ DESIGN 계층은 없다. 정본은 [도메인 모델 §4.2·§4.3](../wiki/domai
 6. `SchemaMigrationTest`: `flyway_schema_history`에 `001`·`002`가 성공으로 기록되고 `public` 스키마의 테이블은 `flyway_schema_history`, `t_order`, `t_order_line`뿐이다.
 7. `ModuleStructureTest`가 모듈 9개(`platform` 포함)를 인식하고 경계 검증이 통과한다. `DependencyDirectionTest`의 도메인 레이어 규칙이 `OrderRepository`(인터페이스, 도메인 쪽)를 포함해 통과한다.
 8. Fixture Monkey로 만든 `CreateOrderCommand`가 실제 `Order.create`를 통과한다. reflection으로 불변식을 우회한 객체를 정상 사례로 쓰지 않는다.
-9. `python3 scripts/check_pr.py --base feature/order-domain-model --worktree`가 통과한다.
+9. `python3 scripts/check_pr.py --base main --worktree`가 통과한다.
 
 ### Checkpoint와 검증 명령
 | Checkpoint | 검증 명령 | 의존 |
@@ -61,7 +61,7 @@ DESIGN 계층은 없다. 정본은 [도메인 모델 §4.2·§4.3](../wiki/domai
 ## 검증
 ```sh
 ./gradlew test
-python3 scripts/check_pr.py --base feature/order-domain-model --worktree
+python3 scripts/check_pr.py --base main --worktree
 ```
 Docker가 필요하다. 통합 테스트는 Testcontainers의 PostgreSQL 18에서 돈다.
 - 정상: 생성 → 저장 → 이벤트 1회, 재시도 → 같은 결과·이벤트 0회.
@@ -93,3 +93,8 @@ Docker가 필요하다. 통합 테스트는 Testcontainers의 PostgreSQL 18에�
 - Fixture Monkey 1.1.11의 Kotlin API(`giveMeKotlinBuilder`, `setExp`)가 Kotlin 2.4·JDK 25에서 그대로 동작했다. `Money`는 `init` 불변식 때문에 무작위 생성 대상이 아니라 line과 통화를 고정값으로 넣는다.
 - 통합 테스트 5개가 RED를 한 원인(`NoSuchBeanDefinitionException`)으로 함께 실패한 뒤 함께 GREEN이 됐다. Facade 구현 하나가 다섯 동작을 동시에 만족시키는 구조라 동작별 RED를 따로 관측하지 못했다. 재시도 반환과 이벤트 1회 발행은 구현의 분기 하나씩에 대응하므로 각 테스트가 그 분기를 고정한다.
 - `SchemaMigrationTest`의 테스트 이름을 `애플리케이션이 업무 테이블을 만들지 않는다`에서 `테이블은 마이그레이션이 만든 것뿐이다`로 바꿨다. 검사 내용(테이블 목록이 마이그레이션 산출과 정확히 같다)은 같고 이름이 새 기대값을 더 정확히 말한다.
+
+### 범위 조정 - 기준 브랜치 변경 (개발 후)
+[order-domain-model](2026-09-16-order-domain-model.md) PR이 squash 머지되어 base 브랜치 `feature/order-domain-model`이 삭제됐고 이 PR의 base가 `main`으로 재지정됐다. squash는 앞 PR의 커밋 6개를 하나로 합치므로 이 브랜치에 남은 원본 커밋 6개가 같은 변경을 두 번 적용해 충돌이 났다.
+
+`git rebase --onto origin/main 36c69f7`로 이 PR 고유 커밋 5개만 새 `main` 위로 옮겨 해결했다. 충돌 편집은 없었다. rebase 전후 트리가 같은 것을 `git diff`로 확인했고 spec 첫 커밋은 그대로 첫 커밋이다. 인수 조건 9와 검증 명령의 기준을 `main`으로 고쳤다. 위 결과의 `--base feature/order-domain-model` 검사는 rebase 전 기록이며, rebase 뒤 `--base main`으로 다시 PASS(일반 18개/585줄)와 `./gradlew test` 30개 통과를 확인했다.
