@@ -13,3 +13,9 @@ value class OrderId(val value: UUID)
  */
 @JvmInline
 value class ClientOrderId(val value: UUID)
+
+/**
+ * 주문 line의 식별자(UUID v7). 주문 안의 위치는 line이 빠지면 당겨지므로 식별자가 아니다.
+ */
+@JvmInline
+value class OrderLineId(val value: UUID)

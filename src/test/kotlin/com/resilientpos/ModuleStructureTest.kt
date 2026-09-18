@@ -14,7 +14,7 @@ class ModuleStructureTest {
     }
 
     @Test
-    fun `bounded context 7개와 foundation을 application module로 인식한다`() {
+    fun `bounded context 7개와 foundation과 platform을 application module로 인식한다`() {
         val moduleNames = modules.map { it.identifier.toString() }.sorted()
 
         assertEquals(
@@ -23,6 +23,7 @@ class ModuleStructureTest {
                 "fulfillment",
                 "order",
                 "payment",
+                "platform",
                 "reconciliation",
                 "store",
                 "sync",

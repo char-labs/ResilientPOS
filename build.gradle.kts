@@ -39,6 +39,7 @@ dependencies {
     testImplementation("org.jetbrains.kotlin:kotlin-test-junit5")
     testImplementation("org.springframework.modulith:spring-modulith-starter-test")
     testImplementation("com.tngtech.archunit:archunit:1.4.2")
+    testImplementation("com.navercorp.fixturemonkey:fixture-monkey-starter-kotlin:1.2.3")
     testImplementation("org.springframework.boot:spring-boot-testcontainers")
     testImplementation("org.testcontainers:testcontainers-postgresql")
     testImplementation("org.testcontainers:testcontainers-junit-jupiter")
