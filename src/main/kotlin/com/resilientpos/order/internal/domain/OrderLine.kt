@@ -1,11 +1,13 @@
 package com.resilientpos.order.internal.domain
 
 import com.resilientpos.foundation.Money
+import com.resilientpos.order.OrderLineId
 
 /**
  * 주문 line 자식 값. 판매 시점 상품 코드·이름·단가·수량을 기록한다.
  */
 data class OrderLine(
+    val id: OrderLineId,
     val productCode: String,
     val productName: String,
     val unitPrice: Money,
