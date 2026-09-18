@@ -31,7 +31,7 @@ class OrderTest {
         private var index = 0
 
         override fun next(): UUID {
-            val id = ids[index]
+            val id = ids.getOrNull(index) ?: UUID.randomUUID()
             index += 1
             return id
         }
@@ -53,6 +53,7 @@ class OrderTest {
     fun `유효한 명령으로 OPEN 주문과 OrderCreated를 만든다`() {
         val orderId = UUID.fromString("00000000-0000-0000-0000-0000000000a1")
         val eventId = UUID.fromString("00000000-0000-0000-0000-0000000000a2")
+        val lineIds = listOf(UUID.fromString("00000000-0000-0000-0000-0000000000b1"), UUID.fromString("00000000-0000-0000-0000-0000000000b2"))
         val command = createOrderCommand(
             lines = listOf(
                 orderLine(unitPrice = Money.of("1000", krw), quantity = 2),
@@ -60,7 +61,7 @@ class OrderTest {
             ),
         )
 
-        val transition = Order.create(command, FixedIdentifierGenerator(listOf(orderId, eventId)), now)
+        val transition = Order.create(command, FixedIdentifierGenerator(listOf(orderId) + lineIds + eventId), now)
 
         val order = transition.aggregate
         assertEquals(OrderStatus.OPEN, order.status)
@@ -70,6 +71,7 @@ class OrderTest {
         assertEquals(command.clientOrderId, order.clientOrderId)
         assertEquals(command.currency, order.currency)
         assertEquals(command.lines.size, order.lines.size)
+        assertEquals(lineIds, order.lines.map { it.id.value })
 
         assertEquals(1, transition.events.size)
         val event = transition.events.single()

@@ -8,6 +8,7 @@ import com.resilientpos.order.CreateOrderCommand
 import com.resilientpos.order.OrderCreated
 import com.resilientpos.order.OrderEvent
 import com.resilientpos.order.OrderId
+import com.resilientpos.order.OrderLineId
 import com.resilientpos.order.OrderStatus
 import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.TerminalId
@@ -62,7 +63,7 @@ class Order private constructor(
                 clientOrderId = command.clientOrderId,
                 currency = command.currency,
                 status = OrderStatus.OPEN,
-                lines = command.lines.map { OrderLine(it.productCode, it.productName, it.unitPrice, it.quantity) },
+                lines = command.lines.map { OrderLine(OrderLineId(ids.next()), it.productCode, it.productName, it.unitPrice, it.quantity) },
             )
             val event = OrderCreated(
                 eventId = ids.next(),
