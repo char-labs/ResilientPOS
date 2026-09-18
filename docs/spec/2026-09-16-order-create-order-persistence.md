@@ -28,8 +28,12 @@ DESIGN 계층은 없다. 정본은 [도메인 모델 §4.2·§4.3](../wiki/domai
 - build.gradle.kts
 - src/main/java/com/resilientpos/platform/package-info.java
 - src/main/kotlin/com/resilientpos/platform/PlatformConfiguration.kt
+- src/main/kotlin/com/resilientpos/platform/BaseEntity.kt
 - src/main/kotlin/com/resilientpos/order/internal/domain/OrderRepository.kt
 - src/main/kotlin/com/resilientpos/order/internal/domain/Order.kt
+- src/main/kotlin/com/resilientpos/order/internal/domain/OrderLine.kt
+- src/main/kotlin/com/resilientpos/order/OrderId.kt
+- src/main/kotlin/com/resilientpos/order/OrderCommandFacade.kt
 - src/main/kotlin/com/resilientpos/order/internal/application/**
 - src/main/kotlin/com/resilientpos/order/internal/adapter/persistence/command/**
 - src/main/resources/db/migration/V002__order_create_order.sql
@@ -38,6 +42,7 @@ DESIGN 계층은 없다. 정본은 [도메인 모델 §4.2·§4.3](../wiki/domai
 - src/test/kotlin/com/resilientpos/ModuleStructureTest.kt
 - docs/spec/2026-09-16-order-create-order-persistence.md
 - docs/wiki/current-state.md
+- docs/wiki/domain-model.md
 - docs/wiki/changes.md
 
 ## 인수 조건
@@ -103,3 +108,26 @@ Docker가 필요하다. 통합 테스트는 Testcontainers의 PostgreSQL 18에�
 처음 1.1.11로 넣었는데 당시 최신은 1.2.3이었다. `search.maven.org`의 검색 API가 `latestVersion`을 1.1.11로 응답했고 그 값을 그대로 썼다. 권위 있는 출처는 `https://repo1.maven.org/maven2/.../maven-metadata.xml`의 `release` 태그이며, 거기에는 버전 96개와 `release` 1.2.3이 있다. 앞으로 의존성 최신 버전은 이 메타데이터로 확인한다.
 
 1.2.3으로 올린 뒤 `OrderFixtures`의 코드 변경 없이 `./gradlew test` 30개가 통과했고 `compileTestKotlin`에 deprecation 경고가 없다. `testRuntimeClasspath`에서 전이 의존성까지 1.2.3으로 해결되는 것을 확인했다.
+
+### 범위 조정 - 리뷰 반영: Facade 클래스화, `BaseEntity`, line 자식 엔티티 (개발 후)
+PR 리뷰를 세 차례 반영한다. 변경 경로에 `order/OrderCommandFacade.kt`, `platform/BaseEntity.kt`, `docs/wiki/domain-model.md`를 추가했다. 아래는 범위·인수 조건의 앞선 서술(`DefaultOrderCommandFacade`, `OrderJpaEntity`, `OrderLineJpaValue`, `@ElementCollection`)을 대체한다.
+
+- **Facade는 인터페이스 없이 구체 클래스다**: 앞 PR의 `OrderCommandFacade` 인터페이스를 지우고 `DefaultOrderCommandFacade`를 모듈 루트의 `class OrderCommandFacade`로 옮긴다. 구현이 하나뿐인 인터페이스였고 `Default` 접두가 그 비용이었다. Spring Modulith는 모듈 기본 패키지의 타입을 공개로 보므로 호출자는 그대로 `com.resilientpos.order.OrderCommandFacade`를 주입받는다. `internal/application` 패키지는 비게 되어 없어진다.
+- **엔티티 이름**: `OrderJpaEntity`를 `OrderEntity`로 바꾼다. JPA 엔티티 이름은 `OrderEntity`처럼 aggregate 이름 + `Entity`이고 `Jpa`를 넣지 않는다. Spring Data repository는 도메인 port `OrderRepository`와 단순 이름이 겹치므로 `OrderJpaRepository`를 유지한다.
+- **`platform.BaseEntity`는 Hibernate 기능으로 만든다**: `@CreationTimestamp`·`@UpdateTimestamp`(`SourceType.DB`)가 `created_at`·`updated_at`을 채우고 `@SoftDelete(strategy = TIMESTAMP, columnName = "deleted_at")`가 삭제를 `deleted_at` 기록으로 바꾸며 모든 조회에서 삭제된 행을 거른다. JPA callback과 `delete()`·`restore()` 같은 직접 구현은 두지 않는다. 시각의 출처는 DB `current_timestamp` 하나라서 한 INSERT의 `created_at`과 `updated_at`이 같다. Hibernate 7.4.5의 `EntityBinder`가 `@MappedSuperclass`의 `@SoftDelete`를 상속 엔티티에 적용하는 것을 소스로 확인했다. `@SoftDelete`는 `@Incubating` API다. `V002`의 `t_order`에 세 컬럼을 추가한다(`V002`는 아직 `main`에 없어 직접 고친다). `foundation`은 `jakarta`에 의존할 수 없어 자리는 `platform`이다.
+- **참고 코드에서 가져오지 않은 것**: `id`(`Long` IDENTITY)는 도메인 ID가 UUID v7이고 `@GeneratedValue`를 쓰지 않는 규칙(볼트 규칙 §3) 때문에 각 엔티티에 남긴다. `ActiveStatus status`는 `deleted_at`과 같은 사실을 두 컬럼에 적어 어긋날 수 있고 `OrderEntity.status`와 컬럼 이름이 충돌하므로 두지 않는다. `LocalDateTime` 대신 `Instant`(`timestamptz`)를 쓴다.
+- **JPA 연관관계 매핑을 쓰지 않는다**: `@OneToMany`·`@ManyToOne`·`@OneToOne`·`@ManyToMany`와 `@ElementCollection`을 쓰지 않는다. aggregate 안의 자식도 부모 ID 컬럼만 가진 독립 엔티티와 독립 Spring Data repository로 두고, 조립과 변경 반영은 persistence adapter가 한다. 매핑이 fetch 전략·cascade·flush 순서를 숨기지 않고, 읽는 쿼리가 코드에 그대로 보인다. 원칙은 [도메인 모델 §4.2](../wiki/domain-model.md)와 볼트 규칙 `domain-modeling-kotlin.md` §5에 적는다.
+- **`OrderLine`에 도메인 ID `OrderLineId`(UUID v7)를 준다**: 독립 엔티티는 자기 키가 필요하다. 주문 안의 위치(`line_no`)는 중간 line을 지우면 뒤 line이 당겨져 다른 상품을 가리키므로 식별자가 될 수 없다. `Order.create`가 이미 받는 `IdentifierGenerator`로 line마다 만든다(순서: 주문 ID → line ID들 → 이벤트 ID). `OrderLineId`는 ID 값 타입이라 모듈 루트에 둔다. 앞 PR의 `OrderLine`·`Order.create`·`OrderTest`를 고친다.
+- **`t_order_line`**: `id uuid primary key`를 추가하고 `(order_id, line_no)`는 PK에서 내려 조회용 index로 둔다. unique로 두면 순서를 바꾸는 UPDATE가 중간에 충돌한다. `line_no`는 정렬용이다. DB FK(`order_id → t_order(id)`)도 두지 않는다. 연관관계 매핑과 같은 이유이고, 무결성은 Facade 트랜잭션 안에서 주문과 line을 함께 저장하는 adapter가 지킨다. 고아 line이 생길 수 있는 경로는 `OrderLineJpaRepository`를 adapter 밖에서 쓰는 경우뿐이라 그 repository는 `OrderPersistenceAdapter`만 쓴다. `V002`는 아직 `main`에 없어 직접 고친다.
+- **`OrderLineEntity`와 `OrderLineJpaRepository`**: line은 자기 ID가 있어 `BaseEntity`를 상속한다. 빠진 line은 soft delete로 `deleted_at`이 남는다. `OrderPersistenceAdapter.save`가 line ID로 기존 행과 맞춰 같은 ID는 제자리 갱신, 새 ID는 INSERT, 없어진 ID는 삭제한다. 조회는 주문 1회 + line 1회(`findAllByOrderIdOrderByLineNo`)다. `EAGER`와 `@EntityGraph`는 없다.
+- **`@Version`을 `BaseEntity`로 옮긴다**: ID를 저장 전에 만드는 엔티티는 모두 아래 `merge` 문제를 겪으므로 `version: Long?`를 공통 컬럼으로 둔다. line INSERT마다 붙던 존재 확인 SELECT가 없어진다.
+- **알려진 한계**: line만 바뀌고 루트 컬럼이 그대로면 루트 `version`이 오르지 않는다. line을 수정하는 첫 use case PR에서 루트 버전을 강제로 올린다.
+- **`@Version`을 `Long?`로 바꾼다(인수 조건 10이 드러낸 결함)**: `version: Long = 0`(primitive)이면 Spring Data `save`가 ID가 이미 채워진 새 엔티티를 기존 행으로 판단해 `persist` 대신 `merge`를 부른다. `merge`는 빈 컬렉션으로 INSERT한 뒤 line을 복사하므로 컬렉션 변경으로 `version`을 0→1로 올리는 UPDATE가 따라붙었고, 그래서 생성 직후인데 `updated_at`이 `created_at`보다 늦었다. wrapper 타입이면 `version == null`로 신규를 판정해 `persist`로 간다. 주문 생성마다 SELECT 1회와 UPDATE 1회가 줄어든다.
+- **인수 조건 10 추가**: `OrderCommandFacade.create`로 저장한 `t_order` 행은 `created_at`과 `updated_at`이 같은 값으로 채워지고 `deleted_at`은 null이며 `version`은 0이다.
+- **인수 조건 11 추가**: 저장된 주문을 line이 바뀐 aggregate(값 변경과 추가, 그다음 중간 line 제거)로 다시 `OrderRepository.save`하면 `findById`가 같은 line 목록을 ID까지 같게 돌려주고, 제거된 line 행은 `deleted_at`이 채워진 채 남는다.
+- **인수 조건 12 추가**: `Order.create`가 만든 line은 `IdentifierGenerator`가 준 ID를 순서대로 가진다.
+
+| 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
+|---|---|---|---|
+| `신규 저장은 INSERT 한 번이고 생성 시각과 수정 시각이 같으며 삭제 시각은 비어 있다` | `./gradlew test --tests 'com.resilientpos.order.internal.application.OrderCommandFacadeIntegrationTest'` — `BadSqlGrammarException`(`created_at` 컬럼 없음). `BaseEntity`·`V002` 반영 뒤 두 번째 RED: `AssertionFailedError: expected …56.890431 but was …56.89063`(`updated_at`이 늦음, `version` 1) | `version: Long?`로 바꾼 뒤 같은 명령 6개 통과, `version` 0 | `./gradlew test` — 31 tests, 실패 0 |
+| `line이 바뀐 주문을 다시 저장하면 같은 ID는 갱신하고 새 ID는 추가하고 없어진 ID는 soft delete한다`, `유효한 명령으로 OPEN 주문과 OrderCreated를 만든다`(line ID 단언 추가) | `./gradlew compileTestKotlin` — `Unresolved reference 'OrderLineId'`, `Unresolved reference 'id'` | `OrderLineId`·독립 `OrderLineEntity`·`OrderLineJpaRepository`·adapter 조립 구현 뒤 `./gradlew test` 32개 통과 | `SPRING_JPA_SHOW_SQL=true`로 SQL 확인: line INSERT 앞의 존재 확인 SELECT 없음, 제거는 `update t_order_line set deleted_at=…`, 모든 조회에 `deleted_at is null`. `src/main`에 연관관계 애너테이션 없음(`grep`) |
