@@ -140,4 +140,8 @@
 - 결정: `platform` 모듈을 만들어 `IdentifierGenerator`·`Clock` 빈을 둔다(개발 가이드 §1의 자리). `OrderCreated`는 plain Spring
   이벤트로 발행하고 EPR은 첫 리스너 PR로 미룬다. `Order.restore`는 저장된 주문 재구성 전용이며 불변식을 다시 묻지 않는다.
   주문 시각 컬럼은 `sync` intake가 envelope의 `occurredAt`을 넘기는 PR에서 Command와 함께 추가한다.
-- 갱신: [현재 상태](current-state.md).
+- 리뷰 반영: `OrderCommandFacade`를 인터페이스 없는 구체 클래스로 바꿨다(`Default*` 구현 제거). JPA 엔티티 이름에서 `Jpa`를 뺀다.
+  `platform.BaseEntity`는 Hibernate `@CreationTimestamp`·`@UpdateTimestamp`·`@SoftDelete(TIMESTAMP)`로 만들고 활성 상태 컬럼은 두지 않는다.
+  JPA 연관관계 매핑과 `@ElementCollection`을 쓰지 않는다. line은 `OrderLineId`를 가진 독립 엔티티·독립 repository이고 adapter가 조립한다. DB FK 제약도 두지 않는다.
+  `@Version`을 `Long?`로 바꿔 `BaseEntity`에 두어 신규 저장이 `merge`로 빠져 SELECT·UPDATE가 붙던 결함을 고쳤다.
+- 갱신: [현재 상태](current-state.md), [도메인 모델](domain-model.md) §4.2·§4.4.

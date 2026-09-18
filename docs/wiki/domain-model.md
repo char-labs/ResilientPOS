@@ -108,6 +108,9 @@ Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰�
 ### 4.2 Aggregate와 JPA 엔티티는 별개 클래스다
 - aggregate·값 객체·Policy·Service는 `internal/domain`에 두고 JPA·Spring 애너테이션을 갖지 않는다. JPA 엔티티, Spring Data repository, 변환기(`from(aggregate)`, `apply(aggregate)`, `toDomain()`)는 `internal/adapter/persistence/command`에 둔다. Repository 인터페이스는 도메인 쪽, 구현은 adapter 쪽이다.
 - 근거: [청사진 §6.1](../references/05_Domain_Development_Blueprint.md) 패키지 구조가 이미 이 분리를 전제하고, [의존성 방향 가드 spec](../spec/2026-09-15-dependency-direction-guard.md)이 "도메인 레이어는 Spring·repository에 의존하지 않는다"는 ArchUnit 규칙을 첫 도메인 PR에 추가하기로 했다. 4.1의 불변 aggregate는 JPA 관리 엔티티와 같은 클래스일 수 없다.
+- 이름: JPA 엔티티는 aggregate 이름 + `Entity`(`OrderEntity`, `OrderLineEntity`)이고 `Jpa`를 넣지 않는다. Spring Data repository만 도메인 port(`OrderRepository`)와 단순 이름이 겹치므로 `OrderJpaRepository`처럼 `Jpa`를 넣는다.
+- **JPA 연관관계 매핑을 쓰지 않는다.** `@OneToMany`·`@ManyToOne`·`@OneToOne`·`@ManyToMany`와 `@ElementCollection`이 대상이다. 다른 aggregate는 물론 같은 aggregate 안의 자식도 부모 ID 컬럼만 가진 독립 엔티티와 독립 Spring Data repository로 둔다(`OrderLineEntity.orderId`, `OrderLineJpaRepository`). 조립과 변경 반영(자식 ID로 맞춰 갱신·추가·삭제)은 persistence adapter가 한다. fetch 전략·cascade·flush 순서가 매핑 뒤에 숨지 않고 읽는 쿼리가 코드에 보인다. 그래서 자식도 도메인 ID(`OrderLineId`)를 가진다. 위치는 식별자가 아니다. DB FK 제약도 두지 않는다. 참조 컬럼에는 index만 두고, 무결성은 aggregate를 한 트랜잭션으로 저장하는 소유 모듈이 지킨다.
+- 엔티티는 `platform.BaseEntity`를 상속한다. `@Version`(`Long?`), Hibernate의 `@CreationTimestamp`·`@UpdateTimestamp`(DB 시각)가 채우는 `created_at`·`updated_at`, `@SoftDelete(TIMESTAMP)`의 `deleted_at`을 준다. 삭제된 행은 모든 조회에서 걸러진다. JPA callback이나 활성 상태 컬럼으로 직접 구현하지 않는다. `id`는 `BaseEntity`에 없다(도메인 ID는 UUID v7을 저장 전에 만든다). `version`이 primitive면 Spring Data가 새 엔티티를 `merge`해 SELECT와 UPDATE가 더 나가므로 nullable이다([order-create-order-persistence](../spec/2026-09-16-order-create-order-persistence.md)).
 - 비용: aggregate마다 클래스가 둘이고 변환기가 붙는다. 그 대신 도메인 테스트에 DB가 없고, JPA 엔티티 규칙(`data class` 금지, 프록시, 지연 로딩)이 도메인에 새지 않는다.
 
 ### 4.3 이벤트 전달과 저장 형식
@@ -115,7 +118,7 @@ Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰�
 - 금액은 `NUMERIC(19,4)` + 통화 코드 컬럼, 식별자는 PostgreSQL native `uuid`다([개발 가이드 §3.1·§3.2](../references/03_Development_Guide.md)). 테이블 이름은 `t_` + 단수 명사(`t_order`, `t_payment_attempt`)다.
 
 ### 4.4 공개 타입은 모듈 루트에 둔다
-- Facade, `*Command`/`*Result`, `*Query`/`*Criteria`/`*View`, 도메인 이벤트, ID 값 타입은 모듈 기본 패키지(`com.resilientpos.order`)에 두고, 그 밖은 전부 `internal/` 아래다. [ADR-002](../references/01_ResilientPOS_PRD_Backend_Requirements.md)를 따르고 [청사진 §6.1](../references/05_Domain_Development_Blueprint.md)의 `api/` 하위 패키지는 쓰지 않는다.
+- Facade, `*Command`/`*Result`, `*Query`/`*Criteria`/`*View`, 도메인 이벤트, ID 값 타입은 모듈 기본 패키지(`com.resilientpos.order`)에 두고, 그 밖은 전부 `internal/` 아래다. Facade는 인터페이스를 따로 두지 않는 구체 클래스(`class OrderCommandFacade`)다. 구현이 둘이 될 때 인터페이스를 뽑는다. [ADR-002](../references/01_ResilientPOS_PRD_Backend_Requirements.md)를 따르고 [청사진 §6.1](../references/05_Domain_Development_Blueprint.md)의 `api/` 하위 패키지는 쓰지 않는다.
 - 근거: Spring Modulith는 모듈 기본 패키지만 공개로 보므로 애너테이션 없이 지금의 `ModuleStructureTest`가 그대로 경계를 지킨다. `api/`를 쓰려면 모듈마다 `@NamedInterface`가 필요하다.
 - 다시 볼 조건: 한 모듈의 루트 파일이 20개를 넘거나 공개 surface를 `api`/`events`처럼 나눠 의존을 허용해야 할 때 `@NamedInterface`로 옮긴다. 그때도 패키지 이름만 바뀌는 파일 이동이다.
 
