@@ -20,13 +20,13 @@ import java.util.UUID
 @Table(name = "t_order_line")
 class OrderLineEntity(
     @Id
-    var id: UUID = UUID(0, 0),
-    var orderId: UUID = UUID(0, 0),
-    var lineNo: Int = 0,
-    var productCode: String = "",
-    var productName: String = "",
-    var unitPrice: BigDecimal = BigDecimal.ZERO,
-    var quantity: Int = 0,
+    var id: UUID,
+    var orderId: UUID,
+    var lineNo: Int,
+    var productCode: String,
+    var productName: String,
+    var unitPrice: BigDecimal,
+    var quantity: Int,
 ) : BaseEntity() {
 
     fun apply(lineNo: Int, line: OrderLine) {
@@ -47,6 +47,6 @@ class OrderLineEntity(
 
     companion object {
         fun from(orderId: UUID, lineNo: Int, line: OrderLine): OrderLineEntity =
-            OrderLineEntity(line.id.value, orderId).also { it.apply(lineNo, line) }
+            OrderLineEntity(line.id.value, orderId, lineNo, line.productCode, line.productName, line.unitPrice.amount, line.quantity)
     }
 }

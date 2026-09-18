@@ -26,15 +26,15 @@ import org.hibernate.type.SqlTypes
 @Table(name = "t_order")
 class OrderEntity(
     @Id
-    var id: UUID = UUID(0, 0),
-    var storeId: UUID = UUID(0, 0),
-    var terminalId: UUID = UUID(0, 0),
-    var clientOrderId: UUID = UUID(0, 0),
+    var id: UUID,
+    var storeId: UUID,
+    var terminalId: UUID,
+    var clientOrderId: UUID,
     @Column(columnDefinition = "char(3)")
     @JdbcTypeCode(SqlTypes.CHAR)
-    var currency: String = "",
+    var currency: String,
     @Enumerated(EnumType.STRING)
-    var status: OrderStatus = OrderStatus.OPEN,
+    var status: OrderStatus,
 ) : BaseEntity() {
 
     /** 관리 엔티티에 최신 aggregate 상태를 반영한다. */
