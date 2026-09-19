@@ -145,3 +145,9 @@
   JPA 연관관계 매핑과 `@ElementCollection`을 쓰지 않는다. line은 `OrderLineId`를 가진 독립 엔티티·독립 repository이고 adapter가 조립한다. DB FK 제약도 두지 않는다.
   `@Version`을 `Long?`로 바꿔 `BaseEntity`에 두어 신규 저장이 `merge`로 빠져 SELECT·UPDATE가 붙던 결함을 고쳤다.
 - 갱신: [현재 상태](current-state.md), [도메인 모델](domain-model.md) §4.2·§4.4.
+
+## 2026-09-19 — 볼트 지침 중복 제거와 세션 컨텍스트 축소
+- Spec: [vault-context-trim](../spec/2026-09-19-vault-context-trim.md)
+- 요구사항 영향: 제품 요구사항은 변경하지 않았다. 볼트 지침이 매 세션 싣는 분량을 줄였다(항상 로드 rule 10.0KB → 4.8KB, 긴 description 3개 축소, 사용자 전용 스킬 2개 description 제외).
+- 결정: 본문이 같던 `outline-*` 에이전트 3개는 `architect-*`로 합쳤다. `develop-auto`는 `develop` references를 정본으로 삼아 차이만 적는다. 윤문 스킬은 `resilientpos-humanizer` 하나만 쓴다. 이식 원본 `Global-claude-code`는 볼트 `ResilientPOS/archive/`에 보관한다.
+- 갱신: [지침 설계 근거](agent-instructions.md), [차용 내역](borrowed-workflows.md).

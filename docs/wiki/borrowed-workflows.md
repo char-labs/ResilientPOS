@@ -39,14 +39,15 @@ Claude에서 `/이름`, Codex에서 `$이름`으로 호출한다. 자연어 요�
 | 글쓰기 | `resilientpos-communicate`, `resilientpos-humanizer` | 대화 밖 독자용 작문 기준, AI 글쓰기 패턴 교정 |
 | 설정 | `resilientpos-setup` | coding-style/develop-workflow/fleta/git-hooks/statusline 모듈 설치·제거. 명시 요청 시만 |
 
-### 도입한 에이전트 (19)와 규칙 (2)
-- 설계·리뷰: `architect-claude/codex/gemini`, `outline-claude/codex/gemini`, `reviewer-claude/codex/gemini`, `code-reviewer`,
+### 도입한 에이전트 (16)와 규칙 (3)
+- 설계·리뷰: `architect-claude/codex/gemini`(design·outline 공용, 2026-09-19에 본문이 같던 `outline-*` 3개를 합침), `reviewer-claude/codex/gemini`, `code-reviewer`,
   `spec-validator`, `complexity-reducer`, `conflict-analyzer`, `test-oracle`.
 - 지침: `workflow-reviewer`(확장, 읽기 전용), `codebase-analyzer`, `document-analyzer`, `rules-generator`.
 - 구현: `tdd-driver`(기존).
-- Codex용(볼트 `codex/agents/*.toml`, 저장소 `.codex/agents` 링크, 2026-09-14 추가): `tdd_driver`, `test_oracle`(workspace-write), `workflow_reviewer`, `code_reviewer`, `spec_validator`, `complexity_reducer`(read-only). Claude 정의와 역할은 같고 형식만 Codex 규약(TOML)을 따른다. 래퍼 6개와 `*-claude` 3개는 옮기지 않았다 — 전자는 Codex가 Codex를 부르는 구조이고 후자는 Claude 전용이다.
+- Codex용(볼트 `codex/agents/*.toml`, 저장소 `.codex/agents` 링크, 2026-09-14 추가): `tdd_driver`, `test_oracle`(workspace-write), `workflow_reviewer`, `code_reviewer`, `spec_validator`, `complexity_reducer`(read-only). Claude 정의와 역할은 같고 형식만 Codex 규약(TOML)을 따른다. 래퍼 4개와 `*-claude` 2개는 옮기지 않았다 — 전자는 Codex가 Codex를 부르는 구조이고 후자는 Claude 전용이다.
 - 규칙(`.claude/rules`, [rules-link-and-ignores](../spec/2026-09-13-rules-link-and-ignores.md) 이후 자동 로드):
-  `engineering-principles`(설계 최우선, 결정적 도구 vs 지능 책임 경계, SOLID, TDD, Quality Gate, 커밋 형식),
+  `engineering-principles`(항상 로드: 설계 최우선, 결정적 도구 vs 지능 책임 경계, Quality Gate, 커밋 형식 요약),
+  `implementation-principles`(`src/**/*.kt` 편집 시 로드: SOLID, 파일 구성, TDD),
   `agent-design-principles`(설계 원칙 스킬의 얇은 바인딩).
 
 ### 외부 도구 가용성과 처리
@@ -55,7 +56,7 @@ Claude에서 `/이름`, Codex에서 `$이름`으로 호출한다. 자연어 요�
 | 도구 | 상태 | 처리 |
 |---|---|---|
 | `fleta`, `git-utils` CLI | 없음 | 모든 CLI 호출을 동등한 plain `git`/`gh` 절차로 풀어 썼다 |
-| `codex` CLI | **있음** (0.154.0) | 2026-09-14에 `codex exec`로 프로젝트 서브에이전트 스폰까지 검증했다. `architect-codex`·`outline-codex`·`reviewer-codex`가 실제로 실행되므로 Multi-LLM 경로는 Claude + Codex 2개로 돈다 |
+| `codex` CLI | **있음** (0.154.0) | 2026-09-14에 `codex exec`로 프로젝트 서브에이전트 스폰까지 검증했다. `architect-codex`·`reviewer-codex`가 실제로 실행되므로 Multi-LLM 경로는 Claude + Codex 2개로 돈다 |
 | `gemini` CLI | 없음 | `*-gemini` 래퍼 3개는 "미실행"을 반환한다. 합의 규칙은 실행된 LLM 수를 분모로 재해석하므로 현재는 2개 기준이다 |
 | hook 스크립트(`detect-ralph-state.sh`, `develop-phase-gate.cjs`, Default Branch Guard, statusline 엔트리) | `resilientpos-setup`이 `.claude/settings.json`(로컬, gitignore) 편집 절차와 대체 셸을 제공한다. 미등록 상태에서는 에이전트가 같은 조건을 직접 확인한다(soft gate) |
 | GitHub Actions | PR 게이트로 빌드와 Flyway 버전 검사만 사용한다. `check-ci`는 이 워크플로 결과를 조회하고, spec 이력·크기·wiki 기록은 로컬 `check_pr.py` 결과를 함께 제시한다 |
