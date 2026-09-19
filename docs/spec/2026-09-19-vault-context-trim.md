@@ -53,3 +53,8 @@ Obsidian 볼트 `ResilientPOS/`의 스킬·에이전트·rules가 매 세션 컨
 
 ## 결과
 개발 전 작성.
+
+- `grep -rn "outline-\(claude\|codex\|gemini\)" docs/wiki` → 결과 없음.
+- `python3 scripts/check_pr.py --base main --worktree` → PASS (일반 4개/78줄).
+- 볼트 변경 확인: 편집한 스킬·에이전트·rules의 frontmatter가 YAML로 파싱되고, 세션의 스킬 목록에 줄인 description이 반영됐다.
+  볼트로 가는 심볼릭 링크는 이 저장소의 `.claude/{skills,agents,rules}`, `.codex/agents` 네 개뿐이다.
