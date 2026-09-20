@@ -52,6 +52,13 @@ class HarnessTest(unittest.TestCase):
     def migration(self, name, statement='select 1;\n'):
         self.write(f'src/main/resources/db/migration/{name}', statement)
 
+    REVIEW = '\n### 스키마 변경 검토\n- 필요성: 기존 컬럼으로 도출할 수 없다.\n'
+    RECORD = '- 대조 기록: 2026-09-07, code-reviewer, 불일치 없음.\n'
+
+    def add_to_spec(self, text):
+        content = Path(self.spec).read_text()
+        self.write(self.spec, content.replace('## 검증\n', f'{text}\n## 검증\n', 1))
+
     def test_valid_history_and_worktree(self):
         self.start()
         self.implementation()
@@ -174,6 +181,7 @@ class MigrationVersionTest(HarnessTest):
         self.implementation()
         self.migration('V001__baseline.sql')
         self.migration('V002__order_create_orders.sql')
+        self.add_to_spec(self.REVIEW + self.RECORD)
         self.commit()
         self.assertEqual('', self.errors())
 
@@ -249,3 +257,143 @@ class MigrationsOnlyModeTest(HarnessTest):
 
         self.assertEqual([], errors)
         self.assertIn('정확히 한 개', '\n'.join(check(self.base)[0]))
+
+
+class SchemaReviewGateTest(HarnessTest):
+    """마이그레이션을 바꾸는 PR은 spec의 스키마 변경 검토 절과 구현자가 아닌 리뷰어의 대조 기록이 있어야 한다."""
+
+    def test_migration_without_review_section_fails(self):
+        self.start()
+        self.implementation()
+        self.migration('V002__order_create_orders.sql')
+        self.assertIn('스키마 변경 검토', self.errors(True))
+
+    def test_review_section_with_record_passes(self):
+        self.start()
+        self.implementation()
+        self.migration('V002__order_create_orders.sql')
+        self.add_to_spec(self.REVIEW + self.RECORD)
+        self.assertEqual('', self.errors(True))
+        self.commit()
+        self.assertEqual('', self.errors())
+
+    def test_missing_record_warns_in_worktree_and_fails_in_history(self):
+        self.start()
+        self.implementation()
+        self.migration('V002__order_create_orders.sql')
+        self.add_to_spec(self.REVIEW)
+        self.assertEqual('', self.errors(True))
+        self.assertIn('대조 기록', self.warnings(True))
+        self.commit()
+        self.assertIn('대조 기록', self.errors())
+
+    def test_empty_or_placeholder_section_fails(self):
+        self.start()
+        self.implementation()
+        self.migration('V002__order_create_orders.sql')
+        self.add_to_spec('\n### 스키마 변경 검토\n')
+        self.assertIn('스키마 변경 검토', self.errors(True))
+        self.add_to_spec('<질문에 답한다>\n' + self.RECORD)
+        self.assertIn('스키마 변경 검토', self.errors(True))
+
+    def test_record_outside_the_section_does_not_count(self):
+        self.start()
+        self.implementation()
+        self.migration('V002__order_create_orders.sql')
+        self.add_to_spec(self.REVIEW + '\n### 다른 절\n' + self.RECORD)
+        self.commit()
+        self.assertIn('대조 기록', self.errors())
+
+    def test_repeatable_and_deleted_migrations_also_require_review(self):
+        self.migration('V002__order_create_orders.sql')
+        self.commit()
+        self.base = self.git('rev-parse', 'HEAD').strip()
+        self.start()
+        self.implementation()
+        self.migration('R__order_views.sql')
+        self.assertIn('스키마 변경 검토', self.errors(True))
+        Path('src/main/resources/db/migration/R__order_views.sql').unlink()
+        self.assertEqual('', self.errors(True))
+        Path('src/main/resources/db/migration/V002__order_create_orders.sql').unlink()
+        self.assertIn('스키마 변경 검토', self.errors(True))
+
+    def test_pr_without_migration_needs_no_review_section(self):
+        self.start()
+        self.implementation()
+        self.assertEqual('', self.errors(True))
+        self.assertEqual('', self.warnings(True))
+
+    def test_every_path_flyway_reads_requires_review(self):
+        """Flyway는 확장자 대소문자를 가리지 않고 하위 디렉터리와 db.migration 패키지의 Java·Kotlin 마이그레이션도 읽는다."""
+        self.start()
+        self.implementation()
+        for path in ('src/main/resources/db/migration/V003__x.SQL',
+                     'src/main/resources/db/migration/order/V003__x.sql',
+                     'src/main/kotlin/db/migration/V003__AddX.kt',
+                     'src/main/java/db/migration/V003__AddX.java'):
+            with self.subTest(path):
+                self.write(path, 'x\n')
+                self.assertIn('스키마 변경 검토', self.errors(True))
+                Path(path).unlink()
+
+    def test_example_sql_outside_src_needs_no_review(self):
+        self.start()
+        self.implementation()
+        self.write('docs/wiki/examples/db/migration/V1__x.sql', 'select 1;\n')
+        self.assertEqual('', self.errors(True))
+
+    def test_empty_record_fails(self):
+        self.start()
+        self.implementation()
+        self.migration('V002__order_create_orders.sql')
+        self.add_to_spec(self.REVIEW + '- 대조 기록:   \n')
+        self.commit()
+        self.assertIn('대조 기록', self.errors())
+
+    def test_fenced_heading_and_record_do_not_count(self):
+        self.start()
+        self.implementation()
+        self.migration('V002__order_create_orders.sql')
+        self.add_to_spec('\n```\n### 스키마 변경 검토\n- 답\n' + self.RECORD + '```\n')
+        self.assertIn('스키마 변경 검토', self.errors(True))
+
+    def test_fenced_hash_lines_do_not_cut_the_section(self):
+        self.start()
+        self.implementation()
+        self.migration('V002__order_create_orders.sql')
+        self.add_to_spec(self.REVIEW + '```sql\n## 위반 행 세기\nselect 1;\n```\n' + self.RECORD)
+        self.commit()
+        self.assertEqual('', self.errors())
+
+    def test_heading_only_body_and_lookalike_heading_fail(self):
+        self.start()
+        self.implementation()
+        self.migration('V002__order_create_orders.sql')
+        self.add_to_spec('\n### 스키마 변경 검토하지 않음\n- 답\n' + self.RECORD)
+        self.assertIn('스키마 변경 검토', self.errors(True))
+        self.add_to_spec('\n### 스키마 변경 검토\n#### 필요성\n')
+        self.assertIn('스키마 변경 검토', self.errors(True))
+
+    def test_record_after_a_top_level_heading_does_not_count(self):
+        self.start()
+        self.implementation()
+        self.migration('V002__order_create_orders.sql')
+        self.add_to_spec(self.REVIEW + '\n# 부록\n' + self.RECORD)
+        self.commit()
+        self.assertIn('대조 기록', self.errors())
+
+    def test_second_level_section_may_hold_subsections(self):
+        """템플릿은 이 절을 필수 절 밖의 독립 ## 절로 둔다. 그 안의 ### 하위 절과 끝의 대조 기록을 본문으로 본다."""
+        self.start()
+        self.implementation()
+        self.migration('V002__order_create_orders.sql')
+        self.add_to_spec('\n## 스키마 변경 검토 (스키마를 바꿀 때만)\n### 필요성\n- 도출할 수 없다.\n### 반영\n- nullable 추가.\n' + self.RECORD)
+        self.commit()
+        self.assertEqual('', self.errors())
+
+    def test_unfilled_template_section_fails(self):
+        self.start()
+        self.implementation()
+        self.migration('V002__order_create_orders.sql')
+        self.add_to_spec('\n## 스키마 변경 검토 (스키마를 바꿀 때만)\n<질문별 답>\n- 대조 기록: <리뷰어, 시점, 불일치 항목>\n')
+        self.assertIn('placeholder', self.errors(True))

@@ -12,6 +12,13 @@ from pathlib import Path
 SPEC = re.compile(r"docs/spec/(\d{4}-\d{2}-\d{2})-[a-z0-9]+(?:-[a-z0-9]+)*\.md$")
 SECTIONS = ('목적', '범위', '제외', '변경 경로', '인수 조건', '검증', 'Wiki 영향', '분할 계획', '결과')
 MIGRATION = re.compile(r'(?:^|/)db/migration/V([0-9._]+)__[^/]*\.sql$')
+# Flyway가 읽는 경로 전부다. 확장자 대소문자를 가리지 않고, 하위 디렉터리와 R(반복) 접두,
+# db.migration 패키지의 Java·Kotlin 마이그레이션도 읽는다. src 밖의 예시 SQL은 대상이 아니다.
+SCHEMA_CHANGE = re.compile(
+    r'^src/[^/]+/(?:resources/db/migration/.+\.sql|(?:kotlin|java)/db/migration/.+\.(?:kt|java))$', re.I)
+FENCE = re.compile(r'^(```|~~~).*?^\1[^\n]*$', re.M | re.S)
+SCHEMA_HEADING = re.compile(r'^(#{2,3}) 스키마 변경 검토(?:[ \t][^\n]*)?\n', re.M)
+SCHEMA_RECORD = re.compile(r'^- 대조 기록:[ \t]*\S', re.M)
 
 
 def git(*args):
@@ -68,6 +75,18 @@ def migration_conflicts(paths):
 def sections(content):
     parts = re.split(r'^## (.+)\n', content, flags=re.M)
     return dict(zip(parts[1::2], parts[2::2]))
+
+
+def schema_review(content):
+    """코드 블록을 뺀 spec에서 스키마 변경 검토 절의 본문을 돌려준다. 절이 없으면 None이다."""
+    text = FENCE.sub('', content)
+    heading = SCHEMA_HEADING.search(text)
+    if not heading:
+        return None
+    rest = text[heading.end():]
+    # 같은 수준이나 더 높은 수준의 제목에서 절이 끝난다. 하위 제목은 본문이다.
+    end = re.search(rf'^#{{1,{len(heading.group(1))}}} ', rest, flags=re.M)
+    return rest[:end.start()] if end else rest
 
 
 def check(base, head='HEAD', worktree=False, migrations_only=False):
@@ -128,6 +147,17 @@ def check(base, head='HEAD', worktree=False, migrations_only=False):
         for p in changed:
             if p != spec and not any(fnmatch.fnmatchcase(p, pattern) for pattern in patterns):
                 errors.append(f'spec 범위 밖 변경: {p}')
+        if any(SCHEMA_CHANGE.search(p) for p in changed):
+            body = schema_review(after[spec].decode('utf-8')) or ''
+            if not re.sub(r'^#+ .*$', '', body, flags=re.M).strip():
+                errors.append('마이그레이션을 바꾸는 PR은 spec에 "스키마 변경 검토" 절과 답이 필요합니다: docs/wiki/domain-model.md')
+            elif '<' in body:
+                errors.append('스키마 변경 검토 절에 placeholder가 남아 있습니다. 부등호 여는 문자는 코드 블록 안에만 씁니다.')
+            elif not SCHEMA_RECORD.search(body):
+                # 독립 대조는 PR 제출 직전에 하므로 개발 중(--worktree)에는 막지 않는다.
+                (warnings if worktree else errors).append(
+                    '스키마 변경 검토 절에 "- 대조 기록: 리뷰어, 시점, 불일치 항목" 줄이 필요합니다'
+                    '(줄 맨 앞 하이픈, 반각 콜론, 내용 필수). 구현자가 아닌 리뷰어가 남깁니다.')
         log = 'docs/wiki/changes.md'
         new_log = after.get(log, b'').decode('utf-8')
         added = '\n'.join(line[2:] for line in difflib.ndiff(
