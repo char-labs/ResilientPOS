@@ -13,7 +13,7 @@
 | 식별자 | `uuid-creator` 6.1.1 (UUID v7) |
 | 구조 검증 | Spring Modulith 경계 검증, ArchUnit 1.4.2 의존성 방향 가드 |
 | 통합 테스트 | Testcontainers 2.0.5 PostgreSQL 18. `./gradlew test` 실행에 Docker가 필요하다 |
-| 테스트 | Kotlin Test/JUnit 5, Spring Boot 테스트 starter, Fixture Monkey 1.2.3; 총 59개 (컨텍스트 1, 스키마 3, 모듈 구조 2, 의존성 방향 2, Money 8, 식별자 4, Order 9, OrderCommandFacade 11, API advice 8, OrderController 8, 주문 API 통합 3) |
+| 테스트 | Kotlin Test/JUnit 5, Spring Boot 테스트 starter, Fixture Monkey 1.2.3; 총 55개 (컨텍스트 1, 스키마 3, 모듈 구조 2, 의존성 방향 2, Money 8, 식별자 4, Order 7, OrderCommandFacade 9, API advice 8, OrderController 8, 주문 API 통합 3) |
 | 로컬 하네스 | Python 3 표준 라이브러리 |
 
 근거: [build.gradle.kts](../../build.gradle.kts), [Gradle Wrapper](../../gradle/wrapper/gradle-wrapper.properties), [애플리케이션 설정](../../src/main/resources/application.yaml).
@@ -38,10 +38,10 @@
   `Order.create` → `OrderRepository.save` → `OrderCreated` 발행(plain Spring 이벤트, EPR 없음) 순으로 진행한다. JPA adapter는
   `internal/adapter/persistence/command`에 있고 `V002__order_create_order.sql`이 `t_order`·`t_order_line`을 만든다
   ([order-create-order-persistence](../spec/2026-09-16-order-create-order-persistence.md)).
-  `Order.create`는 command의 `storeId`·`currency`·line(`productCode`·`productName`·`unitPrice`·`quantity`)을 canonical 문자열로 만들어
-  SHA-256 hex를 `payloadHash`에 담고 `t_order.payload_hash`(`V003__order_payload_hash.sql`)에 저장한다. line 순서와 금액 표기 차이는 같은 hash가 된다.
-  같은 키에 hash가 다른 요청이 오면 `DomainException(IDEMPOTENCY_CONFLICT, kind=CONFLICT)`을 던진다. V003 이전 행은 hash가 null이라서 비교하지 않고
-  기존 결과를 돌려준다([order-idempotency-conflict](../spec/2026-09-20-order-idempotency-conflict.md)).
+  `verifySamePayload`는 저장된 주문과 command의 `storeId`·`currency`·line(`productCode`·`productName`·`unitPrice`·`quantity`)을 직접 비교한다.
+  line 순서와 금액 표기 차이는 같은 payload이고, 다르면 `DomainException(IDEMPOTENCY_CONFLICT, kind=CONFLICT)`을 던진다. 최초 요청을 따로 저장하는
+  컬럼은 없다. line·`storeId`·`currency`를 바꾸는 명령이 생기면 현재 상태가 최초 요청과 달라지므로 그 PR이 최초 요청 기록을 도입한다
+  ([order-idempotency-conflict](../spec/2026-09-20-order-idempotency-conflict.md)).
   첫 공개 endpoint `POST /v1/orders`가 `internal/adapter/web`의 `OrderController`에 있다. 요청 본문을 `CreateOrderCommand`로 옮겨 Facade를 부르고
   201과 `data{orderId, status}`를 돌려준다. 같은 `(terminalId, clientOrderId)` 재시도도 201과 같은 본문이다. 형식 오류는 타입이 있는 DTO의
   Jackson 역직렬화가 거절해 `400 BAD_REQUEST`가 되고 업무 규칙은 도메인이 거절한다. 같은 키에 다른 payload가 오면 `409 IDEMPOTENCY_CONFLICT`다.
@@ -98,8 +98,8 @@ PostgreSQL이 유일한 엔진이다. H2는 제거했다. 테스트가 운영과
 애플리케이션이 테이블을 만들거나 바꾸지 않는다. 마이그레이션이 실패하면 애플리케이션이 뜨지 않는다.
 
 파일명은 `V(번호)__(소유 모듈)_(변경 내용).sql`이다. `V001__baseline.sql`은 의도적으로 비어 있고, 업무 테이블은 각
-모듈이 후속 마이그레이션으로 추가한다. 첫 업무 마이그레이션은 `V002__order_create_order.sql`(`t_order`, `t_order_line`)이고,
-`V003__order_payload_hash.sql`이 `t_order.payload_hash`를 추가한다.
+모듈이 후속 마이그레이션으로 추가한다. 첫 업무 마이그레이션은 `V002__order_create_order.sql`(`t_order`, `t_order_line`)이다.
+새 컬럼·테이블을 추가하기 전에 [도메인 모델](domain-model.md)의 "이벤트 전달과 저장 형식" 절에 있는 확인을 거친다.
 
 통합 테스트는 Testcontainers로 실제 PostgreSQL 18을 띄운다. **`./gradlew test`에 Docker가 필요하다.** 컨테이너는
 JVM당 한 번만 뜨고 Spring 컨텍스트 캐시와 수명을 맞춘다.

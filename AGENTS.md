@@ -23,6 +23,7 @@
 - 애플리케이션/빌드 변경: [현재 상태](docs/wiki/current-state.md)와 [README의 Engineering Principles](README.md#engineering-principles)를 확인한다.
 - 비즈니스·도메인·Controller 개발: 용어·aggregate 경계·유비쿼터스 언어는 [도메인 모델](docs/wiki/domain-model.md)을 먼저 읽는다. 구현은 [TDD 스킬](.claude/skills/resilientpos-tdd/SKILL.md)을 사용하고 지원 환경에서는 `tdd-driver`에 한 동작의 구현/테스트를 맡긴다. Repository 자체 테스트는 제외한다.
 - 도메인 규칙 위반은 `require`가 아니라 `foundation.DomainException(code, message, kind)`으로 던진다. `kind`는 HTTP 숫자가 아닌 업무 의미이고 기본값은 `INVALID`다.
+- 새 컬럼·테이블은 추가하기 전에 세 가지(기존 데이터로 도출·비교할 수 있는가, 지금 읽는 코드가 있는가, 나중에 채울 수 있는가)를 확인하고 결과를 PR spec에 적는다. 나중에 채울 수 있는데 기존 데이터로 판단할 수 있거나 읽는 코드가 없으면 추가하지 않는다. 판정 기준과 사례는 [도메인 모델](docs/wiki/domain-model.md)의 "이벤트 전달과 저장 형식" 절에 있다.
 - Controller는 DTO만 돌려준다. 응답 envelope는 `platform`의 `ApiResponseBodyAdvice`가 씌우고 오류 변환은 `ApiControllerAdvice`가 맡는다.
 - 애플리케이션/빌드 변경 검증: `./gradlew test`로 검증한다. 통합 테스트가 Testcontainers로 PostgreSQL을 띄우므로 Docker가 필요하다. 특정 테스트는 `./gradlew test --tests 'com.resilientpos.테스트클래스'`로 좁혀 실행할 수 있다.
 - 하네스 코드 변경: `python3 -m unittest discover -s scripts -p 'test_*.py'`를 실행한다. Python 3 표준 라이브러리만 사용한다.
