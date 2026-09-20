@@ -67,3 +67,13 @@ AGENTS.md·git 스킬 표의 대조로 확인한다.
 
 ## 결과
 개발 전 작성. 개발 후 실행 결과와 변경 이유를 추가한다.
+
+### 개발 후 (2026-09-20)
+- AGENTS.md의 핸드오프 항목에 두 문장을 더했다. 첫 문장이 prefix 추론과 create 직후 push 전의 `git branch -m`을,
+  둘째 문장이 PR이 열린 브랜치 제외를 담는다. 나열한 prefix 여섯 개는 git 스킬의 브랜치 명명 표와 같다.
+- [개발 규칙](../wiki/development-workflow.md) "개발 시작" 2번 단계에 브랜치 이름 규칙을 더했다. 기존 문장과 모순은
+  없었지만 이름 규칙이 아예 없어 wiki만 읽으면 Orca가 붙인 이름을 그대로 쓰게 되므로 맞췄다.
+- `python3 scripts/check_pr.py --base origin/main --worktree`와 `--worktree` 없는 실행 모두 "일반 4개/80줄"에
+  PASS였다. `python3 -m unittest discover -s scripts -p 'test_*.py'`는 64개가 통과했다.
+- 이 spec의 부등호 여는 문자 개수는 0이다. 변경 파일은 AGENTS.md와 `docs/` 아래 문서 3개뿐이라 `./gradlew test`는
+  실행하지 않았다.
