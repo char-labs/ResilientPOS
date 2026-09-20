@@ -63,7 +63,15 @@ python3 scripts/check_pr.py --base main --worktree
 ## TDD 검증 기록
 | 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
 |---|---|---|---|
-| 개발 전에 테스트 의도를 적고 실행 후 관측 결과를 기록 | 미실행 | 미실행 | 미실행 |
+| `객체 응답은 SUCCESS envelope의 data로 나간다` | `./gradlew test --tests 'com.resilientpos.platform.ApiAdviceTest'` → 실패. `$.result`가 없다(`PathNotFoundException`). 본문이 envelope 없이 나갔다 | 같은 명령 → 통과 | `./gradlew test` → 38개 통과 |
+| `본문이 없는 응답은 data가 없는 SUCCESS envelope로 나간다` | 같은 명령 → 실패. 응답 본문이 비어 jsonPath가 거절했다 | 같은 명령 → 통과 | 위와 같음 |
+| `처리하지 못한 예외는 메시지를 노출하지 않는 500 INTERNAL_ERROR다` | 같은 명령 → 실패. `IllegalStateException`이 `ServletException`으로 전파됐다 | 같은 명령 → 통과 | 위와 같음 |
+| `허용하지 않는 method는 405 METHOD_NOT_ALLOWED다` | 같은 명령 → 실패. 405지만 본문이 비어 있었다 | 같은 명령 → 통과 | 위와 같음 |
+| `없는 경로는 404 NOT_FOUND다` | 같은 명령 → 실패. 404지만 본문이 비어 있었다 | 같은 명령 → 통과 | 위와 같음 |
+| `타입이 맞지 않는 파라미터는 400 BAD_REQUEST다` | 같은 명령 → 실패. 400이지만 본문이 비어 있었다 | 같은 명령 → 통과 | 위와 같음 |
 
 ## 결과
-개발 전 작성. 개발 후 실행 결과와 변경 이유를 추가한다.
+- 테스트는 프로덕션 타입을 참조하지 않고 JSON 계약만 검사하므로 구현 없이 컴파일됐고, RED 6건은 모두 동작 실패였다.
+- `./gradlew test`: 38개 통과(기존 32 + `ApiAdviceTest` 6). `ModuleStructureTest`·`DependencyDirectionTest`는 수정 없이 통과했다.
+- 리팩터링 단계에서 바꾼 코드는 없다. 최소 구현이 그대로 최종 구현이다.
+- 404·405 인수 조건이 `ApiControllerAdvice`에 `basePackages`를 걸지 않는 결정을 고정한다. 원본은 `basePackages`를 걸어 두어 같은 handler가 handler 없는 요청에는 닿지 않는다.
