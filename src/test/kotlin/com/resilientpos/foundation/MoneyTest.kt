@@ -20,25 +20,29 @@ class MoneyTest {
 
     @Test
     fun `통화 자릿수를 넘는 소수 입력을 거절한다`() {
-        val failure = assertFailsWith<IllegalArgumentException> { Money.of("1000.5", krw) }
+        val failure = assertFailsWith<DomainException> { Money.of("1000.5", krw) }
 
-        assertEquals("INVALID_MONEY_SCALE", failure.message)
+        assertEquals("INVALID_MONEY_SCALE", failure.code)
+        assertTrue(failure.message.isNotBlank())
+        assertTrue(failure.message != failure.code)
     }
 
     @Test
     fun `통화가 다른 금액은 더하지 않는다`() {
-        val failure = assertFailsWith<IllegalArgumentException> { Money.of("1000", krw) + Money.of("10.00", usd) }
+        val failure = assertFailsWith<DomainException> { Money.of("1000", krw) + Money.of("10.00", usd) }
 
-        assertEquals("CURRENCY_MISMATCH", failure.message)
+        assertEquals("CURRENCY_MISMATCH", failure.code)
+        assertTrue(failure.message.isNotBlank())
+        assertTrue(failure.message != failure.code)
     }
 
     @Test
     fun `통화가 다른 금액은 비교하지 않는다`() {
-        val failure = assertFailsWith<IllegalArgumentException> {
+        val failure = assertFailsWith<DomainException> {
             Money.of("1000", krw).compareTo(Money.of("10.00", usd))
         }
 
-        assertEquals("CURRENCY_MISMATCH", failure.message)
+        assertEquals("CURRENCY_MISMATCH", failure.code)
     }
 
     @Test

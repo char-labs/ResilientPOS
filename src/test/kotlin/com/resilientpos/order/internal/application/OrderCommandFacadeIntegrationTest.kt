@@ -1,6 +1,7 @@
 package com.resilientpos.order.internal.application
 
 import com.resilientpos.PostgresIntegrationTest
+import com.resilientpos.foundation.DomainException
 import com.resilientpos.foundation.Money
 import com.resilientpos.foundation.UuidV7IdentifierGenerator
 import com.resilientpos.order.ClientOrderId
@@ -129,7 +130,7 @@ class OrderCommandFacadeIntegrationTest(
             lines = emptyList<CreateOrderLine>(),
         )
 
-        assertFailsWith<IllegalArgumentException> { facade.create(command) }
+        assertFailsWith<DomainException> { facade.create(command) }
 
         assertEquals(0L, orderRowCount(terminalId, clientOrderId))
     }

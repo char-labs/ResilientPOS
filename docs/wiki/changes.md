@@ -157,4 +157,12 @@
 - 요구사항 영향: 제품 요구사항은 변경하지 않았다. 첫 Controller PR보다 먼저 HTTP 응답 모양(`result`·`data`·`error{errorCode, message}`)을 정했다. 구조는 ppossilaegi 프로젝트의 전역 API 클래스를 옮겨 온 것이다.
 - 결정: `platform` 기본 패키지에 둔다(`foundation`은 `HttpStatus`에 의존할 수 없다). 원본에서 `CoreException`과 도메인별 `ErrorType` 항목은 옮기지 않았다. 도메인 규칙 위반은 `foundation-domain-exception` PR의 `DomainException`이 맡는다. `ErrorKind`는 `HttpStatus`, `ErrorLevel`은 slf4j `Level`로 대체했다. Swagger `@Schema`, validation·인증 handler는 해당 의존성이 없어 뺐다.
 - 결정: `ApiControllerAdvice`에는 `basePackages`를 걸지 않는다. handler가 정해지기 전에 나는 404·405는 `basePackages`가 걸린 advice에 닿지 않는다. 본문을 감싸는 `ApiResponseBodyAdvice`에만 걸어 Actuator 응답을 그대로 둔다. 응답 메시지는 `ErrorType` 고정 문구만 쓰고 예외 메시지는 로그에만 남긴다.
+
+## 2026-09-19 — foundation 도메인 예외 DomainException
+- Spec: [foundation-domain-exception](../spec/2026-09-19-foundation-domain-exception.md)
+- 요구사항 영향: 제품 요구사항은 변경하지 않았다. 도메인 규칙 위반을 알리는 예외 타입을 `IllegalArgumentException`에서 `foundation.DomainException(code, message)`으로 바꿨다. 검증 조건과 코드 값 5개는 그대로다.
+- 결정: `IllegalArgumentException`은 JDK와 라이브러리도 던지므로 web advice가 이것을 400으로 바꾸면 버그까지 클라이언트 오류가 된다. 전용 타입만 400으로 바꾸고 나머지는 500으로 둔다. 사람이 읽는 `message`는 규칙을 던지는 자리에 한국어로 적는다. 코드별 하위 타입, 오류 코드 enum, `MessageSource`는 만들지 않는다.
+- 범위 조정: 개발 도중 #22 api-response-advice가 main에 머지되어 rebase했다. 응답 계약은 #22를 따른다(`ApiResponse`의 `error{errorCode, message}`, 형식 오류는 `BAD_REQUEST`). 두 타입이 한 브랜치에 모였으므로 `ApiControllerAdvice`의 `DomainException` → 400 handler를 이 PR에 넣었다. `DomainException`의 `message`는 응답용 문구라서 그대로 나가고, 그 밖의 예외는 고정 문구만 나간다.
+- 범위 조정: `DomainErrorKind`(`INVALID`·`NOT_FOUND`·`CONFLICT`·`UNPROCESSABLE`)를 추가했다. 상태 전이 위반이나 멱등 충돌은 요청이 올바르고 대상의 현재 상태와 충돌하는 것이라 409가 맞고, 단말은 400(재시도 무의미)과 409(최신 상태를 다시 읽는다)를 다르게 처리해야 한다. 예외에 HTTP 숫자를 담지 않고 업무 의미만 담아 advice가 상태로 바꾼다. sync intake처럼 HTTP가 아닌 소비자도 같은 `kind`를 해석할 수 있다. 새 4xx는 enum 항목 하나와 `when` 분기 한 줄로 더한다. `INVALID`가 아닌 `kind`를 던지는 도메인 코드는 아직 없다.
+- 합의된 후속 계약(다음 PR `order-create-order-api`): 같은 `(terminalId, clientOrderId)` 재시도는 항상 201과 같은 본문, `storeId`·`terminalId`는 요청 본문으로 받는다. 같은 키에 다른 payload가 오는 경우의 `409 IDEMPOTENCY_CONFLICT`는 그 뒤 PR `order-idempotency-conflict`가 맡는다.
 - 갱신: [현재 상태](current-state.md).

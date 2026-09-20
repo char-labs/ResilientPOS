@@ -1,5 +1,6 @@
 package com.resilientpos.order.internal.domain
 
+import com.resilientpos.foundation.DomainException
 import com.resilientpos.foundation.IdentifierGenerator
 import com.resilientpos.foundation.Money
 import com.resilientpos.order.ClientOrderId
@@ -88,32 +89,38 @@ class OrderTest {
     fun `빈 line을 EMPTY_ORDER로 거절한다`() {
         val command = createOrderCommand(lines = emptyList())
 
-        val failure = assertFailsWith<IllegalArgumentException> {
+        val failure = assertFailsWith<DomainException> {
             Order.create(command, FixedIdentifierGenerator(listOf(UUID.randomUUID(), UUID.randomUUID())), now)
         }
 
-        assertEquals(Order.EMPTY_ORDER, failure.message)
+        assertEquals(Order.EMPTY_ORDER, failure.code)
+        assertTrue(failure.message.isNotBlank())
+        assertTrue(failure.message != failure.code)
     }
 
     @Test
     fun `0 이하 수량과 음수 단가를 거절한다`() {
-        val invalidQuantity = assertFailsWith<IllegalArgumentException> {
+        val invalidQuantity = assertFailsWith<DomainException> {
             Order.create(
                 createOrderCommand(lines = listOf(orderLine(quantity = 0))),
                 FixedIdentifierGenerator(listOf(UUID.randomUUID(), UUID.randomUUID())),
                 now,
             )
         }
-        assertEquals(OrderLine.INVALID_QUANTITY, invalidQuantity.message)
+        assertEquals(OrderLine.INVALID_QUANTITY, invalidQuantity.code)
+        assertTrue(invalidQuantity.message.isNotBlank())
+        assertTrue(invalidQuantity.message != invalidQuantity.code)
 
-        val negativeUnitPrice = assertFailsWith<IllegalArgumentException> {
+        val negativeUnitPrice = assertFailsWith<DomainException> {
             Order.create(
                 createOrderCommand(lines = listOf(orderLine(unitPrice = Money.of("-1000", krw)))),
                 FixedIdentifierGenerator(listOf(UUID.randomUUID(), UUID.randomUUID())),
                 now,
             )
         }
-        assertEquals(OrderLine.NEGATIVE_UNIT_PRICE, negativeUnitPrice.message)
+        assertEquals(OrderLine.NEGATIVE_UNIT_PRICE, negativeUnitPrice.code)
+        assertTrue(negativeUnitPrice.message.isNotBlank())
+        assertTrue(negativeUnitPrice.message != negativeUnitPrice.code)
     }
 
     @Test
@@ -123,11 +130,13 @@ class OrderTest {
             lines = listOf(orderLine(unitPrice = Money.of("10.00", usd))),
         )
 
-        val failure = assertFailsWith<IllegalArgumentException> {
+        val failure = assertFailsWith<DomainException> {
             Order.create(command, FixedIdentifierGenerator(listOf(UUID.randomUUID(), UUID.randomUUID())), now)
         }
 
-        assertEquals(Order.CURRENCY_MISMATCH, failure.message)
+        assertEquals(Order.CURRENCY_MISMATCH, failure.code)
+        assertTrue(failure.message.isNotBlank())
+        assertTrue(failure.message != failure.code)
     }
 
     @Test
