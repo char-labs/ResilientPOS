@@ -5,7 +5,7 @@
 
 ## 개발 시작
 1. 요구사항이 아직 합의되지 않았으면 [grill 스킬](../../.claude/skills/resilientpos-grill/SKILL.md)로 한 번에 한 질문씩 심문해 의도를 맞춘다. 합의 전에는 코드를 쓰지 않는다. 합의된 결정 목록이 spec의 입력이다.
-2. 대상 브랜치 최신 상태에서 작업 브랜치를 만든다. PR 기준 커밋을 확인한다. 새 머신이면 먼저 `make bootstrap`으로 스킬·에이전트·규칙 링크를 만든다.
+2. 대상 브랜치 최신 상태에서 작업 브랜치를 만든다. 브랜치 이름은 작업 유형 prefix(`feature/`, `fix/`, `docs/`, `refactor/`, `perf/`, `test/`)로 시작한다. Orca 핸드오프로 만든 worktree는 브랜치가 `git사용자명/작업이름`으로 만들어지므로, 넘기는 세션이 create 직후 push 전에 `git -C worktree경로 branch -m 유형/작업이름`으로 바꾼다. 이미 push되어 PR이 열린 브랜치는 바꾸지 않는다. PR 기준 커밋을 확인한다. 새 머신이면 먼저 `make bootstrap`으로 스킬·에이전트·규칙 링크를 만든다.
 3. `docs/spec-template.md`를 `docs/spec/yyyy-mm-dd-slug.md`로 복사한다. 날짜는 실제 작성일, slug는 영문 소문자/숫자/하이픈이다.
 4. 단일 목표, 제외 범위, 변경 경로, 인수 조건, 검증, wiki 영향, 분할 계획을 작성한다. 관련 장기 스펙 문서가 있으면 "관련 문서"에 링크한다.
 5. **다른 파일을 수정하기 전에 spec 파일 하나만 첫 커밋한다.** 개발 중 spec 변경은 후속 커밋에 남긴다.
