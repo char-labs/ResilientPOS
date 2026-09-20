@@ -8,11 +8,13 @@
   - `code`는 API 오류 응답과 로그 `errorCode`에 그대로 쓰는 안정적인 식별자다(`EMPTY_ORDER` 등). 기존 메시지 상수의 값을 그대로 쓴다.
   - `message`는 사람이 읽는 한국어 설명이다. 규칙을 던지는 자리에 같이 적는다. advice가 코드→문구 표를 따로 가지면 규칙과 문구가 다른 파일로 갈라지기 때문이다.
 - `Order.create`, `OrderLine` 생성, `Money`의 `require(...)`와 `throw IllegalArgumentException(...)`을 `DomainException`으로 바꾼다. 검증 조건과 코드 값은 바꾸지 않는다.
-- 소유 모듈: `foundation`(타입), `order`(사용처). 계약: `DomainException`의 public API와 기존 코드 값 5개(`EMPTY_ORDER`, `CURRENCY_MISMATCH`, `INVALID_QUANTITY`, `NEGATIVE_UNIT_PRICE`, `INVALID_MONEY_SCALE`). 불변식: 도메인 규칙 위반은 `DomainException`으로만 나간다.
-- 복구·관측성: 예외 타입 교체라 재시도·복구 경로가 생기지 않는다. `code`를 로그 속성 `errorCode`로 남기는 일은 advice가 생기는 다음 PR이 맡는다.
+- `platform.ApiControllerAdvice`에 `DomainException` handler를 추가한다. 상태는 400이고 본문은 `ApiResponse.fail(ErrorResponse(errorCode = code, message = message))`다. `DomainException`의 `message`는 응답에 내보내려고 쓴 문구라서 그대로 나간다. 그 밖의 예외는 [api-response-advice](2026-09-19-api-response-advice.md)가 정한 대로 `ErrorType`의 고정 문구만 나간다. 로그는 `WARN`으로 `errorCode`와 함께 남긴다(아래 범위 조정 참고).
+- 소유 모듈: `foundation`(타입), `order`(사용처), `platform`(HTTP 매핑). 계약: `DomainException`의 public API와 기존 코드 값 5개(`EMPTY_ORDER`, `CURRENCY_MISMATCH`, `INVALID_QUANTITY`, `NEGATIVE_UNIT_PRICE`, `INVALID_MONEY_SCALE`). 불변식: 도메인 규칙 위반은 `DomainException`으로만 나간다.
+- 복구·관측성: 예외 타입 교체라 재시도·복구 경로가 생기지 않는다. advice가 도메인 거절마다 `errorCode={code}` 로그를 `WARN`으로 남긴다. 구조화 로그 속성은 Controller PR에서 붙인다.
 
 ## 제외
-- web advice, 오류 응답 envelope `{code, message}`, HTTP 상태 매핑. 다음 PR `order-create-order-api`.
+- REST Controller, 요청 DTO, validation, REST Docs. 다음 PR `order-create-order-api`. 응답 envelope와 공통 오류는 #22 [api-response-advice](2026-09-19-api-response-advice.md)가 이미 정했다.
+- 코드별 HTTP 상태 구분(404·409 등). 지금 코드 5개는 모두 입력 거절이라 400 하나로 충분하다. 상태가 갈리는 첫 코드(`IDEMPOTENCY_CONFLICT`)가 생길 때 다룬다.
 - 코드별 하위 예외 타입이나 sealed 계층, 오류 코드 enum. 코드가 문자열 상수 5개인 동안 만들지 않는다.
 - 메시지 다국어(`MessageSource`). 단말이 `code`로 문구를 고르는 요구가 생기면 다룬다.
 - 같은 `(terminalId, clientOrderId)`에 다른 payload가 오는 경우의 `IDEMPOTENCY_CONFLICT`. 후속 PR `order-idempotency-conflict`.
@@ -25,6 +27,8 @@
 - src/main/kotlin/com/resilientpos/foundation/Money.kt
 - src/main/kotlin/com/resilientpos/order/internal/domain/Order.kt
 - src/main/kotlin/com/resilientpos/order/internal/domain/OrderLine.kt
+- src/main/kotlin/com/resilientpos/platform/ApiControllerAdvice.kt
+- src/test/kotlin/com/resilientpos/platform/ApiAdviceTest.kt
 - src/test/kotlin/com/resilientpos/foundation/MoneyTest.kt
 - src/test/kotlin/com/resilientpos/order/internal/domain/OrderTest.kt
 - src/test/kotlin/com/resilientpos/order/internal/application/OrderCommandFacadeIntegrationTest.kt
@@ -42,6 +46,8 @@
 7. `src/main/kotlin`에 도메인 규칙용 `require(`와 `IllegalArgumentException`이 남지 않는다.
 8. `DependencyDirectionTest`와 `ModuleStructureTest`가 그대로 통과한다.
 9. `python3 scripts/check_pr.py --base origin/main`이 통과한다.
+10. Controller에서 `DomainException`이 나오면 응답은 400이고 `result`가 `FAIL`, `error.errorCode`가 예외의 `code`, `error.message`가 예외의 `message`다.
+11. `DomainException`이 아닌 예외는 #22와 같이 500 `INTERNAL_ERROR`이고 예외 메시지가 응답에 나가지 않는다(기존 `ApiAdviceTest` 회귀).
 
 ## 검증
 ```sh
@@ -57,7 +63,7 @@ python3 scripts/check_pr.py --base origin/main --worktree
 - [변경 기록](../wiki/changes.md): 이 spec 링크와 결정 근거를 남긴다. 제품 요구사항은 바뀌지 않는다.
 
 ## 분할 계획
-예상 규모: 구현 약 40줄, 테스트 수정 약 50줄, 문서 약 90줄로 총 180줄·10파일 내외. 경고 한도(600줄·20파일) 안이다.
+예상 규모: 구현 약 50줄, 테스트 수정 약 70줄, 문서 약 110줄로 총 230줄·12파일 내외. 경고 한도(600줄·20파일) 안이다.
 후속 순서는 `order-create-order-api`(REST Controller, 오류 envelope, REST Docs) → `order-idempotency-conflict` → `RequestCheckout`이다.
 
 ## TDD 검증 기록
@@ -74,3 +80,13 @@ python3 scripts/check_pr.py --base origin/main --worktree
 `Money.of`가 `ArithmeticException`을 감싸던 자리는 cause를 넘기지 않는다. `INVALID_MONEY_SCALE` 코드가 원인을 이미 말해 주므로 `DomainException`에 cause 파라미터를 두지 않았다.
 
 `./gradlew test`는 32개 테스트가 모두 통과했다(실패 0, Docker·Testcontainers PostgreSQL 사용). `DependencyDirectionTest`와 `ModuleStructureTest`도 같은 실행에서 통과했다. `grep -rn "require(\|IllegalArgumentException" src/main/kotlin`은 결과가 없다. 테스트 수는 그대로여서 [현재 상태](../wiki/current-state.md)의 테스트 수는 고치지 않았다.
+
+### 범위 조정 - main rebase와 DomainException handler 추가 (개발 후)
+개발 도중 main에 #22 [api-response-advice](2026-09-19-api-response-advice.md)가 머지되어 이 브랜치를 main 위로 rebase했다. 충돌은 `docs/wiki/changes.md` 한 곳이었고 두 항목을 모두 남겼다. spec 단독 첫 커밋은 그대로 첫 커밋이다.
+
+#22가 응답 계약을 먼저 정했으므로 이 spec이 전제하던 후속 계약을 고친다.
+- 오류 응답은 자체 envelope `{code, message}`이 아니라 `ApiResponse`의 `error{errorCode, message}`다.
+- 형식 오류 코드는 `INVALID_REQUEST`가 아니라 `ErrorType.BAD_REQUEST`다.
+- 전역 advice를 새로 만들지 않고 `platform.ApiControllerAdvice`에 handler를 더한다.
+
+#22의 spec은 `DomainException` handler를 `order-create-order-api`에서 추가한다고 적었다. 그때는 두 타입이 서로 다른 브랜치에 있었기 때문이다. rebase 뒤에는 한 브랜치에 같이 있고, handler가 없으면 이 PR의 목적(도메인 거절만 클라이언트 오류로 구분)이 코드로 확인되지 않는다. handler와 테스트는 약 25줄이라 이 PR에 넣고, Controller PR은 HTTP 매핑과 문서화에만 집중하게 한다.
