@@ -1,7 +1,9 @@
 package com.resilientpos.platform
 
+import com.resilientpos.foundation.DomainErrorKind
 import com.resilientpos.foundation.DomainException
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import org.hamcrest.Matchers.containsString
 import org.hamcrest.Matchers.not
 import org.springframework.beans.factory.annotation.Autowired
@@ -10,6 +12,7 @@ import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.get
 import org.springframework.test.web.servlet.post
 import org.springframework.web.bind.annotation.GetMapping
+import org.springframework.web.bind.annotation.PathVariable
 import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RequestParam
 import org.springframework.web.bind.annotation.RestController
@@ -88,6 +91,26 @@ class ApiAdviceTest(@Autowired private val mockMvc: MockMvc) {
         }
     }
 
+    @Test
+    fun `도메인 규칙 위반의 kind가 HTTP 상태를 정한다`() {
+        val expected = mapOf(
+            DomainErrorKind.INVALID to 400,
+            DomainErrorKind.NOT_FOUND to 404,
+            DomainErrorKind.CONFLICT to 409,
+            DomainErrorKind.UNPROCESSABLE to 422,
+        )
+        assertEquals(DomainErrorKind.entries.toSet(), expected.keys)
+
+        expected.forEach { (kind, httpStatus) ->
+            mockMvc.get("/test-advice/domain/$kind").andExpect {
+                status { isEqualTo(httpStatus) }
+                jsonPath("$.result") { value("FAIL") }
+                jsonPath("$.error.errorCode") { value("SAMPLE_$kind") }
+                jsonPath("$.error.message") { value("$kind 사례") }
+            }
+        }
+    }
+
     companion object {
         const val SECRET = "secret-internal-detail"
     }
@@ -111,6 +134,10 @@ class ApiAdviceTestController {
 
     @GetMapping("/domain")
     fun domain(): Sample = throw DomainException("EMPTY_ORDER", "주문에는 line이 1개 이상 필요합니다")
+
+    @GetMapping("/domain/{kind}")
+    fun domainKind(@PathVariable kind: DomainErrorKind): Sample =
+        throw DomainException("SAMPLE_$kind", "$kind 사례", kind)
 
     @GetMapping("/number")
     fun number(@RequestParam n: Int): Sample = Sample(n.toString())

@@ -1,5 +1,6 @@
 package com.resilientpos.platform
 
+import com.resilientpos.foundation.DomainErrorKind
 import com.resilientpos.foundation.DomainException
 import org.slf4j.LoggerFactory
 import org.springframework.http.HttpHeaders
@@ -35,16 +36,24 @@ class ApiControllerAdvice : ResponseEntityExceptionHandler() {
         return super.handleExceptionInternal(ex, failBody(errorType, ex), headers, statusCode, request)
     }
 
-    /** 도메인 규칙 위반은 예외의 `code`와 응답용 `message`를 그대로 내보낸다. */
+    /** 도메인 규칙 위반은 예외의 `code`와 응답용 `message`를 그대로 내보내고 `kind`가 상태 코드를 정한다. */
     @ExceptionHandler(DomainException::class)
     fun handleDomain(e: DomainException): ResponseEntity<ApiResponse<Nothing>> {
         log.warn("errorCode={} : {}", e.code, e.message)
-        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(ApiResponse.fail(ErrorResponse(e.code, e.message)))
+        return ResponseEntity.status(e.kind.toHttpStatus()).body(ApiResponse.fail(ErrorResponse(e.code, e.message)))
     }
 
     @ExceptionHandler(Exception::class)
     fun handleUnexpected(e: Exception): ResponseEntity<ApiResponse<Nothing>> =
         ResponseEntity.status(ErrorType.INTERNAL_ERROR.status).body(failBody(ErrorType.INTERNAL_ERROR, e))
+
+    // else를 두지 않는다. `DomainErrorKind`에 항목을 더하고 매핑을 빠뜨리면 컴파일되지 않는다.
+    private fun DomainErrorKind.toHttpStatus(): HttpStatus = when (this) {
+        DomainErrorKind.INVALID -> HttpStatus.BAD_REQUEST
+        DomainErrorKind.NOT_FOUND -> HttpStatus.NOT_FOUND
+        DomainErrorKind.CONFLICT -> HttpStatus.CONFLICT
+        DomainErrorKind.UNPROCESSABLE -> HttpStatus.UNPROCESSABLE_CONTENT
+    }
 
     private fun failBody(errorType: ErrorType, e: Exception): ApiResponse<Nothing> {
         log.atLevel(errorType.level).setCause(e).log("errorCode={} : {}", errorType.name, e.message)
