@@ -23,6 +23,9 @@
 ### Checkpoint와 검증 명령 (선택)
 design·implement 스킬의 Contract를 썼다면 Checkpoint 이름, 검증 명령(예: `./gradlew test --tests 'com.resilientpos.order.*'`), 의존 Checkpoint를 표로 적는다. 별도 checkpoints 파일은 커밋하지 않는다.
 
+### 스키마 변경 검토 (컬럼·테이블·제약·인덱스를 더하거나 뺄 때)
+[도메인 모델](wiki/domain-model.md)의 "스키마 변경 검토" 절에 있는 필요성·정합성·반영 질문에 답한다. 해당 없는 질문은 이유를 적는다. 절 끝에 대조한 리뷰어와 시점, 불일치 항목을 한 줄로 남긴다.
+
 ## 검증
 <실행할 명령과 정상/실패 시나리오>
 

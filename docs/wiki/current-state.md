@@ -45,7 +45,8 @@
   첫 공개 endpoint `POST /v1/orders`가 `internal/adapter/web`의 `OrderController`에 있다. 요청 본문을 `CreateOrderCommand`로 옮겨 Facade를 부르고
   201과 `data{orderId, status}`를 돌려준다. 같은 `(terminalId, clientOrderId)` 재시도도 201과 같은 본문이다. 형식 오류는 타입이 있는 DTO의
   Jackson 역직렬화가 거절해 `400 BAD_REQUEST`가 되고 업무 규칙은 도메인이 거절한다. 같은 키에 다른 payload가 오면 `409 IDEMPOTENCY_CONFLICT`다.
-  빈 `productCode`·`productName`을 받는 것과 같은 키의 동시 요청이 unique 제약 위반으로 끝나는 것은 알려진 빈틈이다([order-create-order-api](../spec/2026-09-20-order-create-order-api.md)).
+  빈 `productCode`·`productName`을 받는 것과 같은 키의 동시 요청이 unique 제약 위반으로 끝나는 것은 알려진 빈틈이다. 주문을 soft delete하면 같은 키의 재시도가
+  삭제된 주문을 찾지 못하고 unique 제약에 걸리는데, 지금은 주문을 삭제하는 코드가 없다([order-create-order-api](../spec/2026-09-20-order-create-order-api.md)).
 - `foundation` 모듈에 `Money`, `IdentifierGenerator`/`UuidV7IdentifierGenerator`, 모델링 원시 타입 `DomainEvent`·`Transition`,
   도메인 규칙 위반을 알리는 `DomainException(code, message, kind)`과 `DomainErrorKind`(`INVALID`·`NOT_FOUND`·`CONFLICT`·`UNPROCESSABLE`)가 있다. 프레임워크 의존성은 없다.
   `Order`·`OrderLine`·`Money`는 규칙 위반을 `DomainException`으로만 던진다. `code`는 API 오류 응답과 로그 `errorCode`에 쓰는 안정적인
@@ -99,7 +100,7 @@ PostgreSQL이 유일한 엔진이다. H2는 제거했다. 테스트가 운영과
 
 파일명은 `V(번호)__(소유 모듈)_(변경 내용).sql`이다. `V001__baseline.sql`은 의도적으로 비어 있고, 업무 테이블은 각
 모듈이 후속 마이그레이션으로 추가한다. 첫 업무 마이그레이션은 `V002__order_create_order.sql`(`t_order`, `t_order_line`)이다.
-새 컬럼·테이블을 추가하기 전에 [도메인 모델](domain-model.md)의 "이벤트 전달과 저장 형식" 절에 있는 확인을 거친다.
+스키마를 바꾸는 PR은 [도메인 모델](domain-model.md)의 "스키마 변경 검토" 절 질문(필요성·정합성·반영)에 spec에서 답한다.
 
 통합 테스트는 Testcontainers로 실제 PostgreSQL 18을 띄운다. **`./gradlew test`에 Docker가 필요하다.** 컨테이너는
 JVM당 한 번만 뜨고 Spring 컨텍스트 캐시와 수명을 맞춘다.
