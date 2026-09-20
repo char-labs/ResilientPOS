@@ -114,7 +114,7 @@ Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰�
 - 비용: aggregate마다 클래스가 둘이고 변환기가 붙는다. 그 대신 도메인 테스트에 DB가 없고, JPA 엔티티 규칙(`data class` 금지, 프록시, 지연 로딩)이 도메인에 새지 않는다.
 
 ### 4.3 이벤트 전달과 저장 형식
-- 모듈 안 이벤트 전달은 Spring Modulith Event Publication Registry(`EVENT_PUBLICATION` 테이블)를 쓴다. 별도 outbox 테이블과 processed-event 보조 테이블은 만들지 않는다. 멱등성은 `(orderId, attemptNo)` 같은 natural unique key가 담당한다. 근거는 [ADR-004](../references/01_ResilientPOS_PRD_Backend_Requirements.md)이고, 보조 테이블을 두지 않는 것은 이 PR에서 정했다. [README](../../README.md#engineering-principles)의 "Event Publication Registry 또는 outbox/inbox"에서 outbox는 외부 전달(Kafka)을 붙일 때의 이야기다.
+- 모듈 안 이벤트 전달은 Spring Modulith Event Publication Registry(`EVENT_PUBLICATION` 테이블)를 쓴다. 별도 outbox 테이블과 processed-event 보조 테이블은 만들지 않는다. 멱등성은 `(orderId, attemptNo)` 같은 natural unique key가 담당한다. 근거는 [ADR-004](../references/01_ResilientPOS_PRD_Backend_Requirements.md)이고, 보조 테이블을 두지 않는 것은 이 PR에서 정했다. "스키마 변경 검토" 절의 질문 1·4와 같은 판단이다. [README](../../README.md#engineering-principles)의 "Event Publication Registry 또는 outbox/inbox"에서 outbox는 외부 전달(Kafka)을 붙일 때의 이야기다.
 - 금액은 `NUMERIC(19,4)` + 통화 코드 컬럼, 식별자는 PostgreSQL native `uuid`다([개발 가이드 §3.1·§3.2](../references/03_Development_Guide.md)). 테이블 이름은 `t_` + 단수 명사(`t_order`, `t_payment_attempt`)다.
 
 ### 4.4 공개 타입은 모듈 루트에 둔다
@@ -135,6 +135,39 @@ Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰�
 - **후속 처리는 커밋 뒤 이벤트다.** `OrderCreated`·`SyncOperationApplied`는 같은 커밋에 기록되고 `@ApplicationModuleListener`(AFTER_COMMIT)가 fulfillment·reconciliation을 처리한다. 외부 consumer가 생기면 같은 기록을 `@Externalized`로 Kafka에 relay한다(§4.3). provider 승인 호출은 트랜잭션 밖이며, `PAYMENT_REQUESTED` 항목은 attempt 생성까지만 트랜잭션 안이다.
 - 근거: 기획 PRD 3.2·PR-02는 항목별 수락·중복·충돌·누락 판정과 watermark를 응답으로 요구하고, 개발 가이드 §4.3은 "안전한 명령 하나를 트랜잭션으로 적용하고 항목별 결과를 반환"한다. 커밋을 나누면 크래시 창이 생기고, 순수 이벤트로 바꾸면 주문 상태에 기반한 충돌 판정을 응답에 실을 수 없다.
 - 다시 볼 조건: `order`나 `payment`를 독립 배포로 분리할 때다. [시스템 설계 §6.2](../references/02_System_Design.md) 2단계대로 이 경로를 먼저 "`ACCEPTED` 응답 + 이벤트 적용"으로 바꿔 원격 경계를 시뮬레이션하고 단말 계약을 함께 바꾼다. 시스템 설계 §1.3의 `checkout` orchestration module이 필요해지면 같은 조건(한 곳, 한 트랜잭션)으로 ADR을 쓴다.
+
+### 4.7 스키마 변경 검토
+컬럼·테이블·제약·인덱스를 더하거나 빼는 PR은 spec에 `스키마 변경 검토` 절을 두고 아래 질문에 답한다. 해당 없는 질문은 이유를 적는다. 답은 구현자가 스스로 승인하지 않는다. PR을 제출하기 전에 구현자가 아닌 리뷰어가 마이그레이션 SQL, 엔티티, 그 컬럼을 읽고 쓰는 코드를 열어 spec의 답과 대조한다. 에이전트가 작업했으면 `code-reviewer`처럼 읽기 전용 도구만 가진 다른 에이전트에 맡긴다. 대조한 주체와 시점, 불일치 항목을 spec의 같은 절 끝에 `- 대조 기록:`으로 시작하는 한 줄로 남긴다. `check_pr.py`는 마이그레이션을 바꾸는 PR에 이 절과 이 줄이 있는지를 제출 전 이력 검사에서 확인한다([개발 규칙](development-workflow.md)). 원칙 자체는 [README의 데이터 정본 원칙](../../README.md#engineering-principles), [청사진 §6.2·§7.1](../references/05_Domain_Development_Blueprint.md), [개발 가이드 §2.5](../references/03_Development_Guide.md)에 있고, 이 절은 그것을 스키마를 바꾸는 시점의 질문으로 모은 것이다.
+
+**필요성: 불필요한 컬럼을 넣지 않는다.**
+1. PostgreSQL에 이미 저장된 컬럼·테이블에서 그 값을 도출하거나 직접 비교할 수 있는가.
+2. 지금 있는 코드가 그 값을 실제로 읽는가, 아니면 아직 없는 명령을 대비하는 것인가.
+3. 필요해지는 시점에 기존 행을 채울 수 있는가.
+- 나중에 채울 수 있는 값인데 기존 데이터로 지금 판단할 수 있거나 지금 읽는 코드가 없으면 추가하지 않고, 다시 볼 조건만 spec과 코드 주석에 남긴다. 단 질문 4에 해당하는 값이면 이 판정보다 질문 4가 우선한다. 참고 문서가 그 컬럼을 예시로 들었더라도 같은 확인을 거친다.
+- 중복 컬럼은 디스크를 쓰는 데서 끝나지 않는다. 같은 사실의 정본이 둘이 되어 어긋났을 때 어느 쪽이 맞는지 알 수 없고, 나중에 읽는 사람이 그 컬럼이 왜 있는지를 이력에서 찾아야 하며, 머지된 뒤에는 제거에도 마이그레이션과 배포된 데이터 처리가 필요하다.
+
+**정합성: 필요한 컬럼을 빼지 않는다.**
+4. 이 값이 불변식의 마지막 방어선인가. unique 제약, `@Version`, 멱등 키와 접수 기록, 상태, 판매 시점 snapshot이 여기에 든다. 그렇다면 PostgreSQL의 컬럼과 제약으로 두고 질문 1~3으로 빼지 않는다. Redis의 값, Kafka의 이벤트와 offset은 질문 1의 "기존 데이터"가 아니다. Redis 값은 TTL·eviction·장애로 사라질 수 있다. Kafka 이벤트는 보존 기간 안에서는 남지만 PostgreSQL 트랜잭션과 함께 commit되지 않고 다시 전달될 수 있으며 unique 같은 불변식 검사 수단이 없다. 그래서 둘 다 정본이 될 수 없다. unique 제약마다 soft delete된 행이 계속 걸려야 하는지도 적는다. `BaseEntity`의 `@SoftDelete`는 조회만 거르고 제약은 삭제된 행에도 걸린다. 걸려야 하는 값(멱등 키)이면 그 조회가 삭제된 행도 보는지 확인하고, 재사용을 허용하는 값이면 `WHERE deleted_at IS NULL` partial unique 인덱스로 둔다.
+5. 정본은 하나인가. 성능이나 조회를 위해 일부러 만드는 사본(캐시, read model, consumer 쪽 테이블)은 질문 1에서 도출할 수 있다고 나와도 추가할 수 있다. 대신 사본임을 밝힌다. 같은 사실을 두 컬럼이나 두 저장소가 가지면 누가 쓰는지와 같은 트랜잭션에서 함께 바뀌는지를 적는다. 다른 트랜잭션이나 다른 저장소에서 갱신되는 사본은 정본이 무엇인지와 어긋났을 때의 복구 경로를 적는다.
+6. 이 값을 읽고 판단한 뒤 쓰는 경로(check-then-act)가 있는가. 있다면 경합을 막는 것이 unique 제약, `@Version`, 조건부 UPDATE, row lock 중 무엇인지 적는다. 답이 `@Version`이면 그 변경이 version을 가진 행을 실제로 UPDATE하는지 확인한다. 엔티티 사이에 연관관계 매핑이 없어서 자식 행만 바뀌면 루트의 version이 오르지 않는다. Redis 락이나 짧은 TTL 키는 경합을 줄이는 힌트일 뿐이고 DB 검사를 생략하는 근거가 아니다. 한 aggregate를 여러 쿼리로 읽는 경로라면 READ COMMITTED에서 서로 다른 commit을 함께 읽을 수 있는지도 본다.
+
+**반영: 마이그레이션이 락과 배포를 깨지 않는다.**
+7. 이 DDL이 잡는 락과 대상 테이블의 크기는 어떤가.
+   - nullable 컬럼이나 non-volatile 기본값(상수, `now()`)이 있는 컬럼의 추가는 메타데이터 변경이라 `ACCESS EXCLUSIVE`를 잡는 시간이 짧다. volatile 기본값(`gen_random_uuid()`, `clock_timestamp()`), stored generated 컬럼, identity 컬럼은 테이블과 인덱스를 전부 재작성한다.
+   - 짧은 `ACCESS EXCLUSIVE`도 긴 트랜잭션 뒤에서 기다리는 동안 뒤따르는 모든 쿼리를 세운다. 마이그레이션 안에서 `SET LOCAL lock_timeout`을 두고, 시간 초과로 실패하면 다시 실행한다.
+   - 일반 `CREATE INDEX`는 `SHARE` 락이라 빌드 동안 쓰기만 막는다. `SET NOT NULL`, 타입 변경, unique·PK 제약 추가는 `ACCESS EXCLUSIVE`라 스캔·재작성·인덱스 빌드 동안 읽기까지 막는다. 타입 변경은 binary coercible(`varchar` 길이 확장, `varchar`에서 `text`)이면 재작성이 없다.
+   - 큰 테이블에서는 나눈다. `NOT NULL`은 nullable 추가, 배치 backfill, `NOT VALID` 제약 추가, `VALIDATE CONSTRAINT`(`SHARE UPDATE EXCLUSIVE`라 읽기와 쓰기를 막지 않는다) 순서다. unique는 `CREATE UNIQUE INDEX CONCURRENTLY` 뒤에 `ADD CONSTRAINT ... USING INDEX`로 붙인다. partial·expression 인덱스는 제약에 붙일 수 없다.
+   - `CONCURRENTLY`는 트랜잭션 안에서 실행할 수 없다. Flyway는 이 문장을 감지해 그 마이그레이션을 트랜잭션 없이 실행하고 다른 문장과 섞이면 실패시키므로, 그 문장만 담은 별도 마이그레이션으로 둔다. 이 마이그레이션을 처음 넣는 PR에서 `spring.flyway.postgresql.transactional-lock=false`를 함께 설정한다. 기본값이면 Flyway 자신의 락 트랜잭션을 `CONCURRENTLY`가 기다려 끝나지 않을 수 있다(Flyway 문서의 경고이고 이 저장소에서 재현하지는 않았다). 실패하면 롤백되지 않고 INVALID 인덱스가 남는다. 이 인덱스는 쓰기 비용을 계속 내고 unique면 INSERT도 계속 거절하므로 다시 실행하기 전에 `DROP INDEX CONCURRENTLY IF EXISTS`로 지운다.
+   - 제약을 더하기 전에 위반 행을 세는 쿼리와 그 결과, 위반 행의 처리 방침을 적는다. 위반 행이 있으면 마이그레이션이 실패해 새 버전이 기동하지 못한다.
+8. 이전 버전 애플리케이션이 새 스키마에서 뜨고 쓰는가. 순서는 expand, 이중 읽기·쓰기, backfill, 전환, 정리다. JPA가 `validate`라서 엔티티에 없는 컬럼이 추가되는 것은 이전 버전의 기동을 막지 않는다. 기본값 없는 `NOT NULL` 컬럼은 이전 버전의 INSERT를 실패시킨다. 컬럼 삭제와 이름 변경은 이전 버전의 기동을 막고, Hibernate가 SELECT와 INSERT에 컬럼을 모두 명시하므로 이미 떠 있는 이전 버전 인스턴스의 조회와 쓰기도 즉시 실패시킨다. 삭제는 그 컬럼을 쓰는 코드가 배포에서 빠진 다음 PR에서 한다.
+9. 이 값이 도메인 이벤트의 payload나 캐시되는 DTO에 실리는가. 실린다면 이벤트 schema의 하위 호환과 캐시 무효화를 함께 적는다.
+
+사례:
+- `t_order.payload_hash`는 질문 1·3에서 걸려 추가하지 않았다. 대상 필드가 이미 `t_order`·`t_order_line`에 있고 line 변경 명령이 생기기 전까지는 현재 상태가 최초 요청과 같아서 직접 비교로 대체했다([order-idempotency-conflict](../spec/2026-09-20-order-idempotency-conflict.md)).
+- `sync`의 operation 접수 기록이 가질 payload hash는 같은 질문을 통과한다. 접수 기록은 operation의 payload를 저장하지 않으므로 도출할 수 없고(질문 1), `(terminalId, operationId)` 재전송 판정의 근거다(질문 4).
+- `t_order`의 unique `(terminal_id, client_order_id)`는 질문 4·6의 답이다. Redis로 중복 요청을 먼저 걸러내더라도 이 제약은 남는다. 멱등 키는 삭제 뒤에도 재사용하면 안 되므로 partial unique로 바꾸지 않는다. 주문을 soft delete하는 명령이 생기면 `findByClientOrderId`가 삭제된 주문도 찾게 해야 한다. 지금은 주문을 삭제하는 코드가 없다.
+
+기술 근거(2026-09-20 확인, PostgreSQL 18·Flyway 12.4.0·Hibernate 7.4.5): [ALTER TABLE](https://www.postgresql.org/docs/18/sql-altertable.html), [CREATE INDEX](https://www.postgresql.org/docs/18/sql-createindex.html), [Explicit Locking](https://www.postgresql.org/docs/18/explicit-locking.html), [Transaction Isolation](https://www.postgresql.org/docs/18/transaction-iso.html), [Flyway 트랜잭션 처리](https://documentation.red-gate.com/fd/migration-transaction-handling-273973399.html), [Flyway PostgreSQL 락](https://documentation.red-gate.com/fd/postgresql-database-277579325.html). Hibernate `validate`가 매핑된 컬럼만 검사한다는 점은 사용자 가이드에 없어서 `AbstractSchemaValidator` 소스로 확인했다.
 
 ## 5. 레이어 경계를 넘는 타입
 

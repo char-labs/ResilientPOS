@@ -1,6 +1,7 @@
 package com.resilientpos.order.internal.application
 
 import com.resilientpos.PostgresIntegrationTest
+import com.resilientpos.foundation.DomainErrorKind
 import com.resilientpos.foundation.DomainException
 import com.resilientpos.foundation.Money
 import com.resilientpos.foundation.UuidV7IdentifierGenerator
@@ -99,6 +100,8 @@ class OrderCommandFacadeIntegrationTest(
         assertEquals(first.orderId, second.orderId)
         assertEquals(first.status, second.status)
         assertEquals(1L, orderRowCount(terminalId, clientOrderId))
+        val stored = assertNotNull(repository.findById(first.orderId))
+        assertEquals(command.lines.map { it.unitPrice }, stored.lines.map { it.unitPrice })
     }
 
     @Test
@@ -172,5 +175,41 @@ class OrderCommandFacadeIntegrationTest(
         ).aggregate
 
         assertFailsWith<DataIntegrityViolationException> { repository.save(duplicate) }
+    }
+
+    @Test
+    fun `같은 키에 수량이 다른 command는 IDEMPOTENCY_CONFLICT를 던지고 기존 행과 line을 바꾸지 않는다`(events: ApplicationEvents) {
+        val terminalId = TerminalId(UUID.randomUUID())
+        val clientOrderId = ClientOrderId(UUID.randomUUID())
+        val command = OrderFixtures.createOrderCommand(terminalId = terminalId, clientOrderId = clientOrderId)
+
+        val first = facade.create(command)
+        val conflicting = command.copy(lines = command.lines.map { it.copy(quantity = it.quantity + 1) })
+
+        val failure = assertFailsWith<DomainException> { facade.create(conflicting) }
+
+        assertEquals(Order.IDEMPOTENCY_CONFLICT, failure.code)
+        assertEquals(DomainErrorKind.CONFLICT, failure.kind)
+        assertEquals(1L, orderRowCount(terminalId, clientOrderId))
+        val stored = assertNotNull(repository.findById(first.orderId))
+        assertEquals(command.lines.map { it.quantity }, stored.lines.map { it.quantity })
+        assertEquals(
+            1L,
+            events.stream(OrderCreated::class.java).filter { it.orderId == first.orderId }.count(),
+        )
+    }
+
+    @Test
+    fun `같은 키에 line 순서만 바꾼 command는 기존 결과를 돌려준다`() {
+        val terminalId = TerminalId(UUID.randomUUID())
+        val clientOrderId = ClientOrderId(UUID.randomUUID())
+        val command = OrderFixtures.createOrderCommand(terminalId = terminalId, clientOrderId = clientOrderId)
+        val reordered = command.copy(lines = command.lines.reversed())
+
+        val first = facade.create(command)
+        val second = facade.create(reordered)
+
+        assertEquals(first.orderId, second.orderId)
+        assertEquals(1L, orderRowCount(terminalId, clientOrderId))
     }
 }

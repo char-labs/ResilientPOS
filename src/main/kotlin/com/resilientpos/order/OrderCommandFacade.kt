@@ -24,6 +24,7 @@ class OrderCommandFacade(
     fun create(command: CreateOrderCommand): CreateOrderResult {
         val existing = repository.findByClientOrderId(command.terminalId, command.clientOrderId)
         if (existing != null) {
+            existing.verifySamePayload(command)
             return CreateOrderResult(existing.id, existing.status)
         }
 
