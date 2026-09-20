@@ -185,3 +185,10 @@
 - 범위 조정: "개발 계약" 절에 main 기준 새 작업을 Orca CLI로 만든 새 worktree·새 Claude 세션에 넘긴다는 규칙을 한 줄 더했다. 이 PR이 근거다. 처음 받은 전제는 PR #24가 열려 있다는 것이었으나 실제로는 이미 머지되어 있었고, 그 차이로 기술 스택 요약에 REST Docs를 적을지가 뒤집혔다. 세션을 이어 쓰면 브랜치가 만들어진 시점의 main을 계속 전제하게 되므로, 새 세션이 origin/main을 처음부터 다시 읽게 하고 넘기기 직전 `git fetch`로 한 번 더 확인한다. 진행 중인 브랜치의 후속 작업과 설명·조회 요청은 제외한다.
 - 범위 조정: 루트 `CLAUDE.md`를 지우고 프로젝트 지침 정본을 `AGENTS.md` 하나로 합쳤다. Claude Code 2.1.277부터 `CLAUDE.md`가 없으면 `AGENTS.md`를 프로젝트 지침으로 읽고 하위 디렉터리의 `AGENTS.md`도 그 위치의 지침이 되므로, 제목 한 줄과 `@AGENTS.md` import 한 줄뿐이던 스텁을 유지할 이유가 없다([출처](https://news.hada.io/topic?id=33925), 이 worktree의 Claude Code는 2.1.278이다). 남는 위험은 2.1.277 미만 버전과 `/config`의 Project instructions를 CLAUDE.md 전용으로 바꾼 환경에서 지침이 실리지 않는 것이라 최소 버전을 AGENTS.md에 적었다.
 - 갱신: [AGENTS.md](../../AGENTS.md), [지침 설계 근거](agent-instructions.md).
+
+## 2026-09-20 — 핸드오프 worktree의 브랜치를 작업 유형 prefix로 만들기
+- Spec: [handoff-branch-type-prefix](../spec/2026-09-20-handoff-branch-type-prefix.md)
+- 요구사항 영향: 제품 요구사항과 설계는 변경하지 않았다. 개발 절차 중 핸드오프 worktree의 브랜치 이름을 정하는 단계만 바뀐다. Orca는 앱 설정(`branchPrefix = git-username`) 때문에 브랜치를 `char-yb/작업이름`으로 만들어 git 스킬의 브랜치 명명 표에서 벗어났다. 이제 넘기는 세션이 작업 프롬프트에서 유형을 추론해 create 직후 push 전에 `git branch -m 유형/작업이름`으로 바꾼다.
+- 결정: Orca 앱 설정은 바꾸지 않았다. prefix를 없애도 유형 prefix를 붙이려면 이름 변경이 어차피 필요하다. `--name`에 슬래시를 넣으면 대시로 바뀌는 것을 2026-09-20에 시험으로 확인했고, CLI에는 브랜치 이름을 지정하는 옵션이 없다.
+- 결정: 이미 push되어 PR이 열린 브랜치는 이름을 바꾸지 않는다. 원격 브랜치 이름을 바꾸면 열린 PR이 닫히므로 #26과 #27의 `char-yb/` 브랜치는 그대로 두었다.
+- 갱신: [AGENTS.md](../../AGENTS.md), [개발 규칙](development-workflow.md)의 "개발 시작" 2번 단계.
