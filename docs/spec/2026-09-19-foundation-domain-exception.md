@@ -63,7 +63,14 @@ python3 scripts/check_pr.py --base origin/main --worktree
 ## TDD 검증 기록
 | 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
 |---|---|---|---|
-| 개발 전에 테스트 의도를 적고 실행 후 관측 결과를 기록 | 미실행 | 미실행 | 미실행 |
+| `Money.of`/연산 거절이 `DomainException`을 던진다 — `MoneyTest.통화 자릿수를 넘는 소수 입력을 거절한다`, `통화가 다른 금액은 더하지 않는다`, `통화가 다른 금액은 비교하지 않는다` | `./gradlew test --tests 'com.resilientpos.foundation.MoneyTest'` → `AssertionFailedError: Expected an exception of class com.resilientpos.foundation.DomainException to be thrown, but was java.lang.IllegalArgumentException: CURRENCY_MISMATCH`(및 `INVALID_MONEY_SCALE`) | 같은 명령 → BUILD SUCCESSFUL, 7 tests 통과 | `./gradlew test` → BUILD SUCCESSFUL |
+| `Order.create` 거절이 `DomainException`을 던진다 — `OrderTest.빈 line을 EMPTY_ORDER로 거절한다`, `0 이하 수량과 음수 단가를 거절한다`, `주문 통화와 다른 단가를 CURRENCY_MISMATCH로 거절한다` | `./gradlew test --tests 'com.resilientpos.order.internal.domain.OrderTest'` → `AssertionFailedError: Expected an exception of class com.resilientpos.foundation.DomainException to be thrown, but was java.lang.IllegalArgumentException: EMPTY_ORDER`(및 `INVALID_QUANTITY`/`NEGATIVE_UNIT_PRICE`/`CURRENCY_MISMATCH`) | 같은 명령 → BUILD SUCCESSFUL, 6 tests 통과 | `./gradlew test` → BUILD SUCCESSFUL |
+| `OrderCommandFacade.create`가 불변식 위반 command에 `DomainException`을 전파하고 저장하지 않는다 — `OrderCommandFacadeIntegrationTest.도메인이 거절한 명령은 행을 남기지 않는다` | 별도 RED 미실행: `MoneyTest`/`OrderTest`에서 이미 `IllegalArgumentException → DomainException` 전환을 RED로 확인했고, 이 테스트는 같은 예외 타입 교체를 상위에서 재검증하는 회귀 성격이라 production 교체 전 별도 실행은 생략 | `./gradlew test` (Docker 실행 중, Testcontainers Postgres 사용) → BUILD SUCCESSFUL | `./gradlew test` → BUILD SUCCESSFUL, 32 tests 전체 통과, 0 failed |
+| `grep -rn "require(\|IllegalArgumentException" src/main/kotlin` | 대상 아님(테스트 아님) | 실행 결과 없음(빈 출력) 확인 | 동일 |
 
 ## 결과
-개발 전 작성. 개발 후 실행 결과와 변경 이유를 추가한다.
+`DomainException(code, message)`을 `foundation`에 추가하고 `Money`·`Order`·`OrderLine`의 `require(...)`와 `IllegalArgumentException`을 모두 `DomainException`으로 교체했다. `code`는 기존 상수 값을 그대로 쓰고 `message`에는 규칙별 한국어 문장을 붙였다. 테스트는 기대 예외 타입을 `DomainException`으로 바꾸고 코드 값 비교 대상을 `failure.message`에서 `failure.code`로 옮겼다. 인수 조건 5는 코드 5개의 거절 사례마다 `message`가 비어 있지 않고 `code`와 다르다는 assertion으로 검증한다.
+
+`Money.of`가 `ArithmeticException`을 감싸던 자리는 cause를 넘기지 않는다. `INVALID_MONEY_SCALE` 코드가 원인을 이미 말해 주므로 `DomainException`에 cause 파라미터를 두지 않았다.
+
+`./gradlew test`는 32개 테스트가 모두 통과했다(실패 0, Docker·Testcontainers PostgreSQL 사용). `DependencyDirectionTest`와 `ModuleStructureTest`도 같은 실행에서 통과했다. `grep -rn "require(\|IllegalArgumentException" src/main/kotlin`은 결과가 없다. 테스트 수는 그대로여서 [현재 상태](../wiki/current-state.md)의 테스트 수는 고치지 않았다.
