@@ -31,6 +31,7 @@ PostgreSQL 전용이 되었고 Spring Modulith 2.1.1이 도입되었는데도 �
 
 ## 변경 경로
 - AGENTS.md
+- CLAUDE.md
 - docs/**
 
 ## 인수 조건
@@ -43,6 +44,8 @@ PostgreSQL 전용이 되었고 Spring Modulith 2.1.1이 도입되었는데도 �
 - 추가된 문장이 모두 한국어 평서문이고 기존 절 구조를 유지한다.
 - "개발 계약" 절에 main 기준 새 작업을 새 worktree와 새 세션으로 넘긴다는 규칙이 한 줄 있고, 인용한 Orca 명령이
   `orca skills get orca-cli`가 알려주는 형식과 일치한다.
+- 루트 `CLAUDE.md`가 없고, 정본이 `AGENTS.md` 하나라는 사실과 Claude Code 최소 버전이 "개발 계약" 절에 한 줄 있다.
+  [지침 설계 근거](../wiki/agent-instructions.md)에 `CLAUDE.md` import 스텁을 전제한 문장이 남아 있지 않다.
 
 ## 검증
 - `python3 scripts/check_pr.py --base origin/main --worktree`가 PASS로 끝난다. spec 첫 커밋 독립, 변경 경로 일치,
@@ -82,3 +85,19 @@ origin/main의 최신 커밋과 열린 PR 상태를 다시 확인한다. 이미 
 
 기술 스택 요약 수정과 같은 범위에 둔다. 둘 다 AGENTS.md 한 파일의 인덱스 문장이고 합쳐도 분할 한도에서 멀다.
 규칙만 따로 PR로 내면 근거가 된 사건과 규칙이 다른 PR에 흩어진다.
+
+### 범위 조정 - 프로젝트 지침 정본을 AGENTS.md 하나로 통합 (개발 중)
+루트 `CLAUDE.md`를 지우고 프로젝트 지침 정본을 `AGENTS.md` 하나로 둔다. [지침 설계 근거](../wiki/agent-instructions.md)의
+정본 구조 문장과 하위 디렉터리 확장 문장도 같이 고친다.
+
+Claude Code 2.1.277부터 `CLAUDE.md`가 없으면 `AGENTS.md`를 프로젝트 지침으로 읽는다. 하위 디렉터리의 `AGENTS.md`도
+그 위치의 지침으로 적용되므로 나중에 영역별 규칙이 생겨도 Claude 전용 파일을 따로 둘 이유가 없다
+([출처](https://news.hada.io/topic?id=33925)). 지금 `CLAUDE.md`는 제목 한 줄과 `@AGENTS.md` import 한 줄뿐이라
+지우면 같은 내용이 폴백으로 그대로 실린다. 이 worktree의 Claude Code는 2.1.278이라 기준을 넘는다.
+
+남는 위험은 두 가지이고 AGENTS.md에 최소 버전을 적어 알린다. 2.1.277 미만에서는 프로젝트 지침이 실리지 않는다.
+`/config`의 Project instructions를 CLAUDE.md 전용으로 바꾼 환경에서도 실리지 않는다. 두 경우 모두 파일을 되돌리면
+복구되므로 되돌리기 어려운 변경은 아니다.
+
+같은 PR에 두는 이유는 앞의 네 가지 변경과 대상이 같기 때문이다. 모두 매 세션 로드되는 지침 문서를 지금 도구와
+빌드 상태에 맞추는 작업이고, 합쳐도 분할 한도에서 멀다.
