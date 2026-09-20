@@ -104,7 +104,7 @@ PR 본문을 의사결정 문서로 쓰도록 템플릿을 바꾼다. 기대 결
 개발 전 작성. 개발 후 실행 결과와 변경 이유를 추가한다.
 
 ### 실행 결과 (개발 후)
-- `python3 scripts/check_pr.py --base origin/main --worktree`: PASS. multi-review 결과 기록까지 반영한 값은 일반 6개 파일, 310줄이다(파일명 변경으로 삭제된 옛 경로가 1개로 집계된다). 이 줄을 고친 뒤에 검사를 다시 실행해서 같은 값을 확인했다.
+- `python3 scripts/check_pr.py --base origin/main --worktree`: PASS. multi-review 합의 반영까지 마친 값은 일반 6개 파일, 324줄이다(파일명 변경으로 삭제된 옛 경로가 1개로 집계된다). 이 줄을 고친 뒤에 검사를 다시 실행해서 같은 값을 확인했다.
 - `python3 -m unittest discover -s scripts -p 'test_*.py'`: 64개 테스트 OK. `scripts/test_*.py`에 템플릿 문구를
   참조하는 곳이 없다는 것도 grep으로 확인했다.
 - 이 spec 파일의 부등호 여는 문자 개수: 0.
