@@ -192,3 +192,13 @@
 - 결정: Orca 앱 설정은 바꾸지 않았다. prefix를 없애도 유형 prefix를 붙이려면 이름 변경이 어차피 필요하다. `--name`에 슬래시를 넣으면 대시로 바뀌는 것을 2026-09-20에 시험으로 확인했고, CLI에는 브랜치 이름을 지정하는 옵션이 없다.
 - 결정: 이미 push되어 PR이 열린 브랜치는 이름을 바꾸지 않는다. 원격 브랜치 이름을 바꾸면 열린 PR이 닫히므로 #26과 #27의 `char-yb/` 브랜치는 그대로 두었다.
 - 갱신: [AGENTS.md](../../AGENTS.md), [개발 규칙](development-workflow.md)의 "개발 시작" 2번 단계.
+
+## 2026-09-20 — 같은 주문 생성 키에 다른 payload가 오면 409 IDEMPOTENCY_CONFLICT
+- Spec: [order-idempotency-conflict](../spec/2026-09-20-order-idempotency-conflict.md)
+- 요구사항 영향: `POST /v1/orders`에 409 `IDEMPOTENCY_CONFLICT` 응답이 생겼다. 같은 `(terminalId, clientOrderId)`에 payload가 같은 재시도는 계속 201과 기존 결과를 받고, payload가 다르면 `DomainException(IDEMPOTENCY_CONFLICT, kind=CONFLICT)`이 나간다. #24가 알려진 빈틈으로 남긴 항목이며 [시스템 설계 3.1절](../references/02_System_Design.md)의 "동일 key에 다른 payload면 409"를 주문 생성에 적용했다. 요청·응답 모양과 `CreateOrderCommand`·`CreateOrderResult`는 바뀌지 않았다.
+- 결정: 저장된 주문의 현재 상태와 비교하지 않고 최초 요청의 SHA-256 hash를 `t_order.payload_hash`(`V003__order_payload_hash.sql`)에 저장한다. `Order`는 `OPEN`에서 line이 바뀌는 aggregate라서 현재 상태와 비교하면 line 변경 명령이 생기는 순간 정상 재시도가 충돌로 판정된다. 멱등 키의 unique 제약이 이미 `t_order`에 있어서 별도 테이블은 두지 않았다.
+- 결정: hash 대상은 `storeId`, `currency`, line의 `productCode`·`productName`·`unitPrice`(금액과 통화 코드)·`quantity`다. 기준은 HTTP 본문이 아니라 `CreateOrderCommand`의 값이라서 JSON 표기 차이가 영향을 주지 않고 `sync`가 같은 Facade를 불러도 같은 판정을 받는다. 금액은 `Money`의 canonical scale과 `toPlainString()`으로 적고, line은 정렬해 순서를 무시하며, 필드는 `길이:값`으로 이어 구분자 모호성을 없앴다. 순서만 다른 재시도를 충돌로 판정하면 단말의 재시도가 영원히 막히고, 같은 요청으로 판정하면 내용이 같은 주문을 돌려줄 뿐이라서 순서를 무시하는 쪽을 택했다.
+- 결정: 계산과 판정은 `Order`(`payloadHash`, `verifySamePayload`)가 맡고 `OrderCommandFacade`는 호출 한 줄만 늘었다. 같은 키의 요청이 최초 요청과 같은지는 업무 규칙이고 Facade는 aggregate rule을 구현하지 않는다. `platform`은 고치지 않았다. `CONFLICT`의 409 매핑은 #23에 이미 있고 이 코드가 그 첫 사용처다.
+- 결정: `payload_hash`는 nullable이고 backfill하지 않는다. V003 이전 행은 최초 요청을 알 수 없으므로 비교하지 않고 기존 결과를 돌려준다. 운영 배포가 아직 없어서 대상은 개발 DB의 행뿐이다.
+- 알려진 빈틈: 같은 키의 두 요청이 동시에 도착하면 unique 제약이 한쪽을 거절한다. 빈 `productCode`·`productName`을 거절하지 않는다(다음 PR).
+- 갱신: [현재 상태](current-state.md). [도메인 모델](domain-model.md)은 aggregate 경계와 용어가 바뀌지 않아 갱신하지 않았다.
