@@ -13,7 +13,7 @@
 | 식별자 | `uuid-creator` 6.1.1 (UUID v7) |
 | 구조 검증 | Spring Modulith 경계 검증, ArchUnit 1.4.2 의존성 방향 가드 |
 | 통합 테스트 | Testcontainers 2.0.5 PostgreSQL 18. `./gradlew test` 실행에 Docker가 필요하다 |
-| 테스트 | Kotlin Test/JUnit 5, Spring Boot 테스트 starter, Fixture Monkey 1.2.3; 총 49개 (컨텍스트 1, 스키마 3, 모듈 구조 2, 의존성 방향 2, Money 8, 식별자 4, Order 5, OrderCommandFacade 7, API advice 8, OrderController 7, 주문 API 통합 2) |
+| 테스트 | Kotlin Test/JUnit 5, Spring Boot 테스트 starter, Fixture Monkey 1.2.3; 총 55개 (컨텍스트 1, 스키마 3, 모듈 구조 2, 의존성 방향 2, Money 8, 식별자 4, Order 7, OrderCommandFacade 9, API advice 8, OrderController 8, 주문 API 통합 3) |
 | 로컬 하네스 | Python 3 표준 라이브러리 |
 
 근거: [build.gradle.kts](../../build.gradle.kts), [Gradle Wrapper](../../gradle/wrapper/gradle-wrapper.properties), [애플리케이션 설정](../../src/main/resources/application.yaml).
@@ -33,18 +33,24 @@
 - `order` 모듈은 공개 계약(`OrderCommandFacade` 클래스, `CreateOrderCommand`·`CreateOrderResult`, `OrderId`·`ClientOrderId`,
   `OrderStatus`, `OrderEvent`·`OrderCreated`)과 `internal/domain`의 `Order`·`OrderLine`이 있다. `Order.create`가 생성 불변식
   (line 1개 이상, 수량 1 이상, 단가 0 이상, 통화 일치)을 검증하고 `Transition`을 돌려준다. 상태는 `OPEN` 하나다([order-domain-model](../spec/2026-09-16-order-domain-model.md)).
-  `OrderCommandFacade`가 `@Transactional` 안에서 같은 `(terminalId, clientOrderId)` 재시도에 기존 결과를 돌려주고, 아니면
+  `OrderCommandFacade`가 `@Transactional` 안에서 같은 `(terminalId, clientOrderId)`의 주문을 찾으면 `order.verifySamePayload(command)`로
+  payload를 확인한 뒤 기존 결과를 돌려주고, 아니면
   `Order.create` → `OrderRepository.save` → `OrderCreated` 발행(plain Spring 이벤트, EPR 없음) 순으로 진행한다. JPA adapter는
   `internal/adapter/persistence/command`에 있고 `V002__order_create_order.sql`이 `t_order`·`t_order_line`을 만든다
   ([order-create-order-persistence](../spec/2026-09-16-order-create-order-persistence.md)).
+  `verifySamePayload`는 저장된 주문과 command의 `storeId`·`currency`·line(`productCode`·`productName`·`unitPrice`·`quantity`)을 직접 비교한다.
+  line 순서와 금액 표기 차이는 같은 payload이고, 다르면 `DomainException(IDEMPOTENCY_CONFLICT, kind=CONFLICT)`을 던진다. 최초 요청을 따로 저장하는
+  컬럼은 없다. line·`storeId`·`currency`를 바꾸는 명령이 생기면 현재 상태가 최초 요청과 달라지므로 그 PR이 최초 요청 기록을 도입한다
+  ([order-idempotency-conflict](../spec/2026-09-20-order-idempotency-conflict.md)).
   첫 공개 endpoint `POST /v1/orders`가 `internal/adapter/web`의 `OrderController`에 있다. 요청 본문을 `CreateOrderCommand`로 옮겨 Facade를 부르고
   201과 `data{orderId, status}`를 돌려준다. 같은 `(terminalId, clientOrderId)` 재시도도 201과 같은 본문이다. 형식 오류는 타입이 있는 DTO의
-  Jackson 역직렬화가 거절해 `400 BAD_REQUEST`가 되고 업무 규칙은 도메인이 거절한다. 같은 키에 다른 payload가 와도 기존 결과를 돌려주는 것과
-  빈 `productCode`·`productName`을 받는 것은 알려진 빈틈이다([order-create-order-api](../spec/2026-09-20-order-create-order-api.md)).
+  Jackson 역직렬화가 거절해 `400 BAD_REQUEST`가 되고 업무 규칙은 도메인이 거절한다. 같은 키에 다른 payload가 오면 `409 IDEMPOTENCY_CONFLICT`다.
+  빈 `productCode`·`productName`을 받는 것과 같은 키의 동시 요청이 unique 제약 위반으로 끝나는 것은 알려진 빈틈이다. 주문을 soft delete하면 같은 키의 재시도가
+  삭제된 주문을 찾지 못하고 unique 제약에 걸리는데, 지금은 주문을 삭제하는 코드가 없다([order-create-order-api](../spec/2026-09-20-order-create-order-api.md)).
 - `foundation` 모듈에 `Money`, `IdentifierGenerator`/`UuidV7IdentifierGenerator`, 모델링 원시 타입 `DomainEvent`·`Transition`,
   도메인 규칙 위반을 알리는 `DomainException(code, message, kind)`과 `DomainErrorKind`(`INVALID`·`NOT_FOUND`·`CONFLICT`·`UNPROCESSABLE`)가 있다. 프레임워크 의존성은 없다.
   `Order`·`OrderLine`·`Money`는 규칙 위반을 `DomainException`으로만 던진다. `code`는 API 오류 응답과 로그 `errorCode`에 쓰는 안정적인
-  식별자다. `kind`는 HTTP 숫자가 아닌 업무 의미이고 기본값은 `INVALID`다. 지금 코드 5개는 모두 `INVALID`다([foundation-domain-exception](../spec/2026-09-19-foundation-domain-exception.md)).
+  식별자다. `kind`는 HTTP 숫자가 아닌 업무 의미이고 기본값은 `INVALID`다. 입력 거절 코드 5개는 `INVALID`이고 `IDEMPOTENCY_CONFLICT`가 `CONFLICT`의 첫 사용처다([foundation-domain-exception](../spec/2026-09-19-foundation-domain-exception.md)).
   `Money`는 통화의 표준 소수 자릿수를 canonical scale로 쓰고, scale 초과 입력과 통화 불일치 연산을 거절한다.
   나눗셈·퍼센트 할인·세금 계산은 없다. 반올림 정책은 매장 규칙이므로 `store` 정책과 checkout에서 다룬다.
 - `platform` 모듈은 `IdentifierGenerator`(UUID v7)와 `Clock`(UTC) 빈을 등록하는 `PlatformConfiguration`과 엔티티 공통 컬럼
@@ -94,6 +100,7 @@ PostgreSQL이 유일한 엔진이다. H2는 제거했다. 테스트가 운영과
 
 파일명은 `V(번호)__(소유 모듈)_(변경 내용).sql`이다. `V001__baseline.sql`은 의도적으로 비어 있고, 업무 테이블은 각
 모듈이 후속 마이그레이션으로 추가한다. 첫 업무 마이그레이션은 `V002__order_create_order.sql`(`t_order`, `t_order_line`)이다.
+스키마를 바꾸는 PR은 [도메인 모델](domain-model.md)의 "스키마 변경 검토" 절 질문(필요성·정합성·반영)에 spec에서 답한다.
 
 통합 테스트는 Testcontainers로 실제 PostgreSQL 18을 띄운다. **`./gradlew test`에 Docker가 필요하다.** 컨테이너는
 JVM당 한 번만 뜨고 Spring 컨텍스트 캐시와 수명을 맞춘다.

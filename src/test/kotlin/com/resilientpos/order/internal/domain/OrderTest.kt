@@ -1,5 +1,6 @@
 package com.resilientpos.order.internal.domain
 
+import com.resilientpos.foundation.DomainErrorKind
 import com.resilientpos.foundation.DomainException
 import com.resilientpos.foundation.IdentifierGenerator
 import com.resilientpos.foundation.Money
@@ -155,5 +156,53 @@ class OrderTest {
         )
 
         assertEquals(Money.of("3500", krw), transition.aggregate.total)
+    }
+
+    @Test
+    fun `verifySamePayload는 같은 command와 line 순서·금액 표기만 다른 command에 던지지 않는다`() {
+        val lineA = orderLine(productCode = "SKU-1", unitPrice = Money.of("1000", krw), quantity = 2)
+        val lineB = orderLine(productCode = "SKU-2", unitPrice = Money.of("500", krw), quantity = 3)
+        val command = createOrderCommand(lines = listOf(lineA, lineB))
+        val reordered = createOrderCommand(lines = listOf(lineB, lineA))
+        val order = Order.create(command, FixedIdentifierGenerator(emptyList()), now).aggregate
+
+        order.verifySamePayload(command)
+        order.verifySamePayload(reordered)
+
+        val usdCommand = createOrderCommand(currency = usd, lines = listOf(orderLine(unitPrice = Money.of("45", usd))))
+        val usdCommandFormatted = createOrderCommand(currency = usd, lines = listOf(orderLine(unitPrice = Money.of("45.00", usd))))
+        val usdOrder = Order.create(usdCommand, FixedIdentifierGenerator(emptyList()), now).aggregate
+
+        usdOrder.verifySamePayload(usdCommandFormatted)
+    }
+
+    @Test
+    fun `verifySamePayload는 필드가 다르면 IDEMPOTENCY_CONFLICT를 던지고 같으면 던지지 않는다`() {
+        val baseCommand = createOrderCommand(lines = listOf(orderLine(unitPrice = Money.of("1000", krw), quantity = 2)))
+        val order = Order.create(baseCommand, FixedIdentifierGenerator(emptyList()), now).aggregate
+
+        val variants = listOf(
+            "storeId" to baseCommand.copy(storeId = StoreId(UUID.randomUUID())),
+            "currency" to baseCommand.copy(
+                currency = usd,
+                lines = listOf(orderLine(unitPrice = Money.of("10.00", usd), quantity = 2)),
+            ),
+            "productCode" to baseCommand.copy(lines = listOf(orderLine(productCode = "SKU-9", unitPrice = Money.of("1000", krw), quantity = 2))),
+            "productName" to baseCommand.copy(lines = listOf(orderLine(productName = "카페모카", unitPrice = Money.of("1000", krw), quantity = 2))),
+            "unitPrice" to baseCommand.copy(lines = listOf(orderLine(unitPrice = Money.of("2000", krw), quantity = 2))),
+            "quantity" to baseCommand.copy(lines = listOf(orderLine(unitPrice = Money.of("1000", krw), quantity = 5))),
+            "line 개수" to baseCommand.copy(
+                lines = baseCommand.lines + orderLine(productCode = "SKU-2", unitPrice = Money.of("500", krw), quantity = 1),
+            ),
+            "같은 line 중복" to baseCommand.copy(lines = baseCommand.lines + baseCommand.lines.first()),
+        )
+
+        variants.forEach { (label, variant) ->
+            val failure = assertFailsWith<DomainException>(label) { order.verifySamePayload(variant) }
+            assertEquals(Order.IDEMPOTENCY_CONFLICT, failure.code, label)
+            assertEquals(DomainErrorKind.CONFLICT, failure.kind, label)
+        }
+
+        order.verifySamePayload(baseCommand)
     }
 }

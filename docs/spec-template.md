@@ -23,6 +23,12 @@
 ### Checkpoint와 검증 명령 (선택)
 design·implement 스킬의 Contract를 썼다면 Checkpoint 이름, 검증 명령(예: `./gradlew test --tests 'com.resilientpos.order.*'`), 의존 Checkpoint를 표로 적는다. 별도 checkpoints 파일은 커밋하지 않는다.
 
+## 스키마 변경 검토
+선택 항목. 마이그레이션(컬럼·테이블·제약·인덱스)을 더하거나 고치거나 뺄 때만 쓰고 아니면 이 절을 지운다. 필수 절 밖에 있어서 남겨 둬도 검사에 걸리지 않지만 마이그레이션을 바꾸는 PR에서는 placeholder가 남아 있으면 `check_pr.py`가 실패한다.
+
+<[도메인 모델](wiki/domain-model.md)의 "스키마 변경 검토" 절에 있는 필요성·정합성·반영 질문별 답. 해당 없는 질문은 이유>
+- 대조 기록: <구현자가 아닌 리뷰어, 시점, 불일치 항목. PR 제출 전에 리뷰어가 채운다>
+
 ## 검증
 <실행할 명령과 정상/실패 시나리오>
 

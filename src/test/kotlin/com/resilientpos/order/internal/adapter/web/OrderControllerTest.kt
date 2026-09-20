@@ -1,5 +1,6 @@
 package com.resilientpos.order.internal.adapter.web
 
+import com.resilientpos.foundation.DomainErrorKind
 import com.resilientpos.foundation.DomainException
 import com.resilientpos.foundation.Money
 import com.resilientpos.order.ClientOrderId
@@ -93,6 +94,34 @@ class OrderControllerTest(
                     requestFields(
                         HEADER_FIELDS + fieldWithPath("lines").type(JsonFieldType.ARRAY).description("주문 line 목록. 비어 있으면 EMPTY_ORDER"),
                     ),
+                    responseFields(failFields("도메인 오류 코드")),
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun `Facade가 IDEMPOTENCY_CONFLICT를 던지면 409이고 도메인 오류 코드를 담는다`() {
+        given(facade.create(command()))
+            .willThrow(
+                DomainException(
+                    "IDEMPOTENCY_CONFLICT",
+                    "같은 clientOrderId로 내용이 다른 주문 생성 요청이 이미 처리되었습니다",
+                    DomainErrorKind.CONFLICT,
+                ),
+            )
+
+        postOrder(requestJson()).andExpect {
+            status { isEqualTo(409) }
+            jsonPath("$.result") { value("FAIL") }
+            jsonPath("$.data") { value(null) }
+            jsonPath("$.error.errorCode") { value("IDEMPOTENCY_CONFLICT") }
+            jsonPath("$.error.message") { value("같은 clientOrderId로 내용이 다른 주문 생성 요청이 이미 처리되었습니다") }
+        }.andDo {
+            handle(
+                document(
+                    "orders-create-idempotency-conflict",
+                    requestFields(HEADER_FIELDS + LINE_FIELDS),
                     responseFields(failFields("도메인 오류 코드")),
                 ),
             )
