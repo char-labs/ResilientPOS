@@ -100,6 +100,8 @@ class OrderCommandFacadeIntegrationTest(
         assertEquals(first.orderId, second.orderId)
         assertEquals(first.status, second.status)
         assertEquals(1L, orderRowCount(terminalId, clientOrderId))
+        val stored = assertNotNull(repository.findById(first.orderId))
+        assertEquals(command.lines.map { it.unitPrice }, stored.lines.map { it.unitPrice })
     }
 
     @Test
@@ -137,7 +139,7 @@ class OrderCommandFacadeIntegrationTest(
     }
 
     private fun Order.withLines(lines: List<OrderLine>): Order =
-        Order.restore(id, storeId, terminalId, clientOrderId, currency, status, lines, payloadHash)
+        Order.restore(id, storeId, terminalId, clientOrderId, currency, status, lines)
 
     @Test
     fun `line이 바뀐 주문을 다시 저장하면 같은 ID는 갱신하고 새 ID는 추가하고 없어진 ID는 soft delete한다`() {
@@ -206,35 +208,6 @@ class OrderCommandFacadeIntegrationTest(
 
         val first = facade.create(command)
         val second = facade.create(reordered)
-
-        assertEquals(first.orderId, second.orderId)
-        assertEquals(1L, orderRowCount(terminalId, clientOrderId))
-    }
-
-    @Test
-    fun `주문을 만들면 t_order payload_hash에 64자 값이 저장된다`() {
-        val result = facade.create(OrderFixtures.createOrderCommand())
-
-        val payloadHash = jdbcTemplate.queryForObject(
-            "select payload_hash from t_order where id = ?",
-            String::class.java,
-            result.orderId.value,
-        )
-
-        assertEquals(64, payloadHash?.length)
-    }
-
-    @Test
-    fun `payload_hash가 null인 기존 행은 다른 payload에도 기존 결과를 돌려준다`() {
-        val terminalId = TerminalId(UUID.randomUUID())
-        val clientOrderId = ClientOrderId(UUID.randomUUID())
-        val command = OrderFixtures.createOrderCommand(terminalId = terminalId, clientOrderId = clientOrderId)
-        val first = facade.create(command)
-
-        jdbcTemplate.update("update t_order set payload_hash = null where id = ?", first.orderId.value)
-
-        val conflicting = command.copy(lines = command.lines.map { it.copy(quantity = it.quantity + 1) })
-        val second = facade.create(conflicting)
 
         assertEquals(first.orderId, second.orderId)
         assertEquals(1L, orderRowCount(terminalId, clientOrderId))
