@@ -175,3 +175,11 @@
 - 결정: REST Docs는 스니펫 생성까지만 한다. Asciidoctor HTML 빌드는 문서를 내보낼 곳이 생기면 추가한다.
 - 알려진 빈틈: 같은 키에 다른 payload가 와도 기존 결과와 201을 돌려준다(`order-idempotency-conflict`). 빈 `productCode`·`productName`을 거절하지 않는다(후속 도메인 규칙 PR).
 - 갱신: [현재 상태](current-state.md), [AGENTS.md](../../AGENTS.md).
+
+## 2026-09-20 — AGENTS.md를 현재 빌드 상태에 맞게 갱신
+- Spec: [agents-md-currency](../spec/2026-09-20-agents-md-currency.md)
+- 요구사항 영향: 제품 요구사항과 설계는 변경하지 않았다. 이미 머지된 PR들이 만든 사실(H2 제거와 PostgreSQL 전용, Flyway 스키마 소유, Spring Modulith 2.1.1 도입, REST Docs·Testcontainers·ArchUnit·Fixture Monkey)을 매 세션 로드되는 인덱스 문서에 옮겨 적었다. [현재 상태](current-state.md)는 이미 같은 사실을 담고 있어 갱신하지 않았다.
+- 결정: 틀린 문장을 고치는 데서 멈추지 않고 반복 비용이 큰 규약 두 가지를 한 줄씩 남겼다. 도메인 규칙 위반은 `foundation.DomainException(code, message, kind)`으로 던지고, Controller는 DTO만 돌려주며 envelope와 오류 변환은 `platform`의 advice가 맡는다. 두 규약은 #22·#23이 정했지만 AGENTS.md에는 없어 세션마다 코드를 다시 읽어야 했다.
+- 결정: 함정 두 가지를 검증 명령 옆에 적었다. `./gradlew test`는 Testcontainers 때문에 Docker가 필요하고, `check_pr.py`는 spec 필수 절에 부등호 여는 문자가 있으면 미작성으로 판정한다. 판정 근거는 명령 결과만 보고는 알기 어렵다.
+- 결정: [지침 설계 근거](agent-instructions.md)는 갱신하지 않았다. 그 문서는 AGENTS.md의 배치와 우선순위 근거를 다루고 기술 스택 사실이나 코드 규약을 담지 않는다.
+- 갱신: [AGENTS.md](../../AGENTS.md).
