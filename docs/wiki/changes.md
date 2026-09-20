@@ -217,4 +217,5 @@
 - 결정: 작성 가이드와 Risk 판정 기준(🔴/🟡/🟢)은 템플릿의 HTML 주석에 넣었다. git 스킬이 PR 생성 전에 템플릿을 먼저 읽고 그 구조를 따르므로 볼트의 스킬은 수정하지 않았다.
 - 결정: AI 리뷰 봇(GitHub Action)은 도입하지 않았다. 최근 PR은 작성자가 한 명이고 기록된 리뷰가 0건이라 봇이 줄여 줄 대기 시간이 없다. 대신 리뷰 포인트에 🔴 항목이 있는 PR만 제출 전에 `resilientpos-multi-review`를 실행한다. 리뷰 코멘트 심각도 태그도 도입하지 않았다. `resilientpos-review` 스킬이 이미 Critical / Important / Nice-to-have로 표기한다.
 - 기존 불일치 해소: [개발 규칙](development-workflow.md)은 PR 본문을 "4단"이라고 적었지만 실제 템플릿은 그 구조가 아니었다. 이번에 두 문서를 맞췄다.
-- 갱신: [개발 규칙](development-workflow.md)의 "PR 본문" 절, [차용 내역](borrowed-workflows.md)의 계약 조정 표, `.github/pull_request_template.md`.
+- 범위 조정: PR을 올린 뒤에 실행한 독립 에이전트 리뷰(Spring 백엔드 스페셜리스트 관점)의 지적 중 여섯 건을 반영했다. Risk 기준에 diff로 확인하는 🔴 사실 기준을 두고 🟢의 리네임·메서드 추출에 단서를 붙였다. 조건부 multi-review 체크박스는 실행 여부를 적는 서술 한 줄로 바꿨다. "사람의 리뷰가 필요하다" 체크박스에는 머지 보류와 사용자 알림을 연결했다. 볼트 스킬의 "4단 고정" 선언과 충돌한다는 사실과 템플릿 우선 원칙을 개발 규칙에 적었다. 규칙을 강제하는 장치가 없다는 점을 사실대로 적었다. 템플릿 파일명을 볼트 git 스킬이 읽는 표기인 `PULL_REQUEST_TEMPLATE.md`로 바꿨다. 근거와 이번에 고치지 않은 항목은 spec의 범위 조정에 있다.
+- 갱신: [개발 규칙](development-workflow.md)의 "PR 본문" 절, [차용 내역](borrowed-workflows.md)의 계약 조정 표, `.github/PULL_REQUEST_TEMPLATE.md`.
