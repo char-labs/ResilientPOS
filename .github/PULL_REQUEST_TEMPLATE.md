@@ -25,11 +25,11 @@
 ## 리뷰 포인트
 <!--
 Risk 판정 기준
-- 🔴 사실 기준: diff에 아래 중 하나라도 있으면 작성자의 판단과 무관하게 🔴다.
-  - `src/main/resources/db/migration/**`
-  - `application.yaml`의 `flyway`·`jpa` 설정
-  - `@Transactional` 또는 `@Entity`가 붙은 코드
-  - DB에 이름으로 저장되는 enum 상수의 이름, 요청·응답 DTO의 프로퍼티 이름
+- 🔴 사실 기준: 아래 중 하나라도 해당하는 파일이 diff에 있으면 작성자의 판단과 무관하게 🔴다.
+  - `src/main/resources/**` (마이그레이션, `application.yaml`)
+  - JPA·Hibernate 매핑 어노테이션(`@Entity`, `@MappedSuperclass`, `@SoftDelete` 등)이나 `@Transactional`이 있는 파일
+  - 검사 하네스: `.github/workflows/**`, `scripts/check_pr.py`
+  - DB에 이름으로 저장되거나 응답 본문에 값으로 나가는 상수(enum 이름, `DomainException`의 code), 요청·응답 DTO의 프로퍼티 이름
 - 🔴 판단 기준: 비즈니스 로직, 정합성 불변식, 동시성, 새 패턴 도입
 - 🟡 기존 패턴을 따르는 기능 추가, 위 사실 기준에 해당하지 않는 설정 변경
 - 🟢 포맷팅, 테스트 추가, 문서, 그리고 저장 형식·API 계약·프록시 경계(`@Transactional` 메서드 등)에 닿지 않는 리네임과 메서드 추출
