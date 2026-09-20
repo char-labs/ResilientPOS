@@ -13,6 +13,19 @@
 - 직접 비교는 마이그레이션, 엔티티 필드, canonical 문자열과 구분자 처리, V003 이전 행을 비교 없이 통과시키는 예외를 모두 없앤다. 기존 행도 똑같이 검증된다.
 - 같은 실수를 반복하지 않도록 새 컬럼·테이블 추가 전 확인 세 가지(기존 데이터로 도출·비교할 수 있는가, 지금 읽는 코드가 있는가, 나중에 채울 수 있는가)와 판정 기준을 [도메인 모델](../wiki/domain-model.md)의 "이벤트 전달과 저장 형식" 절과 [AGENTS.md](../../AGENTS.md)에 추가한다. 지침 변경을 기능 PR에 넣는 것은 이 PR이 그 규칙의 근거 사례이고 사용자가 같은 PR에 반영하도록 요청했기 때문이다.
 
+### 범위 조정 2 (2026-09-20): 스키마 변경 검토를 정합성·락 관점으로 확장
+위 규칙은 불필요한 컬럼을 막는 쪽만 다뤘다. 이후 Redis와 Kafka가 들어오고 정합성과 락을 염두에 두고 개발할 예정이라서 반대 방향의 실수와 반영 단계의 실수도 같은 검토에서 걸러야 한다. unique 제약·`@Version`·멱등 키처럼 정합성을 지키는 컬럼을 "Redis에 있다", "이벤트로 알 수 있다"는 이유로 빼는 실수와, 마이그레이션이 테이블 쓰기를 막거나 이전 버전 애플리케이션의 기동·INSERT를 깨는 실수다.
+- [도메인 모델](../wiki/domain-model.md)에 "스키마 변경 검토" 절을 새로 두고 첫 범위 조정에서 "이벤트 전달과 저장 형식" 절에 넣은 규칙을 옮긴다. 검토는 필요성, 정합성, 반영 세 관점의 질문이다. 기존 원칙(README의 데이터 정본 원칙, 청사진 6.2절·7.1절, 개발 가이드 2.5절)을 새로 정하지 않고 스키마 변경 시점의 질문으로 모은다.
+- 마이그레이션이 있는 PR은 spec에 `### 스키마 변경 검토` 절을 두고 질문에 답한다. 답은 구현자가 아닌 리뷰어(에이전트 작업이면 읽기 전용의 다른 에이전트)가 실제 DDL·엔티티·코드와 대조한다. 이 PR에서 `payload_hash`는 구현자가 스스로 승인해서 통과했다.
+- `check_pr.py`가 이 절의 존재를 검사하게 하는 일은 하네스 변경이라서 이 PR에 넣지 않는다. 이 PR이 머지되어 절 이름이 main에 생긴 뒤의 후속 PR이다.
+
+### 스키마 변경 검토
+이 PR의 최종 변경에는 마이그레이션이 없다. 검토했다가 뺀 `t_order.payload_hash`의 답을 사례로 남긴다.
+- 필요성: 기존 데이터로 같은 판단을 할 수 있다(`t_order`·`t_order_line`에 대상 필드가 전부 있다). line 변경 명령이 생기는 시점에 현재 상태로 채울 수 있다. 그래서 추가하지 않는다.
+- 정합성: 마지막 방어선은 `t_order`의 unique `(terminal_id, client_order_id)`이고 이 PR이 건드리지 않는다. 충돌 판정 경로는 조회한 뒤 비교하고 쓰지 않으므로 check-then-act 경합이 없다. 생성 경로의 경합(둘 다 조회에서 찾지 못함)은 unique 제약이 막고 주문이 둘 생기지 않는다. 이때 진 쪽이 기존 결과 대신 오류를 받는 것은 제외 절의 알려진 빈틈이다. Redis가 들어와도 중복 요청 완화 힌트일 뿐이고 이 비교는 PostgreSQL에서 한다.
+- 다시 볼 조건의 정합성 근거: `OrderPersistenceAdapter`는 주문과 line을 다른 쿼리로 읽는다. line을 바꾸는 명령이 생기면 READ COMMITTED에서 재시도 요청이 변경 전 주문과 변경 후 line을 함께 읽을 수 있다. 최초 요청 기록을 `t_order` 한 행에 두면 이 문제가 없다. 그 PR이 최초 요청 기록을 도입해야 하는 이유가 하나 더 있는 셈이다.
+- 반영: 해당 없음.
+
 ### 결정 1. 비교 대상과 같은 payload의 기준
 - 대상: `storeId`, `currency`, 각 line의 `productCode`·`productName`·`unitPrice`(금액과 통화)·`quantity`.
 - `terminalId`와 `clientOrderId`는 비교하지 않는다. 조회 키 자체라서 기존 주문을 찾았다면 이미 같다.
@@ -61,7 +74,7 @@
 5. Facade가 `DomainException(IDEMPOTENCY_CONFLICT, kind=CONFLICT)`을 던지면 409이고 `result`가 `FAIL`, `data`가 null, `error.errorCode`가 `IDEMPOTENCY_CONFLICT`다. 요청·응답 필드가 `relaxed` 없이 문서화되고 `build/generated-snippets/orders-create-idempotency-conflict`에 스니펫이 생긴다.
 6. 같은 `storeId`·`terminalId`·`clientOrderId`로 수량만 다른 본문을 이어서 보내면 첫 응답은 201, 두 번째 응답은 409 `IDEMPOTENCY_CONFLICT`이고 `t_order`에 행이 하나다. 같은 본문 재시도는 계속 201이다(기존 테스트 유지).
 7. 마이그레이션은 `V001`·`V002` 그대로이고 `SchemaMigrationTest`, `ModuleStructureTest`, `DependencyDirectionTest`가 변경 없이 통과한다.
-8. [도메인 모델](../wiki/domain-model.md)의 "이벤트 전달과 저장 형식" 절과 [AGENTS.md](../../AGENTS.md)에 새 컬럼·테이블 추가 전 확인 규칙이 있고 `workflow-reviewer`의 읽기 전용 검토를 거친다.
+8. [도메인 모델](../wiki/domain-model.md)에 "스키마 변경 검토" 절이 있고 필요성·정합성·반영 세 관점의 질문, spec에 답을 적는 규칙, 구현자가 아닌 리뷰어의 대조 규칙을 담는다. [AGENTS.md](../../AGENTS.md)가 한 줄로 이 절을 가리킨다. 지침 변경은 `workflow-reviewer`의 읽기 전용 검토를 거친다.
 9. `python3 scripts/check_pr.py --base b412ccf`가 통과한다.
 
 ### Checkpoint와 검증 명령
@@ -82,12 +95,12 @@ python3 scripts/check_pr.py --base b412ccf --worktree
 
 ## Wiki 영향
 - [현재 상태](../wiki/current-state.md): 알려진 빈틈에서 "같은 키에 다른 payload" 항목을 지우고 직접 비교 판정, `CONFLICT`의 첫 사용처, 다시 볼 조건, 테스트 수를 반영한다.
-- [도메인 모델](../wiki/domain-model.md): "이벤트 전달과 저장 형식" 절에 새 컬럼·테이블 추가 전 확인 규칙을 추가한다. aggregate 경계와 용어는 바뀌지 않는다.
+- [도메인 모델](../wiki/domain-model.md): "스키마 변경 검토" 절을 새로 둔다. aggregate 경계와 용어는 바뀌지 않는다.
 - [AGENTS.md](../../AGENTS.md): 같은 규칙을 한 줄로 적고 도메인 모델을 가리킨다.
 - [변경 기록](../wiki/changes.md): 이 spec 링크, 결정 근거, 범위 조정을 남긴다.
 
 ## 분할 계획
-예상 규모: 구현 약 20줄, 테스트 약 170줄, 문서 약 170줄로 총 360줄·10파일 내외. 경고 한도(600줄·20파일) 안이다. 초과하면 HTTP 통합(인수 조건 6)을 후속 PR로 옮긴다. 후속 순서는 빈 상품 코드 규칙, `RequestCheckout`이다.
+예상 규모: 구현 약 20줄, 테스트 약 170줄, 문서 약 170줄로 총 360줄·10파일 내외. 경고 한도(600줄·20파일) 안이다. 초과하면 HTTP 통합(인수 조건 6)을 후속 PR로 옮긴다. 후속 순서는 빈 상품 코드 규칙, `RequestCheckout`이다. 별도로 마이그레이션이 있는 PR의 spec에 `### 스키마 변경 검토` 절이 있는지 `check_pr.py`가 검사하게 하는 하네스 PR이 이 PR의 머지 뒤에 이어진다.
 
 ## TDD 검증 기록
 | 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
