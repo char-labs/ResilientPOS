@@ -18,7 +18,15 @@
 - [도메인 모델](../wiki/domain-model.md)에 "스키마 변경 검토" 절을 새로 두고 첫 범위 조정에서 "이벤트 전달과 저장 형식" 절에 넣은 규칙을 옮긴다. 검토는 필요성, 정합성, 반영 세 관점의 질문이다. 기존 원칙(README의 데이터 정본 원칙, 청사진 6.2절·7.1절, 개발 가이드 2.5절)을 새로 정하지 않고 스키마 변경 시점의 질문으로 모은다.
 - 마이그레이션이 있는 PR은 spec에 `### 스키마 변경 검토` 절을 두고 질문에 답한다. 답은 구현자가 아닌 리뷰어(에이전트 작업이면 읽기 전용의 다른 에이전트)가 실제 DDL·엔티티·코드와 대조한다. 이 PR에서 `payload_hash`는 구현자가 스스로 승인해서 통과했다.
 - spec을 시작하는 [spec 템플릿](../spec-template.md)에 `### 스키마 변경 검토` 자리를 선택 절로 둔다. 답을 적을 칸이 없으면 규칙이 지켜지지 않는다.
-- `check_pr.py`가 이 절의 존재를 검사하게 하는 일은 하네스 변경이라서 이 PR에 넣지 않는다. 이 PR이 머지되어 절 이름이 main에 생긴 뒤의 후속 PR이다.
+- `check_pr.py`가 이 절의 존재를 검사하게 하는 일은 처음에 후속 하네스 PR로 미뤘다가 아래 범위 조정 3에서 이 PR에 넣었다.
+
+### 범위 조정 3 (2026-09-20): `check_pr.py`가 스키마 변경 검토 절을 검사한다
+사람이 지켜야만 동작하는 리뷰 절차는 빠뜨리기 쉽다. 사용자가 후속 PR로 나누지 말고 이 PR에서 검사를 넣도록 결정했다. 개발 규칙은 하네스 변경을 별도로 리뷰하라고 하므로 이 변경도 구현자가 아닌 리뷰어가 검사 우회 경로를 본다.
+- 발동 조건: PR의 변경 파일에 `db/migration` 아래 `.sql`이 있다. 추가·수정·삭제 모두이고 `V`뿐 아니라 `R` 같은 다른 접두의 마이그레이션도 포함한다. 스키마는 Flyway만 소유하므로 스키마 변경은 이 경로를 지난다. 한 PR 안에서 더했다가 뺀 마이그레이션은 최종 diff에 없으므로 발동하지 않는다.
+- 최종 spec에 `### 스키마 변경 검토` 절이 없거나, 본문이 비었거나, 템플릿 placeholder가 남아 있으면 실패한다.
+- 그 절에 `- 대조 기록:`으로 시작하는 줄이 없으면 `--worktree`에서는 경고, 이력 검사에서는 실패다. 독립 대조는 PR 제출 직전에 하므로 개발 중 검사를 막지 않는다. 검사기는 줄의 존재만 확인하고 내용의 진위는 PR 리뷰가 본다.
+- `--migrations-only`(PR 워크플로)와 마이그레이션이 없는 PR은 영향받지 않는다.
+- 제한: 검사기는 답의 품질을 판단하지 못한다. 절과 대조 기록을 빠뜨리는 것만 막는다.
 
 ### 스키마 변경 검토
 이 PR의 최종 변경에는 마이그레이션이 없다. 검토했다가 뺀 `t_order.payload_hash`의 답을 사례로 남긴다.
@@ -67,6 +75,9 @@
 - docs/wiki/domain-model.md
 - docs/wiki/changes.md
 - docs/spec-template.md
+- docs/wiki/development-workflow.md
+- scripts/check_pr.py
+- scripts/test_check_pr.py
 - AGENTS.md
 
 ## 인수 조건
@@ -80,6 +91,9 @@
 7. 마이그레이션은 `V001`·`V002` 그대로이고 `SchemaMigrationTest`, `ModuleStructureTest`, `DependencyDirectionTest`가 변경 없이 통과한다.
 8. [도메인 모델](../wiki/domain-model.md)에 "스키마 변경 검토" 절이 있고 필요성·정합성·반영 세 관점의 질문, spec에 답을 적는 규칙, 구현자가 아닌 리뷰어의 대조 규칙을 담는다. [AGENTS.md](../../AGENTS.md)가 한 줄로 이 절을 가리킨다. 지침 변경은 `workflow-reviewer`의 읽기 전용 검토를 거친다.
 9. `python3 scripts/check_pr.py --base b412ccf`가 통과한다.
+10. `db/migration` 아래 `.sql`을 더하거나 고치거나 지우는 PR에서 spec에 `### 스키마 변경 검토` 절이 없거나 비었거나 placeholder가 남아 있으면 `check_pr.py`가 실패한다. `R` 접두의 반복 마이그레이션도 같다.
+11. 그 절에 `- 대조 기록:` 줄이 없으면 `--worktree`에서는 경고만 내고 이력 검사에서는 실패한다. 절과 대조 기록이 있으면 통과한다.
+12. 마이그레이션이 없는 PR과 `--migrations-only`는 이 검사의 영향을 받지 않는다. `python3 -m unittest discover -s scripts -p 'test_*.py'`가 통과한다.
 
 ### Checkpoint와 검증 명령
 | Checkpoint | 검증 명령 | 의존 |
@@ -87,11 +101,13 @@
 | domain-compare (1~2) | `./gradlew test --tests 'com.resilientpos.order.internal.domain.OrderTest'` | 없음 |
 | facade-conflict (3~4, 7) | `./gradlew test --tests 'com.resilientpos.order.internal.application.OrderCommandFacadeIntegrationTest' --tests 'com.resilientpos.SchemaMigrationTest'` | domain-compare |
 | web-409 (5~6) | `./gradlew test --tests 'com.resilientpos.order.internal.adapter.web.*'` | facade-conflict |
+| schema-review-gate (10~12) | `python3 -m unittest discover -s scripts -p 'test_*.py'` | 없음 |
 
 ## 검증
 ```sh
 ./gradlew test
 ls build/generated-snippets
+python3 -m unittest discover -s scripts -p 'test_*.py'
 python3 scripts/check_pr.py --base b412ccf --worktree
 ```
 - 정상: payload가 같은 재시도와 line 순서만 다른 재시도가 201과 같은 `orderId`를 받는다.
@@ -101,10 +117,11 @@ python3 scripts/check_pr.py --base b412ccf --worktree
 - [현재 상태](../wiki/current-state.md): 알려진 빈틈에서 "같은 키에 다른 payload" 항목을 지우고 직접 비교 판정, `CONFLICT`의 첫 사용처, 다시 볼 조건, 테스트 수를 반영한다.
 - [도메인 모델](../wiki/domain-model.md): "스키마 변경 검토" 절을 새로 둔다. aggregate 경계와 용어는 바뀌지 않는다.
 - [AGENTS.md](../../AGENTS.md): 같은 규칙을 한 줄로 적고 도메인 모델을 가리킨다.
+- [개발 규칙](../wiki/development-workflow.md): 로컬 검사기가 검사하는 항목에 스키마 변경 검토 절과 대조 기록을 더한다.
 - [변경 기록](../wiki/changes.md): 이 spec 링크, 결정 근거, 범위 조정을 남긴다.
 
 ## 분할 계획
-예상 규모: 구현 약 20줄, 테스트 약 170줄, 문서 약 170줄로 총 360줄·10파일 내외. 경고 한도(600줄·20파일) 안이다. 초과하면 HTTP 통합(인수 조건 6)을 후속 PR로 옮긴다. 후속 순서는 빈 상품 코드 규칙, `RequestCheckout`이다. 별도로 마이그레이션이 있는 PR의 spec에 `### 스키마 변경 검토` 절이 있는지 `check_pr.py`가 검사하게 하는 하네스 PR이 이 PR의 머지 뒤에 이어진다.
+예상 규모: 구현 약 20줄, 테스트 약 170줄, 문서 약 170줄로 총 360줄·10파일 내외. 경고 한도(600줄·20파일) 안이다. 초과하면 HTTP 통합(인수 조건 6)을 후속 PR로 옮긴다. 후속 순서는 빈 상품 코드 규칙, `RequestCheckout`이다. 범위 조정 3으로 하네스 검사와 테스트 약 120줄이 늘어 총 500줄 안팎이 된다. 경고 한도(600줄)에 닿으면 하네스 검사를 후속 PR로 되돌린다.
 
 ## TDD 검증 기록
 | 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
@@ -115,6 +132,7 @@ python3 scripts/check_pr.py --base b412ccf --worktree
 | 인수 4·7, 같은 클래스의 `같은 키에 line 순서만 바꾼 command는 기존 결과를 돌려준다`, `같은 clientOrderId 재시도는 기존 결과를 돌려주고 행을 늘리지 않는다`(DB에서 복원한 단가가 command의 단가와 같은 값인지 assertion 추가), `SchemaMigrationTest`의 `001`·`002` 기록 | "던지지 않는다" 쪽이라서 빈 본문으로도 통과한다. characterization. 직접 비교에서는 DB 복원 금액의 scale이 다르면 이 두 테스트가 충돌로 실패하므로 구현 뒤의 통과가 의미를 가진다 | 위와 같은 명령 12개 통과 | 위와 같음 |
 | 인수 5, `OrderControllerTest`의 `Facade가 IDEMPOTENCY_CONFLICT를 던지면 409이고 도메인 오류 코드를 담는다`와 REST Docs `orders-create-idempotency-conflict` | 미실행. `CONFLICT`의 409 매핑이 #23에 이미 있어서 작성하자마자 통과했다. characterization. 범위 조정으로 바뀌지 않은 테스트다 | `./gradlew test --tests 'com.resilientpos.order.internal.adapter.web.*'`. `OrderControllerTest` 8개 통과, 스니펫 디렉터리 생성 확인 | 범위 조정 뒤 같은 명령 8개 통과 |
 | 인수 6, `OrderApiIntegrationTest`의 `같은 storeId terminalId clientOrderId로 수량만 다른 요청을 이어서 보내면 두 번째는 409 IDEMPOTENCY_CONFLICT다` | 구현이 끝난 뒤에 작성해서 처음부터 통과했다. Facade의 `verifySamePayload` 호출을 임시로 지우고 실행해 3개 중 이 테스트 1개가 상태 코드 assertion에서 AssertionError로 실패하는 것을 확인했다. 범위 조정으로 바뀌지 않은 테스트다 | 호출을 되돌린 뒤 같은 명령 3개 통과 | 범위 조정 뒤 `./gradlew clean test` 55개 통과, 실패 0 |
+| 인수 10~12, `scripts/test_check_pr.py`의 `SchemaReviewGateTest` | 미실행 | 미실행 | 미실행 |
 
 범위 조정 전 기록: hash 방식은 `OrderTest` 4개와 `OrderCommandFacadeIntegrationTest` 4개로 RED(최소 선언 상태에서 도메인 3개 실패, Facade 호출이 없는 상태에서 충돌 테스트 1개 실패)와 GREEN을 확인했고 `./gradlew clean test` 59개가 통과했다(커밋 `3d41a1b`·`6637d04`). 이 중 hash 형식, 구분자 경계, hash 저장, null hash 테스트 4개는 범위 조정으로 없어졌다.
 
