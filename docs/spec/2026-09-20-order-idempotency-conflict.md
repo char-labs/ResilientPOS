@@ -136,12 +136,12 @@ python3 scripts/check_pr.py --base b412ccf --worktree
 | 인수 10~12, `scripts/test_check_pr.py`의 `SchemaReviewGateTest` 1차 7개 | `python3 -m unittest discover -s scripts -p 'test_*.py'`. 검사가 없는 상태에서 7개 중 5개가 assertion 실패. 통과하는 쪽 2개는 characterization | 정규식 2개와 검사 8줄을 넣은 뒤 기존 `test_distinct_versions_pass` 1개가 새 계약에 걸려 실패. 검토 절을 넣어 계약 전체 통과 단언을 유지하고 87개 통과 | 같은 명령 87개 통과 |
 | 우회 검토 반영, `SchemaReviewGateTest` 2차 9개(Flyway가 읽는 경로 4종, `src` 밖 예시 SQL, 빈 대조 기록, 코드 블록, 제목만 있는 본문과 비슷한 제목, 상위 제목 뒤의 기록, `##` 절과 하위 절, 채우지 않은 템플릿) | 같은 명령. 처음 실행은 반복문 안에서 `setUp`·`tearDown`을 직접 불러 ERROR 4건이 났고 RED로 치지 않았다. 테스트를 고친 뒤 9개(subTest 포함 12건)가 모두 assertion 실패 | 경로 정규식, 코드 블록 제거, 제목 수준별 절 경계, 내용 있는 대조 기록 판정을 구현한 뒤 96개 통과 | 같은 명령 96개 통과 |
 
-범위 조정 전 기록: hash 방식은 `OrderTest` 4개와 `OrderCommandFacadeIntegrationTest` 4개로 RED(최소 선언 상태에서 도메인 3개 실패, Facade 호출이 없는 상태에서 충돌 테스트 1개 실패)와 GREEN을 확인했고 `./gradlew clean test` 59개가 통과했다(커밋 `3d41a1b`·`6637d04`). 이 중 hash 형식, 구분자 경계, hash 저장, null hash 테스트 4개는 범위 조정으로 없어졌다.
+범위 조정 전 기록: hash 방식은 `OrderTest` 4개와 `OrderCommandFacadeIntegrationTest` 4개로 RED(최소 선언 상태에서 도메인 3개 실패, Facade 호출이 없는 상태에서 충돌 테스트 1개 실패)와 GREEN을 확인했고 `./gradlew clean test` 59개가 통과했다(커밋 `adea19c`·`10f0b9d`). 이 중 hash 형식, 구분자 경계, hash 저장, null hash 테스트 4개는 범위 조정으로 없어졌다.
 
 ## 결과
 `Order`에 `verifySamePayload`를 추가했고 `OrderCommandFacade`는 기존 주문을 찾은 분기에 호출 한 줄이 늘었다. 기준 커밋 대비 프로덕션 변경은 이 두 파일뿐이다. `OrderEntity`와 마이그레이션은 기준 커밋과 같고 새 컬럼, 새 파일, 새 의존성이 없다. `platform`, `CreateOrderCommand`, Controller, DTO는 고치지 않았다.
 
-처음 구현은 최초 요청의 SHA-256 hash를 `t_order.payload_hash`(`V003`)에 저장했다(커밋 `3d41a1b`). PR #26 리뷰에서 컬럼 없이도 검증할 수 있다는 지적을 받아 저장된 주문과의 직접 비교로 바꿨다. 비교는 `storeId`·`currency`의 동등성과 line 값 `(productCode, productName, unitPrice, quantity)`의 개수 묶음 비교다. canonical 문자열, 구분자 처리, V003 이전 행을 비교 없이 통과시키는 예외가 함께 없어졌고 기존 행도 똑같이 검증된다. `Order.verifySamePayload` 안에 `ponytail:` 주석으로 다시 볼 조건을 남겼다.
+처음 구현은 최초 요청의 SHA-256 hash를 `t_order.payload_hash`(`V003`)에 저장했다(커밋 `adea19c`). PR #26 리뷰에서 컬럼 없이도 검증할 수 있다는 지적을 받아 저장된 주문과의 직접 비교로 바꿨다. 비교는 `storeId`·`currency`의 동등성과 line 값 `(productCode, productName, unitPrice, quantity)`의 개수 묶음 비교다. canonical 문자열, 구분자 처리, V003 이전 행을 비교 없이 통과시키는 예외가 함께 없어졌고 기존 행도 똑같이 검증된다. `Order.verifySamePayload` 안에 `ponytail:` 주석으로 다시 볼 조건을 남겼다.
 
 직접 비교는 DB에서 복원한 금액이 command의 금액과 같은 값이어야 성립한다. `OrderLineEntity.toDomain`이 `NUMERIC(19,4)`를 통화의 표준 scale로 되돌리므로 같은 값이 되고, 재시도 통합 테스트에 단가 동등성 assertion을 추가해 고정했다.
 
@@ -154,5 +154,7 @@ python3 scripts/check_pr.py --base b412ccf --worktree
 - 이 검증에서 기존 코드의 잠재 문제를 하나 찾았다. 주문을 soft delete하면 같은 멱등 키의 재시도가 unique 제약에 걸린다. 도달할 수 없는 경로라서 코드는 고치지 않고 제외 절과 현재 상태에 적었다.
 
 하네스: `check_pr.py`에 스키마 변경 검토 절 검사를 넣었다(범위 조정 3). 구현자가 아닌 에이전트가 임시 저장소에서 우회를 실제로 시도해 첫 구현의 구멍 네 갈래를 찾았다. Flyway 12.4.0과 Spring Boot 4.1.1 소스 기준으로 Flyway가 읽는 `.SQL`·하위 디렉터리·Java·Kotlin 마이그레이션을 놓쳤고, `docs/` 아래 예시 SQL을 잘못 잡았으며, 빈 대조 기록과 코드 블록 안의 제목·기록을 인정했고, 템플릿 안내문만 있어도 통과했다. 모두 테스트로 고정하고 고쳤다. 템플릿의 절은 필수 절 밖의 독립 `##` 절로 옮기고 placeholder를 두어서 스키마를 바꾸지 않는 PR에는 마찰이 없다. 표기가 조금 다른 대조 기록(`*`, 들여쓰기, 굵게)은 받지 않고 오류 메시지에 형식을 적었다. `python3 -m unittest discover -s scripts -p 'test_*.py'`는 96개가 통과했다.
+
+rebase: 작업 중에 main에 #28이 머지되어 `docs/wiki/changes.md`가 충돌했다(두 PR이 파일 끝에 항목을 추가). 사용자 확인을 받아 `origin/main`(`d5c6a41`) 위로 rebase하고 #28 항목 뒤에 이 PR의 항목을 두었다. 17개 커밋이 같은 순서로 옮겨졌고 spec 첫 커밋이 첫 커밋으로 남았다. rebase 전후의 트리 차이는 #28의 변경과 정확히 같았다. 이 문서의 커밋 SHA는 rebase 후의 값이다. rebase 결과에서 `check_pr.py --base origin/main` PASS, `./gradlew clean test` 55개 통과, 하네스 테스트 96개 통과를 다시 확인한 뒤 `--force-with-lease`로 push했다.
 
 `./gradlew clean test`는 55개 테스트가 모두 통과했다(실패 0, Docker·Testcontainers PostgreSQL 사용). 기존 49개에 `OrderTest` 2개, `OrderCommandFacadeIntegrationTest` 2개, `OrderControllerTest` 1개, `OrderApiIntegrationTest` 1개가 늘었다. `build/generated-snippets`에 `orders-create-idempotency-conflict`가 생긴다.
