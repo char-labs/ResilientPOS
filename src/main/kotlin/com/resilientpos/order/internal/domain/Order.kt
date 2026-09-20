@@ -1,5 +1,6 @@
 package com.resilientpos.order.internal.domain
 
+import com.resilientpos.foundation.DomainException
 import com.resilientpos.foundation.IdentifierGenerator
 import com.resilientpos.foundation.Money
 import com.resilientpos.foundation.Transition
@@ -52,8 +53,12 @@ class Order private constructor(
         ): Order = Order(id, storeId, terminalId, clientOrderId, currency, status, lines)
 
         fun create(command: CreateOrderCommand, ids: IdentifierGenerator, now: Instant): Transition<Order, OrderEvent> {
-            require(command.lines.isNotEmpty()) { EMPTY_ORDER }
-            require(command.lines.all { it.unitPrice.currency == command.currency }) { CURRENCY_MISMATCH }
+            if (command.lines.isEmpty()) {
+                throw DomainException(EMPTY_ORDER, "주문에는 line이 1개 이상 필요합니다")
+            }
+            if (command.lines.any { it.unitPrice.currency != command.currency }) {
+                throw DomainException(CURRENCY_MISMATCH, "line 통화가 주문 통화와 다릅니다")
+            }
 
             val orderId = OrderId(ids.next())
             val order = Order(

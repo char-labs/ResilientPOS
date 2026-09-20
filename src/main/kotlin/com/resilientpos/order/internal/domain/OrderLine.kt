@@ -1,5 +1,6 @@
 package com.resilientpos.order.internal.domain
 
+import com.resilientpos.foundation.DomainException
 import com.resilientpos.foundation.Money
 import com.resilientpos.order.OrderLineId
 
@@ -14,8 +15,12 @@ data class OrderLine(
     val quantity: Int,
 ) {
     init {
-        require(quantity >= 1) { INVALID_QUANTITY }
-        require(unitPrice >= Money.zero(unitPrice.currency)) { NEGATIVE_UNIT_PRICE }
+        if (quantity < 1) {
+            throw DomainException(INVALID_QUANTITY, "수량은 1 이상이어야 합니다")
+        }
+        if (unitPrice < Money.zero(unitPrice.currency)) {
+            throw DomainException(NEGATIVE_UNIT_PRICE, "단가는 음수일 수 없습니다")
+        }
     }
 
     val amount: Money get() = unitPrice * quantity

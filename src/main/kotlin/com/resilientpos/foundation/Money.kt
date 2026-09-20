@@ -14,7 +14,9 @@ import java.util.Currency
 data class Money(val amount: BigDecimal, val currency: Currency) {
 
     init {
-        require(amount.scale() == currency.defaultFractionDigits) { INVALID_MONEY_SCALE }
+        if (amount.scale() != currency.defaultFractionDigits) {
+            throw DomainException(INVALID_MONEY_SCALE, "통화 표준 자릿수를 넘는 금액입니다")
+        }
     }
 
     operator fun plus(other: Money): Money = Money(amount + other.amountIn(currency), currency)
@@ -26,7 +28,9 @@ data class Money(val amount: BigDecimal, val currency: Currency) {
     operator fun compareTo(other: Money): Int = amount.compareTo(other.amountIn(currency))
 
     private fun amountIn(expected: Currency): BigDecimal {
-        require(currency == expected) { CURRENCY_MISMATCH }
+        if (currency != expected) {
+            throw DomainException(CURRENCY_MISMATCH, "통화가 다른 금액끼리는 연산할 수 없습니다")
+        }
         return amount
     }
 
@@ -40,7 +44,7 @@ data class Money(val amount: BigDecimal, val currency: Currency) {
             val canonical = try {
                 BigDecimal(raw).setScale(currency.defaultFractionDigits, RoundingMode.UNNECESSARY)
             } catch (e: ArithmeticException) {
-                throw IllegalArgumentException(INVALID_MONEY_SCALE, e)
+                throw DomainException(INVALID_MONEY_SCALE, "통화 표준 자릿수를 넘는 금액입니다")
             }
             return Money(canonical, currency)
         }
