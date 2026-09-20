@@ -7,14 +7,20 @@
 - `foundation`에 `DomainException(code: String, message: String) : RuntimeException(message)`을 추가한다. `message`는 non-null로 다시 선언해 호출자가 `!!` 없이 쓴다. 프레임워크 의존성이 없다.
   - `code`는 API 오류 응답과 로그 `errorCode`에 그대로 쓰는 안정적인 식별자다(`EMPTY_ORDER` 등). 기존 메시지 상수의 값을 그대로 쓴다.
   - `message`는 사람이 읽는 한국어 설명이다. 규칙을 던지는 자리에 같이 적는다. advice가 코드→문구 표를 따로 가지면 규칙과 문구가 다른 파일로 갈라지기 때문이다.
+- `foundation`에 `DomainErrorKind`(`INVALID`, `NOT_FOUND`, `CONFLICT`, `UNPROCESSABLE`)를 추가하고 `DomainException`이 `kind`를 가진다. 기본값은 `INVALID`다. 이름은 HTTP 숫자가 아니라 업무 의미다. `foundation`은 Spring(`HttpStatus`)에 의존할 수 없고, 같은 예외를 HTTP가 아닌 경로(sync item 결과, event listener)도 해석해야 하기 때문이다.
+  - `INVALID`: 요청 내용 자체가 규칙에 어긋난다. 언제 보내도 거절된다.
+  - `NOT_FOUND`: 가리킨 대상이 없다.
+  - `CONFLICT`: 요청은 올바르지만 대상의 현재 상태와 충돌한다. 다른 시점에는 성공할 수 있다.
+  - `UNPROCESSABLE`: 형식과 상태는 맞지만 업무 의미상 처리할 수 없다(예: 승인 금액이 checkout 금액과 다름).
 - `Order.create`, `OrderLine` 생성, `Money`의 `require(...)`와 `throw IllegalArgumentException(...)`을 `DomainException`으로 바꾼다. 검증 조건과 코드 값은 바꾸지 않는다.
-- `platform.ApiControllerAdvice`에 `DomainException` handler를 추가한다. 상태는 400이고 본문은 `ApiResponse.fail(ErrorResponse(errorCode = code, message = message))`다. `DomainException`의 `message`는 응답에 내보내려고 쓴 문구라서 그대로 나간다. 그 밖의 예외는 [api-response-advice](2026-09-19-api-response-advice.md)가 정한 대로 `ErrorType`의 고정 문구만 나간다. 로그는 `WARN`으로 `errorCode`와 함께 남긴다(아래 범위 조정 참고).
+- `platform.ApiControllerAdvice`에 `DomainException` handler를 추가한다. 상태는 `kind`로 정하고(`INVALID` → 400, `NOT_FOUND` → 404, `CONFLICT` → 409, `UNPROCESSABLE` → 422) 본문은 `ApiResponse.fail(ErrorResponse(errorCode = code, message = message))`다. `DomainException`의 `message`는 응답에 내보내려고 쓴 문구라서 그대로 나간다. 그 밖의 예외는 [api-response-advice](2026-09-19-api-response-advice.md)가 정한 대로 `ErrorType`의 고정 문구만 나간다. 로그는 `WARN`으로 `errorCode`와 함께 남긴다(아래 범위 조정 참고).
 - 소유 모듈: `foundation`(타입), `order`(사용처), `platform`(HTTP 매핑). 계약: `DomainException`의 public API와 기존 코드 값 5개(`EMPTY_ORDER`, `CURRENCY_MISMATCH`, `INVALID_QUANTITY`, `NEGATIVE_UNIT_PRICE`, `INVALID_MONEY_SCALE`). 불변식: 도메인 규칙 위반은 `DomainException`으로만 나간다.
 - 복구·관측성: 예외 타입 교체라 재시도·복구 경로가 생기지 않는다. advice가 도메인 거절마다 `errorCode={code}` 로그를 `WARN`으로 남긴다. 구조화 로그 속성은 Controller PR에서 붙인다.
 
 ## 제외
 - REST Controller, 요청 DTO, validation, REST Docs. 다음 PR `order-create-order-api`. 응답 envelope와 공통 오류는 #22 [api-response-advice](2026-09-19-api-response-advice.md)가 이미 정했다.
-- 코드별 HTTP 상태 구분(404·409 등). 지금 코드 5개는 모두 입력 거절이라 400 하나로 충분하다. 상태가 갈리는 첫 코드(`IDEMPOTENCY_CONFLICT`)가 생길 때 다룬다.
+- `INVALID`가 아닌 `kind`를 실제로 던지는 도메인 코드. 지금 코드 5개는 모두 입력 거절이라 `INVALID`다. `CONFLICT`의 첫 사용처는 `order-idempotency-conflict`와 `RequestCheckout`이다.
+- 401·403처럼 도메인 규칙이 아닌 4xx. 인증·인가가 생길 때 `ErrorType`에 추가한다.
 - 코드별 하위 예외 타입이나 sealed 계층, 오류 코드 enum. 코드가 문자열 상수 5개인 동안 만들지 않는다.
 - 메시지 다국어(`MessageSource`). 단말이 `code`로 문구를 고르는 요구가 생기면 다룬다.
 - 같은 `(terminalId, clientOrderId)`에 다른 payload가 오는 경우의 `IDEMPOTENCY_CONFLICT`. 후속 PR `order-idempotency-conflict`.
@@ -47,6 +53,8 @@
 8. `DependencyDirectionTest`와 `ModuleStructureTest`가 그대로 통과한다.
 9. `python3 scripts/check_pr.py --base origin/main`이 통과한다.
 10. Controller에서 `DomainException`이 나오면 응답은 400이고 `result`가 `FAIL`, `error.errorCode`가 예외의 `code`, `error.message`가 예외의 `message`다.
+12. `kind`를 주지 않은 `DomainException`의 `kind`는 `INVALID`다. 기존 throw 자리 6곳은 고치지 않는다.
+13. `DomainErrorKind`의 모든 항목이 HTTP 상태로 바뀐다. `INVALID` → 400, `NOT_FOUND` → 404, `CONFLICT` → 409, `UNPROCESSABLE` → 422이고 본문의 `error.errorCode`·`error.message`는 예외의 값 그대로다. advice의 매핑은 else 없는 `when`이라 항목을 추가하고 매핑을 빠뜨리면 컴파일되지 않는다.
 11. `DomainException`이 아닌 예외는 #22와 같이 500 `INTERNAL_ERROR`이고 예외 메시지가 응답에 나가지 않는다(기존 `ApiAdviceTest` 회귀).
 
 ## 검증
@@ -91,3 +99,8 @@ main rebase 뒤 `ApiControllerAdvice`에 `DomainException` handler를 추가했�
 - 전역 advice를 새로 만들지 않고 `platform.ApiControllerAdvice`에 handler를 더한다.
 
 #22의 spec은 `DomainException` handler를 `order-create-order-api`에서 추가한다고 적었다. 그때는 두 타입이 서로 다른 브랜치에 있었기 때문이다. rebase 뒤에는 한 브랜치에 같이 있고, handler가 없으면 이 PR의 목적(도메인 거절만 클라이언트 오류로 구분)이 코드로 확인되지 않는다. handler와 테스트는 약 25줄이라 이 PR에 넣고, Controller PR은 HTTP 매핑과 문서화에만 집중하게 한다.
+
+### 범위 조정 - DomainErrorKind로 4xx 상태 구분 (개발 후)
+PR #23 리뷰 중 "규칙 위반이 모두 400인 것이 맞는가"라는 질문이 나왔다. 상태 전이 위반이나 멱등 충돌은 요청이 올바르고 대상의 현재 상태와 충돌하는 것이라 409가 맞고, 단말은 400(재시도 무의미)과 409(최신 상태를 다시 읽는다)를 다르게 처리해야 한다. 처음 spec은 이 구분을 첫 409 코드가 생길 때로 미뤘는데, 그러면 `order-idempotency-conflict`가 예외 구조 변경과 업무 규칙을 한 PR에 섞게 된다. 구조는 약 30줄이고 기본값 덕분에 기존 throw 자리를 건드리지 않으므로 이 PR에 넣는다.
+
+새 4xx가 필요하면 `DomainErrorKind` 항목 하나와 advice `when` 분기 한 줄을 더한다. 예외에 HTTP 숫자를 직접 담는 방식은 쓰지 않는다. 도메인이 전송 계층을 알게 되고, sync intake처럼 HTTP 응답이 아닌 item 결과(`CONFLICT`, `REQUIRES_RECONCILIATION`)로 바꿔야 하는 소비자가 숫자를 다시 해석해야 하기 때문이다.
