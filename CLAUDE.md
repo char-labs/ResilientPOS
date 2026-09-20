@@ -1,3 +1,0 @@
-# ResilientPOS
-
-@AGENTS.md
