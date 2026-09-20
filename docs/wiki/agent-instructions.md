@@ -50,7 +50,7 @@ Claude 정의(`agents/*.md`)와 역할은 같고 형식만 다르다. Codex TOML
 
 | 등급 | 기준 | 에이전트 |
 |---|---|---|
-| `opus` | 판단 오류의 대가가 큰 검토·설계·게이트 | `architect-claude`, `reviewer-claude`, `code-reviewer`, `spec-validator`, `workflow-reviewer`, `complexity-reducer`, `conflict-analyzer` |
+| `opus` | 판단 오류의 대가가 큰 검토·설계·게이트 | `architect-claude`, `reviewer-claude`, `code-reviewer`, `spec-validator`, `workflow-reviewer`, `complexity-reducer`, `conflict-analyzer`, `spring-backend-specialist` |
 | `sonnet` | 구현 실행자, 절차가 정해진 분석·생성·진단 | `tdd-driver`, `test-oracle`, `codebase-analyzer`, `document-analyzer`, `rules-generator` |
 | `haiku` | 외부 CLI 결과를 포장만 하는 래퍼 | `architect-codex/gemini`, `reviewer-codex/gemini` |
 
@@ -59,7 +59,7 @@ Claude 정의(`agents/*.md`)와 역할은 같고 형식만 다르다. Codex TOML
 스킬 description이 같은 요청에 경합할 때의 선행 규칙:
 - 요구사항·설계가 아직 합의되지 않았으면 `resilientpos-grill`이 먼저다. `resilientpos-develop`·`resilientpos-orchestrator`는 합의 뒤에 진입한다.
 - 커밋/push 요청은 `resilientpos-git`이 절차를, `resilientpos-commit-push`가 범위 판단(commit-only vs push, staged 범위, spec 첫 커밋 보존)을 맡아 함께 로드된다.
-- 지침·스킬 파일 검토는 `workflow-reviewer`, 구현 코드 검토는 `code-reviewer`·`resilientpos-review`다.
+- 지침·스킬 파일 검토는 `workflow-reviewer`, 구현 코드 검토는 `code-reviewer`·`resilientpos-review`다. 백엔드 운영 리스크(정합성, 멱등성, 응답 속도, 보안, AOP 리팩토링 여지 등)는 `spring-backend-specialist`가 더 깊게 점검하지만 사용자가 명시적으로 요청할 때만 쓰고, 그런 요청이 없으면 `code-reviewer`가 "잠재적 문제" 항목에서 계속 본다.
 - `resilientpos-setup`과 `resilientpos-develop-auto`는 사용자가 명시 호출할 때만 실행한다. 두 스킬은 `disable-model-invocation: true`라 description이 세션 컨텍스트에 올라가지 않는다(`user-invocable: false`는 `/` 메뉴만 숨기고 description은 계속 로드된다).
 
 ## 유지와 확인
