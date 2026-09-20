@@ -13,7 +13,7 @@
 | 식별자 | `uuid-creator` 6.1.1 (UUID v7) |
 | 구조 검증 | Spring Modulith 경계 검증, ArchUnit 1.4.2 의존성 방향 가드 |
 | 통합 테스트 | Testcontainers 2.0.5 PostgreSQL 18. `./gradlew test` 실행에 Docker가 필요하다 |
-| 테스트 | Kotlin Test/JUnit 5, Spring Boot 테스트 starter, Fixture Monkey 1.2.3; 총 32개 (컨텍스트 1, 스키마 3, 모듈 구조 2, 의존성 방향 2, Money 8, 식별자 4, Order 5, OrderCommandFacade 7) |
+| 테스트 | Kotlin Test/JUnit 5, Spring Boot 테스트 starter, Fixture Monkey 1.2.3; 총 38개 (컨텍스트 1, 스키마 3, 모듈 구조 2, 의존성 방향 2, Money 8, 식별자 4, Order 5, OrderCommandFacade 7, API advice 6) |
 | 로컬 하네스 | Python 3 표준 라이브러리 |
 
 근거: [build.gradle.kts](../../build.gradle.kts), [Gradle Wrapper](../../gradle/wrapper/gradle-wrapper.properties), [애플리케이션 설정](../../src/main/resources/application.yaml).
@@ -43,6 +43,10 @@
   나눗셈·퍼센트 할인·세금 계산은 없다. 반올림 정책은 매장 규칙이므로 `store` 정책과 checkout에서 다룬다.
 - `platform` 모듈은 `IdentifierGenerator`(UUID v7)와 `Clock`(UTC) 빈을 등록하는 `PlatformConfiguration`과 엔티티 공통 컬럼
   (`version`·`created_at`·`updated_at`·`deleted_at`, Hibernate `@SoftDelete`)을 주는 `BaseEntity`를 가진다. `OrderEntity`·`OrderLineEntity`가 상속한다. 모듈은 9개다.
+  HTTP 응답 공통 모양도 여기에 있다. `ApiResponseBodyAdvice`가 `com.resilientpos` Controller의 본문을 `ApiResponse`(`result`·`data`·`error`)로
+  감싸고, `ApiControllerAdvice`가 Spring MVC 표준 예외와 처리하지 못한 예외를 `ErrorResponse`(`errorCode`·`message`)로 바꾼다.
+  `ErrorType`은 HTTP 공통 오류 4개만 가진다. 응답 메시지는 고정 문구이고 예외 메시지는 로그에만 남는다. 도메인 예외 handler와
+  validation은 아직 없고 공개 endpoint도 없다([api-response-advice](../spec/2026-09-19-api-response-advice.md)).
 - 제공된 요구사항 문서 7개는 [원문 목록](../references/README.md)에 보관했다. 요구사항 재정리와 원문 간 정합성 검토는 아직 수행하지 않았다.
 - 애플리케이션 작업에는 [기존 설계 원칙](../../README.md#engineering-principles)을 참고하되 도입 완료 여부는 코드로 확인한다.
 - 개발 기준은 [개발 규칙](development-workflow.md)이다. 공통 LLM 지침과 로컬 검사로 운영한다.
