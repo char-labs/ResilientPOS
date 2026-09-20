@@ -137,7 +137,7 @@ Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰�
 - 다시 볼 조건: `order`나 `payment`를 독립 배포로 분리할 때다. [시스템 설계 §6.2](../references/02_System_Design.md) 2단계대로 이 경로를 먼저 "`ACCEPTED` 응답 + 이벤트 적용"으로 바꿔 원격 경계를 시뮬레이션하고 단말 계약을 함께 바꾼다. 시스템 설계 §1.3의 `checkout` orchestration module이 필요해지면 같은 조건(한 곳, 한 트랜잭션)으로 ADR을 쓴다.
 
 ### 4.7 스키마 변경 검토
-컬럼·테이블·제약·인덱스를 더하거나 빼는 PR은 spec에 `### 스키마 변경 검토` 절을 두고 아래 질문에 답한다. 해당 없는 질문은 이유를 적는다. 답은 구현자가 스스로 승인하지 않는다. PR을 제출하기 전에 구현자가 아닌 리뷰어가 마이그레이션 SQL, 엔티티, 그 컬럼을 읽고 쓰는 코드를 열어 spec의 답과 대조한다. 에이전트가 작업했으면 `code-reviewer`처럼 읽기 전용 도구만 가진 다른 에이전트에 맡긴다. 대조한 주체와 시점, 불일치 항목을 spec의 같은 절 끝에 한 줄로 남긴다. 원칙 자체는 [README의 데이터 정본 원칙](../../README.md#engineering-principles), [청사진 §6.2·§7.1](../references/05_Domain_Development_Blueprint.md), [개발 가이드 §2.5](../references/03_Development_Guide.md)에 있고, 이 절은 그것을 스키마를 바꾸는 시점의 질문으로 모은 것이다.
+컬럼·테이블·제약·인덱스를 더하거나 빼는 PR은 spec에 `스키마 변경 검토` 절을 두고 아래 질문에 답한다. 해당 없는 질문은 이유를 적는다. 답은 구현자가 스스로 승인하지 않는다. PR을 제출하기 전에 구현자가 아닌 리뷰어가 마이그레이션 SQL, 엔티티, 그 컬럼을 읽고 쓰는 코드를 열어 spec의 답과 대조한다. 에이전트가 작업했으면 `code-reviewer`처럼 읽기 전용 도구만 가진 다른 에이전트에 맡긴다. 대조한 주체와 시점, 불일치 항목을 spec의 같은 절 끝에 `- 대조 기록:`으로 시작하는 한 줄로 남긴다. `check_pr.py`는 마이그레이션을 바꾸는 PR에 이 절과 이 줄이 있는지를 제출 전 이력 검사에서 확인한다([개발 규칙](development-workflow.md)). 원칙 자체는 [README의 데이터 정본 원칙](../../README.md#engineering-principles), [청사진 §6.2·§7.1](../references/05_Domain_Development_Blueprint.md), [개발 가이드 §2.5](../references/03_Development_Guide.md)에 있고, 이 절은 그것을 스키마를 바꾸는 시점의 질문으로 모은 것이다.
 
 **필요성: 불필요한 컬럼을 넣지 않는다.**
 1. PostgreSQL에 이미 저장된 컬럼·테이블에서 그 값을 도출하거나 직접 비교할 수 있는가.
