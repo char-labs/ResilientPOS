@@ -1,5 +1,6 @@
 package com.resilientpos.platform
 
+import com.resilientpos.foundation.DomainException
 import kotlin.test.Test
 import org.hamcrest.Matchers.containsString
 import org.hamcrest.Matchers.not
@@ -76,6 +77,17 @@ class ApiAdviceTest(@Autowired private val mockMvc: MockMvc) {
         }
     }
 
+    @Test
+    fun `도메인 규칙 위반은 예외의 code와 message를 담은 400이다`() {
+        mockMvc.get("/test-advice/domain").andExpect {
+            status { isBadRequest() }
+            jsonPath("$.result") { value("FAIL") }
+            jsonPath("$.data") { value(null) }
+            jsonPath("$.error.errorCode") { value("EMPTY_ORDER") }
+            jsonPath("$.error.message") { value("주문에는 line이 1개 이상 필요합니다") }
+        }
+    }
+
     companion object {
         const val SECRET = "secret-internal-detail"
     }
@@ -96,6 +108,9 @@ class ApiAdviceTestController {
 
     @GetMapping("/boom")
     fun boom(): Sample = throw IllegalStateException(ApiAdviceTest.SECRET)
+
+    @GetMapping("/domain")
+    fun domain(): Sample = throw DomainException("EMPTY_ORDER", "주문에는 line이 1개 이상 필요합니다")
 
     @GetMapping("/number")
     fun number(@RequestParam n: Int): Sample = Sample(n.toString())

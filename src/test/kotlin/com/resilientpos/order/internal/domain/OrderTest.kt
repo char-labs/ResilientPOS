@@ -94,7 +94,7 @@ class OrderTest {
         }
 
         assertEquals(Order.EMPTY_ORDER, failure.code)
-        assertTrue(failure.message!!.isNotBlank())
+        assertTrue(failure.message.isNotBlank())
         assertTrue(failure.message != failure.code)
     }
 
@@ -108,7 +108,7 @@ class OrderTest {
             )
         }
         assertEquals(OrderLine.INVALID_QUANTITY, invalidQuantity.code)
-        assertTrue(invalidQuantity.message!!.isNotBlank())
+        assertTrue(invalidQuantity.message.isNotBlank())
         assertTrue(invalidQuantity.message != invalidQuantity.code)
 
         val negativeUnitPrice = assertFailsWith<DomainException> {
@@ -119,7 +119,7 @@ class OrderTest {
             )
         }
         assertEquals(OrderLine.NEGATIVE_UNIT_PRICE, negativeUnitPrice.code)
-        assertTrue(negativeUnitPrice.message!!.isNotBlank())
+        assertTrue(negativeUnitPrice.message.isNotBlank())
         assertTrue(negativeUnitPrice.message != negativeUnitPrice.code)
     }
 
@@ -135,7 +135,7 @@ class OrderTest {
         }
 
         assertEquals(Order.CURRENCY_MISMATCH, failure.code)
-        assertTrue(failure.message!!.isNotBlank())
+        assertTrue(failure.message.isNotBlank())
         assertTrue(failure.message != failure.code)
     }
 

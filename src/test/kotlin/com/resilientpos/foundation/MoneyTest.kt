@@ -23,7 +23,7 @@ class MoneyTest {
         val failure = assertFailsWith<DomainException> { Money.of("1000.5", krw) }
 
         assertEquals("INVALID_MONEY_SCALE", failure.code)
-        assertTrue(failure.message!!.isNotBlank())
+        assertTrue(failure.message.isNotBlank())
         assertTrue(failure.message != failure.code)
     }
 
@@ -32,7 +32,7 @@ class MoneyTest {
         val failure = assertFailsWith<DomainException> { Money.of("1000", krw) + Money.of("10.00", usd) }
 
         assertEquals("CURRENCY_MISMATCH", failure.code)
-        assertTrue(failure.message!!.isNotBlank())
+        assertTrue(failure.message.isNotBlank())
         assertTrue(failure.message != failure.code)
     }
 

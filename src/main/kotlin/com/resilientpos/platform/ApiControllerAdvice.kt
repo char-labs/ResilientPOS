@@ -1,7 +1,9 @@
 package com.resilientpos.platform
 
+import com.resilientpos.foundation.DomainException
 import org.slf4j.LoggerFactory
 import org.springframework.http.HttpHeaders
+import org.springframework.http.HttpStatus
 import org.springframework.http.HttpStatusCode
 import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.ExceptionHandler
@@ -11,7 +13,7 @@ import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExcep
 
 /**
  * `basePackages`를 걸지 않는다. 걸면 handler가 정해지기 전에 나는 404·405에 적용되지 않는다.
- * 응답 메시지는 항상 `ErrorType`의 고정 문구이고 예외 메시지는 로그에만 남긴다.
+ * 응답 메시지는 `ErrorType`의 고정 문구이고 예외 메시지는 로그에만 남긴다. 응답용 문구를 가진 `DomainException`만 예외다.
  */
 @RestControllerAdvice
 class ApiControllerAdvice : ResponseEntityExceptionHandler() {
@@ -31,6 +33,13 @@ class ApiControllerAdvice : ResponseEntityExceptionHandler() {
             else -> ErrorType.INTERNAL_ERROR
         }
         return super.handleExceptionInternal(ex, failBody(errorType, ex), headers, statusCode, request)
+    }
+
+    /** 도메인 규칙 위반은 예외의 `code`와 응답용 `message`를 그대로 내보낸다. */
+    @ExceptionHandler(DomainException::class)
+    fun handleDomain(e: DomainException): ResponseEntity<ApiResponse<Nothing>> {
+        log.warn("errorCode={} : {}", e.code, e.message)
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(ApiResponse.fail(ErrorResponse(e.code, e.message)))
     }
 
     @ExceptionHandler(Exception::class)
