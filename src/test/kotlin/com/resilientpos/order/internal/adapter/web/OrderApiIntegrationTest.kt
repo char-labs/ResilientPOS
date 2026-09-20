@@ -37,10 +37,12 @@ class OrderApiIntegrationTest(
     private fun requestJson(
         clientOrderId: UUID,
         lines: String = """{ "productCode": "SKU-1", "productName": "아메리카노", "unitPrice": "4500", "quantity": 2 }""",
+        storeId: UUID = UUID.randomUUID(),
+        terminalId: UUID = UUID.randomUUID(),
     ) = """
         {
-          "storeId": "${UUID.randomUUID()}",
-          "terminalId": "${UUID.randomUUID()}",
+          "storeId": "$storeId",
+          "terminalId": "$terminalId",
           "clientOrderId": "$clientOrderId",
           "currency": "KRW",
           "lines": [$lines]
@@ -73,5 +75,28 @@ class OrderApiIntegrationTest(
         }
 
         assertEquals(0L, orderRowCount(clientOrderId))
+    }
+
+    @Test
+    fun `같은 storeId terminalId clientOrderId로 수량만 다른 요청을 이어서 보내면 두 번째는 409 IDEMPOTENCY_CONFLICT다`() {
+        val storeId = UUID.randomUUID()
+        val terminalId = UUID.randomUUID()
+        val clientOrderId = UUID.randomUUID()
+        val first = requestJson(clientOrderId, storeId = storeId, terminalId = terminalId)
+        val second = requestJson(
+            clientOrderId,
+            lines = """{ "productCode": "SKU-1", "productName": "아메리카노", "unitPrice": "4500", "quantity": 3 }""",
+            storeId = storeId,
+            terminalId = terminalId,
+        )
+
+        post(first).andExpect { status { isCreated() } }
+        post(second).andExpect {
+            status { isEqualTo(409) }
+            jsonPath("$.result") { value("FAIL") }
+            jsonPath("$.error.errorCode") { value("IDEMPOTENCY_CONFLICT") }
+        }
+
+        assertEquals(1L, orderRowCount(clientOrderId))
     }
 }
