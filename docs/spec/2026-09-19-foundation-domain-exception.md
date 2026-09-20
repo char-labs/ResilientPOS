@@ -53,9 +53,9 @@
 8. `DependencyDirectionTest`와 `ModuleStructureTest`가 그대로 통과한다.
 9. `python3 scripts/check_pr.py --base origin/main`이 통과한다.
 10. Controller에서 `DomainException`이 나오면 응답은 400이고 `result`가 `FAIL`, `error.errorCode`가 예외의 `code`, `error.message`가 예외의 `message`다.
+11. `DomainException`이 아닌 예외는 #22와 같이 500 `INTERNAL_ERROR`이고 예외 메시지가 응답에 나가지 않는다(기존 `ApiAdviceTest` 회귀).
 12. `kind`를 주지 않은 `DomainException`의 `kind`는 `INVALID`다. 기존 throw 자리 6곳은 고치지 않는다.
 13. `DomainErrorKind`의 모든 항목이 HTTP 상태로 바뀐다. `INVALID` → 400, `NOT_FOUND` → 404, `CONFLICT` → 409, `UNPROCESSABLE` → 422이고 본문의 `error.errorCode`·`error.message`는 예외의 값 그대로다. advice의 매핑은 else 없는 `when`이라 항목을 추가하고 매핑을 빠뜨리면 컴파일되지 않는다.
-11. `DomainException`이 아닌 예외는 #22와 같이 500 `INTERNAL_ERROR`이고 예외 메시지가 응답에 나가지 않는다(기존 `ApiAdviceTest` 회귀).
 
 ## 검증
 ```sh
@@ -71,7 +71,7 @@ python3 scripts/check_pr.py --base origin/main --worktree
 - [변경 기록](../wiki/changes.md): 이 spec 링크와 결정 근거를 남긴다. 제품 요구사항은 바뀌지 않는다.
 
 ## 분할 계획
-예상 규모: 구현 약 50줄, 테스트 수정 약 70줄, 문서 약 110줄로 총 230줄·12파일 내외. 경고 한도(600줄·20파일) 안이다.
+예상 규모: 구현 약 80줄, 테스트 수정 약 100줄, 문서 약 130줄로 총 310줄·12파일 내외. 경고 한도(600줄·20파일) 안이다.
 후속 순서는 `order-create-order-api`(REST Controller, 오류 envelope, REST Docs) → `order-idempotency-conflict` → `RequestCheckout`이다.
 
 ## TDD 검증 기록
@@ -81,6 +81,7 @@ python3 scripts/check_pr.py --base origin/main --worktree
 | `Order.create` 거절이 `DomainException`을 던진다 — `OrderTest.빈 line을 EMPTY_ORDER로 거절한다`, `0 이하 수량과 음수 단가를 거절한다`, `주문 통화와 다른 단가를 CURRENCY_MISMATCH로 거절한다` | `./gradlew test --tests 'com.resilientpos.order.internal.domain.OrderTest'` → `AssertionFailedError: Expected an exception of class com.resilientpos.foundation.DomainException to be thrown, but was java.lang.IllegalArgumentException: EMPTY_ORDER`(및 `INVALID_QUANTITY`/`NEGATIVE_UNIT_PRICE`/`CURRENCY_MISMATCH`) | 같은 명령 → BUILD SUCCESSFUL, 6 tests 통과 | `./gradlew test` → BUILD SUCCESSFUL |
 | `OrderCommandFacade.create`가 불변식 위반 command에 `DomainException`을 전파하고 저장하지 않는다 — `OrderCommandFacadeIntegrationTest.도메인이 거절한 명령은 행을 남기지 않는다` | 별도 RED 미실행: `MoneyTest`/`OrderTest`에서 이미 `IllegalArgumentException → DomainException` 전환을 RED로 확인했고, 이 테스트는 같은 예외 타입 교체를 상위에서 재검증하는 회귀 성격이라 production 교체 전 별도 실행은 생략 | `./gradlew test` (Docker 실행 중, Testcontainers Postgres 사용) → BUILD SUCCESSFUL | `./gradlew test` → BUILD SUCCESSFUL, 32 tests 전체 통과, 0 failed |
 | 도메인 규칙 위반이 400과 예외의 code·message로 나간다 — `ApiAdviceTest.도메인 규칙 위반은 예외의 code와 message를 담은 400이다` | `./gradlew test --tests 'com.resilientpos.platform.ApiAdviceTest'` → `AssertionError: Status expected:[400] but was:[500]`(7 tests, 1 failed) | 같은 명령 → BUILD SUCCESSFUL, 7 tests 통과 | `./gradlew test` → BUILD SUCCESSFUL, 39 tests 전체 통과, 0 failed |
+| `kind`가 HTTP 상태를 정한다 — `ApiAdviceTest.도메인 규칙 위반의 kind가 HTTP 상태를 정한다` | `./gradlew test --tests 'com.resilientpos.platform.ApiAdviceTest'` → `AssertionError: Response status expected:[404] but was:[400]`(8 tests, 1 failed. 타입과 `kind` 파라미터만 먼저 추가해 컴파일은 통과시킨 상태) | 같은 명령 → BUILD SUCCESSFUL, 8 tests 통과 | `./gradlew test` → BUILD SUCCESSFUL, 40 tests 전체 통과, 0 failed |
 | `grep -rn "require(\|IllegalArgumentException" src/main/kotlin` | 대상 아님(테스트 아님) | 실행 결과 없음(빈 출력) 확인 | 동일 |
 
 ## 결과
@@ -88,7 +89,7 @@ python3 scripts/check_pr.py --base origin/main --worktree
 
 `Money.of`가 `ArithmeticException`을 감싸던 자리는 cause를 넘기지 않는다. `INVALID_MONEY_SCALE` 코드가 원인을 이미 말해 주므로 `DomainException`에 cause 파라미터를 두지 않았다.
 
-main rebase 뒤 `ApiControllerAdvice`에 `DomainException` handler를 추가했다(아래 범위 조정). `./gradlew test`는 39개 테스트가 모두 통과했다(실패 0, Docker·Testcontainers PostgreSQL 사용. #22의 advice 테스트 6개와 이 PR의 1개 포함). `DependencyDirectionTest`와 `ModuleStructureTest`도 같은 실행에서 통과했다. `grep -rn "require(\|IllegalArgumentException" src/main/kotlin`은 결과가 없다. [현재 상태](../wiki/current-state.md)의 테스트 수를 39개(API advice 7)로 고쳤다.
+main rebase 뒤 `ApiControllerAdvice`에 `DomainException` handler를 추가했다(아래 범위 조정). 이어서 `DomainErrorKind`를 추가해 `kind`가 상태 코드를 정하게 했다(아래 범위 조정). 422는 Spring 7에서 deprecated된 `UNPROCESSABLE_ENTITY` 대신 `UNPROCESSABLE_CONTENT`를 쓴다. `./gradlew test`는 40개 테스트가 모두 통과했다(실패 0, Docker·Testcontainers PostgreSQL 사용. #22의 advice 테스트 6개와 이 PR의 2개 포함). `DependencyDirectionTest`와 `ModuleStructureTest`도 같은 실행에서 통과했다. `grep -rn "require(\|IllegalArgumentException" src/main/kotlin`은 결과가 없다. [현재 상태](../wiki/current-state.md)의 테스트 수를 40개(API advice 8)로 고쳤다.
 
 ### 범위 조정 - main rebase와 DomainException handler 추가 (개발 후)
 개발 도중 main에 #22 [api-response-advice](2026-09-19-api-response-advice.md)가 머지되어 이 브랜치를 main 위로 rebase했다. 충돌은 `docs/wiki/changes.md` 한 곳이었고 두 항목을 모두 남겼다. spec 단독 첫 커밋은 그대로 첫 커밋이다.

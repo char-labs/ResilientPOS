@@ -163,5 +163,6 @@
 - 요구사항 영향: 제품 요구사항은 변경하지 않았다. 도메인 규칙 위반을 알리는 예외 타입을 `IllegalArgumentException`에서 `foundation.DomainException(code, message)`으로 바꿨다. 검증 조건과 코드 값 5개는 그대로다.
 - 결정: `IllegalArgumentException`은 JDK와 라이브러리도 던지므로 web advice가 이것을 400으로 바꾸면 버그까지 클라이언트 오류가 된다. 전용 타입만 400으로 바꾸고 나머지는 500으로 둔다. 사람이 읽는 `message`는 규칙을 던지는 자리에 한국어로 적는다. 코드별 하위 타입, 오류 코드 enum, `MessageSource`는 만들지 않는다.
 - 범위 조정: 개발 도중 #22 api-response-advice가 main에 머지되어 rebase했다. 응답 계약은 #22를 따른다(`ApiResponse`의 `error{errorCode, message}`, 형식 오류는 `BAD_REQUEST`). 두 타입이 한 브랜치에 모였으므로 `ApiControllerAdvice`의 `DomainException` → 400 handler를 이 PR에 넣었다. `DomainException`의 `message`는 응답용 문구라서 그대로 나가고, 그 밖의 예외는 고정 문구만 나간다.
+- 범위 조정: `DomainErrorKind`(`INVALID`·`NOT_FOUND`·`CONFLICT`·`UNPROCESSABLE`)를 추가했다. 상태 전이 위반이나 멱등 충돌은 요청이 올바르고 대상의 현재 상태와 충돌하는 것이라 409가 맞고, 단말은 400(재시도 무의미)과 409(최신 상태를 다시 읽는다)를 다르게 처리해야 한다. 예외에 HTTP 숫자를 담지 않고 업무 의미만 담아 advice가 상태로 바꾼다. sync intake처럼 HTTP가 아닌 소비자도 같은 `kind`를 해석할 수 있다. 새 4xx는 enum 항목 하나와 `when` 분기 한 줄로 더한다. `INVALID`가 아닌 `kind`를 던지는 도메인 코드는 아직 없다.
 - 합의된 후속 계약(다음 PR `order-create-order-api`): 같은 `(terminalId, clientOrderId)` 재시도는 항상 201과 같은 본문, `storeId`·`terminalId`는 요청 본문으로 받는다. 같은 키에 다른 payload가 오는 경우의 `409 IDEMPOTENCY_CONFLICT`는 그 뒤 PR `order-idempotency-conflict`가 맡는다.
 - 갱신: [현재 상태](current-state.md).
