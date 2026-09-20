@@ -26,6 +26,7 @@
 - 정합성: 마지막 방어선은 `t_order`의 unique `(terminal_id, client_order_id)`이고 이 PR이 건드리지 않는다. 충돌 판정 경로는 조회한 뒤 비교하고 쓰지 않으므로 check-then-act 경합이 없다. 생성 경로의 경합(둘 다 조회에서 찾지 못함)은 unique 제약이 막고 주문이 둘 생기지 않는다. 이때 진 쪽이 기존 결과 대신 오류를 받는 것은 제외 절의 알려진 빈틈이다. Redis가 들어와도 중복 요청 완화 힌트일 뿐이고 이 비교는 PostgreSQL에서 한다.
 - 다시 볼 조건의 정합성 근거: `OrderPersistenceAdapter`는 주문과 line을 다른 쿼리로 읽는다. line을 바꾸는 명령이 생기면 READ COMMITTED에서 재시도 요청이 변경 전 주문과 변경 후 line을 함께 읽을 수 있다. 최초 요청 기록을 `t_order` 한 행에 두면 이 문제가 없다. 그 PR이 최초 요청 기록을 도입해야 하는 이유가 하나 더 있는 셈이다.
 - 반영: 해당 없음.
+- 대조 기록: 2026-09-20, PR 본문 갱신 전. 지침 문구는 `workflow-reviewer`가, 기술 서술은 공식 문서와 소스를 직접 읽는 별도 에이전트가 읽기 전용으로 대조했다. 불일치는 지침 설계 7건 중 6건, 기술 서술 8건 중 6건을 고쳤고 내역은 결과 절에 있다. 위 답 가운데 "주문과 line을 다른 쿼리로 읽는다", "격리 수준은 READ COMMITTED다"는 `OrderPersistenceAdapter`와 `application.yaml`로 확인됐다.
 
 ### 결정 1. 비교 대상과 같은 payload의 기준
 - 대상: `storeId`, `currency`, 각 line의 `productCode`·`productName`·`unitPrice`(금액과 통화)·`quantity`.
@@ -48,6 +49,7 @@
 
 ## 제외
 - 빈 `productCode`·`productName` 거절 규칙과 `RequestCheckout`. 각각 다음 PR이다.
+- 주문을 soft delete했을 때의 같은 키 재시도. `BaseEntity`의 `@SoftDelete`가 조회에서 삭제된 주문을 거르므로 Facade가 기존 주문을 찾지 못하고 INSERT가 unique 제약에 걸린다. 지금은 주문을 삭제하는 코드가 없어서 도달할 수 없는 경로이고, 주문 삭제 명령을 넣는 PR이 조회를 고친다. 기술 검증에서 발견해 [현재 상태](../wiki/current-state.md)의 알려진 빈틈에 적었다.
 - 같은 키의 두 요청이 동시에 도착하는 경합. 둘 다 조회에서 기존 주문을 찾지 못하면 unique 제약이 한쪽을 거절한다. 이 거절을 기존 결과 반환으로 바꾸는 일은 이 PR의 목표가 아니다.
 - 409 응답에 기존 `orderId`를 담는 것. 오류 응답 모양(`errorCode`·`message`)을 바꾸는 일이라서 필요해지면 `platform` PR로 한다.
 - idempotency hit·conflict 전용 metric. 업무 metric 기반이 아직 없다.
@@ -125,6 +127,10 @@ python3 scripts/check_pr.py --base b412ccf --worktree
 
 `OrderApiIntegrationTest`의 `requestJson`은 호출할 때마다 `storeId`·`terminalId`를 새로 만들었는데, 두 요청이 같은 키를 쓰도록 기본값이 있는 파라미터로 바꿨다. 기존 테스트 2개의 동작은 그대로다.
 
-지침: 새 컬럼·테이블 추가 전 확인 세 가지와 판정 기준을 도메인 모델의 "이벤트 전달과 저장 형식" 절에 두고 AGENTS.md에 한 줄로 가리켰다. `workflow-reviewer`의 읽기 전용 검토에서 첫 문구의 판정 문장이 "기존 데이터로 판단할 수 있거나 나중에 채울 수 있으면 추가하지 않는다"여서 기본값으로 채울 수 있는 상태 컬럼까지 막는다는 지적을 받았다. "나중에 채울 수 있는 값인데 기존 데이터로 지금 판단할 수 있거나 지금 읽는 코드가 없으면 추가하지 않는다"로 고치고, 상태·멱등 키·판매 시점 snapshot은 추가 대상임을 적었다. 확인 (1)의 대상을 컬럼·테이블로 넓히고 머지 뒤의 제거 비용을 한 문장 더했다. 개발 규칙의 Flyway 절에 포인터를 하나 더 두라는 권장은 반영하지 않았다. AGENTS.md가 매 세션 로드되어서 같은 안내를 세 곳에 두는 비용이 더 크다.
+지침: 도메인 모델에 "스키마 변경 검토" 절을 새로 두고 AGENTS.md에 한 줄로 가리켰으며 spec 템플릿에 답을 적을 자리를 선택 절로 두었다. 처음에는 "이벤트 전달과 저장 형식" 절의 불릿 하나로 필요성만 다뤘다. 이후 Redis와 Kafka가 들어오고 정합성과 락을 염두에 두고 개발한다는 방향에 맞춰 정합성(질문 4~6)과 반영(질문 7~9)으로 넓히고 독립 절로 옮겼다. 검토는 두 갈래로 받았다.
+- `workflow-reviewer` 1차: 판정 문장이 "기존 데이터로 판단할 수 있거나 나중에 채울 수 있으면 추가하지 않는다"여서 기본값으로 채울 수 있는 상태 컬럼까지 막았다. "나중에 채울 수 있는 값인데 기존 데이터로 지금 판단할 수 있거나 지금 읽는 코드가 없으면 추가하지 않는다"로 고쳤다.
+- `workflow-reviewer` 2차: 질문 4가 필요성 판정보다 우선한다는 문장, 의도적인 사본(캐시·read model·consumer 쪽 테이블)의 허용과 조건, 리뷰의 시점(PR 제출 전)·주체(`code-reviewer` 같은 읽기 전용 에이전트)·증거(spec 절 끝의 한 줄), AGENTS.md 괄호 요약의 조건, spec 템플릿의 자리, 4.3절과의 상호 참조를 반영했다. 도메인 설계 체크리스트에 항목을 더하는 것은 시점과 독자가 달라서 하지 않았다. 개발 규칙의 Flyway 절에 포인터를 두는 것도 같은 안내가 세 곳이 되어서 하지 않았다.
+- 기술 서술의 공식 문서 대조(PostgreSQL 18, Flyway 12.4.0, Hibernate 7.4.5): 8건 중 6건을 고쳤다. 컬럼 추가가 빠른 기준은 상수가 아니라 non-volatile 기본값이다. `SET NOT NULL`·타입 변경·unique 제약 추가는 `ACCESS EXCLUSIVE`라 읽기도 막고 일반 `CREATE INDEX`만 쓰기만 막는다. `CREATE INDEX CONCURRENTLY`는 Flyway가 감지해 트랜잭션 없이 실행하지만 `transactional-lock` 기본값과 부딪혀 끝나지 않을 수 있고(문서의 경고이며 재현하지 않았다) 실패하면 INVALID 인덱스가 남는다. 컬럼 삭제는 이전 버전의 기동뿐 아니라 떠 있는 인스턴스의 쿼리도 깬다. Kafka가 정본이 될 수 없는 이유는 유실이 아니라 PostgreSQL 트랜잭션과 함께 commit되지 않고 불변식 검사 수단이 없다는 점이다. 빠진 항목 셋(soft delete와 unique 제약, 기존 행의 제약 위반, `@Version`이 그 행만 지킨다는 점)을 질문에 더했다.
+- 이 검증에서 기존 코드의 잠재 문제를 하나 찾았다. 주문을 soft delete하면 같은 멱등 키의 재시도가 unique 제약에 걸린다. 도달할 수 없는 경로라서 코드는 고치지 않고 제외 절과 현재 상태에 적었다.
 
 `./gradlew clean test`는 55개 테스트가 모두 통과했다(실패 0, Docker·Testcontainers PostgreSQL 사용). 기존 49개에 `OrderTest` 2개, `OrderCommandFacadeIntegrationTest` 2개, `OrderControllerTest` 1개, `OrderApiIntegrationTest` 1개가 늘었다. `build/generated-snippets`에 `orders-create-idempotency-conflict`가 생긴다.
