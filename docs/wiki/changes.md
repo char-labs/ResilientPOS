@@ -166,3 +166,12 @@
 - 범위 조정: `DomainErrorKind`(`INVALID`·`NOT_FOUND`·`CONFLICT`·`UNPROCESSABLE`)를 추가했다. 상태 전이 위반이나 멱등 충돌은 요청이 올바르고 대상의 현재 상태와 충돌하는 것이라 409가 맞고, 단말은 400(재시도 무의미)과 409(최신 상태를 다시 읽는다)를 다르게 처리해야 한다. 예외에 HTTP 숫자를 담지 않고 업무 의미만 담아 advice가 상태로 바꾼다. sync intake처럼 HTTP가 아닌 소비자도 같은 `kind`를 해석할 수 있다. 새 4xx는 enum 항목 하나와 `when` 분기 한 줄로 더한다. `INVALID`가 아닌 `kind`를 던지는 도메인 코드는 아직 없다.
 - 합의된 후속 계약(다음 PR `order-create-order-api`): 같은 `(terminalId, clientOrderId)` 재시도는 항상 201과 같은 본문, `storeId`·`terminalId`는 요청 본문으로 받는다. 같은 키에 다른 payload가 오는 경우의 `409 IDEMPOTENCY_CONFLICT`는 그 뒤 PR `order-idempotency-conflict`가 맡는다.
 - 갱신: [현재 상태](current-state.md).
+
+## 2026-09-20 — 주문 생성 REST API POST /v1/orders
+- Spec: [order-create-order-api](../spec/2026-09-20-order-create-order-api.md)
+- 요구사항 영향: 첫 공개 endpoint `POST /v1/orders`를 추가했다. [시스템 설계 §3.1](../references/02_System_Design.md)이 나열한 endpoint 중 하나이며 제품 요구사항 자체는 바꾸지 않았다.
+- 결정: 같은 `(terminalId, clientOrderId)` 재시도는 항상 201과 같은 본문이다. 응답을 잃은 단말이 원래 응답을 그대로 받고 `CreateOrderResult`를 고치지 않아도 된다. `terminal` 인증이 없어서 `storeId`·`terminalId`는 요청 본문으로 받는다.
+- 결정: Bean Validation을 쓰지 않는다. 형식 오류는 타입이 있는 DTO의 Jackson 역직렬화가 거절해 `400 BAD_REQUEST`가 되고, 업무 규칙은 도메인의 `DomainException`이 거절한다. 같은 규칙을 DTO와 도메인 두 곳에 두면 같은 위반에 계층마다 다른 `errorCode`가 나간다.
+- 결정: REST Docs는 스니펫 생성까지만 한다. Asciidoctor HTML 빌드는 문서를 내보낼 곳이 생기면 추가한다.
+- 알려진 빈틈: 같은 키에 다른 payload가 와도 기존 결과와 201을 돌려준다(`order-idempotency-conflict`). 빈 `productCode`·`productName`을 거절하지 않는다(후속 도메인 규칙 PR).
+- 갱신: [현재 상태](current-state.md), [AGENTS.md](../../AGENTS.md).
