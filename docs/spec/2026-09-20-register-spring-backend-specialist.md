@@ -27,6 +27,21 @@
   - 읽기 전용을 본문 서술이 아니라 도구 목록으로 보장하려고 Bash를 뺐다.
   - 자동 발동 경로가 없어서 description을 명시 호출 전용으로 좁혔다.
 
+### 검토 후 범위 조정 (2026-09-20)
+wiki 커밋 뒤에 받은 `workflow-reviewer`의 검토에서 네 가지 지적이 나왔고, 아래처럼 범위를 조정한다.
+- 볼트 `ResilientPOS/README.md`의 "에이전트" 표에 `spring-backend-specialist` 한 행을 더한다. 그 표는 볼트에 있는 에이전트의
+  현재 목록인데 새 에이전트가 빠져 있어 wiki의 배정표와 어긋난다. 처음의 grep은 저장소만 대상으로 했기 때문에 이 표를
+  보지 못했다. `code-reviewer.md`와 같은 방식으로 수정 전 사본을 `~/Documents/`에 남긴다.
+- 선행 규칙에 더한 문장의 "`spring-backend-specialist`가 맡되"를 고친다. 정합성·멱등성·응답 속도·보안은 `code-reviewer`의
+  "잠재적 문제" 항목이 계속 보는 대상이고, 새 에이전트의 정의도 두 에이전트가 함께 보는 것을 전제로 중복 보고를 줄이는
+  규칙을 둔다. "맡는다"는 점검의 소유가 옮겨 간 것으로 읽히므로, 새 에이전트는 같은 대상을 더 깊게 보고 명시 요청이
+  없으면 `code-reviewer`가 계속 본다는 뜻이 드러나게 쓴다.
+- 볼트 `reviewer-claude.md`의 "역할 겹침:" 문단은 고치지 않는다. `reviewer-claude`는 multi-review 안에서만 호출되는 내부용
+  에이전트라서 명시 호출 전용인 새 에이전트와 description이 경합하는 경로가 없다. 이 PR은 multi-review에 새 에이전트의
+  호출 경로를 추가하지 않으며, 그 경로를 추가하는 PR이 생기면 그때 양방향 열거를 맞춘다.
+- `AGENTS.md`는 고치지 않는다. 30번째 줄은 "전체 스킬·에이전트 목록과 모델 배정"이 차용 내역과 지침 설계 근거에 있다고
+  두 문서를 함께 가리킨다. 지침 설계 근거의 배정표가 새 에이전트를 포함하므로 이 문장은 여전히 참이다.
+
 ### borrowed-workflows.md를 고치지 않는 판단
 [차용한 워크플로우](../wiki/borrowed-workflows.md)의 "도입한 에이전트 (16)와 규칙 (3)" 절은 "2026-09-13 — 전체 이식" 절
 아래에 있는 이식 이력이다. 새 에이전트는 이식분이 아니라 이 프로젝트에서 새로 만든 것이므로 그 절의 숫자와 목록은
@@ -50,7 +65,7 @@
 ## 변경 경로
 - docs/**
 
-볼트 `ResilientPOS/agents/code-reviewer.md`는 저장소 밖에 있어 diff에 나타나지 않는다.
+볼트 `ResilientPOS/agents/code-reviewer.md`와 `ResilientPOS/README.md`는 저장소 밖에 있어 diff에 나타나지 않는다.
 
 ## 인수 조건
 - 배정표의 `opus` 행 목록이 `spring-backend-specialist`로 끝나고, 그 행의 기준 문구와 다른 행은 바뀌지 않았다.
@@ -59,6 +74,8 @@
   리스크다.
 - 볼트 `code-reviewer.md`의 "역할 겹침:" 문단이 `spring-backend-specialist`를 열거하고, 수정 전 사본이 `~/Documents/`에
   있다. 그 문단 밖의 내용은 바뀌지 않았다.
+- 볼트 `README.md`의 "에이전트" 표에 `spring-backend-specialist` 행이 있고 모델이 `opus`다. 수정 전 사본이 `~/Documents/`에
+  있고 그 행 밖의 내용은 바뀌지 않았다.
 - 변경 기록 항목에 spec 링크, 요구사항 무영향 근거, 세 결정, 볼트 수정 사실과 문구가 있다.
 - `borrowed-workflows.md`와 에이전트 정의 본문은 바뀌지 않았다.
 - 추가된 문장이 모두 한국어 평서문이고 기존 절 구조를 유지한다.
