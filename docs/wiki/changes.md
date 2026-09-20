@@ -151,3 +151,10 @@
 - 요구사항 영향: 제품 요구사항은 변경하지 않았다. 볼트 지침이 매 세션 싣는 분량을 줄였다(항상 로드 rule 10.0KB → 4.8KB, 긴 description 3개 축소, 사용자 전용 스킬 2개 description 제외).
 - 결정: 본문이 같던 `outline-*` 에이전트 3개는 `architect-*`로 합쳤다. `develop-auto`는 `develop` references를 정본으로 삼아 차이만 적는다. 윤문 스킬은 `resilientpos-humanizer` 하나만 쓴다. 이식 원본 `Global-claude-code`는 볼트 `ResilientPOS/archive/`에 보관한다.
 - 갱신: [지침 설계 근거](agent-instructions.md), [차용 내역](borrowed-workflows.md).
+
+## 2026-09-19 — 공통 API 응답 envelope와 전역 예외 advice
+- Spec: [api-response-advice](../spec/2026-09-19-api-response-advice.md)
+- 요구사항 영향: 제품 요구사항은 변경하지 않았다. 첫 Controller PR보다 먼저 HTTP 응답 모양(`result`·`data`·`error{errorCode, message}`)을 정했다. 구조는 ppossilaegi 프로젝트의 전역 API 클래스를 옮겨 온 것이다.
+- 결정: `platform` 기본 패키지에 둔다(`foundation`은 `HttpStatus`에 의존할 수 없다). 원본에서 `CoreException`과 도메인별 `ErrorType` 항목은 옮기지 않았다. 도메인 규칙 위반은 `foundation-domain-exception` PR의 `DomainException`이 맡는다. `ErrorKind`는 `HttpStatus`, `ErrorLevel`은 slf4j `Level`로 대체했다. Swagger `@Schema`, validation·인증 handler는 해당 의존성이 없어 뺐다.
+- 결정: `ApiControllerAdvice`에는 `basePackages`를 걸지 않는다. handler가 정해지기 전에 나는 404·405는 `basePackages`가 걸린 advice에 닿지 않는다. 본문을 감싸는 `ApiResponseBodyAdvice`에만 걸어 Actuator 응답을 그대로 둔다. 응답 메시지는 `ErrorType` 고정 문구만 쓰고 예외 메시지는 로그에만 남긴다.
+- 갱신: [현재 상태](current-state.md).
