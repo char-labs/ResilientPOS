@@ -9,11 +9,11 @@
 
 ## 이 저장소에 적용한 판단
 - 사용자 홈의 전역 설정과 저장소 루트 지침을 구분한다. 이번 변경은 저장소 내부에만 적용한다.
-- 공통 정본은 루트 `AGENTS.md`다. Claude는 `CLAUDE.md`에서 `@AGENTS.md`로 import하고 Gemini는 같은 파일을 명시적으로 읽는다.
+- 공통 정본은 루트 `AGENTS.md` 하나다. Claude Code는 2.1.277부터 `CLAUDE.md`가 없으면 `AGENTS.md`를 프로젝트 지침으로 읽으므로 import 스텁을 두지 않는다. Gemini는 같은 파일을 명시적으로 읽는다. 그보다 낮은 버전이나 `/config`의 Project instructions를 CLAUDE.md 전용으로 바꾼 환경에서는 지침이 실리지 않는다. [Claude Code의 AGENTS.md 지원](https://news.hada.io/topic?id=33925)
 - 루트에는 사용자가 요청한 현재 스택, spec/wiki 계약, 작업별 읽기 조건과 검증 명령만 둔다. 상세 개발 절차와 조사 내용은 wiki에 둔다.
 - 의존성 버전은 빌드 파일을 기준으로 관리한다. 계획만 있는 기술을 이미 사용 중인 기술로 적지 않는다.
 - 전체 wiki를 import하거나 항상 읽게 하지 않는다. Markdown 링크는 자동 import가 아니므로 읽어야 하는 시점을 함께 적는다.
-- 아직 작은 단일 프로젝트이므로 디렉터리별 지침 파일을 미리 늘리지 않는다. 실제 영역별 규칙이 생기면 Codex의 하위 AGENTS.md와 Claude의 하위 CLAUDE.md 또는 paths 규칙으로 범위를 좁힌다.
+- 아직 작은 단일 프로젝트이므로 디렉터리별 지침 파일을 미리 늘리지 않는다. 실제 영역별 규칙이 생기면 하위 디렉터리의 `AGENTS.md`로 범위를 좁힌다. Codex와 Claude Code가 모두 그 위치의 지침으로 읽는다.
 - 두 도구의 로딩/우선순위를 동일하다고 가정하지 않는다. 특히 Codex는 실행 디렉터리 기준 탐색을 확인하고, Claude 지침은 서로 충돌하지 않게 작성한다.
 - spec 선작성·PR 크기·wiki 갱신은 사용자 요청에 따른 프로젝트 규칙이다. 공식 문서에서 강제하는 수치나 절차가 아니다.
 

@@ -183,4 +183,5 @@
 - 결정: 함정 두 가지를 검증 명령 옆에 적었다. `./gradlew test`는 Testcontainers 때문에 Docker가 필요하고, `check_pr.py`는 spec 필수 절에 부등호 여는 문자가 있으면 미작성으로 판정한다. 판정 근거는 명령 결과만 보고는 알기 어렵다.
 - 결정: [지침 설계 근거](agent-instructions.md)는 갱신하지 않았다. 그 문서는 AGENTS.md의 배치와 우선순위 근거를 다루고 기술 스택 사실이나 코드 규약을 담지 않는다.
 - 범위 조정: "개발 계약" 절에 main 기준 새 작업을 Orca CLI로 만든 새 worktree·새 Claude 세션에 넘긴다는 규칙을 한 줄 더했다. 이 PR이 근거다. 처음 받은 전제는 PR #24가 열려 있다는 것이었으나 실제로는 이미 머지되어 있었고, 그 차이로 기술 스택 요약에 REST Docs를 적을지가 뒤집혔다. 세션을 이어 쓰면 브랜치가 만들어진 시점의 main을 계속 전제하게 되므로, 새 세션이 origin/main을 처음부터 다시 읽게 하고 넘기기 직전 `git fetch`로 한 번 더 확인한다. 진행 중인 브랜치의 후속 작업과 설명·조회 요청은 제외한다.
-- 갱신: [AGENTS.md](../../AGENTS.md).
+- 범위 조정: 루트 `CLAUDE.md`를 지우고 프로젝트 지침 정본을 `AGENTS.md` 하나로 합쳤다. Claude Code 2.1.277부터 `CLAUDE.md`가 없으면 `AGENTS.md`를 프로젝트 지침으로 읽고 하위 디렉터리의 `AGENTS.md`도 그 위치의 지침이 되므로, 제목 한 줄과 `@AGENTS.md` import 한 줄뿐이던 스텁을 유지할 이유가 없다([출처](https://news.hada.io/topic?id=33925), 이 worktree의 Claude Code는 2.1.278이다). 남는 위험은 2.1.277 미만 버전과 `/config`의 Project instructions를 CLAUDE.md 전용으로 바꾼 환경에서 지침이 실리지 않는 것이라 최소 버전을 AGENTS.md에 적었다.
+- 갱신: [AGENTS.md](../../AGENTS.md), [지침 설계 근거](agent-instructions.md).
