@@ -36,6 +36,8 @@ dependencies {
     testImplementation("org.springframework.boot:spring-boot-starter-actuator-test")
     testImplementation("org.springframework.boot:spring-boot-starter-data-jpa-test")
     testImplementation("org.springframework.boot:spring-boot-starter-webmvc-test")
+    testImplementation("org.springframework.boot:spring-boot-starter-restdocs")
+    testImplementation("org.springframework.restdocs:spring-restdocs-mockmvc")
     testImplementation("org.jetbrains.kotlin:kotlin-test-junit5")
     testImplementation("org.springframework.modulith:spring-modulith-starter-test")
     testImplementation("com.tngtech.archunit:archunit:1.4.2")

@@ -2,7 +2,7 @@
 
 ## 현재 기술 스택
 - Kotlin 2.4.10, Spring Boot 4.1.1, Java toolchain 25, Gradle Wrapper 9.7.1 / Kotlin DSL.
-- Spring MVC, Spring Data JPA, Actuator, Jackson Kotlin; H2/PostgreSQL runtime 드라이버; Kotlin Test/JUnit 5.
+- Spring MVC, Spring Data JPA, Actuator, Jackson Kotlin; H2/PostgreSQL runtime 드라이버; Kotlin Test/JUnit 5, Spring REST Docs(MockMvc, test).
 - 단일 Gradle 프로젝트, 기본 패키지 `com.resilientpos`. Spring Modulith·Redis·Kafka는 아직 의존성에 없다.
 - 버전의 기준은 `build.gradle.kts`와 `gradle/wrapper/gradle-wrapper.properties`다. 변경 시 이 요약도 갱신한다.
 
