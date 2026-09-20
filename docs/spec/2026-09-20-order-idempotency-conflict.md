@@ -91,10 +91,17 @@ python3 scripts/check_pr.py --base b412ccf --worktree
 ## TDD 검증 기록
 | 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
 |---|---|---|---|
-| 인수 1~3, `OrderTest`의 payload hash와 `verifySamePayload` | 미실행 | 미실행 | 미실행 |
-| 인수 4~7·10, `OrderCommandFacadeIntegrationTest`의 충돌·순서 무시·hash 저장·null hash, `SchemaMigrationTest` | 미실행 | 미실행 | 미실행 |
-| 인수 8, `OrderControllerTest`의 409와 REST Docs `orders-create-idempotency-conflict` | 미실행 | 미실행 | 미실행 |
-| 인수 9, `OrderApiIntegrationTest`의 201 뒤 409 | 미실행 | 미실행 | 미실행 |
+| 인수 1~3, `OrderTest`의 `payloadHash는 소문자 hex 64자이고 line 순서와 금액 표기가 달라도 같다`, `verifySamePayload는 필드가 다르면 IDEMPOTENCY_CONFLICT를 던지고 같으면 던지지 않는다`, `verifySamePayload는 productCode와 productName 경계가 달라 이어붙인 글자가 같아도 충돌로 판정한다`, `payloadHash가 null인 주문은 verifySamePayload가 어떤 command에도 던지지 않는다` | `./gradlew test --tests 'com.resilientpos.order.internal.domain.OrderTest'`. `payloadHash`가 항상 null이고 `verifySamePayload`의 본문이 빈 최소 선언으로 컴파일만 통과시킨 상태에서 9개 중 3개 실패. hash 테스트는 `payloadHash`가 null이라서 NullPointerException, 충돌 테스트 2개는 예외가 나오지 않아 AssertionFailedError. null hash 테스트는 빈 본문으로도 통과하므로 characterization | 같은 명령. `payloadHashOf`와 `verifySamePayload`의 비교를 구현한 뒤 9개 전부 통과 | 같은 명령 9개 통과 유지. 첫 구현이 최소 구현이라서 리팩터링은 없었다 |
+| 인수 4, `OrderCommandFacadeIntegrationTest`의 `같은 키에 수량이 다른 command는 IDEMPOTENCY_CONFLICT를 던지고 기존 행과 line을 바꾸지 않는다` | `./gradlew test --tests 'com.resilientpos.order.internal.application.OrderCommandFacadeIntegrationTest' --tests 'com.resilientpos.SchemaMigrationTest'`. Facade에 `verifySamePayload` 호출이 없는 상태에서 14개 중 1개 실패. 예외가 나오지 않아 `assertFailsWith`가 AssertionFailedError | 같은 명령. `existing.verifySamePayload(command)` 한 줄을 추가한 뒤 14개 전부 통과 | `OrderTest` 9개 통과 유지 |
+| 인수 5~7·10, 같은 클래스의 `같은 키에 line 순서만 바꾼 command는 기존 결과를 돌려준다`, `주문을 만들면 t_order payload_hash에 64자 값이 저장된다`, `payload_hash가 null인 기존 행은 다른 payload에도 기존 결과를 돌려준다`, `SchemaMigrationTest`의 `003` 기록 | 별도 실패를 관측하지 못해 characterization으로 기록한다. domain-hash 단계에서 `OrderEntity`와 `V003`의 저장 경로를 이미 만들었고, 인수 5와 7은 Facade에 판정이 없어도 통과하는 "던지지 않는다" 쪽 사례다 | 위와 같은 명령 14개 통과 | 위와 같음 |
+| 인수 8, `OrderControllerTest`의 `Facade가 IDEMPOTENCY_CONFLICT를 던지면 409이고 도메인 오류 코드를 담는다`와 REST Docs `orders-create-idempotency-conflict` | 미실행. `CONFLICT`의 409 매핑이 #23에 이미 있어서 작성하자마자 통과했다. characterization | `./gradlew test --tests 'com.resilientpos.order.internal.adapter.web.*'`. `OrderControllerTest` 8개 통과, 스니펫 디렉터리 생성 확인 | 같은 명령 통과 유지 |
+| 인수 9, `OrderApiIntegrationTest`의 `같은 storeId terminalId clientOrderId로 수량만 다른 요청을 이어서 보내면 두 번째는 409 IDEMPOTENCY_CONFLICT다` | 구현이 끝난 뒤에 작성해서 처음부터 통과했다. 테스트가 판정을 실제로 관측하는지 확인하려고 Facade의 `verifySamePayload` 호출을 임시로 지우고 `./gradlew test --tests 'com.resilientpos.order.internal.adapter.web.OrderApiIntegrationTest'`를 실행했다. 3개 중 이 테스트 1개가 상태 코드 assertion에서 AssertionError로 실패했다 | 호출을 되돌린 뒤 같은 명령 3개 통과 | `./gradlew clean test` 59개 통과, 실패 0 |
 
 ## 결과
-개발 전 작성. 개발 후 실행 결과와 변경 이유를 추가한다.
+`Order`에 `payloadHash`와 `verifySamePayload`를 추가했고 `OrderCommandFacade`는 기존 주문을 찾은 분기에 호출 한 줄이 늘었다. `OrderEntity`는 `payloadHash`를 `from`·`apply`·`toDomain`에 반영하고 `V003__order_payload_hash.sql`이 nullable `payload_hash varchar(64)`를 추가한다. `platform`, `CreateOrderCommand`, Controller, DTO는 고치지 않았다. 설계에서 벗어난 부분은 없다.
+
+hash 계산은 `Order` companion의 private 함수 `payloadHashOf` 하나다. 새 파일과 새 의존성이 없다. `Order.restore`에 `payloadHash` 파라미터가 생겨서 테스트 helper `withLines`가 값을 그대로 넘기도록 고쳤다. `OrderApiIntegrationTest`의 `requestJson`은 호출할 때마다 `storeId`·`terminalId`를 새로 만들었는데, 두 요청이 같은 키를 쓰도록 기본값이 있는 파라미터로 바꿨다. 기존 테스트 2개의 동작은 그대로다.
+
+인수 5~9는 RED를 관측하지 못했다. 저장 경로와 409 매핑이 앞 단계와 #23에서 이미 완성된 뒤에 작성했기 때문이다. HTTP 통합 테스트(인수 9)만 Facade 호출을 임시로 지워 실패하는 것을 확인했다.
+
+`./gradlew clean test`는 59개 테스트가 모두 통과했다(실패 0, Docker·Testcontainers PostgreSQL 사용). 기존 49개에 `OrderTest` 4개, `OrderCommandFacadeIntegrationTest` 4개, `OrderControllerTest` 1개, `OrderApiIntegrationTest` 1개가 늘었다. `build/generated-snippets`에 `orders-create-idempotency-conflict`가 생긴다.
