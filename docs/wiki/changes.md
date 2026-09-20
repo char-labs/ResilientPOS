@@ -208,3 +208,15 @@
 - 검토: 이 절은 구현자가 아닌 두 검토를 거쳤다. `workflow-reviewer`는 필요성 판정이 질문 4보다 먼저 읽혀 `@Version` 같은 값을 빼게 만들 수 있다는 점, 의도적인 사본(캐시·read model)의 허용 여부가 없다는 점, 리뷰 절차에 시점·주체·증거가 없다는 점을 지적했다. 공식 문서 대조에서는 기술 서술 8개 중 6개를 고쳤다. 기준은 "상수 기본값"이 아니라 non-volatile이고, `SET NOT NULL`·타입 변경·unique 제약 추가는 쓰기뿐 아니라 읽기도 막으며, `CREATE INDEX CONCURRENTLY`는 Flyway의 `transactional-lock` 기본값과 부딪히고 실패하면 INVALID 인덱스가 남는다. 컬럼 삭제는 이전 버전의 기동뿐 아니라 떠 있는 인스턴스의 쿼리도 깨고, Kafka가 정본이 될 수 없는 이유는 유실이 아니라 PostgreSQL 트랜잭션과 함께 commit되지 않는다는 점이다. soft delete와 unique 제약의 상호작용, 기존 행의 제약 위반, `@Version`이 그 행만 지킨다는 점을 질문에 더했다.
 - 알려진 빈틈: 같은 키의 두 요청이 동시에 도착하면 unique 제약이 한쪽을 거절한다. 주문을 soft delete하면 같은 키의 재시도가 삭제된 주문을 찾지 못하고 unique 제약에 걸린다(지금은 주문을 삭제하는 코드가 없다). 빈 `productCode`·`productName`을 거절하지 않는다(다음 PR).
 - 갱신: [현재 상태](current-state.md), [도메인 모델](domain-model.md), [개발 규칙](development-workflow.md), [AGENTS.md](../../AGENTS.md), spec 템플릿, `scripts/check_pr.py`.
+
+## 2026-09-20 — PR 템플릿을 의사결정 문서 형태로 개편
+- Spec: [pr-template-decision-doc](../spec/2026-09-20-pr-template-decision-doc.md)
+- 요구사항 영향: 제품 요구사항과 설계는 변경하지 않았다. 개발 절차 중 PR 본문 작성 규칙만 바뀐다. PR 본문이 spec 링크와 체크박스에서 의사결정 문서 8절(왜 / 무엇을·어떻게 / 한계와 트레이드오프 / 기존 기능 영향 / Edge case와 실패 시나리오 / 검토한 대안 / 리뷰 포인트 / 확인 방법)로 늘어난다. 참고한 글은 카카오페이손해보험 기술 블로그의 [PR을 더 느리게 만들기 위한 고민](https://tech.kakaopay.com/post/kakaopayins-slow-pr-fast-dev/)이다.
+- 결정: 기존 템플릿의 체크박스 다섯 개는 "확인 방법" 절로 옮겨 그대로 유지했다. "위험 / 후속 PR" 절은 없애고 "한계와 트레이드오프"가 흡수했다. communicate 스킬의 네 가지 질문은 새 템플릿의 골격으로 남는다.
+- 결정: 해당 사항이 없는 절은 `해당 없음: 근거` 한 줄로 채우도록 허용했다. 절을 지우게 두면 "검토했는데 없음"과 "검토하지 않음"을 구분할 수 없고, 빈 절을 강제하면 문서 전용 PR의 부담이 커진다.
+- 결정: 작성 가이드와 Risk 판정 기준(🔴/🟡/🟢)은 템플릿의 HTML 주석에 넣었다. git 스킬이 PR 생성 전에 템플릿을 먼저 읽고 그 구조를 따르므로 볼트의 스킬은 수정하지 않았다.
+- 결정: AI 리뷰 봇(GitHub Action)은 도입하지 않았다. 최근 PR은 작성자가 한 명이고 기록된 리뷰가 0건이라 봇이 줄여 줄 대기 시간이 없다. 대신 리뷰 포인트에 🔴 항목이 있는 PR만 제출 전에 `resilientpos-multi-review`를 실행한다. 리뷰 코멘트 심각도 태그도 도입하지 않았다. `resilientpos-review` 스킬이 이미 Critical / Important / Nice-to-have로 표기한다.
+- 기존 불일치 해소: [개발 규칙](development-workflow.md)은 PR 본문을 "4단"이라고 적었지만 실제 템플릿은 그 구조가 아니었다. 이번에 두 문서를 맞췄다.
+- 범위 조정: PR을 올린 뒤에 실행한 독립 에이전트 리뷰(Spring 백엔드 스페셜리스트 관점)의 지적 중 여섯 건을 반영했다. Risk 기준에 diff로 확인하는 🔴 사실 기준을 두고 🟢의 리네임·메서드 추출에 단서를 붙였다. 조건부 multi-review 체크박스는 실행 여부를 적는 서술 한 줄로 바꿨다. "사람의 리뷰가 필요하다" 체크박스에는 머지 보류와 사용자 알림을 연결했다. 볼트 스킬의 "4단 고정" 선언과 충돌한다는 사실과 템플릿 우선 원칙을 개발 규칙에 적었다. 규칙을 강제하는 장치가 없다는 점을 사실대로 적었다. 템플릿 파일명을 볼트 git 스킬이 읽는 표기인 `PULL_REQUEST_TEMPLATE.md`로 바꿨다. 근거와 이번에 고치지 않은 항목은 spec의 범위 조정에 있다.
+- 범위 조정: 🔴로 다시 판정한 뒤 규칙대로 multi-review를 실행했다(Claude와 Codex, Gemini는 CLI가 없어 미실행). 두 리뷰어가 합의한 지적을 반영해서 🔴 사실 기준을 `src/main/resources/**`, JPA·Hibernate 매핑 어노테이션이나 `@Transactional`이 있는 파일, 검사 하네스(`.github/workflows/**`, `scripts/check_pr.py`), 응답 본문에 값으로 나가는 상수로 넓혔다. 통합 테스트가 datasource를 주입받아 읽지 않는 설정, `@Entity`가 아닌 매핑(`@MappedSuperclass`, `@SoftDelete`), 실패하는 테스트가 없는 하네스 변경이 기존 기준에서 빠져 있었다. 개발 규칙에 복제했던 기준 목록은 지우고 템플릿의 주석을 정본으로 가리키게 했다. 영속화 어댑터 경로 기준과 `build.gradle.kts`는 넣지 않았고 이유는 spec에 있다.
+- 갱신: [개발 규칙](development-workflow.md)의 "PR 본문" 절, [차용 내역](borrowed-workflows.md)의 계약 조정 표, `.github/PULL_REQUEST_TEMPLATE.md`.
