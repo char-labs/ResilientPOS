@@ -1,5 +1,6 @@
 package com.resilientpos.order.internal.domain
 
+import com.resilientpos.foundation.DomainErrorKind
 import com.resilientpos.foundation.DomainException
 import com.resilientpos.foundation.IdentifierGenerator
 import com.resilientpos.foundation.Money
@@ -7,6 +8,8 @@ import com.resilientpos.order.ClientOrderId
 import com.resilientpos.order.CreateOrderCommand
 import com.resilientpos.order.CreateOrderLine
 import com.resilientpos.order.OrderCreated
+import com.resilientpos.order.OrderId
+import com.resilientpos.order.OrderLineId
 import com.resilientpos.order.OrderStatus
 import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.TerminalId
@@ -155,5 +158,83 @@ class OrderTest {
         )
 
         assertEquals(Money.of("3500", krw), transition.aggregate.total)
+    }
+
+    @Test
+    fun `payloadHash는 소문자 hex 64자이고 line 순서와 금액 표기가 달라도 같다`() {
+        val lineA = orderLine(productCode = "SKU-1", unitPrice = Money.of("1000", krw), quantity = 2)
+        val lineB = orderLine(productCode = "SKU-2", unitPrice = Money.of("500", krw), quantity = 3)
+        val command = createOrderCommand(lines = listOf(lineA, lineB))
+        val reordered = createOrderCommand(lines = listOf(lineB, lineA))
+        val usdCommand = createOrderCommand(currency = usd, lines = listOf(orderLine(unitPrice = Money.of("45", usd))))
+        val usdCommandFormatted = createOrderCommand(currency = usd, lines = listOf(orderLine(unitPrice = Money.of("45.00", usd))))
+
+        val order = Order.create(command, FixedIdentifierGenerator(emptyList()), now).aggregate
+        val reorderedOrder = Order.create(reordered, FixedIdentifierGenerator(emptyList()), now).aggregate
+        val usdOrder = Order.create(usdCommand, FixedIdentifierGenerator(emptyList()), now).aggregate
+        val usdFormattedOrder = Order.create(usdCommandFormatted, FixedIdentifierGenerator(emptyList()), now).aggregate
+
+        assertTrue(order.payloadHash!!.matches(Regex("[0-9a-f]{64}")))
+        assertEquals(order.payloadHash, reorderedOrder.payloadHash)
+        assertEquals(usdOrder.payloadHash, usdFormattedOrder.payloadHash)
+    }
+
+    @Test
+    fun `verifySamePayload는 필드가 다르면 IDEMPOTENCY_CONFLICT를 던지고 같으면 던지지 않는다`() {
+        val baseCommand = createOrderCommand(lines = listOf(orderLine(unitPrice = Money.of("1000", krw), quantity = 2)))
+        val order = Order.create(baseCommand, FixedIdentifierGenerator(emptyList()), now).aggregate
+
+        val variants = listOf(
+            "storeId" to baseCommand.copy(storeId = StoreId(UUID.randomUUID())),
+            "currency" to baseCommand.copy(
+                currency = usd,
+                lines = listOf(orderLine(unitPrice = Money.of("10.00", usd), quantity = 2)),
+            ),
+            "productCode" to baseCommand.copy(lines = listOf(orderLine(productCode = "SKU-9", unitPrice = Money.of("1000", krw), quantity = 2))),
+            "productName" to baseCommand.copy(lines = listOf(orderLine(productName = "카페모카", unitPrice = Money.of("1000", krw), quantity = 2))),
+            "unitPrice" to baseCommand.copy(lines = listOf(orderLine(unitPrice = Money.of("2000", krw), quantity = 2))),
+            "quantity" to baseCommand.copy(lines = listOf(orderLine(unitPrice = Money.of("1000", krw), quantity = 5))),
+            "line 개수" to baseCommand.copy(
+                lines = baseCommand.lines + orderLine(productCode = "SKU-2", unitPrice = Money.of("500", krw), quantity = 1),
+            ),
+        )
+
+        variants.forEach { (label, variant) ->
+            val failure = assertFailsWith<DomainException>(label) { order.verifySamePayload(variant) }
+            assertEquals(Order.IDEMPOTENCY_CONFLICT, failure.code, label)
+            assertEquals(DomainErrorKind.CONFLICT, failure.kind, label)
+        }
+
+        order.verifySamePayload(baseCommand)
+    }
+
+    // 길이 접두어가 없으면 productCode "AB"·productName "C"와 productCode "A"·productName "BC"가 같은 문자열이 된다.
+    @Test
+    fun `verifySamePayload는 productCode와 productName 경계가 달라 이어붙인 글자가 같아도 충돌로 판정한다`() {
+        val command = createOrderCommand(lines = listOf(orderLine(productCode = "A", productName = "BC", unitPrice = Money.of("1000", krw), quantity = 1)))
+        val order = Order.create(command, FixedIdentifierGenerator(emptyList()), now).aggregate
+        val collidingCommand = createOrderCommand(lines = listOf(orderLine(productCode = "AB", productName = "C", unitPrice = Money.of("1000", krw), quantity = 1)))
+
+        val failure = assertFailsWith<DomainException> { order.verifySamePayload(collidingCommand) }
+        assertEquals(Order.IDEMPOTENCY_CONFLICT, failure.code)
+        assertEquals(DomainErrorKind.CONFLICT, failure.kind)
+    }
+
+    @Test
+    fun `payloadHash가 null인 주문은 verifySamePayload가 어떤 command에도 던지지 않는다`() {
+        val restored = Order.restore(
+            id = OrderId(UUID.randomUUID()),
+            storeId = storeId,
+            terminalId = terminalId,
+            clientOrderId = clientOrderId,
+            currency = krw,
+            status = OrderStatus.OPEN,
+            lines = listOf(OrderLine(OrderLineId(UUID.randomUUID()), "SKU-1", "아메리카노", Money.of("1000", krw), 1)),
+            payloadHash = null,
+        )
+
+        restored.verifySamePayload(
+            createOrderCommand(lines = listOf(orderLine(productCode = "다른코드", unitPrice = Money.of("9999", krw), quantity = 9))),
+        )
     }
 }

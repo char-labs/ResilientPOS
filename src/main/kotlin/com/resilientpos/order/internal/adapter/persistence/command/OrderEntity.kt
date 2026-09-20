@@ -35,6 +35,7 @@ class OrderEntity(
     var currency: String,
     @Enumerated(EnumType.STRING)
     var status: OrderStatus,
+    var payloadHash: String?,
 ) : BaseEntity() {
 
     /** 관리 엔티티에 최신 aggregate 상태를 반영한다. */
@@ -44,6 +45,7 @@ class OrderEntity(
         clientOrderId = order.clientOrderId.value
         currency = order.currency.currencyCode
         status = order.status
+        payloadHash = order.payloadHash
     }
 
     fun toDomain(lines: List<OrderLineEntity>): Order {
@@ -56,6 +58,7 @@ class OrderEntity(
             currency = resolvedCurrency,
             status = status,
             lines = lines.map { it.toDomain(resolvedCurrency) },
+            payloadHash = payloadHash,
         )
     }
 
@@ -67,6 +70,7 @@ class OrderEntity(
             clientOrderId = order.clientOrderId.value,
             currency = order.currency.currencyCode,
             status = order.status,
+            payloadHash = order.payloadHash,
         )
     }
 }
