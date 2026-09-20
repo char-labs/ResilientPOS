@@ -110,3 +110,47 @@ wiki 커밋 뒤에 받은 `workflow-reviewer`의 검토에서 네 가지 지적�
 
 ## 결과
 개발 전 작성. 개발 후 실행 결과와 변경 이유를 추가한다.
+
+### 개발 후 (2026-09-20)
+- [지침 설계 근거](../wiki/agent-instructions.md)의 배정표에서 `opus` 행 목록 끝에 `spring-backend-specialist`를 더했다. 기준
+  문구와 다른 행은 그대로다. 선행 규칙에는 다음 문장을 더했다. "백엔드 운영 리스크(정합성, 멱등성, 응답 속도, 보안, AOP
+  리팩토링 여지 등)는 `spring-backend-specialist`가 더 깊게 점검하지만 사용자가 명시적으로 요청할 때만 쓰고, 그런 요청이
+  없으면 `code-reviewer`가 "잠재적 문제" 항목에서 계속 본다."
+- 볼트 `ResilientPOS/agents/code-reviewer.md`의 "역할 겹침:" 문단에 다음 문장을 더했다. "`spring-backend-specialist`는 사용자가
+  명시적으로 요청할 때만 쓰는 별도 에이전트로, 백엔드 운영 리스크(정합성, 멱등성, 응답 속도, 보안 등)를 깊게 봅니다."
+  수정 전 사본(`~/Documents/code-reviewer.md.2026-09-20.before-spring-backend-specialist.bak`)과 `diff`로 비교해 14번째 줄만
+  바뀐 것을 확인했다.
+- 볼트 `ResilientPOS/README.md`의 "에이전트" 표에서 `conflict-analyzer` 행 다음에 한 행을 더했다. 역할 칸의 문구는
+  "백엔드 운영 리스크(정합성·멱등성·응답 속도·보안 등)를 열세 개 렌즈로 점검하는 읽기 전용 리뷰. 사용자가 명시적으로
+  요청할 때만 사용"이고 모델 칸은 `opus`다. 수정 전 사본(`~/Documents/vault-README.md.2026-09-20.before-spring-backend-specialist.bak`)과
+  `diff`로 비교해 한 줄 추가뿐임을 확인했다.
+- [변경 기록](../wiki/changes.md)에 항목을 더했다. `borrowed-workflows.md`, `AGENTS.md`, 에이전트 정의 본문은 바뀌지 않았다.
+
+### workflow-reviewer 검토 (2026-09-20)
+spec, 기준 ref, 수정한 wiki 파일, 볼트의 두 에이전트 정의를 넘겨 읽기 전용으로 검토받았다. 판정은 WARN이고 지적은 네
+건이었다. 처리는 범위 절의 "검토 후 범위 조정"에 적은 대로다.
+- 높음, 반영: 볼트 README의 에이전트 표에 새 에이전트가 없었다.
+- 중간, 반영: 선행 규칙의 처음 문구 "`spring-backend-specialist`가 맡되"가 점검의 소유가 옮겨 간 것으로 읽혔다.
+- 낮음, 고치지 않음: 볼트 `reviewer-claude.md`에는 새 에이전트를 가리키는 반대 방향 열거가 없다.
+- 낮음, 고치지 않음: `AGENTS.md` 30번째 줄이 차용 내역을 전체 에이전트 목록의 위치로 가리킨다.
+- 문제없다고 확인된 것: 배정표 앵커와 추가한 링크의 대상 경로, 볼트 사본의 존재와 14번째 줄만 바뀐 사실, spec 첫
+  커밋, TDD를 적용하지 않는 이유의 기재.
+- 검토자가 확인하지 못한 것: 검토자에게 셸 도구가 없어서 `git diff`, `check_pr.py`, 단위 테스트는 실행하지 못했다. 이
+  세 가지는 아래처럼 작성자가 실행했다.
+
+### 기준 변경과 rebase
+spec을 쓸 때의 기준은 origin/main `ee16971`이었고 PR #27은 열려 있었다. 제출 전에 `git fetch`로 다시 확인하니 #27이
+머지되어 origin/main이 `8264730`이 되어 있었다. 사용자의 승인을 받아 rebase 했다. 충돌은 `docs/wiki/changes.md`의 파일
+끝에서만 났고, #27의 항목을 먼저 두고 이 PR의 항목을 그 뒤에 두어 둘 다 남겼다. `git diff origin/main`에서 `changes.md`의
+삭제 줄이 0개인 것으로 #27의 항목이 보존되었음을 확인했다. 이 spec의 커밋은 rebase 뒤에도 첫 커밋이다. 분할 계획
+절의 "#27이 열려 있다"는 서술은 작성 시점의 사실이다. #27로 main의 PR 템플릿이 바뀌었으므로 PR 본문은 새 템플릿을
+따른다.
+
+### 검증 결과
+- `python3 scripts/check_pr.py --base origin/main --worktree`와 `--worktree` 없는 실행 모두 PASS였다. rebase와 검토 지적
+  반영 뒤에는 "일반 3개/129줄", 이 결과 절을 기록한 뒤의 마지막 실행에서는 "일반 3개/173줄"이었다.
+- `python3 -m unittest discover -s scripts -p 'test_*.py'`는 96개가 통과했다.
+- 이 spec의 부등호 여는 문자 개수는 커밋마다 0이었다.
+- 추가한 링크의 대상(`agent-instructions.md`와 그 앵커 "에이전트 모델 배정과 스킬 선행 규칙", `borrowed-workflows.md`,
+  `domain-model.md`, `2026-09-13-advisor-model-policy.md`, 이 spec)이 모두 실제 경로에 있다.
+- `git diff --stat origin/main`의 변경 파일은 `docs/` 아래 문서 3개뿐이라 `./gradlew test`는 실행하지 않았다.
