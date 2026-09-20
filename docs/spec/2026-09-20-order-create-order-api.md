@@ -73,7 +73,23 @@ python3 scripts/check_pr.py --base origin/main --worktree
 ## TDD 검증 기록
 | 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
 |---|---|---|---|
-| 개발 전에 테스트 의도를 적고 실행 후 관측 결과를 기록 | 미실행 | 미실행 | 미실행 |
+| 인수 1~5, `OrderControllerTest`의 8개 요청·매핑·오류 테스트 | `./gradlew test --tests 'com.resilientpos.order.internal.adapter.web.OrderControllerTest'`. 매핑 없는 골격 `OrderController`(요청 처리 없음)로 실행해 8개 모두 실패 관측: 성공·커맨드매핑·EMPTY_ORDER·형식 오류(4건)는 expected 201 또는 400 but was 404(Not Found), 커맨드 캡처 테스트는 stub 미설정으로 NullPointerException | 같은 명령. `CreateOrderRequest`·`CreateOrderLineRequest`·`CreateOrderResponse`·`OrderController.create` 구현 후 8개 전부 통과 | `./gradlew test --tests 'com.resilientpos.order.internal.adapter.web.OrderControllerTest'` 8개 통과 유지 |
+| 인수 6, REST Docs 3종(`orders-create`, `orders-create-domain-rejected`, `orders-create-bad-request`) | 같은 클래스에 `document(...)` 3개 테스트 추가하되 `@AutoConfigureRestDocs` 미적용 상태로 실행 → 3개 모두 IllegalStateException: REST Docs configuration not found. Did you forget to apply a MockMvcRestDocumentationConfigurer | `build.gradle.kts`에 `spring-boot-starter-restdocs`·`spring-restdocs-mockmvc` test 의존성 추가, 테스트 클래스에 `@AutoConfigureRestDocs`(`org.springframework.boot.restdocs.test.autoconfigure`) 적용 후 재실행 → 2개는 FieldTypesDoNotMatchException(lines[].unitPrice를 NUMBER로 기술했으나 실제 값은 String) 실패, `orders-create-domain-rejected`만 통과. `lines[].unitPrice` 기술을 STRING으로 고친 뒤 11개(웹 슬라이스 8 + Docs 3) 전부 통과, `build/generated-snippets`에 3개 디렉터리 생성 확인 | `./gradlew test --tests 'com.resilientpos.order.internal.adapter.web.OrderControllerTest'` 11개 통과 유지, `ls build/generated-snippets`로 orders-create·orders-create-domain-rejected·orders-create-bad-request 3개 확인 |
+| 인수 7~8, `OrderApiIntegrationTest`의 재시도·EMPTY_ORDER 통합 2개 | 웹 슬라이스 구현이 이미 완료된 뒤 처음 작성해 실행했고 Docker 기반 PostgreSQL(Testcontainers)로 2개 모두 즉시 통과. 별도 실패를 관측하지 못해 characterization으로 기록(실제 Facade·DB 연결은 `OrderCommandFacadeIntegrationTest`가 이미 검증한 로직을 HTTP 경유로 재확인하는 성격) | `./gradlew test --tests 'com.resilientpos.order.internal.adapter.web.OrderApiIntegrationTest'` 2개 통과(Docker 필요, 이번 실행 환경에 Docker 있어 실제 실행함) | 동일 명령 2개 통과 유지 |
+| 인수 9, `ModuleStructureTest`·`DependencyDirectionTest` 회귀 | 신규 코드 추가 전부터 이미 통과하던 기존 테스트라 RED 없이 characterization | `./gradlew test --rerun` 전체 53개 통과, 그중 `ModuleStructureTest` 2개·`DependencyDirectionTest` 2개 포함 | `./gradlew test --rerun` 53개 전부 통과, 실패 0 |
+| 리팩터링: 동작 검증과 문서화를 같은 테스트로 합치고 요청 JSON·필드 기술을 함수로 뽑음(`OrderControllerTest` 11개 → 7개, 시나리오는 그대로) | 해당 없음(동작을 바꾸지 않는 테스트 정리) | 해당 없음 | `./gradlew clean test` → BUILD SUCCESSFUL, 49개 전부 통과(기존 40 + `OrderControllerTest` 7 + `OrderApiIntegrationTest` 2), `ls build/generated-snippets`로 3개 디렉터리 확인 |
 
 ## 결과
-개발 전 작성. 개발 후 실행 결과와 변경 이유를 추가한다.
+`order/internal/adapter/web`에 `OrderController`, `CreateOrderRequest`·`CreateOrderLineRequest`, `CreateOrderResponse`를 추가했다. Controller는 `request.toCommand()`로 Facade를 부르고 `CreateOrderResponse.from(result)`를 201로 돌려주는 한 줄이다. envelope와 오류 변환은 #22·#23의 advice가 맡아서 Controller에 try-catch나 검증 코드가 없다.
+
+REST Docs 좌표는 Gradle 의존성 해석과 jar 내용으로 확인했다. `spring-boot-starter-restdocs`(4.1.1)만으로는 `spring-restdocs-core`만 들어와서 `spring-restdocs-mockmvc`(4.0.1, BOM 관리)를 같이 선언했다. `@AutoConfigureRestDocs`의 패키지는 `org.springframework.boot.restdocs.test.autoconfigure`다. 출력 경로는 설정 없이 `build/generated-snippets`다.
+
+개발 중 확인한 Jackson·JDK 동작:
+- `unitPrice`는 DTO에서 `BigDecimal`이지만 JSON 문자열 `"4500"`을 그대로 받는다. 그래서 REST Docs 필드 타입은 `STRING`이다.
+- `"XXX"`는 ISO 4217이 "통화 없음"으로 정의한 실제 코드라서 `Currency`가 거절하지 않는다. 없는 통화 사례는 `"ZZZ"`로 검증한다.
+- 빠진 필드 사례는 `storeId`로 검증했다. 빠진 `quantity`가 0으로 채워져 도메인의 `INVALID_QUANTITY`로 나가는지는 확인하지 않았다. 어느 쪽이든 400이다.
+- Mockito의 `any()`·`ArgumentCaptor`는 Kotlin non-null 파라미터에서 NPE가 난다. `CreateOrderCommand`가 data class라서 기대 값과의 동등성으로 stub·verify했고 `mockito-kotlin`은 추가하지 않았다.
+
+인수 조건 7~8의 통합 테스트는 웹 슬라이스 구현이 끝난 뒤에 써서 처음부터 통과했다. RED를 보지 못했으므로 characterization으로 기록했다. 첫 구현에서 `OrderControllerTest`가 360줄이었고 PR 검사가 600줄 경고를 냈다. 같은 요청의 동작 검증과 문서화가 따로 있었고 JSON 본문과 필드 기술이 반복됐기 때문이다. 시나리오를 그대로 두고 합쳐서 190줄로 줄였다.
+
+`./gradlew clean test`는 49개 테스트가 모두 통과했다(실패 0, Docker·Testcontainers PostgreSQL 사용). `build/generated-snippets`에 `orders-create`, `orders-create-domain-rejected`, `orders-create-bad-request`가 생긴다.
