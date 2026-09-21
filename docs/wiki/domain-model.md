@@ -57,7 +57,7 @@ Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰�
 
 | 루트 | 자식 엔티티 (같은 트랜잭션) | 왜 같은 aggregate인가 |
 |---|---|---|
-| `Order` | `OrderLine`(판매 시점 상품 코드·이름·단가·수량), checkout(회차별 확정 금액·통화. 정책 버전은 store 정책이 생길 때 더한다. `Checkout`은 `OrderLine`처럼 도메인 ID `CheckoutId`를 갖고 `t_order_checkout`의 PK는 `id` 하나다. 회차 중복은 unique `(order_id, checkout_no)`가 막는다) | line 변경과 금액, checkout 확정과 상태 전이가 한 커밋으로 맞아야 한다 |
+| `Order` | `OrderLine`(판매 시점 상품 코드·이름·단가·수량), checkout(회차별 확정 금액. 통화는 주문의 것이다. 정책 버전은 store 정책이 생길 때 더한다. `Checkout`은 `OrderLine`처럼 도메인 ID `CheckoutId`를 갖고 `t_order_checkout`의 PK는 `id` 하나다. 회차 중복은 unique `(order_id, checkout_no)`가 막는다) | line 변경과 금액, checkout 확정과 상태 전이가 한 커밋으로 맞아야 한다 |
 | `PaymentAttempt` | provider 요청·응답 결과. provider idempotency 기록이 attempt의 자식인지 컨텍스트 공용 테이블인지는 payment PR spec에서 정한다 | "provider 결과를 한 번만 적용했다"를 같은 트랜잭션의 기록이 증명한다. 취소는 별도 attempt다([외부 연동 전략](../references/04_External_Integration_Strategy.md)) |
 | `Terminal` | credential rotation 이력 | 회전과 이력이 따로 커밋되면 어느 자격증명이 유효한지 알 수 없다 |
 | `TerminalSyncState` | operation 접수 기록(`t_sync_operation`) | watermark 전진과 접수 기록이 함께 커밋돼야 gap을 건너뛰지 않는다 |
