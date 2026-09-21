@@ -5,4 +5,5 @@ package com.resilientpos.order
  */
 enum class OrderStatus {
     OPEN,
+    CHECKOUT_REQUESTED,
 }

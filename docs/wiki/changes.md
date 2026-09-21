@@ -242,3 +242,14 @@
 - 발견: `productCode` 64자·`productName` 255자를 넘는 입력은 DB가 거절해 `500 INTERNAL_ERROR`가 된다. 임시 테스트로 65자 `productCode`의 응답을 확인했고 알려진 빈틈에 적었다. 상한 검증은 후속 PR이다.
 - 검토: 제출 전 multi-review(Claude 86점, Codex 92점, Gemini는 CLI가 없어 미실행)를 실행했다. 두 리뷰어가 함께 지적한 것을 반영했다. `Order.restore`의 KDoc이 line 불변식의 재실행을 빠뜨렸고, 이미 주문이 있는 키로 blank line이 오면 400이 아니라 `409 IDEMPOTENCY_CONFLICT`라는 순서가 기록에 없었다. 한 리뷰어만 지적한 것(오류 응답에 line 위치 싣기, endpoint별 오류 코드 표, `BLANK_PRODUCT_NAME`의 HTTP 경로 테스트)은 반영하지 않고 PR 본문에 남겼다.
 - 갱신: [현재 상태](current-state.md).
+
+## 2026-09-21 — Order의 RequestCheckout 전이와 OrderPaymentRequested
+- Spec: [order-request-checkout-domain](../spec/2026-09-21-order-request-checkout-domain.md)
+- 요구사항 영향: 주문 lifecycle에 `CHECKOUT_REQUESTED`가 생겼다. `Order`가 결제를 요청하는 시점의 합계를 회차별 `Checkout`으로 확정하고 `OrderPaymentRequested`를 만든다. 도메인만 있고 Facade·`t_order_checkout`·endpoint는 다음 두 PR이다. API와 스키마는 바뀌지 않았다.
+- 결정: store 정책, `CheckoutPolicy`, 정책 버전을 미뤘다. 반올림할 계산이 없어서 읽는 코드가 없는 값이 된다([도메인 모델](domain-model.md) 4.7절 질문 2·3). 그래서 전이 인자가 처음 설계의 `policy`가 아니라 `(ids, now)`다.
+- 결정: 이미 요청된 주문의 재요청은 같은 주문과 빈 이벤트를 돌려준다. 요청 키는 두지 않았다. 결제 실패 뒤 재-checkout(2회차)을 넣는 PR이 늦게 도착한 재시도 문제를 다시 본다.
+- 결정: 0원 주문을 거절하지 않는다. 전액 할인·프로모션 주문의 고객 경험이 먼저이고 주문·결제 기록이 둘 다 남아야 조회가 쉽다. provider 호출을 건너뛰는 판단은 `payment`가 맡는다.
+- 결정: `OPEN`·`CHECKOUT_REQUESTED` 밖의 상태가 없어서 `INVALID_ORDER_STATE` 거절은 넣지 않았다. 분기가 else 없는 `when`이라 상태를 더하는 PR이 컴파일 오류로 이 전이의 처리를 함께 정한다.
+- 검토: 제출 전 multi-review(Claude 84점, Codex 93점, Gemini는 CLI가 없어 미실행)를 실행했고 둘 다 막는 결함은 없다고 판정했다. 재요청이 같은 인스턴스를 돌려주는지와 소수 자리 통화의 확정 금액을 테스트로 고정했다. `(orderId, checkoutNo)`는 `payment`의 attempt 키가 아니라 같은 checkout의 승인 attempt 중복을 막는 근거라고 문장을 좁혔다. 동시 요청에서 진 쪽의 응답, checkout 왕복 복원, `t_order_checkout`의 키는 영속화 PR이 정할 것으로 spec의 분할 계획에 옮겼다.
+- 볼트 수정: 볼트 `ResilientPOS/rules/domain-modeling-kotlin.md` 2절을 이 PR의 구현에 맞췄다. 예시가 `check`로 시작하는 전이, 단수 `checkout`, `requestCheckout(policy)`였다. `requestCheckout(ids, now)`, 회차 목록 `checkouts`, else 없는 `when`으로 바꾸고 규칙 두 줄을 더했다. 거절은 `check`·`require`가 아니라 `DomainException`으로 던진다는 것(`AGENTS.md`와 같은 내용)과, 재시도가 올 수 있는 전이는 이미 전이된 상태에서 `Transition(this, emptyList())`를 돌려준다는 것(멱등 전이)이다. 같은 절 5절의 "자식도 도메인 ID를 가진다"는 고치지 않았다. 식별자 없는 `Checkout`을 예외로 둘지는 영속화 PR이 정한다. 볼트는 git으로 관리되지 않아 저장소 diff에 나타나지 않는다. 수정 전 사본은 `~/Documents/domain-modeling-kotlin.md.2026-09-21.before-request-checkout.bak`에 있다.
+- 갱신: [현재 상태](current-state.md), [도메인 모델](domain-model.md).
