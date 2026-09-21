@@ -20,15 +20,23 @@
 - 동시 요청: 주문 행 잠금으로 직렬화한다. 예외를 재시도 가능한 409로 바꾸는 안은 unique 위반을 일반 매핑해야 해서 버렸다. Facade가 새 트랜잭션에서 다시 읽는 안은 `sync`가 바깥 트랜잭션을 소유하는 구조([도메인 모델](../wiki/domain-model.md) 4.6절)에서 이미 rollback-only가 되어 동작하지 않아 버렸다. 잠금은 그 구조에서도 그대로 동작한다.
 - 통화 컬럼을 두지 않는다. `t_order_line`처럼 `t_order.currency`에서 읽는다.
 
+### 범위 조정 (2026-09-21, 제출 전 multi-review와 스키마 대조 반영)
+마이그레이션, JPA 엔티티, `@Transactional`이 있어 PR 템플릿 기준 🔴이다. multi-review(Claude, Codex 실행. Gemini는 CLI가 없어 미실행)와 구현자가 아닌 `code-reviewer`의 스키마 대조를 돌렸다. 셋 다 막는 결함은 없다고 판정했다. 구현 동작은 바뀌지 않는다.
+- 같은 트랜잭션에서 주문을 먼저 일반 조회한 뒤 `findByIdForUpdate`를 부르는 경로를 두 리뷰어가 함께 짚었다. `sync`가 바깥 트랜잭션을 소유하면 생길 수 있다. 임시 테스트로 확인했다(커밋하지 않았다). 그 사이에 다른 트랜잭션이 주문을 바꿨으면 Hibernate 7.4.5가 낡은 값을 돌려주지 않고 `ObjectOptimisticLockingFailureException`("Query result contains conflicting version of entity already held in persistence context")을 던졌고 checkout 행은 하나였다. 조용히 틀리지 않고 실패한다. port의 KDoc에 "이 조회를 그 트랜잭션에서 이 주문의 첫 접촉으로 둔다"를 적는다.
+- 동시성 테스트가 1초 타임아웃으로 "기다린다"를 판정해서, 뒤 요청이 아직 시작하지 않았어도 통과할 수 있었다. `pg_stat_activity`에서 잠금 대기 세션을 확인한 뒤에 앞 트랜잭션을 풀도록 바꾸고 latch의 시간 초과를 실패로 처리한다.
+- 새 checkout 행이 INSERT 한 번(`version` 0)인지와 소수 자리 통화(USD)의 `numeric(19,4)` 왕복 복원을 테스트로 고정한다.
+- 스키마 변경 검토의 답 2에 `order_id`를 읽는 곳을, 답 6에 잠금 없는 읽기의 성질과 line만 바꾸는 저장의 version, unique 위반의 관측을 더했다.
+- 잠금 대기 시간 제한은 두 리뷰어가 모두 다시 보라고 했다. 대기하는 요청이 커넥션을 쥐고 있어서 한 주문의 경합이 풀 전체로 번질 수 있고, 잠금은 Facade 메서드가 아니라 바깥 트랜잭션이 끝날 때까지 유지되며, `publishEvent`의 동기 리스너도 그 안에서 돈다. endpoint가 열리는 다음 PR의 결정 항목으로 분할 계획에 옮겼다.
+
 ## 스키마 변경 검토
 [도메인 모델](../wiki/domain-model.md) 4.7절 질문의 답이다.
 
 1. 도출 가능성: `amount`는 지금은 line 합계와 같지만 "시간이 지나면 바뀌는 사실의 고정"이다. `ChangeOrderLine`과 결제 실패 뒤 재-checkout이 생기면 회차마다 금액이 달라지고 line에서 도출할 수 없다. `checkout_no`는 결제 시도 회차라는 업무 사실이다. `id`는 도메인 ID다. 통화는 `t_order.currency`에서 도출되므로 두지 않았다.
-2. 읽는 코드: `OrderCheckoutEntity.toDomain`이 `id`·`checkout_no`·`amount`를 읽어 `Order.checkouts`를 복원한다. 도메인은 `checkouts.size`로 다음 회차를 정하고 Facade는 마지막 회차로 결과를 만든다. `version`·`created_at`·`updated_at`·`deleted_at`은 `BaseEntity` 공통 컬럼이다. checkout은 갱신·삭제하지 않으므로 `version`은 0에 머물고 `deleted_at`은 비어 있다. 모든 엔티티가 `BaseEntity`를 상속한다는 규칙을 따른 결과다.
+2. 읽는 코드: `OrderCheckoutEntity.toDomain`이 `id`·`checkout_no`·`amount`를 읽어 `Order.checkouts`를 복원한다. `order_id`는 `findAllByOrderIdOrderByCheckoutNo`의 조회 조건이다. 도메인은 `checkouts.size`로 다음 회차를 정하고 Facade는 마지막 회차로 결과를 만든다. `version`·`created_at`·`updated_at`·`deleted_at`은 `BaseEntity` 공통 컬럼이다. checkout은 갱신·삭제하지 않으므로 `version`은 0에 머물고 `deleted_at`은 비어 있다. 모든 엔티티가 `BaseEntity`를 상속한다는 규칙을 따른 결과다.
 3. 나중에 채울 수 있는가: 없다. 회차별 확정 금액은 확정 시점에만 알 수 있다.
 4. 마지막 방어선: `amount`는 판매 시점 확정 금액이고 unique `(order_id, checkout_no)`는 "한 주문에 같은 회차는 하나"의 방어선이다. 잠금이 빠지거나 다른 경로가 생겨도 이 제약이 중복 회차를 막는다. checkout은 삭제하지 않으므로 soft delete된 행도 제약에 계속 걸리는 것이 맞고 partial unique로 두지 않는다.
 5. 정본: 확정 금액의 정본은 `t_order_checkout.amount` 하나다. `OrderPaymentRequested.amount`는 같은 트랜잭션에서 같은 `Checkout`으로 만든 사본이고 `payment`가 attempt에 기록할 값이다. 어긋났을 때의 복구(승인 금액과 checkout 대조)는 `MarkOrderPaid` PR이 맡는다.
-6. check-then-act: Facade가 `status`를 읽고 전이를 정한다. 경합은 주문 행의 `select for update`가 막는다. 잠금이 없어도 루트의 `status`가 바뀌므로 `@Version`이, 그리고 unique `(order_id, checkout_no)`가 두 번째 커밋을 거절한다. Hibernate가 INSERT를 UPDATE보다 먼저 flush하므로 실제로 먼저 걸리는 것은 unique 제약이다. 어댑터는 주문, line, checkout을 세 쿼리로 읽는다. 쓰기 경로는 주문 행을 먼저 잠그고 나머지를 읽으므로 같은 주문의 다른 커밋이 끼어들지 않는다.
+6. check-then-act: Facade가 `status`를 읽고 전이를 정한다. 경합은 주문 행의 `select for update`가 막는다. 잠금이 없어도 루트의 `status`가 바뀌므로 `@Version`이, 그리고 unique `(order_id, checkout_no)`가 두 번째 커밋을 거절한다. Hibernate가 INSERT를 UPDATE보다 먼저 flush하므로 실제로 먼저 걸리는 것은 unique 제약이다. 어댑터는 주문, line, checkout을 세 쿼리로 읽는다. 쓰기 경로는 주문 행을 먼저 잠그고 나머지를 읽으므로 같은 주문의 다른 커밋이 끼어들지 않는다. 잠금 없는 읽기(`findById`, `findByClientOrderId`)는 READ COMMITTED에서 세 쿼리가 서로 다른 커밋을 읽을 수 있어서 `OPEN`인데 `checkouts`가 하나인 주문이 복원될 수 있다. 전이 판단에는 `findByIdForUpdate`만 쓰고, 주문 생성 재시도 경로는 `checkouts`를 읽지 않으므로 허용한다. line만 바꾸는 저장은 `t_order`를 UPDATE하지 않아 루트 `@Version`이 오르지 않는다. `ChangeOrderLine`을 넣는 PR이 같은 잠금 조회를 쓰거나 version 증가를 함께 정한다. 잠금이 우회돼 unique 제약에 걸리면 `DataIntegrityViolationException`이고 HTTP에서는 500이다. `CreateOrder`의 같은 키 동시 요청과 같은 성질의 알려진 빈틈이다.
 7. 락과 크기: 새 테이블 `CREATE TABLE`이라 기존 테이블에 락을 잡지 않는다. unique 제약의 인덱스가 `order_id`로 시작하므로 주문별 조회용 인덱스를 따로 두지 않는다.
 8. 이전 버전 호환: 이전 버전은 `t_order_checkout`을 모르고 `JPA validate`는 매핑된 엔티티만 검사하므로 기동과 쓰기에 영향이 없다. 이전 버전은 `CHECKOUT_REQUESTED`를 이미 읽을 수 있다(#31에서 enum 상수를 먼저 배포했다).
 9. 이벤트·캐시: `amount`와 `checkout_no`가 `OrderPaymentRequested`에 실린다. payload는 #31에서 정했고 이 PR은 바꾸지 않는다. 직렬화 형태와 하위 호환은 Event Publication Registry를 넣는 PR이 확인한다. 캐시는 없다.
@@ -72,7 +80,7 @@
 
 ## 검증
 - 도메인: `./gradlew test --tests 'com.resilientpos.order.internal.domain.OrderTest'`
-- Facade 통합: `./gradlew test --tests 'com.resilientpos.order.internal.application.OrderCommandFacadeIntegrationTest'` (Docker 필요)
+- Facade 통합: `./gradlew test --tests 'com.resilientpos.order.internal.application.OrderRequestCheckoutIntegrationTest'` (Docker 필요)
 - 전체 회귀: `./gradlew test`
 - 하네스: `python3 scripts/check_pr.py --base origin/main --worktree`, 제출 전 `--worktree` 없이 한 번 더.
 - 정상 시나리오: 인수 조건 1·2·6. 재시도·동시성: 3·5. 실패: 4.
@@ -84,6 +92,10 @@
 
 ## 분할 계획
 예상 규모는 구현 약 150줄, 테스트 약 170줄, 문서 약 170줄로 총 490줄·16파일 내외다. 경고 한도(600줄·20파일) 안이다. 초과하면 동시성 테스트(인수 조건 5)와 잠금 조회를 후속 PR로 옮기지 않고 wiki의 도메인 모델 갱신을 줄인다. 잠금은 이 PR의 정합성 답이라 나누지 않는다. 후속은 `order-request-checkout-api`(endpoint, 요청·응답 DTO, REST Docs, `ORDER_NOT_FOUND`의 404 문서화, `data.status` 설명)다.
+
+다음 PR이 정할 것:
+- 잠금 대기 시간 제한. 후보는 Hikari `connection-init-sql`의 `set lock_timeout`이나 JDBC URL 옵션이고, 초과했을 때의 응답(재시도 가능한 오류 코드)을 함께 정한다. `idle_in_transaction_session_timeout`도 같이 본다.
+- 인가가 없다는 점을 [현재 상태](../wiki/current-state.md)의 알려진 빈틈에 적는다. endpoint가 열리면 `orderId`만 알아도 다른 매장의 주문을 전이시킬 수 있다.
 
 ## TDD 검증 기록
 
