@@ -45,7 +45,7 @@
   첫 공개 endpoint `POST /v1/orders`가 `internal/adapter/web`의 `OrderController`에 있다. 요청 본문을 `CreateOrderCommand`로 옮겨 Facade를 부르고
   201과 `data{orderId, status}`를 돌려준다. 같은 `(terminalId, clientOrderId)` 재시도도 201과 같은 본문이다. 형식 오류는 타입이 있는 DTO의
   Jackson 역직렬화가 거절해 `400 BAD_REQUEST`가 되고 업무 규칙은 도메인이 거절한다. 같은 키에 다른 payload가 오면 `409 IDEMPOTENCY_CONFLICT`다.
-  빈 문자열이거나 공백뿐인 `productCode`·`productName`은 `OrderLine`이 `BLANK_PRODUCT_CODE`·`BLANK_PRODUCT_NAME`(400)으로 거절하고 값은 다듬지 않는다([order-line-blank-product](../spec/2026-09-21-order-line-blank-product.md)).
+  빈 문자열이거나 공백뿐인 `productCode`·`productName`은 `OrderLine`이 `BLANK_PRODUCT_CODE`·`BLANK_PRODUCT_NAME`(400)으로 거절하고 값은 다듬지 않는다. 이미 주문이 있는 키로 오면 멱등 판정이 먼저라서 409다([order-line-blank-product](../spec/2026-09-21-order-line-blank-product.md)).
   `productCode` 64자·`productName` 255자를 넘는 입력이 DB 오류로 `500 INTERNAL_ERROR`가 되는 것과 같은 키의 동시 요청이 unique 제약 위반으로 끝나는 것은 알려진 빈틈이다. 주문을 soft delete하면 같은 키의 재시도가
   삭제된 주문을 찾지 못하고 unique 제약에 걸리는데, 지금은 주문을 삭제하는 코드가 없다([order-create-order-api](../spec/2026-09-20-order-create-order-api.md)).
 - `foundation` 모듈에 `Money`, `IdentifierGenerator`/`UuidV7IdentifierGenerator`, 모델링 원시 타입 `DomainEvent`·`Transition`,

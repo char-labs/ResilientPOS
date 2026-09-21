@@ -240,4 +240,5 @@
 - 결정: 판정은 `isBlank()`이고 값은 다듬지 않는다. trim을 넣으면 `verifySamePayload`의 같은 payload 판정이 함께 바뀌므로 따로 다룬다.
 - 결정: DB `check` 제약은 두지 않았다. 방어선은 도메인 생성자이고 `OrderLine`을 거치지 않고 line을 쓰는 경로가 없다.
 - 발견: `productCode` 64자·`productName` 255자를 넘는 입력은 DB가 거절해 `500 INTERNAL_ERROR`가 된다. 임시 테스트로 65자 `productCode`의 응답을 확인했고 알려진 빈틈에 적었다. 상한 검증은 후속 PR이다.
+- 검토: 제출 전 multi-review(Claude 86점, Codex 92점, Gemini는 CLI가 없어 미실행)를 실행했다. 두 리뷰어가 함께 지적한 것을 반영했다. `Order.restore`의 KDoc이 line 불변식의 재실행을 빠뜨렸고, 이미 주문이 있는 키로 blank line이 오면 400이 아니라 `409 IDEMPOTENCY_CONFLICT`라는 순서가 기록에 없었다. 한 리뷰어만 지적한 것(오류 응답에 line 위치 싣기, endpoint별 오류 코드 표, `BLANK_PRODUCT_NAME`의 HTTP 경로 테스트)은 반영하지 않고 PR 본문에 남겼다.
 - 갱신: [현재 상태](current-state.md).
