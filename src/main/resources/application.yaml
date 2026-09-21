@@ -4,13 +4,44 @@ spring:
   datasource:
     url: ${POSTGRES_URL:jdbc:postgresql://localhost:5432/resilientpos}
     username: ${POSTGRES_USER:resilientpos}
-    password: ${POSTGRES_PASSWORD:}
+    # 기본값을 두지 않는다. 빈 문자열을 기본값으로 두면 환경 변수를 빠뜨린 인스턴스가 그대로 떠서
+    # 실패가 기동이 아니라 첫 요청에서 드러난다. 테스트는 Testcontainers가 접속 값을 준다.
+    # 주의: 해석되지 않은 placeholder는 예외가 아니라 리터럴 문자열로 바인딩된다. 그래서 기동이 멈추는
+    # 실제 지점은 Hikari의 인증 실패이고 로그도 "password authentication failed"로 나온다.
+    # DB가 trust 인증이면 아무 값이나 통과하므로 이 줄은 아무것도 막지 못한다. 알려진 한계다.
+    password: ${POSTGRES_PASSWORD}
+    hikari:
+      # 풀이 비었을 때 기다리는 시간. 넘으면 요청이 실패하고 스레드를 돌려준다.
+      # 잠금 대기를 3초로 제한한 checkout의 선례와 같은 값이다.
+      connection-timeout: 3000
+      validation-timeout: 1000
+      data-source-properties:
+        # JDBC 드라이버가 TCP에서 기다리는 시간(초). 이게 없으면 DB가 응답을 멈췄을 때
+        # 아래 쿼리·트랜잭션 타임아웃이 돌기 전에 소켓에서 무기한 묶인다.
+        connectTimeout: 3
+        socketTimeout: 30
   flyway:
     enabled: true
+  jackson:
+    factory:
+      constraints:
+        read:
+          # 기본값은 문서 길이 -1(무제한), 문자열 1억 자다. 요청 하나가 읽는 양에 상한을 둔다.
+          max-document-length: 1048576
+          max-string-length: 65536
+          # 기본값과 같다. 금액 거절 비용이 이 값에 기대고 있어서 적어 둔다
+          # (money-input-boundary). 올리는 변경은 그 비용을 되살린다.
+          max-number-length: 1000
   jpa:
     hibernate:
       ddl-auto: validate
     open-in-view: false
+    properties:
+      # 쿼리 하나가 도는 시간(ms). 넘으면 그 쿼리만 실패한다.
+      jakarta.persistence.query.timeout: 10000
+  transaction:
+    # 트랜잭션 하나가 도는 시간(초). 쿼리 여러 개로 나뉘어 각각은 상한 안이어도 전체가 길어질 수 있다.
+    default-timeout: 30
   modulith:
     events:
       # 기본값과 같다. 결정을 설정에 적어 Modulith를 올릴 때 기본값이 바뀌어도 뒤집히지 않게 한다.

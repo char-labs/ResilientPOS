@@ -105,6 +105,28 @@ class OrderTest {
     }
 
     @Test
+    fun `line 개수가 상한을 넘으면 TOO_MANY_ORDER_LINES로 거절한다`() {
+        val overLimit = createOrderCommand(lines = List(Order.MAX_LINES + 1) { orderLine(productCode = "SKU-$it") })
+
+        val failure = assertFailsWith<DomainException> {
+            Order.create(overLimit, FixedIdentifierGenerator(List(Order.MAX_LINES + 2) { UUID.randomUUID() }), now)
+        }
+
+        assertEquals(Order.TOO_MANY_ORDER_LINES, failure.code)
+        assertTrue(failure.message.isNotBlank())
+        assertTrue(failure.message != failure.code)
+    }
+
+    @Test
+    fun `line 개수가 상한과 같으면 통과한다`() {
+        val atLimit = createOrderCommand(lines = List(Order.MAX_LINES) { orderLine(productCode = "SKU-$it") })
+
+        val transition = Order.create(atLimit, FixedIdentifierGenerator(List(Order.MAX_LINES + 1) { UUID.randomUUID() }), now)
+
+        assertEquals(Order.MAX_LINES, transition.aggregate.lines.size)
+    }
+
+    @Test
     fun `0 이하 수량과 음수 단가를 거절한다`() {
         val invalidQuantity = assertFailsWith<DomainException> {
             Order.create(
