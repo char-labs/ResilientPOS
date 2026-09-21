@@ -376,3 +376,24 @@
 - 반영: 가드 순서가 바뀌면서 금액·자릿수를 동시에 어긴 입력의 `errorCode`가 `INVALID_MONEY_SCALE`에서 `INVALID_MONEY_AMOUNT`로 바뀐다. 무작위 50만 건에서 갈리는 입력을 전부 분류했고 그 밖의 차이는 0건이다.
 - 범위 밖: line 개수·요청 본문 크기의 상한, 커넥션·쿼리·트랜잭션 타임아웃, 로그 속성. 같은 감사에서 나왔고 목표가 달라 뒤따르는 PR에서 닫는다.
 - 갱신: [현재 상태](current-state.md).
+
+## 2026-09-21 — 요청 하나가 자원을 무한정 잡지 않게 한다
+- Spec: [request-resource-limits](../spec/2026-09-21-request-resource-limits.md)
+- 요구사항 영향: 주문 line 개수에 상한이 생겼다. 500개를 넘으면 `TOO_MANY_ORDER_LINES`(400)다. 요청 본문은 1 MiB까지만 읽는다. 응답의 모양과 스키마는 바뀌지 않았다.
+- 배경: 전체 코드 감사에서 나왔다. 요청 하나가 쓸 수 있는 자원에 상한이 하나도 없었다. 본문 크기, line 개수, 커넥션을 기다리는 시간, 쿼리와 트랜잭션이 도는 시간 전부다. DB가 느려지면 요청 스레드가 무기한 묶이고, 톰캣 스레드가 다 묶이면 상태 조회조차 응답하지 못한다.
+- 배경: Jackson의 기본값이 문서 길이 무제한, 문자열 하나 1억 자다. 숫자 길이만 1000자로 막혀 있는데 [money-input-boundary](../spec/2026-09-21-money-input-boundary.md)의 거절 비용이 그 값에 기대고 있었다.
+- 결정: line 개수 상한은 도메인 불변식으로 뒀다. 본문 크기가 간접적으로 막지만 그것은 전송 계층의 사실이지 업무 규칙이 아니다. `MAX_LINES = 500`은 소매 영수증(수십 건)에 도매·창고 주문의 여유를 더해 잡은 값이고 근거를 상수 주석에 남겼다.
+- 결정: `POSTGRES_PASSWORD`의 기본값을 없앴다. 빈 문자열이 기본값이면 환경 변수를 빠뜨린 인스턴스가 그대로 떠서 실패가 기동이 아니라 첫 요청에서 드러난다.
+- 결정: 풀 크기는 건드리지 않았다. 배포 환경이 없어 정할 근거가 없고, 상한을 두는 것과 크기를 정하는 것은 다른 결정이다.
+- 발견: 설정을 적기만 하고 확인하지 않으면 오타를 잡지 못한다. 실재하지 않는 이름(`connect-timeout`, `max-doc-length`)과 `spring.jpa.properties`의 오타(`query.timeoutt`)를 넣어 보니 Spring이 **조용히 무시**했다. 값을 읽어 확인하는 테스트를 남겼다.
+- 발견: 이름의 kebab/camel 차이는 오타가 아니다. `connectionTimeout`·`maxDocumentLength`는 relaxed binding이 받아들여 그대로 적용된다. 반면 `spring.jpa.properties.*`는 그대로 넘기는 map이라 relaxed binding이 없고 오타가 조용히 사라진다. 위험이 가장 큰 쪽이 거기다.
+- 확인: 본문 상한이 정상 주문을 막지 않는다. 최악의 정상 주문(line 500개, `productCode` 64자, `productName` 255자 전부 한글, 정수부 15자리 단가)이 465,192바이트로 1 MiB의 절반이 안 된다. 문서 상한에 걸리는 지점은 line 1100개 부근이라 **먼저 걸리는 것은 언제나 line 개수 상한**이고, 그래야 일반적인 파싱 실패 대신 이유가 붙은 400이 나간다.
+- 확인: 이미 500개를 넘는 주문이 있어도 조회와 checkout이 그대로 동작한다. `Order.restore`는 이 검사를 거치지 않으며 이는 "생성 불변식은 최초 `create` 때 검증했다"는 기존 계약과 같다. 상한을 더하면서 기존 데이터를 막아 세우지 않는다.
+- 주의: `socketTimeout: 30`은 Flyway 마이그레이션에도 걸린다. 같은 `DataSource`를 쓰기 때문이다. 지금 마이그레이션 4개는 모두 작아서 문제가 없지만, 30초를 넘길 수 있는 마이그레이션(큰 테이블의 인덱스 생성, 백필)을 더하는 PR은 이 값을 함께 봐야 한다.
+- 반영: multi-review(Claude 85점, 블로킹 없음)가 짚은 것을 받았다. line 개수 검사가 `repository.findByClientOrderId` 뒤에 있어서, 상한을 넘는 요청도 조회 문장을 먼저 내보내며 커넥션을 잡았다. 검사를 `Order.requireLineCountWithinLimit`으로 빼고 Facade가 저장소를 건드리기 전에 부르게 했다.
+- 반영: 정상 최대 주문(line 500개, 모든 필드 컬럼 상한)이 본문 상한을 통과하는지 통합 테스트로 잠갔다. 여유가 두 배뿐이라 `MAX_LINES`를 올리거나 line DTO에 필드를 더하면 정상 주문이 전송 단계에서 끊긴다.
+- 발견: 본문 크기가 아니라 **합계 상한이 실질 한계다.** 단가를 최댓값(15자리)으로 잡으면 500개를 더할 때 18자리가 되어 `INVALID_MONEY_AMOUNT`가 난다. 500 line을 담으려면 단가가 12자리 이하여야 한다.
+- 발견: `POSTGRES_PASSWORD`의 실패 모드가 주석과 달랐다. 해석되지 않은 placeholder는 `@ConfigurationProperties` 바인딩에서 예외가 아니라 **리터럴 문자열**이 된다. 기동이 멈추는 실제 지점은 Hikari의 인증 실패이고, DB가 `trust` 인증이면 아무것도 막지 못한다. 주석과 wiki를 실제 동작으로 고쳤다.
+- 확인: Jackson 3의 기본 문자열 길이는 실측 1억이다(`StreamReadConstraints.defaults()`). 리뷰가 지적한 2천만은 jackson-core 2.15의 값이라 이 버전에는 해당하지 않는다.
+- 범위 밖: 속도 제한(rate limit), 톰캣·커넥션 풀 크기, profile 분리, 로그에 주문·요청 식별자를 남기는 것. [현재 상태](current-state.md)의 알려진 빈틈에 적었다.
+- 갱신: [현재 상태](current-state.md).
