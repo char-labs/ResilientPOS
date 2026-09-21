@@ -8,6 +8,7 @@ import com.resilientpos.order.ClientOrderId
 import com.resilientpos.order.CreateOrderCommand
 import com.resilientpos.order.CreateOrderLine
 import com.resilientpos.order.OrderCreated
+import com.resilientpos.order.OrderPaymentRequested
 import com.resilientpos.order.OrderStatus
 import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.TerminalId
@@ -251,5 +252,79 @@ class OrderTest {
         }
 
         order.verifySamePayload(baseCommand)
+    }
+
+    @Test
+    fun `OPEN 주문의 requestCheckout은 CHECKOUT_REQUESTED와 1회차 Checkout을 가진 새 주문을 돌려주고 원본은 그대로다`() {
+        val command = createOrderCommand(
+            lines = listOf(
+                orderLine(unitPrice = Money.of("1000", krw), quantity = 2),
+                orderLine(productCode = "SKU-2", unitPrice = Money.of("500", krw), quantity = 3),
+            ),
+        )
+        val order = Order.create(command, FixedIdentifierGenerator(emptyList()), now).aggregate
+
+        val requested = order.requestCheckout(FixedIdentifierGenerator(emptyList()), now).aggregate
+
+        assertEquals(OrderStatus.CHECKOUT_REQUESTED, requested.status)
+        assertEquals(listOf(Checkout(1, Money.of("3500", krw))), requested.checkouts)
+        assertEquals(order.id, requested.id)
+        assertEquals(order.storeId, requested.storeId)
+        assertEquals(order.terminalId, requested.terminalId)
+        assertEquals(order.clientOrderId, requested.clientOrderId)
+        assertEquals(order.currency, requested.currency)
+        assertEquals(order.lines, requested.lines)
+
+        assertEquals(OrderStatus.OPEN, order.status)
+        assertEquals(emptyList(), order.checkouts)
+    }
+
+    @Test
+    fun `requestCheckout은 확정 금액을 담은 OrderPaymentRequested 한 건을 만든다`() {
+        val eventId = UUID.fromString("00000000-0000-0000-0000-0000000000c1")
+        val requestedAt = Instant.parse("2026-09-21T03:00:00Z")
+        val command = createOrderCommand(lines = listOf(orderLine(unitPrice = Money.of("1000", krw), quantity = 2)))
+        val order = Order.create(command, FixedIdentifierGenerator(emptyList()), now).aggregate
+
+        val events = order.requestCheckout(FixedIdentifierGenerator(listOf(eventId)), requestedAt).events
+
+        assertEquals(
+            listOf(
+                OrderPaymentRequested(
+                    eventId = eventId,
+                    occurredAt = requestedAt,
+                    orderId = order.id,
+                    storeId = storeId,
+                    terminalId = terminalId,
+                    checkoutNo = 1,
+                    amount = Money.of("2000", krw),
+                ),
+            ),
+            events,
+        )
+    }
+
+    @Test
+    fun `합계가 0인 주문도 0원 Checkout으로 전이한다`() {
+        val command = createOrderCommand(lines = listOf(orderLine(unitPrice = Money.zero(krw), quantity = 1)))
+        val order = Order.create(command, FixedIdentifierGenerator(emptyList()), now).aggregate
+
+        val transition = order.requestCheckout(FixedIdentifierGenerator(emptyList()), now)
+
+        assertEquals(OrderStatus.CHECKOUT_REQUESTED, transition.aggregate.status)
+        assertEquals(listOf(Checkout(1, Money.zero(krw))), transition.aggregate.checkouts)
+        assertEquals(Money.zero(krw), (transition.events.single() as OrderPaymentRequested).amount)
+    }
+
+    @Test
+    fun `이미 CHECKOUT_REQUESTED인 주문의 requestCheckout은 같은 주문과 빈 이벤트를 돌려준다`() {
+        val order = Order.create(createOrderCommand(), FixedIdentifierGenerator(emptyList()), now).aggregate
+        val requested = order.requestCheckout(FixedIdentifierGenerator(emptyList()), now).aggregate
+
+        val again = requested.requestCheckout(FixedIdentifierGenerator(emptyList()), now)
+
+        assertEquals(OrderStatus.CHECKOUT_REQUESTED, again.aggregate.status)
+        assertEquals(requested.checkouts, again.aggregate.checkouts)
+        assertEquals(emptyList(), again.events)
     }
 }
