@@ -27,11 +27,17 @@
 ### 기준 브랜치
 PR #34(`fix/commit-version-conflict-optimistic-lock`)가 같은 `BaseEntity.kt`의 KDoc과 시각 생성 방식, 같은 통합 테스트, 같은 wiki 절을 고치고 있고 아직 열려 있다(2026-09-21 확인. main과의 충돌은 `docs/wiki/changes.md`와 `docs/wiki/current-state.md` 두 문서뿐이다). 이 PR은 그 브랜치 위에 stacked PR로 올린다. #34가 머지될 때까지 `check_pr.py`의 `--base`는 `origin/fix/commit-version-conflict-optimistic-lock`이다. #34가 머지되면 사용자 확인을 받아 `origin/main` 위로 rebase하고 `--base origin/main`으로 다시 검사한다. #34의 브랜치는 #33 이전에서 갈라졌으므로 #33의 테스트까지 포함한 검증은 `origin/main`과 임시로 합친 결과에서 따로 돌린다.
 
+### 범위 조정 1 (2026-09-21, 어댑터의 save가 트랜잭션을 보장한다)
+위 범위는 "트랜잭션 밖에서 `save`를 부르면 새 자식 행에서 예외가 난다"까지만 적었다. 임시 테스트로 실행해 보니 결과가 그보다 나빴다. 주문 행은 `OrderJpaRepository.save`가 자기 트랜잭션으로 이미 커밋한 뒤라서, `persist`가 `InvalidDataAccessApiUsageException`(트랜잭션 없음)으로 실패하면 line이 하나도 없는 주문 행이 남는다. line 없는 주문은 도메인이 `EMPTY_ORDER`로 거절하는 상태다. 전에는 주문과 line이 따로 커밋되기는 해도 둘 다 저장됐으므로 이 PR이 새로 만드는 위험이고 여기서 막는다.
+- 결정: `OrderPersistenceAdapter.save`에 `@Transactional`(기본 전파 `REQUIRED`)을 선언한다. Facade의 트랜잭션이 있으면 합류하고, 없으면 `save` 하나가 한 트랜잭션이 되어 주문과 자식 행이 함께 커밋되거나 함께 롤백된다. Facade가 트랜잭션을 소유한다는 원칙은 그대로이고 이 선언은 직접 호출에 대한 안전망이다.
+- 버린 안: `MANDATORY`. 트랜잭션 없는 호출을 아무것도 쓰기 전에 거절하므로 역시 안전하지만, 지금까지 동작하던 직접 호출(`같은 terminal_id와 client_order_id는 DB unique가 거절한다` 테스트)을 금지로 바꿀 이유가 없다. 주석으로만 남기는 안은 위 결과 때문에 버렸다.
+- 인수 조건 10: 트랜잭션 밖에서 부른 `save`는 주문과 line을 함께 저장한다. 인수 조건 11: 트랜잭션 밖에서 부른 `save`가 line INSERT에서 실패하면 주문 행도 남지 않는다. 둘 다 `OrderCommandFacadeIntegrationTest`에 더하므로 변경 경로에 그 파일을 더한다.
+- 제외 절의 "전파 규칙을 선언하는 것" 항목은 이 조정으로 대체한다.
+
 ## 제외
 - `t_order`의 `@Version`과 `version` 컬럼. 유지한다. `RequestCheckout`은 주문 행 잠금을 쓰지만 unique 제약과 `@Version`이 마지막 방어선이라는 기존 결정은 그대로다.
 - 루트 `OrderEntity`의 저장 경로. 지금처럼 `OrderJpaRepository.save`를 쓴다. nullable `@Version`이 있어서 Spring Data가 새 엔티티를 판별한다.
 - line만 바꾸는 저장이 루트의 version을 올리지 않는다는 알려진 빈틈. `ChangeOrderLine`을 넣는 PR이 같은 잠금 조회를 쓰거나 version 증가를 함께 정한다는 기존 계획 그대로다.
-- `OrderRepository.save`에 트랜잭션 전파 규칙(`MANDATORY` 등)을 선언하는 것.
 - Event Publication Registry의 `event_publication`. 라이브러리 엔티티라 `BaseEntity`와 무관하다.
 - JDBC batch 설정.
 
@@ -45,6 +51,7 @@ PR #34(`fix/commit-version-conflict-optimistic-lock`)가 같은 `BaseEntity.kt`�
 - src/main/resources/db/migration/V004__order_drop_child_version.sql
 - src/test/kotlin/com/resilientpos/SchemaMigrationTest.kt
 - src/test/kotlin/com/resilientpos/order/internal/application/OrderInsertStatementCountIntegrationTest.kt
+- src/test/kotlin/com/resilientpos/order/internal/application/OrderCommandFacadeIntegrationTest.kt
 - src/test/kotlin/com/resilientpos/order/internal/application/OrderRequestCheckoutIntegrationTest.kt
 - docs/wiki/domain-model.md
 - docs/wiki/current-state.md
