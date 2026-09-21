@@ -5,6 +5,7 @@ import com.resilientpos.foundation.DomainException
 import com.resilientpos.foundation.IdentifierGenerator
 import com.resilientpos.foundation.Money
 import com.resilientpos.foundation.Transition
+import com.resilientpos.order.CheckoutId
 import com.resilientpos.order.ClientOrderId
 import com.resilientpos.order.CreateOrderCommand
 import com.resilientpos.order.CreateOrderLine
@@ -64,7 +65,7 @@ class Order private constructor(
     fun requestCheckout(ids: IdentifierGenerator, now: Instant): Transition<Order, OrderEvent> =
         when (status) {
             OrderStatus.OPEN -> {
-                val checkout = Checkout(checkouts.size + 1, total)
+                val checkout = Checkout(CheckoutId(ids.next()), checkouts.size + 1, total)
                 val requested = Order(
                     id = id,
                     storeId = storeId,
