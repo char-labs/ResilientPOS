@@ -81,12 +81,18 @@
 
 | 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
 |---|---|---|---|
-| 인수 조건 5: advice의 경합 예외 매핑 | 미실행 | 미실행 | 미실행 |
-| 인수 조건 1: checkout 요청 성공 응답과 문서 | 미실행 | 미실행 | 미실행 |
-| 인수 조건 2: `ORDER_NOT_FOUND` 404와 문서 | 미실행 | 미실행 | 미실행 |
-| 인수 조건 3: `CONCURRENT_REQUEST` 409와 문서 | 미실행 | 미실행 | 미실행 |
-| 인수 조건 4: 형식이 틀린 `orderId` 400과 문서 | 미실행 | 미실행 | 미실행 |
-| 인수 조건 6·7: HTTP 통합 | 미실행 | 미실행 | 미실행 |
+| 인수 조건 5: `잠금 대기 초과와 버전 충돌은 메시지를 노출하지 않는 409 CONCURRENT_REQUEST다`(`ApiAdviceTest`) | `./gradlew test --tests 'com.resilientpos.order.internal.adapter.web.*' --tests 'com.resilientpos.platform.ApiAdviceTest'`. handler가 없는 상태에서 실패: 409를 기대했는데 500이었다 | 같은 명령. 통과 | `./gradlew test`. 81개 중 실패 0 |
+| 인수 조건 1: `경로의 orderId를 RequestCheckoutCommand로 옮기고 200과 확정 금액을 돌려준다`, `소수 자리가 있는 통화의 금액은 통화 자릿수 그대로 나간다` | 같은 명령. endpoint가 없는 상태에서 둘 다 실패: 200을 기대했는데 404였다 | 같은 명령. 처음에는 성공 응답의 `error` 필드를 문서화하지 않아 REST Docs가 `SnippetException`으로 실패했다. 기존 `orders-create`처럼 `error`(null)를 문서 필드에 더한 뒤 통과 | `./gradlew test`. 81개 중 실패 0 |
+| 인수 조건 2: `Facade가 ORDER_NOT_FOUND를 던지면 404이고 도메인 오류 코드를 담는다` | 같은 명령. 실패: `ORDER_NOT_FOUND`를 기대했는데 endpoint가 없어 advice의 `NOT_FOUND`였다 | 같은 명령. 통과 | `./gradlew test`. 81개 중 실패 0 |
+| 인수 조건 3: `Facade가 잠금 대기 초과를 던지면 409 CONCURRENT_REQUEST이고 예외 메시지를 담지 않는다` | 같은 명령. 실패: 409를 기대했는데 404였다 | 같은 명령. 통과. 범위 조정으로 고정 문구를 바꾼 뒤 기대값도 함께 바꿨다 | `./gradlew test`. 81개 중 실패 0 |
+| 인수 조건 4: `orderId가 UUID 형식이 아니면 400 BAD_REQUEST이고 Facade를 부르지 않는다` | 같은 명령. 실패: 400을 기대했는데 404였다 | 같은 명령. 통과. 범위 조정으로 더한 `data` null과 고정 문구 확인은 RED 없이 통과했다 | `./gradlew test`. 81개 중 실패 0 |
+| 인수 조건 6: `주문을 만든 뒤 checkout을 요청하면 200과 확정 금액을 받고 재요청도 같은 본문이다`, `checkout을 요청한 주문의 생성 재시도는 201과 CHECKOUT_REQUESTED다` | 같은 명령. 한 테스트였을 때 실패: 200을 기대했는데 404였다. 범위 조정으로 둘로 나눈 뒤에는 RED를 다시 관측하지 않았다 | 같은 명령. 통과 | `./gradlew test`. 81개 중 실패 0 |
+| 인수 조건 7: `없는 주문의 checkout 요청은 404 ORDER_NOT_FOUND다` | 같은 명령. 실패: `ORDER_NOT_FOUND`를 기대했는데 `NOT_FOUND`였다 | 같은 명령. 통과 | `./gradlew test`. 81개 중 실패 0 |
 
 ## 결과
-개발 전 작성. 개발 후 실행 결과와 변경 이유를 추가한다.
+- 인수 조건 1~9를 충족했다. `./gradlew test`는 81개(기존 72, 신규 9) 중 실패 0이다. REST Docs 스니펫 `orders-checkout`, `orders-checkout-not-found`, `orders-checkout-concurrent-request`, `orders-checkout-bad-request`가 `build/generated-snippets`에 생겼다.
+- 구현: `OrderController.requestCheckout`, `RequestCheckoutResponse`, `ErrorType.CONCURRENT_REQUEST`, `ApiControllerAdvice`의 `ConcurrencyFailureException` handler다. 경로 변수를 문서화하려면 URL 템플릿이 필요해서 checkout의 웹 슬라이스 테스트는 Kotlin DSL 대신 REST Docs의 request builder를 쓴다.
+- 이것으로 `RequestCheckout`(도메인 #31, 영속화·Facade #32, 이 PR)이 끝났다.
+- multi-review: Claude 88점, Codex 90점, Gemini 미실행(CLI 없음). 둘 다 막는 결함은 없고 합의한 전제를 뒤집을 사유도 없다고 판정했다. 반영한 것은 위 범위 조정에 적었다. 반영하지 않은 것과 이유는 다음과 같다. advice 테스트의 두 경우를 한 테스트의 반복으로 둔 것은 같은 파일의 기존 테스트(`도메인 규칙 위반의 kind가 HTTP 상태를 정한다`)와 같은 방식이라 그대로 뒀다. 테스트 클래스 이름 `OrderCheckoutControllerTest`는 대상이 `OrderController`지만 문서화 대상 endpoint를 드러내려고 그대로 뒀다. 응답 DTO가 도메인 enum `OrderStatus`를 그대로 내보내는 것은 `CreateOrderResponse`와 같은 기존 방식이다. 요청 본문에 `terminalId`를 받아 주문의 것과 대조하자는 안은 위조할 수 있는 값이라 보안 통제가 아니고 가짜 안전감을 줘서 받지 않았다.
+- 범위 밖에서 확인한 사실: 커밋 시점의 버전 충돌이 `JpaSystemException`(500)으로 나온다. 위 범위 조정과 [현재 상태](../wiki/current-state.md)의 알려진 빈틈에 적었고 별도 PR로 고친다.
+- `tdd-driver`에 위임하지 않고 주 에이전트가 TDD 절차를 직접 수행했다.
