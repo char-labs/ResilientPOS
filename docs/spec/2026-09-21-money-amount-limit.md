@@ -19,6 +19,13 @@
 ### 합의한 결정 (2026-09-21)
 - 상한을 `Money`의 불변식으로 둔다. `Order`·`OrderLine`의 업무 규칙으로 두는 안은 같은 검사를 line 생성과 합계 계산 두 곳에 써야 하고, `payment`·`sync`가 `Money`를 쓸 때 같은 구멍이 다시 생겨서 버렸다. 컬럼 precision을 키우는 안은 도메인이 상한을 모르는 상태가 그대로라 더 큰 값에서 같은 고착이 생겨서 버렸다.
 
+### 범위 조정 (2026-09-21, 개발 중 발견)
+인수 조건 6의 전제가 틀렸다. `Money`에 상한을 넣는 것만으로는 고착이 닫히지 않는다.
+- `OrderLine.amount`와 `Order.total`이 둘 다 lazy 계산(`get()`)이라 `Order.create`가 합계를 평가하지 않는다. 그래서 단가가 범위 안이고 합계만 넘는 주문은 여전히 `201`로 커밋된다. 확인한 결과 상한을 넣은 뒤에도 `201`이었다.
+- 달라진 것은 checkout의 응답이다. 예전에는 DB가 거절해 `500 INTERNAL_ERROR`였고, 이제는 `Money`가 거절해 `400 INVALID_MONEY_AMOUNT`다. 진단 가능한 오류가 됐지만 **주문은 여전히 `OPEN`에 고착된다.**
+- 그래서 `Order.create`가 생성 시점에 합계를 한 번 평가한다. 합계가 저장 가능한 범위인지는 주문 생성의 불변식이다. 이 평가가 없으면 "저장할 수 있는 주문만 만든다"가 성립하지 않는다.
+- 인수 조건 6을 "주문 생성이 400으로 거절되고 행이 생기지 않는다"로 유지하되, 그 근거를 "합계 계산이 `Order.create` 안에서 일어나기 때문"에서 "`Order.create`가 합계를 명시적으로 평가하기 때문"으로 고친다.
+
 ## 제외
 - 지수 표기 입력의 비용. `CreateOrderRequest`가 `BigDecimal.toPlainString()`으로 문자열을 만든 뒤 `Money.of`에 넘기므로, `1E+100000` 같은 입력은 이 PR 뒤에도 10만 자 문자열을 만든 다음 400으로 거절된다(지금은 500이다). 지수를 더 키웠을 때의 위험은 `Money.of(BigDecimal, Currency)` 오버로드를 만들어 DTO가 문자열을 거치지 않게 하는 별도 PR에서 닫는다. 그 PR이 요청 DTO를 바꾸므로 여기서 함께 하지 않는다.
 - 소수 자릿수가 `-1`인 통화(`XAU`·`XDR`·`XXX`)를 `Money`가 받아들여 금액을 10 단위로 양자화하는 것. 통화 allow-list와 함께 다룰 별도 결함이다.
@@ -28,6 +35,8 @@
 
 ## 변경 경로
 - src/main/kotlin/com/resilientpos/foundation/Money.kt
+- src/main/kotlin/com/resilientpos/order/internal/domain/Order.kt
+- src/test/kotlin/com/resilientpos/order/internal/domain/OrderTest.kt
 - src/test/kotlin/com/resilientpos/foundation/MoneyTest.kt
 - src/test/kotlin/com/resilientpos/order/internal/adapter/web/OrderApiIntegrationTest.kt
 - docs/spec/2026-09-21-money-amount-limit.md
@@ -40,7 +49,7 @@
 3. 검사는 `Money`를 만드는 모든 경로에서 걸린다. 생성자, `of`, `copy()`, `plus`, `times`가 모두 거절한다.
 4. 0과 음수는 자릿수만 보므로 영향을 받지 않는다. `Money.zero`, `-999999999999999`는 통과한다.
 5. HTTP: 단가가 16자리인 주문 생성 요청은 `400 INVALID_MONEY_AMOUNT`이고 `t_order`에 행이 생기지 않는다.
-6. HTTP: 단가 `999999999999999` 수량 2로 주문을 만들려 하면 합계가 아니라 **단가 자체는 통과**하고, 주문 생성 자체가 `400 INVALID_MONEY_AMOUNT`로 거절된다. 합계 계산이 `Order.create` 안에서 일어나기 때문이다. 재현했던 고착(`201` 뒤 checkout에서 `500`)이 더 이상 생기지 않는다.
+6. HTTP: 단가 `999999999999999` 수량 2처럼 단가는 범위 안이고 합계만 넘는 요청도 주문 생성이 `400 INVALID_MONEY_AMOUNT`로 거절되고 `t_order`에 행이 생기지 않는다. `Order.create`가 생성 시점에 합계를 평가하기 때문이다. 재현했던 고착(`201` 뒤 checkout에서 `500`)이 더 이상 생기지 않는다.
 7. 기존 테스트 96개가 그대로 통과한다.
 
 ## 검증
