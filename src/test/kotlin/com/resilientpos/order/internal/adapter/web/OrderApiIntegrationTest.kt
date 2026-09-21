@@ -189,6 +189,23 @@ class OrderApiIntegrationTest(
     }
 
     @Test
+    fun `정수부 15자리 금액은 저장되고 checkout까지 그대로 돌아온다`() {
+        val clientOrderId = UUID.randomUUID()
+        val created = post(
+            requestJson(
+                clientOrderId,
+                lines = """{ "productCode": "SKU-1", "productName": "쌀", "unitPrice": "999999999999999", "quantity": 1 }""",
+            ),
+        ).andExpect { status { isCreated() } }.andReturn().response.contentAsString
+        val orderId = objectMapper.readTree(created).at("/data/orderId").asString()
+
+        mockMvc.post("/v1/orders/$orderId/checkout").andExpect {
+            status { isOk() }
+            jsonPath("$.data.amount") { value("999999999999999") }
+        }
+    }
+
+    @Test
     fun `없는 주문의 checkout 요청은 404 ORDER_NOT_FOUND다`() {
         mockMvc.post("/v1/orders/${UUID.randomUUID()}/checkout").andExpect {
             status { isNotFound() }
