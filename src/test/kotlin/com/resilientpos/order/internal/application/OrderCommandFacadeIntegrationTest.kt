@@ -178,6 +178,30 @@ class OrderCommandFacadeIntegrationTest(
         assertFailsWith<DataIntegrityViolationException> { repository.save(duplicate) }
     }
 
+    private fun newOrder(): Order =
+        Order.create(OrderFixtures.createOrderCommand(), UuidV7IdentifierGenerator(), Clock.systemUTC().instant()).aggregate
+
+    @Test
+    fun `트랜잭션 밖에서 부른 save도 주문과 line을 함께 저장한다`() {
+        val order = newOrder()
+
+        repository.save(order)
+
+        assertEquals(order.lines, repository.findById(order.id)?.lines)
+    }
+
+    @Test
+    fun `트랜잭션 밖에서 부른 save가 line INSERT에서 실패하면 주문 행도 남지 않는다`() {
+        val order = newOrder()
+        // t_order_line.product_code는 varchar(64)다. 길이는 도메인이 아직 거절하지 않아서 INSERT에서 실패한다.
+        val tooLong = OrderLine(OrderLineId(UUID.randomUUID()), "X".repeat(65), "긴 코드", Money.of("100", OrderFixtures.krw), 1)
+
+        assertFailsWith<DataIntegrityViolationException> { repository.save(order.withLines(order.lines + tooLong)) }
+
+        assertEquals(0L, orderRowCount(order.terminalId, order.clientOrderId))
+        assertEquals(0L, orderLineRowCount(order.id.value))
+    }
+
     @Test
     fun `같은 키에 수량이 다른 command는 IDEMPOTENCY_CONFLICT를 던지고 기존 행과 line을 바꾸지 않는다`(events: ApplicationEvents) {
         val terminalId = TerminalId(UUID.randomUUID())
