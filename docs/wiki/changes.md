@@ -253,3 +253,13 @@
 - 검토: 제출 전 multi-review(Claude 84점, Codex 93점, Gemini는 CLI가 없어 미실행)를 실행했고 둘 다 막는 결함은 없다고 판정했다. 재요청이 같은 인스턴스를 돌려주는지와 소수 자리 통화의 확정 금액을 테스트로 고정했다. `(orderId, checkoutNo)`는 `payment`의 attempt 키가 아니라 같은 checkout의 승인 attempt 중복을 막는 근거라고 문장을 좁혔다. 동시 요청에서 진 쪽의 응답, checkout 왕복 복원, `t_order_checkout`의 키는 영속화 PR이 정할 것으로 spec의 분할 계획에 옮겼다.
 - 볼트 수정: 볼트 `ResilientPOS/rules/domain-modeling-kotlin.md` 2절을 이 PR의 구현에 맞췄다. 예시가 `check`로 시작하는 전이, 단수 `checkout`, `requestCheckout(policy)`였다. `requestCheckout(ids, now)`, 회차 목록 `checkouts`, else 없는 `when`으로 바꾸고 규칙 두 줄을 더했다. 거절은 `check`·`require`가 아니라 `DomainException`으로 던진다는 것(`AGENTS.md`와 같은 내용)과, 재시도가 올 수 있는 전이는 이미 전이된 상태에서 `Transition(this, emptyList())`를 돌려준다는 것(멱등 전이)이다. 같은 절 5절의 "자식도 도메인 ID를 가진다"는 고치지 않았다. 식별자 없는 `Checkout`을 예외로 둘지는 영속화 PR이 정한다. 볼트는 git으로 관리되지 않아 저장소 diff에 나타나지 않는다. 수정 전 사본은 `~/Documents/domain-modeling-kotlin.md.2026-09-21.before-request-checkout.bak`에 있다.
 - 갱신: [현재 상태](current-state.md), [도메인 모델](domain-model.md).
+
+## 2026-09-21 — RequestCheckout의 Facade와 t_order_checkout 영속화
+- Spec: [order-request-checkout-persistence](../spec/2026-09-21-order-request-checkout-persistence.md)
+- 요구사항 영향: checkout 요청을 서버가 저장할 수 있게 됐다. `OrderCommandFacade.requestCheckout`이 상태 전이와 회차별 확정 금액(`t_order_checkout`)을 한 트랜잭션으로 저장하고 `OrderPaymentRequested`를 발행한다. endpoint는 다음 PR이라 HTTP API는 바뀌지 않았다. 스키마에 `t_order_checkout`이 늘었다.
+- 결정: `Checkout`이 도메인 ID `CheckoutId`를 갖고 PK는 `id` 하나다. `@EmbeddedId`와 복합 PK를 쓰지 않는다. 회차 중복은 unique `(order_id, checkout_no)`가 막는다.
+- 결정: 같은 주문에 겹친 요청은 주문 행 잠금으로 직렬화한다. 뒤 요청은 앞 커밋을 기다린 뒤 기존 결과를 받는다. 예외를 409로 바꾸는 안과 새 트랜잭션에서 다시 읽는 안은 버렸다. 뒤의 것은 `sync`가 바깥 트랜잭션을 소유하면 동작하지 않는다.
+- 결정: `POST /v1/orders` 재시도는 주문의 현재 `status`를 돌려준다. checkout을 요청한 주문이면 `CHECKOUT_REQUESTED`다. "재시도도 같은 본문"이라는 이전 서술을 고쳤다.
+- 결정: 통화 컬럼을 두지 않았다. 잠금 대기 시간 제한도 두지 않았다. 주문 트랜잭션 안에서 provider 호출 같은 긴 작업을 하지 않는다는 원칙이 전제다.
+- 발견: 잠금이 없으면 뒤 요청이 기다리지 않고 먼저 커밋한다. 앞 트랜잭션은 flush 전이라 DB에 아무것도 쓰지 않은 상태이기 때문이다. 통합 테스트가 이 순서를 고정한다.
+- 갱신: [현재 상태](current-state.md), [도메인 모델](domain-model.md).
