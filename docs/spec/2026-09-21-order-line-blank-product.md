@@ -60,10 +60,14 @@
 
 | 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
 |---|---|---|---|
-| 인수 조건 1: `빈 productCode를 BLANK_PRODUCT_CODE로 거절한다` | 미실행 | 미실행 | 미실행 |
-| 인수 조건 2: `빈 productName을 BLANK_PRODUCT_NAME으로 거절한다` | 미실행 | 미실행 | 미실행 |
-| 인수 조건 3: `앞뒤 공백이 있는 상품 코드와 상품명은 다듬지 않고 받는다` | 미실행 | 미실행 | 미실행 |
-| 인수 조건 4: `productCode가 빈 line은 400 BLANK_PRODUCT_CODE이고 t_order에 행이 생기지 않는다` | 미실행 | 미실행 | 미실행 |
+| 인수 조건 1: `빈 productCode를 BLANK_PRODUCT_CODE로 거절한다` | `./gradlew test --tests 'com.resilientpos.order.internal.domain.OrderTest'`. 실패: `DomainException`을 기대했는데 `Order.create`가 `Transition`을 돌려주며 끝났다(`productCode=''`). 코드 상수만 먼저 선언해 컴파일은 통과한 상태였다 | 같은 명령. 10개 중 실패 0 | `./gradlew test`. 59개 중 실패 0 |
+| 인수 조건 2: `빈 productName을 BLANK_PRODUCT_NAME으로 거절한다` | 같은 명령. 실패 이유도 같다(`productName=''`) | 같은 명령. 10개 중 실패 0 | `./gradlew test`. 59개 중 실패 0 |
+| 인수 조건 3: `앞뒤 공백이 있는 상품 코드와 상품명은 다듬지 않고 받는다` | RED 없음. 기존 동작을 고정하는 characterization 테스트라 구현 전에 이미 통과했다 | 같은 명령. 통과 | `./gradlew test`. 59개 중 실패 0 |
+| 인수 조건 4: `productCode가 빈 line은 400 BLANK_PRODUCT_CODE이고 t_order에 행이 생기지 않는다` | RED 미실행. 도메인 구현 뒤에 추가한 HTTP 연결 확인이라 실패를 먼저 관측하지 않았다. 도메인 예외가 400으로 바뀌는 매핑은 기존 `EMPTY_ORDER` 통합 테스트가 이미 검증한다 | `./gradlew test`. `OrderApiIntegrationTest` 4개 중 실패 0 | `./gradlew test`. 59개 중 실패 0 |
 
 ## 결과
-개발 전 작성. 개발 후 실행 결과와 변경 이유를 추가한다.
+- 인수 조건 1~5를 충족했다. `./gradlew test`는 59개(기존 55, 신규 4) 중 실패 0이다.
+- 구현은 `OrderLine`의 `init`에 `isBlank()` 검사 두 개와 코드 상수 두 개다. `OrderLine`은 `Order.restore` 경로에서도 만들어지므로 blank 값이 이미 저장된 행이 있으면 조회가 실패한다. 배포된 데이터가 없어서 도달하지 않는 경로이고, 기존 `INVALID_QUANTITY`·`NEGATIVE_UNIT_PRICE`도 같은 성질이다.
+- REST Docs는 `lines[].productCode`·`lines[].productName` 설명에 거절 코드를 적었다. 새 스니펫은 만들지 않았다. Controller 슬라이스는 Facade를 대역으로 두므로 도메인 규칙의 응답은 `EMPTY_ORDER` 문서와 모양이 같다.
+- 제외에 적은 길이 상한 초과는 임시 테스트로 확인했다. 65자 `productCode`의 응답은 `500 INTERNAL_ERROR`였다. 임시 테스트는 커밋하지 않았고 [현재 상태](../wiki/current-state.md)의 알려진 빈틈에 적었다.
+- `tdd-driver`에 위임하지 않고 주 에이전트가 TDD 절차를 직접 수행했다. 변경이 구현 8줄이라 위임 비용이 더 컸다.
