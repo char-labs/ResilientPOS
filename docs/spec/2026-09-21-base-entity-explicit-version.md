@@ -20,8 +20,8 @@
 | merge의 추가 SELECT를 받아들임 | 코드를 그대로 둔다 | 기각. 새 자식 행마다 SELECT가 하나씩 더 나간다. "신규 저장은 INSERT 한 번"이라는 기존 테스트의 의도와 어긋난다 |
 
 - 버전별 동작을 기억으로 단정하지 않는다. `@Version`을 뺀 뒤 `saveAll`이 실제로 SELECT를 더 내는지, persist로 바꾸면 없어지는지를 Hibernate 통계의 JDBC 문장 수(`prepareStatementCount`)로 측정하는 통합 테스트로 확인하고 결과 절에 적는다. 측정이 위 표의 전제와 다르면 구현 전에 이 spec에 범위 조정을 먼저 적는다.
-- 선택한 방식의 결과로 트랜잭션 밖에서 `OrderRepository.save`를 부르면 새 자식 행에서 `TransactionRequiredException`이 난다. 전에는 호출마다 따로 커밋되어 주문과 line이 원자적으로 저장되지 않는 채로 조용히 지나갔다. 운영 경로는 Facade의 트랜잭션 안에서만 부른다.
-- `OrderRequestCheckoutIntegrationTest`의 checkout 행 version 0 단언은 컬럼이 없어지므로 문장 수 검사로 바꾼다. `t_order`의 version 0 단언(`OrderCommandFacadeIntegrationTest`)과 `OrderVersionConflictIntegrationTest`는 그대로 통과해야 한다.
+- ~~선택한 방식의 결과로 트랜잭션 밖에서 `OrderRepository.save`를 부르면 새 자식 행에서 예외가 난다.~~ **범위 조정 1로 대체한다.** 실행해 보니 예외로 끝나는 것이 아니라 line 없는 주문 행이 남았고, 어댑터의 `save`가 트랜잭션을 보장하도록 바꿨다. 운영 경로가 Facade의 트랜잭션 안에서 부른다는 것은 그대로다.
+- `OrderRequestCheckoutIntegrationTest`의 checkout 행 version 0 단언은 컬럼이 없어지므로 없앤다. 그 단언이 간접 증거로 삼던 "INSERT 한 번"은 새 `OrderInsertStatementCountIntegrationTest`가 문장 수로 직접 검사한다. `t_order`의 version 0 단언(`OrderCommandFacadeIntegrationTest`)과 `OrderVersionConflictIntegrationTest`는 그대로 통과해야 한다.
 - 소유 모듈은 `platform`(`BaseEntity`)과 `order`(엔티티, 어댑터, 마이그레이션)다. Command, Query, Event, HTTP 계약은 바뀌지 않는다. 정합성 불변식의 변화는 스키마 변경 검토의 답 4와 6에 적는다. 실패·재시도·복구와 관측성은 바뀌지 않는다.
 
 ### 기준 브랜치
@@ -31,7 +31,7 @@ PR #34(`fix/commit-version-conflict-optimistic-lock`)가 같은 `BaseEntity.kt`�
 위 범위는 "트랜잭션 밖에서 `save`를 부르면 새 자식 행에서 예외가 난다"까지만 적었다. 임시 테스트로 실행해 보니 결과가 그보다 나빴다. 주문 행은 `OrderJpaRepository.save`가 자기 트랜잭션으로 이미 커밋한 뒤라서, `persist`가 `InvalidDataAccessApiUsageException`(트랜잭션 없음)으로 실패하면 line이 하나도 없는 주문 행이 남는다. line 없는 주문은 도메인이 `EMPTY_ORDER`로 거절하는 상태다. 전에는 주문과 line이 따로 커밋되기는 해도 둘 다 저장됐으므로 이 PR이 새로 만드는 위험이고 여기서 막는다.
 - 결정: `OrderPersistenceAdapter.save`에 `@Transactional`(기본 전파 `REQUIRED`)을 선언한다. Facade의 트랜잭션이 있으면 합류하고, 없으면 `save` 하나가 한 트랜잭션이 되어 주문과 자식 행이 함께 커밋되거나 함께 롤백된다. Facade가 트랜잭션을 소유한다는 원칙은 그대로이고 이 선언은 직접 호출에 대한 안전망이다.
 - 버린 안: `MANDATORY`. 트랜잭션 없는 호출을 아무것도 쓰기 전에 거절하므로 역시 안전하지만, 지금까지 동작하던 직접 호출(`같은 terminal_id와 client_order_id는 DB unique가 거절한다` 테스트)을 금지로 바꿀 이유가 없다. 주석으로만 남기는 안은 위 결과 때문에 버렸다.
-- 인수 조건 10: 트랜잭션 밖에서 부른 `save`는 주문과 line을 함께 저장한다. 인수 조건 11: 트랜잭션 밖에서 부른 `save`가 line INSERT에서 실패하면 주문 행도 남지 않는다. 둘 다 `OrderCommandFacadeIntegrationTest`에 더하므로 변경 경로에 그 파일을 더한다.
+- 인수 조건 10·11을 본 목록에 더했다. 둘 다 `OrderCommandFacadeIntegrationTest`에 더하므로 변경 경로에 그 파일을 더한다.
 - 제외 절의 "전파 규칙을 선언하는 것" 항목은 이 조정으로 대체한다.
 
 ## 제외
@@ -39,7 +39,7 @@ PR #34(`fix/commit-version-conflict-optimistic-lock`)가 같은 `BaseEntity.kt`�
 - 루트 `OrderEntity`의 저장 경로. 지금처럼 `OrderJpaRepository.save`를 쓴다. nullable `@Version`이 있어서 Spring Data가 새 엔티티를 판별한다.
 - line만 바꾸는 저장이 루트의 version을 올리지 않는다는 알려진 빈틈. `ChangeOrderLine`을 넣는 PR이 같은 잠금 조회를 쓰거나 version 증가를 함께 정한다는 기존 계획 그대로다.
 - Event Publication Registry의 `event_publication`. 라이브러리 엔티티라 `BaseEntity`와 무관하다.
-- JDBC batch 설정.
+- JDBC batch 설정과 Event Publication Registry. 둘 다 `OrderInsertStatementCountIntegrationTest`의 기대값을 바꾼다. batch를 켜면 같은 SQL의 INSERT 여러 개가 문장 하나로 세어져 기대값이 줄고, EPR이 들어오면 같은 트랜잭션에 `event_publication` INSERT가 늘어난다. 둘 중 하나를 도입하는 PR이 이 테스트의 기대값을 함께 고친다. 그때 실패 메시지의 "merge로 빠진 것이다"도 맞지 않으므로 같이 본다.
 
 ## 관련 문서
 없음.
@@ -48,6 +48,7 @@ PR #34(`fix/commit-version-conflict-optimistic-lock`)가 같은 `BaseEntity.kt`�
 - src/main/kotlin/com/resilientpos/platform/BaseEntity.kt
 - src/main/kotlin/com/resilientpos/order/internal/adapter/persistence/command/OrderEntity.kt
 - src/main/kotlin/com/resilientpos/order/internal/adapter/persistence/command/OrderPersistenceAdapter.kt
+- src/main/kotlin/com/resilientpos/order/internal/domain/OrderRepository.kt
 - src/main/resources/db/migration/V004__order_drop_child_version.sql
 - src/test/kotlin/com/resilientpos/SchemaMigrationTest.kt
 - src/test/kotlin/com/resilientpos/order/internal/application/OrderInsertStatementCountIntegrationTest.kt
@@ -66,22 +67,25 @@ PR #34(`fix/commit-version-conflict-optimistic-lock`)가 같은 `BaseEntity.kt`�
 6. 조건 3부터 5의 테스트는 `@Version`만 빼고 어댑터를 고치지 않은 상태에서 실패한다. 측정이 merge 경로를 실제로 잡아낸다는 증거로 TDD 검증 기록에 남긴다.
 7. `V004`가 적용되고, `public` 스키마에서 `version` 컬럼을 가진 업무 테이블은 `t_order`뿐이다.
 8. `./gradlew test` 전체가 통과한다. `origin/main`과 임시로 합친 결과에서도 전체가 통과한다.
-9. wiki 세 문서와 볼트 규칙이 새 결정을 서술한다.
+9. wiki 세 문서와 볼트 규칙이 새 결정을 서술한다. `docs/wiki/current-state.md`의 테스트 개수 표도 이 PR이 더한 테스트를 반영한다.
+10. (범위 조정 1) 트랜잭션 밖에서 부른 `save`는 주문과 line을 함께 저장한다.
+11. (범위 조정 1) 트랜잭션 밖에서 부른 `save`가 line INSERT에서 실패하면 주문 행도 남지 않는다.
 
 ## 스키마 변경 검토
 [도메인 모델](../wiki/domain-model.md) 4.7절 질문의 답이다. 컬럼을 빼는 변경이라 필요성 질문은 "이 컬럼이 없어도 되는가"로 읽는다.
 
 1. 도출 가능성: 두 컬럼은 Hibernate가 낙관적 잠금에 쓰는 카운터다. 업무 사실이 아니어서 다른 컬럼에서 도출할 대상이 없고, 없애도 잃는 업무 정보가 없다.
-2. 읽는 코드: 업무 코드는 두 컬럼을 읽지 않는다. `t_order_line.version`은 Hibernate가 line의 UPDATE와 soft delete에서 where 조건과 증가에만 썼다. `t_order_checkout.version`은 checkout을 갱신·삭제하지 않으므로 INSERT 때 0이 들어간 뒤로 쓰이지 않았다. 테스트 한 곳(`OrderRequestCheckoutIntegrationTest`의 version 0 단언)이 "INSERT 한 번"의 간접 증거로 읽었고 문장 수 검사로 바꾼다.
+2. 읽는 코드: 업무 코드는 두 컬럼을 읽지 않는다. `t_order_line.version`은 Hibernate가 line을 UPDATE할 때 where 조건과 증가에만 썼다. `t_order_checkout.version`은 checkout을 갱신·삭제하지 않으므로 INSERT 때 0이 들어간 뒤로 쓰이지 않았다. 테스트 한 곳(`OrderRequestCheckoutIntegrationTest`의 version 0 단언)이 "INSERT 한 번"의 간접 증거로 읽었고, 그 단언을 없애는 대신 새 `OrderInsertStatementCountIntegrationTest`가 문장 수로 직접 검사한다.
 3. 나중에 채울 수 있는가: 있다. 낙관적 잠금은 현재 값만 비교하므로 과거 값에 의미가 없다. 다시 필요해지면 `bigint not null default 0`으로 더하고 그 엔티티에 `@Version`을 선언하면 된다.
-4. 마지막 방어선인가: 아니다. `t_order_checkout`의 방어선은 unique `(order_id, checkout_no)`이고 그대로다. `t_order_line.version`이 막던 것은 같은 line 행을 두 트랜잭션이 동시에 고치는 경우 하나였다. 이 PR 뒤에는 그 경우 뒤에 커밋한 쪽이 조용히 이긴다. 받아들이는 근거는 둘이다. 지금 기존 주문의 line을 고치는 명령이 없다(어댑터의 기능은 있고 통합 테스트만 쓴다). 그리고 행 단위 version은 aggregate 불변식을 지키지 못한다. 두 트랜잭션이 서로 다른 line을 고치면 둘 다 통과해서 합계와 확정 금액이 어긋날 수 있다. aggregate의 방어선은 루트에 있어야 하고(`t_order`의 행 잠금과 `@Version`), line 변경 명령을 넣는 PR이 그 잠금 조회를 쓰거나 루트 version 증가를 정한다. `t_order`의 `@Version`, unique `(terminal_id, client_order_id)`는 건드리지 않는다. soft delete와 unique의 관계도 바뀌지 않는다.
+4. 마지막 방어선인가: 아니다. `t_order_checkout`의 방어선은 unique `(order_id, checkout_no)`이고 그대로다. `t_order_line.version`이 막던 것은 같은 line 행을 두 트랜잭션이 동시에 고치는 경우 하나였다. 이 PR 뒤에는 그 경우 뒤에 커밋한 쪽이 조용히 이긴다. 받아들이는 근거는 둘이다. 지금 기존 주문의 line을 고치는 명령이 없다(어댑터의 기능은 있고 통합 테스트만 쓴다). 그리고 행 단위 version은 aggregate 불변식을 지키지 못한다. 두 트랜잭션이 서로 다른 line을 고치면 둘 다 통과해서 합계와 확정 금액이 어긋날 수 있다. aggregate의 방어선은 루트에 있어야 하고(`t_order`의 행 잠금과 `@Version`), line 변경 명령을 넣는 PR이 그 잠금 조회를 쓰거나 루트 version 증가를 정한다. `t_order`의 `@Version`, unique `(terminal_id, client_order_id)`는 건드리지 않는다. soft delete와 unique의 관계도 바뀌지 않는다. 얻는 것도 있다. `merge`는 다른 주문에 속한 line ID를 만나면 그 행을 읽어 `order_id`까지 덮어쓰지만 `persist`는 PK 위반으로 실패한다. 지금 그 입력을 만드는 명령이 없어서 이 PR이 막은 버그는 아니고, line 변경 명령이 생길 때의 출발점이 더 안전해진 것이다.
 5. 정본: 해당 없음. 사본이나 중복 저장이 생기지 않는다.
-6. check-then-act: `RequestCheckout`은 `status`를 읽고 전이를 정한다. 경합은 주문 행 잠금이 막고 그 뒤에 루트의 `@Version`과 unique `(order_id, checkout_no)`가 있다. 세 가지 모두 그대로다. 자식 행의 version은 이 경로의 방어선이었던 적이 없다. checkout은 INSERT뿐이고 line은 이 경로에서 바뀌지 않는다. "자식 행만 바뀌면 루트의 version이 오르지 않는다"는 4.7절의 주의는 계속 유효하고, 자식에 version이 없어졌으므로 더 분명해진다.
+6. check-then-act: `RequestCheckout`은 `status`를 읽고 전이를 정한다. 경합은 주문 행 잠금이 막고 그 뒤에 루트의 `@Version`과 unique `(order_id, checkout_no)`가 있다. 세 가지 모두 그대로다. 자식 행의 version은 이 경로의 방어선이었던 적이 없다. checkout은 INSERT뿐이고 line은 이 경로에서 바뀌지 않는다. "자식 행만 바뀌면 루트의 version이 오르지 않는다"는 4.7절의 주의는 계속 유효하고, 자식에 version이 없어졌으므로 더 분명해진다. 한 aggregate를 여러 쿼리로 읽는 경로에 대한 답은 [order-request-checkout-persistence](2026-09-21-order-request-checkout-persistence.md)의 답 6과 같고 이 PR이 바꾸지 않는다. 쓰기 경로는 `findByIdForUpdate`가 주문 행을 먼저 잠그므로 line·checkout 조회가 다른 커밋을 섞어 읽지 않는다. 잠금 없는 `findById`는 READ COMMITTED에서 세 쿼리가 서로 다른 커밋을 볼 수 있지만 그 결과로 전이를 판단하지 않는다. 자식 행의 version은 이 경로의 방어선이었던 적이 없다.
 7. 락과 크기: `ALTER TABLE ... DROP COLUMN`은 `ACCESS EXCLUSIVE`를 잡지만 카탈로그에서 컬럼을 숨길 뿐 테이블을 재작성하지 않는다. 배포된 환경이 없어서 대상은 개발자 로컬 DB와 매번 빈 DB로 시작하는 테스트뿐이다. 그래도 4.7절의 지침대로 마이그레이션에 `set local lock_timeout`을 둔다.
-8. 이전 버전 호환: 컬럼 삭제는 이전 버전의 기동과 쓰기를 즉시 깨뜨리므로 원칙은 "그 컬럼을 쓰는 코드가 배포에서 빠진 다음 PR에서"다. 이번에는 한 PR로 한다. 배포된 환경이 아직 없어서([현재 상태](../wiki/current-state.md)의 "운영 배포 설정과 커넥션 풀 튜닝은 아직 없다") 보호할 이전 버전 인스턴스가 없다. 나누는 쪽의 비용은 이렇다. 엔티티에서 `version`을 뺀 코드는 `version bigint not null` 컬럼에 INSERT할 수 없다. 그래서 첫 PR에 default를 더하거나 not null을 푸는 마이그레이션이 하나 필요하고 둘째 PR이 컬럼을 지운다. 지킬 대상이 없는데 마이그레이션 둘과 PR 둘을 쓰게 된다. 이 판단은 배포 환경이 없는 지금에만 성립한다. 배포 환경이 생긴 뒤의 컬럼 삭제는 4.7절 질문 8의 순서를 따른다.
+8. 이전 버전 호환: 컬럼 삭제는 이전 버전의 기동과 쓰기를 즉시 깨뜨리므로 원칙은 "그 컬럼을 쓰는 코드가 배포에서 빠진 다음 PR에서"다. 이번에는 한 PR로 한다. 보호할 이전 버전 인스턴스가 없기 때문이다. 근거는 둘이다. 사용자가 2026-09-21 이 작업을 지시하면서 아직 배포된 환경이 없다고 밝혔고, [현재 상태](../wiki/current-state.md)에도 "운영 배포 설정과 커넥션 풀 튜닝은 아직 없다"고 적혀 있다. 뒤의 문장만으로는 실행 중인 인스턴스가 없다는 것까지 증명되지 않으므로 앞의 사실이 실제 근거다. 지금 이 스키마를 쓰는 곳은 개발자 로컬 DB와 매번 빈 DB로 시작하는 테스트뿐이고, 로컬 DB에서는 `V004`가 순방향으로 적용된다. 나누는 쪽의 비용은 이렇다. 엔티티에서 `version`을 뺀 코드는 `version bigint not null` 컬럼에 INSERT할 수 없다. 그래서 첫 PR에 default를 더하거나 not null을 푸는 마이그레이션이 하나 필요하고 둘째 PR이 컬럼을 지운다. 지킬 대상이 없는데 마이그레이션 둘과 PR 둘을 쓰게 된다. 이 판단은 배포 환경이 없는 지금에만 성립한다. 배포 환경이 생긴 뒤의 컬럼 삭제는 4.7절 질문 8의 순서를 따른다.
 9. 이벤트·캐시: 두 컬럼은 도메인 이벤트 payload와 DTO에 실리지 않는다. 캐시는 없다.
 
 마이그레이션 번호: 기준 브랜치의 마지막은 `V003`이라 `V004`다(2026-09-21 `git fetch` 뒤 확인). Event Publication Registry PR의 spec도 `V004`를 예고했고 그 브랜치에는 아직 마이그레이션 파일이 없다. 먼저 머지되는 쪽이 `V004`를 갖고 나머지가 다음 번호로 바꾼다. 중복은 `check_pr.py`와 PR 워크플로의 버전 게이트가 막는다. 머지 직전에 다시 확인한다.
+- 대조 기록: code-reviewer 에이전트(구현자 아님), 2026-09-21, 불일치 항목: 없음. 답 1~9와 JPA `validate` 관점을 DDL·엔티티·컬럼을 읽고 쓰는 코드와 대조했다. 리뷰어가 확인하지 못한 것 둘: 읽기 전용 도구라 git 이력이 필요한 마이그레이션 번호 서술(구현자가 `git fetch` 뒤 확인했다)과, 제거된 매핑의 과거 런타임 동작(soft delete가 version을 올렸는지). 뒤의 것은 확인된 범위로 답 2의 서술을 좁혔다. 리뷰어가 지적한 서술 차이(문장 수 검사의 실제 위치)와 테스트 견고성(version 컬럼 조회의 정렬)은 반영했다.
 
 ## 검증
 - `./gradlew test --tests 'com.resilientpos.order.internal.application.OrderInsertStatementCountIntegrationTest'`: 인수 조건 3부터 6.
@@ -121,4 +125,8 @@ PR #34(`fix/commit-version-conflict-optimistic-lock`)가 같은 `BaseEntity.kt`�
 - 인수 조건 8: `./gradlew test` 80개 통과. `origin/main`(c317a1b, #33 포함)과 임시 worktree에서 합친 결과는 89개 통과. 합칠 때의 충돌은 `docs/wiki/changes.md`와 `docs/wiki/current-state.md` 두 문서뿐이었고 그 worktree는 커밋 없이 지웠다.
 - 인수 조건 10·11(범위 조정 1): 트랜잭션 밖 `save`가 line 없는 주문 행을 남기는 것을 임시 테스트로 관측하고(주문 행 1, line 행 0) `@Transactional`로 막았다. 기존의 unique 위반 테스트는 트랜잭션 밖에서 `save`를 부르는 그대로 `DataIntegrityViolationException`을 받는다.
 - 인수 조건 9: wiki 세 문서와 볼트 `rules/domain-modeling-kotlin.md` 5절을 고쳤다. 볼트의 수정 전 사본은 `~/Documents/domain-modeling-kotlin.2026-09-21.before-explicit-version.md`다.
+- multi-review: Claude 89점, Codex 90점(`codex exec` 직접 실행), Gemini는 CLI가 없어 미실행. 둘 다 막는 코드 결함은 없다고 판정했고 Codex가 막는 항목으로 든 것은 제출 전 대조 기록 미기재였다. `reviewer-codex` 에이전트가 Codex 출력 없이 먼저 돌아온 결과가 한 번 있었는데, 출력 파일이 없어 점수로 쓰지 않고 CLI를 직접 실행해 받은 결과만 기록했다.
+- 리뷰 반영: (1) `current-state.md`의 테스트 개수 표가 74개에서 멈춰 있어 80개와 내역으로 고쳤다. (2) 어댑터 `save`의 트랜잭션 계약을 port `OrderRepository.save`의 KDoc에 적었다. `findByIdForUpdate`에만 계약이 있어 비대칭이었다. (3) 4.7절 질문 6의 "한 aggregate를 여러 쿼리로 읽는 경로" 항목이 답 6에서 빠져 있어 채웠다. (4) `persist`가 `merge`보다 안전해지는 점(다른 주문의 line ID를 만나면 덮어쓰지 않고 실패한다)을 답 4에 더했다. (5) JDBC batch와 Event Publication Registry가 문장 수 기대값을 바꾼다는 것을 제외 절에 적었다. (6) Hibernate 통계를 끌 때 이전 설정을 복원하고, 전역 누적값이라는 성질과 병렬 실행 시의 대응을 테스트 KDoc에 적었다. (7) `SchemaMigrationTest`의 version 컬럼 조회에 정렬을 줬다. (8) `OrderEntity`의 `@Version` KDoc에 루트 행이 실제 UPDATE될 때만 오른다는 제한을 적었다. (9) spec 범위의 트랜잭션 서술에 범위 조정 1로 대체됐음을 표시하고 인수 조건 10·11을 본 목록에 합쳤다. (10) 답 8의 배포 근거를 사용자가 밝힌 사실로 바꿨다. wiki 문장만으로는 실행 중인 인스턴스가 없다는 것까지 증명되지 않는다.
+- 확인: 리뷰가 조건부 위험으로 든 flush 순서를 SQL 로그로 확인했다. 호출 순서와 무관하게 새 자식 행의 INSERT가 soft delete UPDATE보다 먼저 나간다. 지금은 `t_order_line`에 PK 말고 unique가 없어 무해하고, partial unique를 더할 때 볼 사실이라 어댑터 KDoc에 적었다.
+- 반영하지 않은 것: 문장 수 측정을 `StatementInspector`로 바꾸는 제안(두 리뷰 모두 지금은 불안정하지 않다고 봤고 병렬 실행 설정이 없다. 바꾸면 이 PR의 범위가 넓어진다), 4.7절 §7에 `CONCURRENTLY`와 `SET LOCAL`의 관계를 더하는 제안(이 PR이 그 조합을 만들지 않는다), soft delete된 ID의 재삽입 계약(이 PR의 회귀가 아니고 도달 경로가 없다. `ChangeOrderLine` PR의 선행 조건이다).
 - 고치지 않은 것: `OrderLineEntity`, `OrderCheckoutEntity`, 두 Spring Data repository. `saveAll`을 부르는 곳은 없어졌지만 repository는 조회와 삭제에 계속 쓴다.

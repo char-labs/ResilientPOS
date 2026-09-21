@@ -26,6 +26,8 @@ import org.springframework.transaction.support.TransactionTemplate
  * 새 행이 추가 SELECT 없이 INSERT 한 번으로 들어가는지 Hibernate 통계의 JDBC 문장 수로 검사한다. Docker가 필요하다.
  * 도메인 ID를 저장 전에 만들기 때문에 Spring Data의 `save`는 `@Version`이 없는 새 엔티티를 기존 행으로 보고 `merge`한다.
  * 그러면 새 행마다 SELECT가 하나 더 나가고 이 테스트의 문장 수가 그만큼 늘어난다.
+ * 통계는 `SessionFactory` 전체의 누적값이다. 지금은 테스트를 병렬로 돌리지 않아서 이 구간의 문장만 잡히고,
+ * 병렬 실행을 켜면 다른 클래스의 SQL이 섞이므로 그때 클래스 격리나 세션별 측정으로 바꾼다.
  */
 class OrderInsertStatementCountIntegrationTest(
     @Autowired private val facade: OrderCommandFacade,
@@ -38,14 +40,17 @@ class OrderInsertStatementCountIntegrationTest(
 
     private val statistics: Statistics = entityManagerFactory.unwrap(SessionFactory::class.java).statistics
 
+    private var statisticsWereEnabled = false
+
     @BeforeTest
     fun enableStatistics() {
+        statisticsWereEnabled = statistics.isStatisticsEnabled
         statistics.isStatisticsEnabled = true
     }
 
     @AfterTest
-    fun disableStatistics() {
-        statistics.isStatisticsEnabled = false
+    fun restoreStatistics() {
+        statistics.isStatisticsEnabled = statisticsWereEnabled
     }
 
     /**
@@ -88,6 +93,7 @@ class OrderInsertStatementCountIntegrationTest(
         }
 
         // 주문은 같은 트랜잭션에서 이미 읽은 관리 엔티티라 다시 조회하지 않고, 값이 같아서 UPDATE도 없다.
+        // 이 0이 "자식 행만 바뀌면 루트 version이 오르지 않는다"([도메인 모델] 4.7절 질문 6)의 증거다.
         val lineSelect = 1L
         val checkoutSelect = 1L
         val lineInsert = 1L

@@ -32,7 +32,8 @@ class SchemaMigrationTest(
     fun `낙관적 잠금 version 컬럼은 그것을 선언한 엔티티의 테이블인 t_order에만 있다`() {
         val tables = query(
             "select table_name from information_schema.columns " +
-                "where table_schema = 'public' and column_name = 'version' and table_name <> 'flyway_schema_history'",
+                "where table_schema = 'public' and column_name = 'version' and table_name <> 'flyway_schema_history' " +
+                "order by table_name",
         ) { it.getString("table_name") }
 
         assertEquals(listOf("t_order"), tables)

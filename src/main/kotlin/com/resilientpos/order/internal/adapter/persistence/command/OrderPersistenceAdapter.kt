@@ -15,6 +15,9 @@ import org.springframework.transaction.annotation.Transactional
  * line과 checkout은 `@Version`이 없다. 도메인 ID를 저장 전에 만들기 때문에 Spring Data의 `save`는 이런 새 엔티티를 기존 행으로 보고
  * `merge`해서 SELECT가 한 번 더 나간다. 그래서 새 자식 행은 `EntityManager.persist`로 넣는다. 기존 행은 같은 트랜잭션에서 읽은 관리 엔티티라
  * `apply`만 하면 flush가 UPDATE한다.
+ * 호출 순서와 무관하게 새 자식 행의 INSERT가 soft delete UPDATE보다 먼저 flush된다(SQL 로그로 확인).
+ * `t_order_line`에 지금은 PK 말고 unique가 없어서 지워진 행의 `line_no`를 새 행이 물려받아도 충돌하지 않는다.
+ * partial unique를 더하려면 이 순서를 먼저 본다.
  */
 @Repository
 class OrderPersistenceAdapter(
