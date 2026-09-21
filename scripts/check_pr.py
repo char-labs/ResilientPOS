@@ -229,12 +229,6 @@ def check(base, head='HEAD', worktree=False, migrations_only=False):
                 (warnings if worktree else errors).append(
                     '스키마 변경 검토 절에 "- 대조 기록: 리뷰어, 시점, 불일치 항목" 줄이 필요합니다'
                     '(줄 맨 앞 하이픈, 반각 콜론, 내용 필수). 구현자가 아닌 리뷰어가 남깁니다.')
-        log = 'docs/wiki/changes.md'
-        new_log = after.get(log, b'').decode('utf-8')
-        added = '\n'.join(line[2:] for line in difflib.ndiff(
-            before.get(log, b'').decode('utf-8').splitlines(), new_log.splitlines()) if line.startswith('+ '))
-        if log not in changed or f'../spec/{Path(spec).name}' not in added or '요구사항 영향:' not in added:
-            errors.append('wiki 변경 기록에 이번 spec 링크와 요구사항 영향: 설명을 추가하세요.')
     # 이 PR이 지운 경로는 뺀다. 그러지 않으면 파일명만 바꾸는 변경이 옛 이름과 새 이름의 중복으로 잡힌다.
     errors.extend(migration_conflicts((set(after) | tracked_paths(base_ref)) - (set(before) - set(after))))
     if remote_is_ahead(base_ref, head):

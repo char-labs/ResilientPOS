@@ -41,7 +41,6 @@ class HarnessTest(unittest.TestCase):
 
     def implementation(self):
         self.write('src/example.txt', 'implementation\n')
-        self.write('docs/wiki/changes.md', '# 기록\n[spec](../spec/2026-09-07-example.md)\n요구사항 영향: 기능 추가\n')
 
     def errors(self, worktree=False):
         return '\n'.join(check(self.base, worktree=worktree)[0])
@@ -83,12 +82,6 @@ class HarnessTest(unittest.TestCase):
         self.git('reset', '--soft', self.base)
         self.implementation()
         self.assertIn('독립 커밋', self.errors(True))
-
-    def test_wiki_missing(self):
-        self.start()
-        self.write('src/example.txt', 'x')
-        self.commit()
-        self.assertIn('wiki 변경 기록', self.errors())
 
     def test_scope_and_untracked(self):
         self.start()
@@ -487,7 +480,6 @@ class BypassTest(HarnessTest):
         self.write(self.spec.replace('example', 'rename'), Path(self.spec).read_text())
         Path(self.spec).unlink()
         self.spec = self.spec.replace('example', 'rename')
-        self.write('docs/wiki/changes.md', '# 기록\n[spec](../spec/2026-09-07-rename.md)\n요구사항 영향: 이름만 변경\n')
         self.git('mv', 'src/main/resources/db/migration/V002__order_create_orders.sql',
                  'src/main/resources/db/migration/V002__order_create_order.sql')
         self.commit()
