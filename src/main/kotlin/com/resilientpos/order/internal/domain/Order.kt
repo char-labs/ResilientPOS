@@ -40,6 +40,15 @@ class Order private constructor(
     override fun hashCode() = id.hashCode()
 
     /**
+     * 저장할 수 없는 합계를 가진 주문을 만들지 않는다. 범위 검사는 `Money`가 하고 여기서는 평가만 한다.
+     * `total`은 접근할 때마다 계산하는 getter라 아무도 읽지 않으면 검사도 일어나지 않는다. 그러면 범위를 넘는
+     * 주문이 커밋된 뒤 checkout에서야 드러나고 복구할 수 없다. line을 바꾸는 명령을 더하는 PR은 그 경로에서도 부른다.
+     */
+    private fun requireStorableTotal() {
+        total
+    }
+
+    /**
      * 같은 `(terminalId, clientOrderId)`로 다시 온 command가 최초 요청과 같은 내용인지 검증한다.
      */
     fun verifySamePayload(command: CreateOrderCommand) {
@@ -131,6 +140,8 @@ class Order private constructor(
                 lines = command.lines.map { OrderLine(OrderLineId(ids.next()), it.productCode, it.productName, it.unitPrice, it.quantity) },
                 checkouts = emptyList(),
             )
+            order.requireStorableTotal()
+
             val event = OrderCreated(
                 eventId = ids.next(),
                 occurredAt = now,

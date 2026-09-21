@@ -77,4 +77,42 @@ class MoneyTest {
         assertTrue(Money.of("1000", krw) < Money.of("1001", krw))
         assertTrue(Money.of("1001", krw) > Money.of("1000", krw))
     }
+
+    @Test
+    fun `정수부가 15자리면 만들어지고 16자리면 INVALID_MONEY_AMOUNT로 거절한다`() {
+        assertEquals("999999999999999", Money.of("999999999999999", krw).amount.toPlainString())
+        assertEquals("999999999999999.99", Money.of("999999999999999.99", usd).amount.toPlainString())
+        // 소수 4자리 통화는 정수부 15 + 소수 4 = 19자리로 numeric(19,4)의 한계와 정확히 같다.
+        val clf = Currency.getInstance("CLF")
+        assertEquals(4, clf.defaultFractionDigits)
+        assertEquals("999999999999999.9999", Money.of("999999999999999.9999", clf).amount.toPlainString())
+        assertFailsWith<DomainException> { Money.of("1000000000000000.0000", clf) }
+
+        listOf("1000000000000000" to krw, "1000000000000000.00" to usd).forEach { (raw, currency) ->
+            val failure = assertFailsWith<DomainException>(raw) { Money.of(raw, currency) }
+            assertEquals(Money.INVALID_MONEY_AMOUNT, failure.code, raw)
+            assertEquals(DomainErrorKind.INVALID, failure.kind, raw)
+            assertTrue(failure.message.isNotBlank())
+            assertTrue(failure.message != failure.code)
+        }
+    }
+
+    @Test
+    fun `연산 결과가 저장 범위를 넘으면 거절한다`() {
+        val large = Money.of("999999999999999", krw)
+
+        assertFailsWith<DomainException>("times") { large * 2 }
+        assertFailsWith<DomainException>("plus") { large + Money.of("1", krw) }
+        assertFailsWith<DomainException>("minus") { large - Money.of("-1", krw) }
+        assertFailsWith<DomainException>("생성자") { Money(BigDecimal("1000000000000000"), krw) }
+        assertFailsWith<DomainException>("copy") { large.copy(amount = BigDecimal("1000000000000000")) }
+    }
+
+    @Test
+    fun `0과 음수는 자릿수만 보므로 영향받지 않는다`() {
+        assertEquals(BigDecimal("0"), Money.zero(krw).amount)
+        assertEquals(BigDecimal("0.00"), Money.zero(usd).amount)
+        assertEquals(BigDecimal("-999999999999999"), Money.of("-999999999999999", krw).amount)
+        assertFailsWith<DomainException> { Money.of("-1000000000000000", krw) }
+    }
 }

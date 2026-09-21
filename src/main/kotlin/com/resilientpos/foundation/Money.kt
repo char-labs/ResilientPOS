@@ -17,6 +17,10 @@ data class Money(val amount: BigDecimal, val currency: Currency) {
         if (amount.scale() != currency.defaultFractionDigits) {
             throw DomainException(INVALID_MONEY_SCALE, "통화 표준 자릿수를 넘는 금액입니다")
         }
+        // 정수부 자릿수만 센다. BigDecimal의 메타데이터만 읽으므로 값을 문자열로 펴지 않는다.
+        if (amount.precision() - amount.scale() > MAX_INTEGER_DIGITS) {
+            throw DomainException(INVALID_MONEY_AMOUNT, "저장할 수 있는 금액 범위를 넘습니다")
+        }
     }
 
     operator fun plus(other: Money): Money = Money(amount + other.amountIn(currency), currency)
@@ -36,6 +40,15 @@ data class Money(val amount: BigDecimal, val currency: Currency) {
 
     companion object {
         const val INVALID_MONEY_SCALE = "INVALID_MONEY_SCALE"
+        const val INVALID_MONEY_AMOUNT = "INVALID_MONEY_AMOUNT"
+
+        /**
+         * 금액을 담는 컬럼(`t_order_line.unit_price`, `t_order_checkout.amount`)이 `numeric(19,4)`라서
+         * 정수부는 19 - 4 = 15자리까지다. 이 상한이 없으면 도메인이 저장할 수 없는 금액을 만들어,
+         * 주문이 커밋된 뒤 합계를 저장하는 시점에야 실패해 복구할 수 없는 상태가 된다.
+         * 컬럼 타입을 바꾸는 PR은 이 상수도 함께 본다.
+         */
+        const val MAX_INTEGER_DIGITS = 15
         const val CURRENCY_MISMATCH = "CURRENCY_MISMATCH"
 
         fun zero(currency: Currency): Money = of("0", currency)
