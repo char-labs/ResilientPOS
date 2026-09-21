@@ -24,6 +24,7 @@ class OrderTest {
     private val krw = Currency.getInstance("KRW")
     private val usd = Currency.getInstance("USD")
     private val now = Instant.parse("2026-09-16T00:00:00Z")
+    private val blankValues = listOf("", "   ", "\t", "\n", "\u00A0")
 
     private val storeId = StoreId(UUID.fromString("00000000-0000-0000-0000-000000000001"))
     private val terminalId = TerminalId(UUID.fromString("00000000-0000-0000-0000-000000000002"))
@@ -126,7 +127,7 @@ class OrderTest {
 
     @Test
     fun `빈 productCode를 BLANK_PRODUCT_CODE로 거절한다`() {
-        listOf("", "   ").forEach { blank ->
+        blankValues.forEach { blank ->
             val failure = assertFailsWith<DomainException>("productCode='$blank'") {
                 Order.create(
                     createOrderCommand(lines = listOf(orderLine(productCode = blank))),
@@ -144,7 +145,7 @@ class OrderTest {
 
     @Test
     fun `빈 productName을 BLANK_PRODUCT_NAME으로 거절한다`() {
-        listOf("", "   ").forEach { blank ->
+        blankValues.forEach { blank ->
             val failure = assertFailsWith<DomainException>("productName='$blank'") {
                 Order.create(
                     createOrderCommand(lines = listOf(orderLine(productName = blank))),

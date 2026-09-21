@@ -61,7 +61,8 @@ class Order private constructor(
         const val IDEMPOTENCY_CONFLICT = "IDEMPOTENCY_CONFLICT"
 
         /**
-         * 이미 저장된 주문을 그대로 재구성한다. 생성 불변식은 최초 `create` 때 검증됐으므로 다시 묻지 않는다.
+         * 이미 저장된 주문을 그대로 재구성한다. 주문 단위 생성 불변식은 최초 `create` 때 검증됐으므로 다시 묻지 않는다.
+         * `lines`의 `OrderLine` 생성자 불변식은 재구성 때도 실행된다.
          * persistence adapter의 `toDomain()`만 부른다.
          */
         fun restore(
