@@ -14,6 +14,7 @@ import com.resilientpos.order.RequestCheckoutCommand
 import com.resilientpos.order.RequestCheckoutResult
 import com.resilientpos.order.internal.domain.Order
 import com.resilientpos.order.internal.domain.OrderRepository
+import java.sql.Timestamp
 import java.util.Currency
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
@@ -74,6 +75,20 @@ class OrderRequestCheckoutIntegrationTest(
             jdbcTemplate.queryForObject("select version from t_order_checkout where order_id = ?", Long::class.java, orderId.value),
             "새 checkout은 INSERT 한 번이다. merge로 빠지면 UPDATE가 따라붙어 version이 1이 된다",
         )
+    }
+
+    @Test
+    fun `requestCheckout으로 주문 행이 갱신되면 생성 시각은 그대로이고 수정 시각은 그 뒤다`() {
+        val orderId = facade.create(OrderFixtures.createOrderCommand()).orderId
+        val createdAtBefore = jdbcTemplate.queryForObject("select created_at from t_order where id = ?", Timestamp::class.java, orderId.value)
+
+        facade.requestCheckout(RequestCheckoutCommand(orderId))
+
+        val row = jdbcTemplate.queryForMap("select created_at, updated_at from t_order where id = ?", orderId.value)
+        val createdAt = row["created_at"] as Timestamp
+        val updatedAt = row["updated_at"] as Timestamp
+        assertEquals(createdAtBefore, createdAt)
+        assertTrue(updatedAt.after(createdAt), "created_at=$createdAt, updated_at=$updatedAt")
     }
 
     @Test

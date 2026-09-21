@@ -16,11 +16,13 @@ import com.resilientpos.order.internal.domain.Order
 import com.resilientpos.order.internal.domain.OrderLine
 import com.resilientpos.order.internal.domain.OrderRepository
 import com.resilientpos.terminal.TerminalId
+import java.sql.Timestamp
 import java.time.Clock
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -74,7 +76,7 @@ class OrderCommandFacadeIntegrationTest(
     }
 
     @Test
-    fun `신규 저장은 INSERT 한 번이고 생성 시각과 수정 시각이 같으며 삭제 시각은 비어 있다`() {
+    fun `신규 저장은 INSERT 한 번이고 생성 시각과 수정 시각이 채워지며 삭제 시각은 비어 있다`() {
         val result = facade.create(OrderFixtures.createOrderCommand())
 
         val row = jdbcTemplate.queryForMap(
@@ -82,8 +84,10 @@ class OrderCommandFacadeIntegrationTest(
             result.orderId.value,
         )
 
-        assertNotNull(row["created_at"])
-        assertEquals(row["created_at"], row["updated_at"])
+        // 두 시각은 Hibernate가 JVM에서 따로 만들어서 같지 않을 수 있다. 갱신된 적 없는 행은 version 0으로 판정한다.
+        val createdAt = assertNotNull(row["created_at"] as Timestamp?)
+        val updatedAt = assertNotNull(row["updated_at"] as Timestamp?)
+        assertFalse(updatedAt.before(createdAt), "수정 시각이 생성 시각보다 앞설 수 없다. created_at=$createdAt, updated_at=$updatedAt")
         assertNull(row["deleted_at"])
         assertEquals(0L, row["version"], "신규 저장은 INSERT 한 번이다. merge로 빠지면 UPDATE가 따라붙어 version이 1이 된다")
     }
