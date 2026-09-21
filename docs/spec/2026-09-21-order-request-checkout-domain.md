@@ -86,10 +86,17 @@
 
 | 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
 |---|---|---|---|
-| 인수 조건 1: `OPEN 주문의 requestCheckout은 CHECKOUT_REQUESTED와 1회차 Checkout을 가진 새 주문을 돌려주고 원본은 그대로다` | 미실행 | 미실행 | 미실행 |
-| 인수 조건 2: `requestCheckout은 확정 금액을 담은 OrderPaymentRequested 한 건을 만든다` | 미실행 | 미실행 | 미실행 |
-| 인수 조건 3: `합계가 0인 주문도 0원 Checkout으로 전이한다` | 미실행 | 미실행 | 미실행 |
-| 인수 조건 4: `이미 CHECKOUT_REQUESTED인 주문의 requestCheckout은 같은 주문과 빈 이벤트를 돌려준다` | 미실행 | 미실행 | 미실행 |
+| 인수 조건 1: `OPEN 주문의 requestCheckout은 CHECKOUT_REQUESTED와 1회차 Checkout을 가진 새 주문을 돌려주고 원본은 그대로다` | `./gradlew test --tests 'com.resilientpos.order.internal.domain.OrderTest'`. `requestCheckout`이 자신과 빈 이벤트를 돌려주는 최소 선언 상태에서 실패: `CHECKOUT_REQUESTED`를 기대했는데 `OPEN`이었다 | 같은 명령. 14개 중 실패 0 | `./gradlew test`. 64개 중 실패 0 |
+| 인수 조건 2: `requestCheckout은 확정 금액을 담은 OrderPaymentRequested 한 건을 만든다` | 같은 명령. 실패: 이벤트 한 건을 기대했는데 빈 목록이었다 | 같은 명령. 14개 중 실패 0 | `./gradlew test`. 64개 중 실패 0 |
+| 인수 조건 3: `합계가 0인 주문도 0원 Checkout으로 전이한다` | 같은 명령. 실패: `CHECKOUT_REQUESTED`를 기대했는데 `OPEN`이었다 | 같은 명령. 14개 중 실패 0 | `./gradlew test`. 64개 중 실패 0 |
+| 인수 조건 3 보강(범위 조정): `소수 자리가 있는 통화도 확정 금액이 통화 자릿수를 지킨다` | RED 없음. 구현 뒤에 더한 characterization 테스트라 처음부터 통과했다 | `./gradlew test`. 통과 | `./gradlew test`. 64개 중 실패 0 |
+| 인수 조건 4: `이미 CHECKOUT_REQUESTED인 주문의 requestCheckout은 같은 주문과 빈 이벤트를 돌려준다` | 같은 명령. 실패: 첫 전이가 없어서 `CHECKOUT_REQUESTED`를 기대했는데 `OPEN`이었다. 범위 조정으로 더한 `assertSame`은 RED 없이 통과했다 | 같은 명령. 14개 중 실패 0 | `./gradlew test`. 64개 중 실패 0 |
+
+RED 전에 컴파일 오류가 한 번 있었다. `Order.restore`에 `checkouts` 인자를 더하자 `OrderCommandFacadeIntegrationTest`의 helper가 컴파일되지 않았다. 컴파일 오류는 RED가 아니므로 변경 경로를 spec에 먼저 더하고(범위 조정 커밋) helper의 인자를 맞춘 뒤 위 RED를 관측했다.
 
 ## 결과
-개발 전 작성. 개발 후 실행 결과와 변경 이유를 추가한다.
+- 인수 조건 1~5를 충족했다. `./gradlew test`는 64개(기존 59, 신규 5) 중 실패 0이다.
+- 구현은 `OrderStatus.CHECKOUT_REQUESTED`, 값 객체 `Checkout`, `Order.requestCheckout`, 이벤트 `OrderPaymentRequested`다. `Order`가 `checkouts`를 갖게 되어 `restore`의 인자가 하나 늘었고 `OrderEntity.toDomain()`은 빈 목록을 넘긴다.
+- 이 PR만 머지된 상태에서 `CHECKOUT_REQUESTED` 주문을 만들거나 저장하는 프로덕션 경로는 없다. `OrderCommandFacade`의 쓰기는 `create`뿐이고 `Order.create`는 항상 `OPEN`이다. `requestCheckout`을 부르는 프로덕션 코드가 없다.
+- multi-review: Claude 84점, Codex 93점, Gemini 미실행(CLI 없음). 둘 다 막는 결함은 없다고 판정했고 합의한 전제 네 가지를 뒤집을 사유도 없다고 봤다. 반영한 것은 위 범위 조정에 적었다. 반영하지 않은 것은 두 가지다. `Order.restore`에 "`CHECKOUT_REQUESTED`인데 `checkouts`가 비면 실패"하는 검사를 넣자는 제안은 다음 PR의 왕복 통합 테스트로 대신한다(`restore`는 불변식을 다시 묻지 않는다는 기존 결정을 유지한다). 테스트용 식별자 생성기가 목록이 마르면 무작위 값을 돌려주는 것은 기존 테스트가 쓰던 방식이라 이 PR에서 바꾸지 않는다.
+- `tdd-driver`에 위임하지 않고 주 에이전트가 TDD 절차를 직접 수행했다.
