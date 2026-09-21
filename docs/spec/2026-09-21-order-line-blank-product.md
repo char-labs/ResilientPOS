@@ -9,15 +9,22 @@
   - `BLANK_PRODUCT_CODE`: `productCode`가 빈 문자열이거나 공백 문자뿐이다.
   - `BLANK_PRODUCT_NAME`: `productName`이 빈 문자열이거나 공백 문자뿐이다.
   - 둘 다 `DomainErrorKind.INVALID`(기본값)이고 HTTP에서는 기존 매핑대로 400이다.
-- 판정은 Kotlin `isBlank()`다. 값을 다듬지 않는다. 앞뒤 공백이 있는 `" SKU-1 "`은 그대로 받아 그대로 저장한다. trim을 넣으면 `verifySamePayload`의 같은 payload 판정이 함께 바뀌므로 이 PR에서 다루지 않는다.
-- 불변식: 저장된 `OrderLine`의 `productCode`와 `productName`은 blank가 아니다. 거절된 명령은 `t_order`와 `t_order_line`에 행을 남기지 않는다(기존 트랜잭션 경계가 보장하고 HTTP 통합 테스트로 확인한다).
-- 실패·재시도·복구: 거절은 결정적이라 같은 요청을 다시 보내도 같은 400이다. 저장이 없으므로 복구 경로가 없다.
+- 판정은 Kotlin `isBlank()`다. 값을 다듬지 않는다. 앞뒤 공백이 있는 `" SKU-1 "`을 도메인은 그대로 line에 담는다. trim을 넣으면 `verifySamePayload`의 같은 payload 판정이 함께 바뀌므로 이 PR에서 다루지 않는다.
+- 불변식: 저장된 `OrderLine`의 `productCode`와 `productName`은 blank가 아니다. 거절된 명령은 `t_order`에 행을 남기지 않는다(HTTP 통합 테스트로 확인한다). line은 같은 트랜잭션에서 주문 뒤에 저장되므로 따로 세지 않는다.
+- 실패·재시도·복구: 그 키로 저장된 주문이 없으면 거절은 결정적이라 같은 요청을 다시 보내도 같은 400이다. 저장이 없으므로 복구 경로가 없다. 이미 주문이 있는 키로 blank line을 보내면 멱등 판정이 먼저라서 `409 IDEMPOTENCY_CONFLICT`다.
 - 관측성: 새 로그 속성은 없다. `ApiControllerAdvice`가 `DomainException`의 `code`를 기존 방식으로 남긴다.
 - REST Docs: `lines[].productCode`와 `lines[].productName` 필드 설명에 거절 코드를 적는다.
 
+### 범위 조정 (2026-09-21, 제출 전 multi-review 반영)
+`OrderLine.kt`가 응답 본문에 나가는 `DomainException` code를 더하므로 PR 템플릿의 사실 기준으로 🔴이다. 제출 전에 multi-review(Claude, Codex 실행. Gemini는 CLI가 없어 미실행)를 돌렸고 두 리뷰어가 함께 지적한 네 가지를 반영한다. 구현 동작은 바뀌지 않는다.
+- `Order.restore`의 KDoc은 "생성 불변식은 다시 묻지 않는다"고 적지만 `OrderLine` 생성자 불변식은 재구성 때도 실행된다. 이 PR이 그 검사를 두 개 늘렸으므로 KDoc을 사실에 맞게 고친다. 주석만 바꾼다.
+- blank 판정의 경계값으로 탭, 개행, NBSP(U+00A0)를 도메인 테스트에 더한다. 폭 없는 공백(U+200B)은 `isBlank()`가 blank로 보지 않아 통과한다. 허용 문자 검증은 아래 제외에 이미 있다.
+- "거절은 같은 400"은 그 키로 저장된 주문이 없을 때만 참이다. 이미 주문이 있는 `(terminalId, clientOrderId)`로 blank line을 보내면 Facade가 `Order.create`보다 `verifySamePayload`를 먼저 부르므로 `409 IDEMPOTENCY_CONFLICT`다. 기존 `INVALID_QUANTITY`도 같은 순서였고 이 PR은 순서를 바꾸지 않는다. 아래 실패·재시도 항목의 문장을 고친다.
+- 불변식 문장이 테스트보다 넓었다. HTTP 통합 테스트는 `t_order`만 세고 저장된 `product_code` 값은 확인하지 않는다. 문장을 테스트가 확인하는 범위로 좁힌다.
+
 ## 제외
 - 길이 상한(`product_code varchar(64)`, `product_name varchar(255)`) 검증. 지금은 초과하면 DB 오류로 500이 된다. 별개의 규칙이고 상한 값을 도메인 상수로 둘지부터 정해야 하므로 후속 PR로 둔다.
-- 앞뒤 공백 trim과 대소문자 정규화. 위 범위에 적은 이유다.
+- 앞뒤 공백 trim과 대소문자 정규화. 위 범위에 적은 이유다. 나중에 넣는다면 저장된 값도 함께 정규화하거나 비교 단계에서 정규화해야 한다. 그러지 않으면 201이던 재시도가 409로 바뀐다.
 - 상품 코드의 형식(허용 문자)과 상품 마스터 대조. `t_product`는 두지 않고 line이 판매 시점 값을 기록한다는 기존 결정을 유지한다.
 - DB `check` 제약. 마이그레이션을 바꾸지 않는다. 이 규칙의 방어선은 도메인 생성자이고 `OrderLine`을 거치지 않고 line을 쓰는 경로가 없다.
 - `RequestCheckout`. 다음 PR이다.
@@ -27,6 +34,7 @@
 
 ## 변경 경로
 - src/main/kotlin/com/resilientpos/order/internal/domain/OrderLine.kt
+- src/main/kotlin/com/resilientpos/order/internal/domain/Order.kt
 - src/test/kotlin/com/resilientpos/order/internal/domain/OrderTest.kt
 - src/test/kotlin/com/resilientpos/order/internal/adapter/web/OrderApiIntegrationTest.kt
 - src/test/kotlin/com/resilientpos/order/internal/adapter/web/OrderControllerTest.kt
@@ -35,8 +43,8 @@
 - docs/wiki/changes.md
 
 ## 인수 조건
-1. `Order.create`에 `productCode`가 빈 문자열인 line과 공백뿐인 line을 각각 주면 `DomainException`의 `code`가 `BLANK_PRODUCT_CODE`, `kind`가 `INVALID`다. 메시지는 비어 있지 않고 코드와 다르다.
-2. `Order.create`에 `productName`이 빈 문자열인 line과 공백뿐인 line을 각각 주면 `code`가 `BLANK_PRODUCT_NAME`, `kind`가 `INVALID`다. 메시지 조건은 1과 같다.
+1. `Order.create`에 `productCode`가 빈 문자열인 line과 공백 문자(스페이스, 탭, 개행, NBSP)뿐인 line을 각각 주면 `DomainException`의 `code`가 `BLANK_PRODUCT_CODE`, `kind`가 `INVALID`다. 메시지는 비어 있지 않고 코드와 다르다.
+2. `Order.create`에 `productName`이 빈 문자열인 line과 공백 문자(스페이스, 탭, 개행, NBSP)뿐인 line을 각각 주면 `code`가 `BLANK_PRODUCT_NAME`, `kind`가 `INVALID`다. 메시지 조건은 1과 같다.
 3. 앞뒤에 공백이 있지만 blank가 아닌 값은 거절하지 않고 다듬지 않은 채로 line에 담는다.
 4. `POST /v1/orders`에 `productCode`가 빈 문자열인 line을 보내면 400이고 `error.errorCode`가 `BLANK_PRODUCT_CODE`이며 `t_order`에 행이 생기지 않는다.
 5. 기존 테스트 55개가 그대로 통과한다.
