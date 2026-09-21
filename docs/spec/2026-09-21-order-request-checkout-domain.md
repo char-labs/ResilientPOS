@@ -5,17 +5,17 @@
 
 ## 범위
 - 소유 모듈: `order`. 전이 규칙은 `internal/domain`의 `Order`가 소유한다.
-- 상태: `OrderStatus`에 `CHECKOUT_REQUESTED`를 더한다.
+- 상태: `OrderStatus`에 `CHECKOUT_REQUESTED`를 더한다. `t_order.status`는 `varchar(32)`이고 이 이름은 18자라 마이그레이션이 필요 없다. 이 값을 쓰는 코드(다음 PR)보다 enum 상수가 먼저 배포되므로 이전 버전 인스턴스가 모르는 문자열을 읽는 구간이 없다.
 - 값 객체 `Checkout`(`internal/domain`): 결제 시도 회차 `checkoutNo`와 확정 금액 `amount`(`Money`, 통화 포함)를 가진다. `Order`는 회차별 `checkouts` 목록을 가진다. 용어와 자식 구성은 [도메인 모델](../wiki/domain-model.md) 2절·3절을 따른다.
 - 전이 `order.requestCheckout(ids, now)`: [도메인 모델](../wiki/domain-model.md) 4.1절대로 자신을 바꾸지 않고 `Transition`을 돌려준다.
   - `OPEN`이면 `CHECKOUT_REQUESTED` 상태이고 `checkouts`에 `Checkout(기존 회차 수 + 1, total)`이 더해진 새 `Order`와 `OrderPaymentRequested` 한 건을 돌려준다.
   - 이미 `CHECKOUT_REQUESTED`이면 같은 `Order`와 빈 이벤트 목록을 돌려준다. 응답을 잃은 단말의 재시도가 기존 결과를 받게 하려는 것이고, 의미 있는 이벤트를 두 번 내지 않는다.
   - 분기는 else 없는 `when`이다. 상태가 늘면 이 전이에서의 처리를 정하지 않고는 컴파일되지 않는다.
-- 이벤트 `OrderPaymentRequested`(모듈 루트, `OrderEvent`): `eventId`, `occurredAt`, `orderId`, `storeId`, `terminalId`, `checkoutNo`, `amount`. `payment`가 attempt를 만들 때 필요한 값이고 `(orderId, checkoutNo)`가 그쪽 멱등 판정의 근거가 된다.
+- 이벤트 `OrderPaymentRequested`(모듈 루트, `OrderEvent`): `eventId`, `occurredAt`, `orderId`, `storeId`, `terminalId`, `checkoutNo`, `amount`. `payment`가 attempt를 만들 때 필요한 값이다. `(orderId, checkoutNo)`는 같은 checkout에 대한 승인 attempt를 두 번 만들지 않는 근거다. `attemptNo`와의 대응(취소는 별도 attempt다)과 `(consumer, eventId)` 재전달 방어와의 역할 분담은 `payment` PR이 정한다.
 - 0원 주문: 합계가 0이어도 똑같이 전이하고 0원 `Checkout`과 이벤트를 남긴다. 전액 할인·프로모션 주문이 계산대에서 거절되지 않아야 하고, 주문·결제·영수증 조회가 같은 경로로 보여야 한다. PG 호출을 건너뛰는 판단은 `payment`가 맡는다. `payment` PR은 0원 attempt를 provider 호출 없이 승인으로 기록하고 `PaymentApproved`를 내야 한다.
 - 정합성 불변식: checkout 이후 금액·통화는 바뀌지 않는다. 지금은 line을 바꾸는 명령이 없어서 `Checkout.amount`와 `total`이 어긋날 경로가 없다. `ChangeOrderLine`을 넣는 PR이 `OPEN`에서만 허용하도록 막는다.
 - `Order.restore`에 `checkouts` 인자를 더한다. 기존 통합 테스트의 helper `withLines`가 `restore`를 직접 부르므로 인자만 맞춘다(범위 조정, 2026-09-21: 컴파일 오류로 발견). `OrderEntity.toDomain()`은 다음 PR이 `t_order_checkout`을 읽을 때까지 빈 목록을 넘긴다. 이 PR에는 `CHECKOUT_REQUESTED` 주문을 저장하는 경로(Facade)가 없어서 빈 목록이 틀린 값이 되는 경우가 없다.
-- 실패·재시도·복구, 관측성: 이 PR은 저장·외부 호출·트랜잭션이 없어 해당 없다. 재시도 판정의 도메인 쪽 절반(위 두 번째 분기)만 여기에 있다.
+- 실패·재시도·복구, 관측성: 이 PR은 저장·외부 호출·트랜잭션이 없어 해당 없다. 재시도 판정의 도메인 쪽 절반(위 두 번째 분기)만 여기에 있다. 상태로 판정하는 멱등은 순차 재시도만 해소한다. 동시 요청 둘이 모두 `OPEN`을 읽으면 루트의 `status`가 바뀌므로 `@Version`이 두 번째를 거절하고, 그 응답을 500이 아니라 기존 결과로 만드는 처리는 다음 PR이 정한다. 빈 이벤트는 이전 이벤트의 전달 실패를 복구하지 않는다. 그 복구는 Event Publication Registry가 맡는다.
 
 ### 합의한 결정 (2026-09-21 grill)
 - store 정책, `CheckoutPolicy`, 정책 버전은 만들지 않는다. 합계는 단가 곱 수량의 합이고 `Money`가 통화 자릿수를 강제해서 반올림할 계산이 없다. [도메인 모델](../wiki/domain-model.md) 4.7절 질문 2·3에 걸린다(읽는 코드가 없고 나중에 채울 수 있다). 할인·세금처럼 반올림이 필요한 첫 PR이 store 정책과 정책 버전을 함께 도입한다. 그래서 전이 시그니처는 wiki 4.1절의 `requestCheckout(policy)`가 아니라 `requestCheckout(ids, now)`다.
@@ -23,10 +23,18 @@
 - 0원 주문은 거절하지 않는다(위 범위).
 - PR은 도메인, 영속화·Facade, HTTP API 세 개로 나눈다. 한 PR이면 약 900줄로 실패 한도(800줄)를 넘는다.
 
+### 범위 조정 (2026-09-21, 제출 전 multi-review 반영)
+`CHECKOUT_REQUESTED`는 DB에 이름으로 저장되고 상태 전이는 비즈니스 로직이라 PR 템플릿 기준 🔴이다. multi-review(Claude, Codex 실행. Gemini는 CLI가 없어 미실행)를 돌렸고 둘 다 막는 결함은 없다고 판정했다. 구현 동작은 바뀌지 않는다.
+- 재요청 테스트가 같은 인스턴스를 돌려주는지 확인하지 않았다. `assertSame`을 더한다.
+- store 정책을 미룬 근거가 "`Money`가 통화 자릿수를 지킨다"인데 전이 테스트가 KRW뿐이었다. 소수 둘째 자리 통화(USD) 전이 테스트를 더한다.
+- `(orderId, checkoutNo)`를 `payment`의 멱등 키로 단정한 문장, 동시 요청에서 진 쪽의 결과, 이벤트 전달 실패의 복구, enum 상수의 배포 순서를 위 범위에 적었다.
+- `requestCheckout`의 `Order` 생성자 호출을 같은 파일의 다른 호출처럼 이름 있는 인자로 바꾼다.
+- 다음 PR이 정할 것을 아래 분할 계획에 옮겼다.
+
 ## 제외
 - `RequestCheckoutCommand`·`RequestCheckoutResult`, Facade 메서드, `t_order_checkout` 마이그레이션과 엔티티, 트랜잭션. 다음 PR `order-request-checkout-persistence`.
 - `POST` endpoint와 REST Docs. 그다음 PR `order-request-checkout-api`.
-- Event Publication Registry. `OrderPaymentRequested`를 받는 consumer가 생기는 `payment` PR 전에 도입한다.
+- Event Publication Registry. `OrderPaymentRequested`를 받는 consumer가 생기는 `payment` PR 전에 도입한다. 그 PR이 이벤트에 처음 실리는 `Money`와 ID value class의 직렬화 형태와 하위 호환을 확인한다.
 - `OPEN`·`CHECKOUT_REQUESTED` 밖의 상태에서의 거절(`INVALID_ORDER_STATE`). 그런 상태가 아직 없어서 도달할 수 없는 분기다. 상태를 더하는 PR이 else 없는 `when` 때문에 함께 정한다.
 - 요청한 단말이 주문의 단말·매장과 같은지 확인하는 인가. 단말 인증이 아직 없다.
 - `CheckoutRequested` 이벤트. 청사진 3.1절은 두 이벤트를 적지만 [도메인 모델](../wiki/domain-model.md) 4.1절이 `OrderPaymentRequested` 하나로 정했다.
@@ -67,6 +75,12 @@
 
 ## 분할 계획
 예상 규모는 구현 약 60줄, 테스트 약 90줄, 문서 약 130줄로 총 280줄·10파일 내외다. 경고 한도(600줄·20파일) 안이다. 초과하면 wiki의 도메인 모델 갱신을 다음 PR로 옮긴다. 후속 순서는 `order-request-checkout-persistence`(`V003` `t_order_checkout`, 엔티티, Command·Result, Facade, 재시도 통합 테스트) → `order-request-checkout-api`(endpoint, REST Docs)다. 앞 PR이 머지된 뒤 main에서 다음 PR을 시작한다.
+
+다음 PR `order-request-checkout-persistence`가 정하고 검증할 것:
+- `t_order_checkout`의 PK. `Checkout`은 식별자 없는 값 객체다. `(order_id, checkout_no)`를 키로 둘지 `CheckoutId`(UUID v7)를 둘지, 볼트 규칙의 "자식도 도메인 ID를 가진다"에서 값 객체를 예외로 볼지 정한다. `CheckoutId`를 두면 `requestCheckout`의 `ids.next()` 호출 순서가 바뀐다.
+- `CHECKOUT_REQUESTED` 주문을 저장했다가 다시 읽으면 `checkouts`가 그대로 복원되는 왕복 통합 테스트. 복원이 빈 목록이면 회차 계산(`checkouts.size + 1`)이 컴파일과 기존 테스트를 통과한 채로 틀린다.
+- 재요청을 다시 저장해도 checkout 행이 늘지 않는 것.
+- 낙관적 잠금 충돌에서 진 요청이 다시 조회해 기존 checkout 결과를 받는 것.
 
 ## TDD 검증 기록
 
