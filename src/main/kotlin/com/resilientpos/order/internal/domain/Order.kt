@@ -5,6 +5,7 @@ import com.resilientpos.foundation.DomainException
 import com.resilientpos.foundation.IdentifierGenerator
 import com.resilientpos.foundation.Money
 import com.resilientpos.foundation.Transition
+import com.resilientpos.order.CheckoutId
 import com.resilientpos.order.ClientOrderId
 import com.resilientpos.order.CreateOrderCommand
 import com.resilientpos.order.CreateOrderLine
@@ -64,7 +65,7 @@ class Order private constructor(
     fun requestCheckout(ids: IdentifierGenerator, now: Instant): Transition<Order, OrderEvent> =
         when (status) {
             OrderStatus.OPEN -> {
-                val checkout = Checkout(checkouts.size + 1, total)
+                val checkout = Checkout(CheckoutId(ids.next()), checkouts.size + 1, total)
                 val requested = Order(
                     id = id,
                     storeId = storeId,
@@ -93,6 +94,7 @@ class Order private constructor(
         const val EMPTY_ORDER = "EMPTY_ORDER"
         const val CURRENCY_MISMATCH = "CURRENCY_MISMATCH"
         const val IDEMPOTENCY_CONFLICT = "IDEMPOTENCY_CONFLICT"
+        const val ORDER_NOT_FOUND = "ORDER_NOT_FOUND"
 
         /**
          * 이미 저장된 주문을 그대로 재구성한다. 주문 단위 생성 불변식은 최초 `create` 때 검증됐으므로 다시 묻지 않는다.

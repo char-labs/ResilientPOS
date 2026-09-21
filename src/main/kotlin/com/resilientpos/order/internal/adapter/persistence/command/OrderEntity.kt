@@ -46,7 +46,7 @@ class OrderEntity(
         status = order.status
     }
 
-    fun toDomain(lines: List<OrderLineEntity>): Order {
+    fun toDomain(lines: List<OrderLineEntity>, checkouts: List<OrderCheckoutEntity>): Order {
         val resolvedCurrency = Currency.getInstance(currency)
         return Order.restore(
             id = OrderId(id),
@@ -56,9 +56,7 @@ class OrderEntity(
             currency = resolvedCurrency,
             status = status,
             lines = lines.map { it.toDomain(resolvedCurrency) },
-            // ponytail: t_order_checkout을 읽는 다음 PR(order-request-checkout-persistence)까지 빈 목록이다.
-            // 그 PR 전에는 CHECKOUT_REQUESTED 주문을 저장하는 경로가 없다.
-            checkouts = emptyList(),
+            checkouts = checkouts.map { it.toDomain(resolvedCurrency) },
         )
     }
 

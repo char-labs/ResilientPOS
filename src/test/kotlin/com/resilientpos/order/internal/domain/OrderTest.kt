@@ -4,6 +4,7 @@ import com.resilientpos.foundation.DomainErrorKind
 import com.resilientpos.foundation.DomainException
 import com.resilientpos.foundation.IdentifierGenerator
 import com.resilientpos.foundation.Money
+import com.resilientpos.order.CheckoutId
 import com.resilientpos.order.ClientOrderId
 import com.resilientpos.order.CreateOrderCommand
 import com.resilientpos.order.CreateOrderLine
@@ -26,6 +27,7 @@ class OrderTest {
     private val krw = Currency.getInstance("KRW")
     private val usd = Currency.getInstance("USD")
     private val now = Instant.parse("2026-09-16T00:00:00Z")
+    private val checkoutId = UUID.fromString("00000000-0000-0000-0000-0000000000d1")
     private val blankValues = listOf("", "   ", "\t", "\n", "\u00A0")
 
     private val storeId = StoreId(UUID.fromString("00000000-0000-0000-0000-000000000001"))
@@ -265,10 +267,10 @@ class OrderTest {
         )
         val order = Order.create(command, FixedIdentifierGenerator(emptyList()), now).aggregate
 
-        val requested = order.requestCheckout(FixedIdentifierGenerator(emptyList()), now).aggregate
+        val requested = order.requestCheckout(FixedIdentifierGenerator(listOf(checkoutId)), now).aggregate
 
         assertEquals(OrderStatus.CHECKOUT_REQUESTED, requested.status)
-        assertEquals(listOf(Checkout(1, Money.of("3500", krw))), requested.checkouts)
+        assertEquals(listOf(Checkout(CheckoutId(checkoutId), 1, Money.of("3500", krw))), requested.checkouts)
         assertEquals(order.id, requested.id)
         assertEquals(order.storeId, requested.storeId)
         assertEquals(order.terminalId, requested.terminalId)
@@ -287,7 +289,7 @@ class OrderTest {
         val command = createOrderCommand(lines = listOf(orderLine(unitPrice = Money.of("1000", krw), quantity = 2)))
         val order = Order.create(command, FixedIdentifierGenerator(emptyList()), now).aggregate
 
-        val events = order.requestCheckout(FixedIdentifierGenerator(listOf(eventId)), requestedAt).events
+        val events = order.requestCheckout(FixedIdentifierGenerator(listOf(checkoutId, eventId)), requestedAt).events
 
         assertEquals(
             listOf(
@@ -310,10 +312,10 @@ class OrderTest {
         val command = createOrderCommand(lines = listOf(orderLine(unitPrice = Money.zero(krw), quantity = 1)))
         val order = Order.create(command, FixedIdentifierGenerator(emptyList()), now).aggregate
 
-        val transition = order.requestCheckout(FixedIdentifierGenerator(emptyList()), now)
+        val transition = order.requestCheckout(FixedIdentifierGenerator(listOf(checkoutId)), now)
 
         assertEquals(OrderStatus.CHECKOUT_REQUESTED, transition.aggregate.status)
-        assertEquals(listOf(Checkout(1, Money.zero(krw))), transition.aggregate.checkouts)
+        assertEquals(listOf(Checkout(CheckoutId(checkoutId), 1, Money.zero(krw))), transition.aggregate.checkouts)
         assertEquals(Money.zero(krw), (transition.events.single() as OrderPaymentRequested).amount)
     }
 
@@ -322,9 +324,9 @@ class OrderTest {
         val command = createOrderCommand(currency = usd, lines = listOf(orderLine(unitPrice = Money.of("10.10", usd), quantity = 3)))
         val order = Order.create(command, FixedIdentifierGenerator(emptyList()), now).aggregate
 
-        val transition = order.requestCheckout(FixedIdentifierGenerator(emptyList()), now)
+        val transition = order.requestCheckout(FixedIdentifierGenerator(listOf(checkoutId)), now)
 
-        assertEquals(listOf(Checkout(1, Money.of("30.30", usd))), transition.aggregate.checkouts)
+        assertEquals(listOf(Checkout(CheckoutId(checkoutId), 1, Money.of("30.30", usd))), transition.aggregate.checkouts)
         assertEquals(Money.of("30.30", usd), (transition.events.single() as OrderPaymentRequested).amount)
     }
 

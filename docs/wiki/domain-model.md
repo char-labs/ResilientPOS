@@ -57,7 +57,7 @@ Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰�
 
 | 루트 | 자식 엔티티 (같은 트랜잭션) | 왜 같은 aggregate인가 |
 |---|---|---|
-| `Order` | `OrderLine`(판매 시점 상품 코드·이름·단가·수량), checkout(회차별 확정 금액·통화. 정책 버전은 store 정책이 생길 때 더한다. 도메인에서는 식별자 없는 값 객체 `Checkout`이고 `t_order_checkout`의 키는 영속화 PR이 정한다) | line 변경과 금액, checkout 확정과 상태 전이가 한 커밋으로 맞아야 한다 |
+| `Order` | `OrderLine`(판매 시점 상품 코드·이름·단가·수량), checkout(회차별 확정 금액. 통화는 주문의 것이다. 정책 버전은 store 정책이 생길 때 더한다. `Checkout`은 `OrderLine`처럼 도메인 ID `CheckoutId`를 갖고 `t_order_checkout`의 PK는 `id` 하나다. 회차 중복은 unique `(order_id, checkout_no)`가 막는다) | line 변경과 금액, checkout 확정과 상태 전이가 한 커밋으로 맞아야 한다 |
 | `PaymentAttempt` | provider 요청·응답 결과. provider idempotency 기록이 attempt의 자식인지 컨텍스트 공용 테이블인지는 payment PR spec에서 정한다 | "provider 결과를 한 번만 적용했다"를 같은 트랜잭션의 기록이 증명한다. 취소는 별도 attempt다([외부 연동 전략](../references/04_External_Integration_Strategy.md)) |
 | `Terminal` | credential rotation 이력 | 회전과 이력이 따로 커밋되면 어느 자격증명이 유효한지 알 수 없다 |
 | `TerminalSyncState` | operation 접수 기록(`t_sync_operation`) | watermark 전진과 접수 기록이 함께 커밋돼야 gap을 건너뛰지 않는다 |
@@ -166,6 +166,7 @@ Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰�
 사례:
 - `t_order.payload_hash`는 질문 1·3에서 걸려 추가하지 않았다. 대상 필드가 이미 `t_order`·`t_order_line`에 있고 line 변경 명령이 생기기 전까지는 현재 상태가 최초 요청과 같아서 직접 비교로 대체했다([order-idempotency-conflict](../spec/2026-09-20-order-idempotency-conflict.md)).
 - `sync`의 operation 접수 기록이 가질 payload hash는 같은 질문을 통과한다. 접수 기록은 operation의 payload를 저장하지 않으므로 도출할 수 없고(질문 1), `(terminalId, operationId)` 재전송 판정의 근거다(질문 4).
+- `t_order_checkout`은 통화 컬럼을 두지 않았다(질문 1, `t_order.currency`에서 읽는다). `amount`는 지금은 line 합계와 같아도 확정 시점에만 알 수 있는 값이라 둔다(질문 3·4). 읽고 판단한 뒤 쓰는 `RequestCheckout`의 경합은 주문 행 잠금(`PESSIMISTIC_WRITE`, PostgreSQL에서는 `for no key update`, 대기 3초 제한)이 막고, unique `(order_id, checkout_no)`와 `@Version`이 그 뒤의 방어선이다(질문 6). Hibernate가 INSERT를 UPDATE보다 먼저 flush해서 잠금이 없으면 `@Version`보다 unique 제약이 먼저 걸린다([order-request-checkout-persistence](../spec/2026-09-21-order-request-checkout-persistence.md)).
 - `t_order`의 unique `(terminal_id, client_order_id)`는 질문 4·6의 답이다. Redis로 중복 요청을 먼저 걸러내더라도 이 제약은 남는다. 멱등 키는 삭제 뒤에도 재사용하면 안 되므로 partial unique로 바꾸지 않는다. 주문을 soft delete하는 명령이 생기면 `findByClientOrderId`가 삭제된 주문도 찾게 해야 한다. 지금은 주문을 삭제하는 코드가 없다.
 
 기술 근거(2026-09-20 확인, PostgreSQL 18·Flyway 12.4.0·Hibernate 7.4.5): [ALTER TABLE](https://www.postgresql.org/docs/18/sql-altertable.html), [CREATE INDEX](https://www.postgresql.org/docs/18/sql-createindex.html), [Explicit Locking](https://www.postgresql.org/docs/18/explicit-locking.html), [Transaction Isolation](https://www.postgresql.org/docs/18/transaction-iso.html), [Flyway 트랜잭션 처리](https://documentation.red-gate.com/fd/migration-transaction-handling-273973399.html), [Flyway PostgreSQL 락](https://documentation.red-gate.com/fd/postgresql-database-277579325.html). Hibernate `validate`가 매핑된 컬럼만 검사한다는 점은 사용자 가이드에 없어서 `AbstractSchemaValidator` 소스로 확인했다.
