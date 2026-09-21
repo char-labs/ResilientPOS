@@ -13,7 +13,7 @@
 | 식별자 | `uuid-creator` 6.1.1 (UUID v7) |
 | 구조 검증 | Spring Modulith 경계 검증, ArchUnit 1.4.2 의존성 방향 가드 |
 | 통합 테스트 | Testcontainers 2.0.5 PostgreSQL 18. `./gradlew test` 실행에 Docker가 필요하다 |
-| 테스트 | Kotlin Test/JUnit 5, Spring Boot 테스트 starter, Fixture Monkey 1.2.3; 총 64개 (컨텍스트 1, 스키마 3, 모듈 구조 2, 의존성 방향 2, Money 8, 식별자 4, Order 15, OrderCommandFacade 9, API advice 8, OrderController 8, 주문 API 통합 4) |
+| 테스트 | Kotlin Test/JUnit 5, Spring Boot 테스트 starter, Fixture Monkey 1.2.3; 총 72개 (컨텍스트 1, 스키마 3, 모듈 구조 2, 의존성 방향 2, Money 8, 식별자 4, Order 15, OrderCommandFacade 9, RequestCheckout 통합 8, API advice 8, OrderController 8, 주문 API 통합 4) |
 | 로컬 하네스 | Python 3 표준 라이브러리 |
 
 근거: [build.gradle.kts](../../build.gradle.kts), [Gradle Wrapper](../../gradle/wrapper/gradle-wrapper.properties), [애플리케이션 설정](../../src/main/resources/application.yaml).
@@ -33,10 +33,14 @@
 - `order` 모듈은 공개 계약(`OrderCommandFacade` 클래스, `CreateOrderCommand`·`CreateOrderResult`, `OrderId`·`ClientOrderId`,
   `OrderStatus`, `OrderEvent`·`OrderCreated`)과 `internal/domain`의 `Order`·`OrderLine`이 있다. `Order.create`가 생성 불변식
   (line 1개 이상, 상품 코드·상품명 blank 아님, 수량 1 이상, 단가 0 이상, 통화 일치)을 검증하고 `Transition`을 돌려준다([order-domain-model](../spec/2026-09-16-order-domain-model.md)).
-  상태는 `OPEN`과 `CHECKOUT_REQUESTED` 둘이다. `order.requestCheckout(ids, now)`가 `OPEN` 주문의 합계를 다음 회차 `Checkout`(`checkoutNo`, `amount`)으로 확정하고
+  상태는 `OPEN`과 `CHECKOUT_REQUESTED` 둘이다. `order.requestCheckout(ids, now)`가 `OPEN` 주문의 합계를 다음 회차 `Checkout`(`id`, `checkoutNo`, `amount`)으로 확정하고
   `CHECKOUT_REQUESTED`로 전이하면서 `OrderPaymentRequested`(`orderId`·`storeId`·`terminalId`·`checkoutNo`·`amount`)를 만든다. 이미 요청된 주문이면 같은 주문과 빈 이벤트를 돌려준다.
-  합계가 0원이어도 똑같이 전이한다. store 정책과 정책 버전은 아직 없다. **이 전이는 도메인에만 있다.** Facade 메서드, `t_order_checkout`, endpoint가 없어서
-  `CHECKOUT_REQUESTED` 주문을 만들거나 저장하는 경로가 없고 `OrderEntity.toDomain()`은 `checkouts`를 빈 목록으로 복원한다([order-request-checkout-domain](../spec/2026-09-21-order-request-checkout-domain.md)).
+  합계가 0원이어도 똑같이 전이한다. store 정책과 정책 버전은 아직 없다([order-request-checkout-domain](../spec/2026-09-21-order-request-checkout-domain.md)).
+  `OrderCommandFacade.requestCheckout(RequestCheckoutCommand)`이 `@Transactional` 안에서 주문 행을 잠그고 읽어(`findByIdForUpdate`, Hibernate가 PostgreSQL에 보내는 SQL은 `select ... for no key update`다) 전이를 저장하고
+  `OrderPaymentRequested`를 발행(plain Spring 이벤트)한 뒤 `RequestCheckoutResult`(`orderId`·`status`·`checkoutNo`·`amount`)를 돌려준다. 없는 주문은 `ORDER_NOT_FOUND`(`NOT_FOUND`의 첫 사용처)다.
+  순차 재시도와 겹친 요청 모두 기존 결과를 받는다. 겹친 요청은 앞 커밋을 기다린 뒤 `CHECKOUT_REQUESTED`를 읽는다. 잠금 대기는 3초로 제한한다(`jakarta.persistence.lock.timeout` 힌트, Hibernate가 조회 앞뒤로 `set local lock_timeout`을 걸고 되돌린다). 넘으면 `PessimisticLockingFailureException` 계열 예외로 실패하고 아무것도 바꾸지 않는다. 이 예외를 HTTP 응답으로 바꾸는 매핑은 아직 없다. `findByIdForUpdate`는 트랜잭션에서 그 주문의 첫 접촉이어야 한다. 먼저 일반 조회한 뒤 그 사이에 주문이 바뀌었으면 낡은 값을 받지 않고 낙관적 잠금 예외로 실패한다. `V003__order_request_checkout.sql`이 `t_order_checkout`
+  (`id`, `order_id`, `checkout_no`, `amount`, unique `(order_id, checkout_no)`)을 만들고 통화는 `t_order.currency`에서 읽는다. checkout 행은 넣기만 하고 갱신·삭제하지 않는다.
+  **checkout을 요청하는 endpoint는 아직 없다**([order-request-checkout-persistence](../spec/2026-09-21-order-request-checkout-persistence.md)).
   `OrderCommandFacade`가 `@Transactional` 안에서 같은 `(terminalId, clientOrderId)`의 주문을 찾으면 `order.verifySamePayload(command)`로
   payload를 확인한 뒤 기존 결과를 돌려주고, 아니면
   `Order.create` → `OrderRepository.save` → `OrderCreated` 발행(plain Spring 이벤트, EPR 없음) 순으로 진행한다. JPA adapter는
@@ -47,7 +51,7 @@
   컬럼은 없다. line·`storeId`·`currency`를 바꾸는 명령이 생기면 현재 상태가 최초 요청과 달라지므로 그 PR이 최초 요청 기록을 도입한다
   ([order-idempotency-conflict](../spec/2026-09-20-order-idempotency-conflict.md)).
   첫 공개 endpoint `POST /v1/orders`가 `internal/adapter/web`의 `OrderController`에 있다. 요청 본문을 `CreateOrderCommand`로 옮겨 Facade를 부르고
-  201과 `data{orderId, status}`를 돌려준다. 같은 `(terminalId, clientOrderId)` 재시도도 201과 같은 본문이다. 형식 오류는 타입이 있는 DTO의
+  201과 `data{orderId, status}`를 돌려준다. 같은 `(terminalId, clientOrderId)` 재시도도 201이고 `orderId`가 같다. `status`는 주문의 현재 상태라서 checkout을 요청한 뒤의 재시도는 `CHECKOUT_REQUESTED`를 받는다. 형식 오류는 타입이 있는 DTO의
   Jackson 역직렬화가 거절해 `400 BAD_REQUEST`가 되고 업무 규칙은 도메인이 거절한다. 같은 키에 다른 payload가 오면 `409 IDEMPOTENCY_CONFLICT`다.
   빈 문자열이거나 공백뿐인 `productCode`·`productName`은 `OrderLine`이 `BLANK_PRODUCT_CODE`·`BLANK_PRODUCT_NAME`(400)으로 거절하고 값은 다듬지 않는다. 이미 주문이 있는 키로 오면 멱등 판정이 먼저라서 409다([order-line-blank-product](../spec/2026-09-21-order-line-blank-product.md)).
   `productCode` 64자·`productName` 255자를 넘는 입력이 DB 오류로 `500 INTERNAL_ERROR`가 되는 것과 같은 키의 동시 요청이 unique 제약 위반으로 끝나는 것은 알려진 빈틈이다. 주문을 soft delete하면 같은 키의 재시도가
@@ -104,7 +108,7 @@ PostgreSQL이 유일한 엔진이다. H2는 제거했다. 테스트가 운영과
 애플리케이션이 테이블을 만들거나 바꾸지 않는다. 마이그레이션이 실패하면 애플리케이션이 뜨지 않는다.
 
 파일명은 `V(번호)__(소유 모듈)_(변경 내용).sql`이다. `V001__baseline.sql`은 의도적으로 비어 있고, 업무 테이블은 각
-모듈이 후속 마이그레이션으로 추가한다. 첫 업무 마이그레이션은 `V002__order_create_order.sql`(`t_order`, `t_order_line`)이다.
+모듈이 후속 마이그레이션으로 추가한다. 첫 업무 마이그레이션은 `V002__order_create_order.sql`(`t_order`, `t_order_line`)이고 `V003__order_request_checkout.sql`이 `t_order_checkout`을 더했다.
 스키마를 바꾸는 PR은 [도메인 모델](domain-model.md)의 "스키마 변경 검토" 절 질문(필요성·정합성·반영)에 spec에서 답한다.
 
 통합 테스트는 Testcontainers로 실제 PostgreSQL 18을 띄운다. **`./gradlew test`에 Docker가 필요하다.** 컨테이너는
