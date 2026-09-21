@@ -53,6 +53,7 @@
 - `POST` endpoint, 요청·응답 DTO, REST Docs의 `data.status` 설명. 다음 PR `order-request-checkout-api`.
 - Event Publication Registry. `payment` PR 전에 도입한다.
 - 잠금 대기 초과를 HTTP 응답으로 바꾸는 매핑. 대기 제한 자체는 범위 조정 2로 이 PR에 넣었다. provider 호출처럼 긴 작업을 주문 트랜잭션 안에서 하지 않는다는 기존 원칙은 그대로 전제다.
+- 애플리케이션 락(여러 인스턴스에 걸친 분산 락). Redis를 도입할 때 Redis로 한다(2026-09-21 사용자 결정). 이 PR의 잠금은 DB 락(PostgreSQL 행 잠금)뿐이고 JVM 락이나 advisory lock 기반의 락을 따로 만들지 않는다. Redis 락이 앞에 놓여도 [도메인 모델](../wiki/domain-model.md) 4.7절 질문 6대로 행 잠금·unique 제약·`@Version`은 마지막 방어선으로 남는다.
 - `CreateOrder`의 같은 키 동시 요청 빈틈. 주문 행이 아직 없어서 행 잠금으로 풀 수 없는 별개의 문제다.
 - 요청한 단말이 주문의 단말·매장과 같은지 확인하는 인가. 단말 인증이 아직 없다.
 
