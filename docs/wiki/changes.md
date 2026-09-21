@@ -265,5 +265,6 @@
 - 검토: 제출 전 multi-review(Claude 86점, Codex 84점, Gemini는 CLI가 없어 미실행)와 구현자가 아닌 `code-reviewer`의 스키마 대조(불일치 없음)를 실행했다. 두 리뷰어가 함께 짚은 "같은 트랜잭션에서 먼저 일반 조회한 뒤 잠금 조회" 경로는 임시 테스트로 확인했다. Hibernate 7.4.5가 낡은 값을 돌려주지 않고 `ObjectOptimisticLockingFailureException`으로 실패했고 checkout 행은 하나였다. port의 KDoc에 호출 순서를 적었다. 동시성 테스트는 1초 타임아웃 대신 `pg_stat_activity`의 잠금 대기를 확인하도록 바꿨고, 잠금을 빼면 그 테스트가 실패하는 것을 확인했다.
 - 결정(범위 조정 2): 잠금 대기를 3초로 제한했다. 처음에는 다음 PR로 넘겼다가 이 PR이 잠금을 도입했으므로 그 위험의 완화도 여기서 하기로 했다. 대기하는 요청이 커넥션을 쥐고 있어서 무제한 대기는 한 주문의 경합을 풀 전체로 번지게 한다. 커넥션 전체가 아니라 잠금 조회 한 곳에만 걸어서 Flyway와 다른 쿼리의 동작은 바뀌지 않는다. 넘으면 `PessimisticLockingFailureException` 계열 예외이고 단말이 다시 요청하면 기존 결과를 받는다.
 - 발견: Hibernate 7.4.5는 PostgreSQL에서 `jakarta.persistence.lock.timeout` 힌트를 지원한다. 현재 값을 읽고 `set local lock_timeout = 3000`을 건 뒤 조회하고 되돌린다(잠금 조회 한 번에 문장이 셋 더 나간다). `PESSIMISTIC_WRITE`의 SQL은 `for update`가 아니라 `for no key update`다. 같은 잠금끼리 충돌하므로 직렬화는 그대로 성립한다.
+- 결정: 이 PR의 잠금은 DB 락뿐이다. 애플리케이션 락(분산 락)은 Redis를 도입할 때 Redis로 하고 그 전에는 만들지 않는다. Redis 락은 경합을 앞에서 줄이는 수단이고 DB의 행 잠금·unique 제약·`@Version`은 마지막 방어선으로 남는다.
 - 다음 PR로 넘긴 것: 잠금 대기 초과를 재시도 가능한 HTTP 응답으로 바꾸는 매핑, 인가가 없다는 알려진 빈틈의 기록.
 - 갱신: [현재 상태](current-state.md), [도메인 모델](domain-model.md).
