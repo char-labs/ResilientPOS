@@ -9,7 +9,7 @@
 - Facade 흐름: `@Transactional` 안에서 주문을 잠금 조회하고, 없으면 `DomainException(ORDER_NOT_FOUND, kind=NOT_FOUND)`을 던진다. `order.requestCheckout(ids, now)`의 결과를 저장하고 이벤트를 발행(plain Spring 이벤트)한 뒤 마지막 회차의 `Checkout`으로 결과를 만든다. 재요청이면 도메인이 같은 주문과 빈 이벤트를 돌려주므로 같은 경로가 기존 결과를 돌려주고 이벤트를 다시 내지 않는다. `NOT_FOUND`의 첫 사용처다.
 - 도메인 변경: `Checkout`이 `CheckoutId`(UUID v7, 모듈 루트)를 갖는다. `requestCheckout`은 식별자를 checkout, 이벤트 순서로 만든다.
 - 영속화: `V003__order_request_checkout.sql`이 `t_order_checkout`을 만든다. `OrderCheckoutEntity`와 `OrderCheckoutJpaRepository`를 더하고 `OrderPersistenceAdapter`가 저장과 복원에서 checkout을 조립한다. checkout은 확정 뒤에 바뀌지 않으므로 어댑터는 없는 ID만 INSERT하고 갱신·삭제하지 않는다. `OrderEntity.toDomain()`의 빈 목록 주석을 지운다.
-- `OrderRepository` port에 `findByIdForUpdate(id)`를 더한다. JPA 구현은 `PESSIMISTIC_WRITE`(PostgreSQL `select for update`)다.
+- `OrderRepository` port에 `findByIdForUpdate(id)`를 더한다. JPA 구현은 `PESSIMISTIC_WRITE`다. Hibernate가 PostgreSQL에 보내는 SQL은 `select ... for no key update`이고 같은 잠금끼리 충돌하므로 같은 주문의 전이가 직렬화된다.
 - 정합성 불변식: 상태 전이(`t_order.status`)와 checkout 행이 한 커밋이다. 한 주문에 같은 회차는 하나다(unique `(order_id, checkout_no)`). 거절된 요청은 아무 행도 바꾸지 않는다.
 - 실패·재시도·복구: 순차 재시도는 기존 결과를 받는다. 동시 요청은 주문 행 잠금이 직렬화해서 뒤 요청이 앞 커밋을 기다린 뒤 `CHECKOUT_REQUESTED`를 읽고 기존 결과를 받는다. 이벤트 전달 실패의 복구는 Event Publication Registry의 몫이고 이 PR에는 없다.
 - 관측성: 새 로그 속성은 없다. `ORDER_NOT_FOUND`는 기존 `DomainException` 경로로 남는다.
@@ -17,7 +17,7 @@
 
 ### 합의한 결정 (2026-09-21 grill)
 - 키: `@EmbeddedId`와 복합 PK를 쓰지 않는다. `Checkout`이 `OrderLine`처럼 도메인 ID를 갖고 테이블 PK는 `id` 하나다. 볼트 규칙 "자식도 도메인 ID를 가진다"를 그대로 따른다. 회차 중복은 unique `(order_id, checkout_no)`가 막는다.
-- 동시 요청: 주문 행 잠금으로 직렬화한다. 예외를 재시도 가능한 409로 바꾸는 안은 unique 위반을 일반 매핑해야 해서 버렸다. Facade가 새 트랜잭션에서 다시 읽는 안은 `sync`가 바깥 트랜잭션을 소유하는 구조([도메인 모델](../wiki/domain-model.md) 4.6절)에서 이미 rollback-only가 되어 동작하지 않아 버렸다. 잠금은 그 구조에서도 그대로 동작한다.
+- 동시 요청: 주문 행 잠금으로 직렬화한다(합의 때는 `select for update`라고 불렀고 실제 SQL은 `for no key update`다). 예외를 재시도 가능한 409로 바꾸는 안은 unique 위반을 일반 매핑해야 해서 버렸다. Facade가 새 트랜잭션에서 다시 읽는 안은 `sync`가 바깥 트랜잭션을 소유하는 구조([도메인 모델](../wiki/domain-model.md) 4.6절)에서 이미 rollback-only가 되어 동작하지 않아 버렸다. 잠금은 그 구조에서도 그대로 동작한다.
 - 통화 컬럼을 두지 않는다. `t_order_line`처럼 `t_order.currency`에서 읽는다.
 
 ### 범위 조정 (2026-09-21, 제출 전 multi-review와 스키마 대조 반영)
@@ -43,7 +43,7 @@
 3. 나중에 채울 수 있는가: 없다. 회차별 확정 금액은 확정 시점에만 알 수 있다.
 4. 마지막 방어선: `amount`는 판매 시점 확정 금액이고 unique `(order_id, checkout_no)`는 "한 주문에 같은 회차는 하나"의 방어선이다. 잠금이 빠지거나 다른 경로가 생겨도 이 제약이 중복 회차를 막는다. checkout은 삭제하지 않으므로 soft delete된 행도 제약에 계속 걸리는 것이 맞고 partial unique로 두지 않는다.
 5. 정본: 확정 금액의 정본은 `t_order_checkout.amount` 하나다. `OrderPaymentRequested.amount`는 같은 트랜잭션에서 같은 `Checkout`으로 만든 사본이고 `payment`가 attempt에 기록할 값이다. 어긋났을 때의 복구(승인 금액과 checkout 대조)는 `MarkOrderPaid` PR이 맡는다.
-6. check-then-act: Facade가 `status`를 읽고 전이를 정한다. 경합은 주문 행의 `select for update`가 막는다. 잠금이 없어도 루트의 `status`가 바뀌므로 `@Version`이, 그리고 unique `(order_id, checkout_no)`가 두 번째 커밋을 거절한다. Hibernate가 INSERT를 UPDATE보다 먼저 flush하므로 실제로 먼저 걸리는 것은 unique 제약이다. 어댑터는 주문, line, checkout을 세 쿼리로 읽는다. 쓰기 경로는 주문 행을 먼저 잠그고 나머지를 읽으므로 같은 주문의 다른 커밋이 끼어들지 않는다. 잠금 없는 읽기(`findById`, `findByClientOrderId`)는 READ COMMITTED에서 세 쿼리가 서로 다른 커밋을 읽을 수 있어서 `OPEN`인데 `checkouts`가 하나인 주문이 복원될 수 있다. 전이 판단에는 `findByIdForUpdate`만 쓰고, 주문 생성 재시도 경로는 `checkouts`를 읽지 않으므로 허용한다. line만 바꾸는 저장은 `t_order`를 UPDATE하지 않아 루트 `@Version`이 오르지 않는다. `ChangeOrderLine`을 넣는 PR이 같은 잠금 조회를 쓰거나 version 증가를 함께 정한다. 잠금이 우회돼 unique 제약에 걸리면 `DataIntegrityViolationException`이고 HTTP에서는 500이다. `CreateOrder`의 같은 키 동시 요청과 같은 성질의 알려진 빈틈이다.
+6. check-then-act: Facade가 `status`를 읽고 전이를 정한다. 경합은 주문 행 잠금(`for no key update`, 대기 3초 제한)이 막는다. 잠금이 없어도 루트의 `status`가 바뀌므로 `@Version`이, 그리고 unique `(order_id, checkout_no)`가 두 번째 커밋을 거절한다. Hibernate가 INSERT를 UPDATE보다 먼저 flush하므로 실제로 먼저 걸리는 것은 unique 제약이다. 어댑터는 주문, line, checkout을 세 쿼리로 읽는다. 쓰기 경로는 주문 행을 먼저 잠그고 나머지를 읽으므로 같은 주문의 다른 커밋이 끼어들지 않는다. 잠금 없는 읽기(`findById`, `findByClientOrderId`)는 READ COMMITTED에서 세 쿼리가 서로 다른 커밋을 읽을 수 있어서 `OPEN`인데 `checkouts`가 하나인 주문이 복원될 수 있다. 전이 판단에는 `findByIdForUpdate`만 쓰고, 주문 생성 재시도 경로는 `checkouts`를 읽지 않으므로 허용한다. line만 바꾸는 저장은 `t_order`를 UPDATE하지 않아 루트 `@Version`이 오르지 않는다. `ChangeOrderLine`을 넣는 PR이 같은 잠금 조회를 쓰거나 version 증가를 함께 정한다. 잠금이 우회돼 unique 제약에 걸리면 `DataIntegrityViolationException`이고 HTTP에서는 500이다. `CreateOrder`의 같은 키 동시 요청과 같은 성질의 알려진 빈틈이다.
 7. 락과 크기: 새 테이블 `CREATE TABLE`이라 기존 테이블에 락을 잡지 않는다. unique 제약의 인덱스가 `order_id`로 시작하므로 주문별 조회용 인덱스를 따로 두지 않는다.
 8. 이전 버전 호환: 이전 버전은 `t_order_checkout`을 모르고 `JPA validate`는 매핑된 엔티티만 검사하므로 기동과 쓰기에 영향이 없다. 이전 버전은 `CHECKOUT_REQUESTED`를 이미 읽을 수 있다(#31에서 enum 상수를 먼저 배포했다).
 9. 이벤트·캐시: `amount`와 `checkout_no`가 `OrderPaymentRequested`에 실린다. payload는 #31에서 정했고 이 PR은 바꾸지 않는다. 직렬화 형태와 하위 호환은 Event Publication Registry를 넣는 PR이 확인한다. 캐시는 없다.
@@ -110,19 +110,21 @@
 
 | 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
 |---|---|---|---|
-| 인수 조건 7: 도메인 테스트 4개의 식별자 순서(`OrderTest`) | `./gradlew test --tests 'com.resilientpos.order.internal.domain.OrderTest'`. `Checkout`에 `id`만 선언하고 도메인이 무작위 ID를 쓰는 상태에서 4개 실패: `Checkout`의 `id`가 생성기의 첫 값이 아니었고 이벤트의 `eventId`가 둘째 값이 아니었다 | 같은 명령. 15개 중 실패 0 | `./gradlew test`. 71개 중 실패 0 |
-| 인수 조건 1: `requestCheckout은 CHECKOUT_REQUESTED와 checkout 행을 저장하고 OrderPaymentRequested를 한 번 발행한다` | `./gradlew test --tests 'com.resilientpos.order.internal.application.OrderRequestCheckoutIntegrationTest'`. 마이그레이션·엔티티·Command·Result와 "저장도 전이도 하지 않는" Facade 최소 선언 상태에서 실패: `CHECKOUT_REQUESTED`를 기대했는데 `OPEN`이었다 | 같은 명령. 통과. 범위 조정으로 더한 `version` 0 확인은 RED 없이 통과했다 | `./gradlew test`. 71개 중 실패 0 |
-| 인수 조건 2: `checkout을 요청한 주문을 다시 읽으면 checkouts가 그대로 복원된다` | 같은 명령. 실패: 복원된 `checkouts`가 비어 `single()`이 `NoSuchElementException`을 던졌다 | 같은 명령. 통과 | `./gradlew test`. 71개 중 실패 0 |
-| 인수 조건 2 보강(범위 조정): `소수 자리가 있는 통화의 확정 금액도 저장하고 다시 읽으면 같은 값이다` | RED 없음. 구현 뒤에 더한 characterization 테스트라 처음부터 통과했다 | 같은 명령. 통과 | `./gradlew test`. 71개 중 실패 0 |
-| 인수 조건 3: `같은 주문의 requestCheckout 재요청은 기존 결과를 돌려주고 행과 이벤트를 늘리지 않는다` | 같은 명령. 실패: `CHECKOUT_REQUESTED`를 기대했는데 `OPEN`이었다 | 같은 명령. 통과 | `./gradlew test`. 71개 중 실패 0 |
-| 인수 조건 4: `없는 주문의 requestCheckout은 ORDER_NOT_FOUND다` | 같은 명령. 실패: `DomainException`을 기대했는데 `NoSuchElementException`이었다 | 같은 명령. 통과 | `./gradlew test`. 71개 중 실패 0 |
-| 인수 조건 5: `커밋 전인 requestCheckout과 겹친 요청은 기다렸다가 같은 결과를 받는다` | 같은 명령. RED를 두 번 관측했다. 최소 선언 상태에서 실패했고, 잠금 없이 Facade와 어댑터를 구현한 상태에서도 나머지 5개는 통과하고 이것만 실패했다. 뒤 요청이 기다리지 않고 먼저 끝났다(앞 트랜잭션은 flush 전이라 DB에 쓴 것이 없다). 범위 조정으로 판정을 `pg_stat_activity`의 잠금 대기 확인으로 바꾼 뒤에도 잠금을 빼고 실행해 "잠금 대기 세션 1을 기대했는데 0"으로 실패하는 것을 확인했다 | `findByIdForUpdate`를 넣은 뒤 같은 명령. 통과. `--rerun`으로 범위 조정 전 4회, 뒤 3회 반복해 모두 통과 | `./gradlew test`. 71개 중 실패 0 |
-| 인수 조건 6: `checkout을 요청한 주문의 생성 재시도는 CHECKOUT_REQUESTED를 돌려준다` | 같은 명령. 실패: `CHECKOUT_REQUESTED`를 기대했는데 `OPEN`이었다(checkout이 저장되지 않아서다). `create`의 코드는 바꾸지 않았다 | 같은 명령. 통과 | `./gradlew test`. 71개 중 실패 0 |
+| 인수 조건 7: 도메인 테스트 4개의 식별자 순서(`OrderTest`) | `./gradlew test --tests 'com.resilientpos.order.internal.domain.OrderTest'`. `Checkout`에 `id`만 선언하고 도메인이 무작위 ID를 쓰는 상태에서 4개 실패: `Checkout`의 `id`가 생성기의 첫 값이 아니었고 이벤트의 `eventId`가 둘째 값이 아니었다 | 같은 명령. 15개 중 실패 0 | `./gradlew test`. 72개 중 실패 0 |
+| 인수 조건 1: `requestCheckout은 CHECKOUT_REQUESTED와 checkout 행을 저장하고 OrderPaymentRequested를 한 번 발행한다` | `./gradlew test --tests 'com.resilientpos.order.internal.application.OrderRequestCheckoutIntegrationTest'`. 마이그레이션·엔티티·Command·Result와 "저장도 전이도 하지 않는" Facade 최소 선언 상태에서 실패: `CHECKOUT_REQUESTED`를 기대했는데 `OPEN`이었다 | 같은 명령. 통과. 범위 조정으로 더한 `version` 0 확인은 RED 없이 통과했다 | `./gradlew test`. 72개 중 실패 0 |
+| 인수 조건 2: `checkout을 요청한 주문을 다시 읽으면 checkouts가 그대로 복원된다` | 같은 명령. 실패: 복원된 `checkouts`가 비어 `single()`이 `NoSuchElementException`을 던졌다 | 같은 명령. 통과 | `./gradlew test`. 72개 중 실패 0 |
+| 인수 조건 2 보강(범위 조정): `소수 자리가 있는 통화의 확정 금액도 저장하고 다시 읽으면 같은 값이다` | RED 없음. 구현 뒤에 더한 characterization 테스트라 처음부터 통과했다 | 같은 명령. 통과 | `./gradlew test`. 72개 중 실패 0 |
+| 인수 조건 3: `같은 주문의 requestCheckout 재요청은 기존 결과를 돌려주고 행과 이벤트를 늘리지 않는다` | 같은 명령. 실패: `CHECKOUT_REQUESTED`를 기대했는데 `OPEN`이었다 | 같은 명령. 통과 | `./gradlew test`. 72개 중 실패 0 |
+| 인수 조건 4: `없는 주문의 requestCheckout은 ORDER_NOT_FOUND다` | 같은 명령. 실패: `DomainException`을 기대했는데 `NoSuchElementException`이었다 | 같은 명령. 통과 | `./gradlew test`. 72개 중 실패 0 |
+| 인수 조건 5: `커밋 전인 requestCheckout과 겹친 요청은 기다렸다가 같은 결과를 받는다` | 같은 명령. RED를 두 번 관측했다. 최소 선언 상태에서 실패했고, 잠금 없이 Facade와 어댑터를 구현한 상태에서도 나머지 5개는 통과하고 이것만 실패했다. 뒤 요청이 기다리지 않고 먼저 끝났다(앞 트랜잭션은 flush 전이라 DB에 쓴 것이 없다). 범위 조정으로 판정을 `pg_stat_activity`의 잠금 대기 확인으로 바꾼 뒤에도 잠금을 빼고 실행해 "잠금 대기 세션 1을 기대했는데 0"으로 실패하는 것을 확인했다 | `findByIdForUpdate`를 넣은 뒤 같은 명령. 통과. `--rerun`으로 범위 조정 전 4회, 뒤 3회 반복해 모두 통과 | `./gradlew test`. 72개 중 실패 0 |
+| 인수 조건 9(범위 조정 2): `잠금을 3초 넘게 기다린 요청은 잠금 실패로 끝나고 다시 요청하면 기존 결과를 받는다` | 같은 명령. 제한이 없는 상태에서 실패: `ExecutionException`을 기대했는데 8초 뒤에도 기다리고 있어서 `TimeoutException`이었다 | 잠금 조회에 `jakarta.persistence.lock.timeout` 3000 힌트를 넣은 뒤 같은 명령. 통과. `--rerun` 2회 반복 통과 | `./gradlew test`. 72개 중 실패 0 |
+| 인수 조건 6: `checkout을 요청한 주문의 생성 재시도는 CHECKOUT_REQUESTED를 돌려준다` | 같은 명령. 실패: `CHECKOUT_REQUESTED`를 기대했는데 `OPEN`이었다(checkout이 저장되지 않아서다). `create`의 코드는 바꾸지 않았다 | 같은 명령. 통과 | `./gradlew test`. 72개 중 실패 0 |
 
 ## 결과
-- 인수 조건 1~8을 충족했다. `./gradlew test`는 71개(기존 64, 신규 7) 중 실패 0이다. 실측 규모는 19파일이다(예상 16파일, 통합 테스트를 새 파일로 나눴고 엔티티와 repository가 파일 둘이다).
+- 인수 조건 1~9를 충족했다. `./gradlew test`는 72개(기존 64, 신규 8) 중 실패 0이다. 실측 규모는 19파일이다(예상 16파일, 통합 테스트를 새 파일로 나눴고 엔티티와 repository가 파일 둘이다).
 - 구현: `V003` `t_order_checkout`, `OrderCheckoutEntity`·`OrderCheckoutJpaRepository`, 어댑터의 checkout 저장·복원, `OrderRepository.findByIdForUpdate`, `OrderCommandFacade.requestCheckout`, `RequestCheckoutCommand`·`RequestCheckoutResult`, `CheckoutId`, `ORDER_NOT_FOUND`. `POST /v1/orders` 재시도의 `status`는 코드를 바꾸지 않고 테스트로 고정했다.
 - 개발 중 바뀐 것: checkout 통합 테스트를 기존 파일에 더하지 않고 `OrderRequestCheckoutIntegrationTest`로 나눴다(기존 파일이 200줄을 넘는다). spec의 변경 경로를 먼저 고쳤다.
 - 관측한 사실 두 가지를 기록한다. 잠금이 없으면 뒤 요청이 기다리지 않고 먼저 커밋한다. 같은 트랜잭션에서 먼저 일반 조회한 뒤 잠금 조회를 하면, 그 사이에 주문이 바뀐 경우 Hibernate 7.4.5가 `ObjectOptimisticLockingFailureException`으로 실패하고 checkout 행은 하나다. 뒤의 것은 임시 테스트로 확인했고 커밋하지 않았다.
 - multi-review: Claude 86점, Codex 84점, Gemini 미실행(CLI 없음). 스키마 대조는 `code-reviewer`가 했고 불일치가 없었다. 반영한 것은 위 범위 조정에 적었다. 반영하지 않은 것과 이유는 다음과 같다. `saved.checkouts.last()`에 방어 코드를 넣자는 제안은 `CHECKOUT_REQUESTED`인데 checkout 행이 없는 상태가 이 코드로는 만들어지지 않아서 넣지 않았다. 재요청 때 어댑터가 line과 checkout을 다시 읽는 쿼리 두 번은 port 계약을 흐리지 않으려고 그대로 뒀다. unique 제약에 이름을 붙이는 것과 `check (checkout_no > 0)`은 `V002`와 맞추려고 넣지 않았다. 복원 시 `setScale`이 던지는 `ArithmeticException`은 `OrderLineEntity`와 같은 기존 패턴이라 이 PR에서 바꾸지 않는다.
 - `tdd-driver`에 위임하지 않고 주 에이전트가 TDD 절차를 직접 수행했다.
+- 범위 조정 2: 잠금 대기를 3초로 제한했다. 구현 방식은 실행으로 정했다. JPA 힌트 `jakarta.persistence.lock.timeout`이 PostgreSQL에서 동작했다. SQL 로그로 확인한 Hibernate 7.4.5의 동작은 `select current_setting('lock_timeout', true)`, `set local lock_timeout = 3000`, 잠금 조회, `set local lock_timeout = 0` 순서다. 잠금 조회 한 번에 문장이 셋 더 나간다. 같은 로그에서 잠금 SQL이 `for update`가 아니라 `for no key update`인 것을 알게 되어 spec·wiki·KDoc의 표현을 고쳤다. 이 범위 조정의 구현은 multi-review 뒤에 넣었고 다시 리뷰하지 않았다. 변경은 repository 메서드의 힌트 한 줄과 상수, 테스트 하나다.
