@@ -13,7 +13,7 @@
 | 식별자 | `uuid-creator` 6.1.1 (UUID v7) |
 | 구조 검증 | Spring Modulith 경계 검증, ArchUnit 1.4.2 의존성 방향 가드 |
 | 통합 테스트 | Testcontainers 2.0.5 PostgreSQL 18. `./gradlew test` 실행에 Docker가 필요하다 |
-| 테스트 | Kotlin Test/JUnit 5, Spring Boot 테스트 starter, Fixture Monkey 1.2.3; 총 130개 (컨텍스트 1, 스키마 4, 모듈 구조 2, 의존성 방향 2, Money 25, 식별자 4, Order 19, 자원 상한 설정 3, Facade line 상한 1, OrderCommandFacade 11, RequestCheckout 통합 9, 버전 충돌 통합 1, 문장 수 통합 3, 이벤트 발행 기록 통합 7, API advice 9, OrderController 13, checkout Controller 5, 주문 API 통합 11) |
+| 테스트 | Kotlin Test/JUnit 5, Spring Boot 테스트 starter, Fixture Monkey 1.2.3; 총 136개 (컨텍스트 1, 스키마 4, 모듈 구조 2, 의존성 방향 2, Money 25, 식별자 4, Order 19, 자원 상한 설정 3, Facade line 상한 1, 오류 로그 요청 정보 6, OrderCommandFacade 11, RequestCheckout 통합 9, 버전 충돌 통합 1, 문장 수 통합 3, 이벤트 발행 기록 통합 7, API advice 9, OrderController 13, checkout Controller 5, 주문 API 통합 11) |
 | 로컬 하네스 | Python 3 표준 라이브러리 |
 
 근거: [build.gradle.kts](../../build.gradle.kts), [Gradle Wrapper](../../gradle/wrapper/gradle-wrapper.properties), [애플리케이션 설정](../../src/main/resources/application.yaml).
@@ -104,6 +104,10 @@
   `ErrorType`은 HTTP 공통 오류 5개만 가진다. 다섯째 `CONCURRENT_REQUEST`(409)는 Spring의 `ConcurrencyFailureException` 계열(잠금 대기 초과, 버전 충돌)을 받는다. 5xx로 집계하지 않는다. 고정 문구는 재시도를 약속하지 않는다. 다시 보내도 되는지는 그 endpoint가 멱등인지에 달려 있고, 지금의 쓰기 endpoint 둘(`POST /v1/orders`는 `clientOrderId`로, checkout은 상태로)은 멱등이다. 멱등이 아닌 쓰기 endpoint를 더하는 PR이 이 전제를 다시 본다. 409에는 재시도하면 안 되는 `IDEMPOTENCY_CONFLICT`도 있으므로 단말은 상태 코드가 아니라 `errorCode`로 분기한다. 이 계열에는 deadlock 패자와 직렬화 실패도 들어 있다. 단말의 중복 요청이 아니라 서버 코드의 잠금 순서 문제일 수 있으므로 WARN 로그의 `errorCode=CONCURRENT_REQUEST`에서 따로 본다. 커밋 시점의 버전 충돌도 이 매핑에 닿는다. 영속 계층이 `ObjectOptimisticLockingFailureException`을 내는 것은 `OrderVersionConflictIntegrationTest`가, 그 계열이 409가 되는 것은 `ApiAdviceTest`가 고정한다. 지금은 잠금 없이 `@Version`에 기대는 endpoint가 없어서 HTTP까지 잇는 테스트는 없다. unique 제약 위반(`DataIntegrityViolationException`)은 이 계열이 아니라서 계속 500이다. 응답 메시지는 고정 문구이고 예외 메시지는 로그에만 남는다. `DomainException`만 예외로,
   `kind`가 정한 상태(`INVALID` 400, `NOT_FOUND` 404, `CONFLICT` 409, `UNPROCESSABLE` 422)와 함께 예외의 `code`·`message`가 `error`에 그대로 나간다.
   매핑은 else 없는 `when`이라 `kind`를 추가하고 매핑을 빠뜨리면 컴파일되지 않는다. Bean Validation은 쓰지 않는다([api-response-advice](../spec/2026-09-19-api-response-advice.md)).
+  **오류 로그에는 요청 정보가 함께 남는다.** 형식은 `method=POST uri=/v1/orders errorCode=... : ...`이고 도메인 규칙 위반·표준 예외·처리하지 못한 예외 세 자리 모두에 적용된다.
+  경로 변수가 URI에 그대로 있어서 `POST /v1/orders/{orderId}/checkout`의 주문 식별자는 URI만으로 드러난다. advice가 endpoint별로 식별자를 뽑지 않는 이유다.
+  **쿼리 문자열은 남기지 않는다.** 지금 쿼리 파라미터를 쓰는 endpoint가 없고, 나중에 생겼을 때 개인정보가 로그로 흘러 들어가는 경로가 된다.
+  **요청 상관관계 ID(correlation id)와 접근 로그는 없다.** 구조화 로그(JSON)도 아직이다. 알려진 빈틈이다([error-log-request-context](../spec/2026-09-21-error-log-request-context.md)).
 - 제공된 요구사항 문서 7개는 [원문 목록](../references/README.md)에 보관했다. 요구사항 재정리와 원문 간 정합성 검토는 아직 수행하지 않았다.
 - 애플리케이션 작업에는 [기존 설계 원칙](../../README.md#engineering-principles)을 참고하되 도입 완료 여부는 코드로 확인한다.
 - 개발 기준은 [개발 규칙](development-workflow.md)이다. 공통 LLM 지침과 로컬 검사로 운영한다.

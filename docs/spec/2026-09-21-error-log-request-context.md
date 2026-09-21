@@ -57,12 +57,22 @@
 
 ## TDD 검증 기록
 
+RED 명령은 모두 `./gradlew test --tests '…ErrorLogRequestContextTest'`이고, 실패 이유는 로그에 `method=`가 없다는 것이다.
+
 | 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
 |---|---|---|---|
-| 도메인 규칙 위반 로그에 메서드와 URI가 남는다 | 미실행 | 미실행 | 미실행 |
-| 예상치 못한 예외 로그에 메서드와 URI가 남는다 | 미실행 | 미실행 | 미실행 |
-| 표준 예외 로그에도 남는다 | 미실행 | 미실행 | 미실행 |
-| 쿼리 문자열은 남지 않는다 | 미실행 | 미실행 | 미실행 |
+| 도메인 규칙 위반 로그에 메서드와 URI가 남는다 | FAILED — `메서드가 없다: errorCode=EMPTY_ORDER : …` | 같은 명령 — 통과 | `./gradlew test` — 통과 |
+| 경로 변수를 쓰는 요청은 URI만으로 대상이 드러난다 | FAILED — 같은 이유 | 같은 명령 — 통과 | `./gradlew test` — 통과 |
+| 예상치 못한 예외 로그에도 메서드와 URI가 남고 원인이 보존된다 | FAILED — 같은 이유 | 같은 명령 — 통과 | `./gradlew test` — 통과 |
+| Spring MVC 표준 예외 로그에도 남는다 | FAILED — 같은 이유 | 같은 명령 — 통과 | `./gradlew test` — 통과 |
+| 쿼리 문자열은 로그에 남지 않는다 | FAILED — 같은 이유 | 같은 명령 — 통과 | `./gradlew test` — 통과 |
+| 성공 응답은 오류 로그를 남기지 않는다 | 처음부터 통과 | 같은 명령 — 통과 | `./gradlew test` — 통과 |
 
 ## 결과
-개발 전 작성. 개발 후 실행 결과와 변경 이유를 추가한다.
+`./gradlew test` 132개 통과다(직전 126 + 신규 6).
+
+로그 형식은 `method=POST uri=/v1/orders errorCode=BAD_REQUEST : …`이다. 세 자리 모두에 적용된다. `handleExceptionInternal`은 `failBody`를 거치므로 표준 예외도 자동으로 따라왔다.
+
+`handleExceptionInternal`만 다른 방식으로 요청을 얻는다. 시그니처가 `HttpServletRequest`가 아니라 `WebRequest`이기 때문이다. MVC는 늘 `ServletWebRequest`를 넘기지만 타입으로는 단정할 수 없고, 단언으로 깨면 **예외를 처리하는 자리에서 새 예외가 난다.** 그래서 형식은 유지한 채 값만 비우는 갈래를 뒀다. 일어나지 않을 경로지만, 여기서만은 비용보다 안전이 앞선다.
+
+성공 응답이 오류 로그를 남기지 않는지도 함께 고정했다. 요청 정보를 더하면서 로그를 부르는 자리를 옮겼기 때문에, 조용히 늘어나지 않았는지 확인할 자리가 필요했다.
