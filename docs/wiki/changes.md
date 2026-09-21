@@ -233,3 +233,11 @@
 - 범위 밖: [차용한 워크플로우](borrowed-workflows.md)의 "도입한 에이전트 (16)와 규칙 (3)" 절은 2026-09-13 전체 이식의 이력이라서 숫자와 목록을 고치지 않았다. 에이전트 총수를 현재 사실로 단정하는 문장이 저장소의 wiki·`AGENTS.md`·`README.md`에 없다는 것은 grep으로 확인했다. `AGENTS.md`는 "전체 스킬·에이전트 목록과 모델 배정"이 차용 내역과 지침 설계 근거에 있다고 두 문서를 함께 가리키고, 배정표가 새 에이전트를 포함하므로 그대로 두었다. Codex용 미러(`codex/agents/*.toml`)는 만들지 않았다. 시험 실행에서 나온 코드 결함(입력 길이 검증 부재, 단말 발생 시각 계약, 멱등 경합 복구 등)은 이 PR에서 다루지 않는다.
 - 검토: wiki 커밋 뒤에 `workflow-reviewer`가 읽기 전용으로 검토했고 판정은 WARN이었다. 지적 네 건 중 두 건을 반영했다. 볼트 README의 표에 새 에이전트가 빠져 있었고(처음의 grep이 저장소만 대상으로 했다), 선행 규칙의 처음 문구 "`spring-backend-specialist`가 맡되"는 점검의 소유가 `code-reviewer`에서 옮겨 간 것으로 읽혔다. 나머지 두 건은 고치지 않았다. 볼트 `reviewer-claude.md`의 "역할 겹침:" 문단은 `reviewer-claude`가 multi-review 안에서만 호출되는 내부용 에이전트라서 새 에이전트와 경합하는 경로가 없고, 그 경로를 추가하는 PR에서 양방향 열거를 맞춘다. `AGENTS.md`의 목록 참조는 위에 적은 이유로 여전히 참이다.
 - 갱신: [지침 설계 근거](agent-instructions.md).
+
+## 2026-09-21 — 빈 상품 코드·상품명을 가진 주문 line 거절
+- Spec: [order-line-blank-product](../spec/2026-09-21-order-line-blank-product.md)
+- 요구사항 영향: `POST /v1/orders`의 입력 규칙이 하나 늘었다. `productCode`나 `productName`이 빈 문자열이거나 공백뿐인 line은 `OrderLine`이 `BLANK_PRODUCT_CODE`·`BLANK_PRODUCT_NAME`(`DomainErrorKind.INVALID`, 400)으로 거절한다. 요청·응답의 모양과 스키마는 바뀌지 않았다. [현재 상태](current-state.md)의 알려진 빈틈 하나를 닫았다.
+- 결정: 판정은 `isBlank()`이고 값은 다듬지 않는다. trim을 넣으면 `verifySamePayload`의 같은 payload 판정이 함께 바뀌므로 따로 다룬다.
+- 결정: DB `check` 제약은 두지 않았다. 방어선은 도메인 생성자이고 `OrderLine`을 거치지 않고 line을 쓰는 경로가 없다.
+- 발견: `productCode` 64자·`productName` 255자를 넘는 입력은 DB가 거절해 `500 INTERNAL_ERROR`가 된다. 임시 테스트로 65자 `productCode`의 응답을 확인했고 알려진 빈틈에 적었다. 상한 검증은 후속 PR이다.
+- 갱신: [현재 상태](current-state.md).
