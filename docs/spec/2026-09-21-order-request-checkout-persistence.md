@@ -53,7 +53,7 @@
 - src/main/kotlin/com/resilientpos/order/internal/domain/OrderRepository.kt
 - src/main/kotlin/com/resilientpos/order/internal/adapter/persistence/command/**
 - src/test/kotlin/com/resilientpos/order/internal/domain/OrderTest.kt
-- src/test/kotlin/com/resilientpos/order/internal/application/OrderCommandFacadeIntegrationTest.kt
+- src/test/kotlin/com/resilientpos/order/internal/application/**
 - src/test/kotlin/com/resilientpos/SchemaMigrationTest.kt
 - docs/spec/2026-09-21-order-request-checkout-persistence.md
 - docs/wiki/current-state.md
