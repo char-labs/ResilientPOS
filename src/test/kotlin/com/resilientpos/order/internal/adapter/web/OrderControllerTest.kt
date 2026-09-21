@@ -140,6 +140,48 @@ class OrderControllerTest(
     }
 
     @Test
+    fun `currency가 금액을 표현할 수 없는 통화면 400 UNSUPPORTED_CURRENCY이다`() {
+        postOrder(requestJson(currency = "XAU")).andExpect {
+            status { isBadRequest() }
+            jsonPath("$.result") { value("FAIL") }
+            jsonPath("$.error.errorCode") { value("UNSUPPORTED_CURRENCY") }
+        }.andDo {
+            handle(
+                document(
+                    "orders-create-unsupported-currency",
+                    requestFields(HEADER_FIELDS + LINE_FIELDS),
+                    responseFields(failFields("UNSUPPORTED_CURRENCY 고정 코드")),
+                ),
+            )
+        }
+
+        verifyNoInteractions(facade)
+    }
+
+    @Test
+    fun `자릿수가 아주 많은 unitPrice는 본문을 읽는 단계에서 400으로 끊긴다`() {
+        // Jackson의 숫자 길이 제한(StreamReadConstraints, 기본 1000자)이 여기서 끊어 준다는 사실에
+        // Money의 판정 비용이 기대고 있다. 제한을 올리는 변경은 이 테스트를 깨뜨려 드러난다.
+        postOrder(requestJson(unitPrice = "1" + "0".repeat(1_000))).andExpect {
+            status { isBadRequest() }
+            jsonPath("$.result") { value("FAIL") }
+        }
+
+        verifyNoInteractions(facade)
+    }
+
+    @Test
+    fun `unitPrice가 지수 표기로 저장 범위를 넘으면 400 INVALID_MONEY_AMOUNT이다`() {
+        postOrder(requestJson(unitPrice = "1E+100000")).andExpect {
+            status { isBadRequest() }
+            jsonPath("$.result") { value("FAIL") }
+            jsonPath("$.error.errorCode") { value("INVALID_MONEY_AMOUNT") }
+        }
+
+        verifyNoInteractions(facade)
+    }
+
+    @Test
     fun `terminalId가 UUID 형식이 아니면 400 BAD_REQUEST이고 Facade를 부르지 않는다`() {
         expectBadRequest(requestJson(terminalId = "not-a-uuid")).andDo {
             handle(
@@ -152,7 +194,7 @@ class OrderControllerTest(
         }
     }
 
-    // "XXX"는 ISO 4217이 "통화 없음"으로 정의한 실제 코드라서 거절되지 않는다.
+    // "ZZZ"는 ISO 4217에 없는 코드라서 Currency 역직렬화 단계에서 끊긴다. "XXX"는 실재하는 코드라 도메인까지 가 UNSUPPORTED_CURRENCY가 된다.
     @Test
     fun `없는 통화 코드는 400 BAD_REQUEST이고 Facade를 부르지 않는다`() {
         expectBadRequest(requestJson(currency = "ZZZ"))
