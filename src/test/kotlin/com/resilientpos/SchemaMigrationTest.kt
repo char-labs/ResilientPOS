@@ -16,7 +16,7 @@ class SchemaMigrationTest(
             "select version, success from flyway_schema_history order by installed_rank",
         ) { it.getString("version") to it.getBoolean("success") }
 
-        assertEquals(listOf("001" to true, "002" to true, "003" to true, "004" to true), applied)
+        assertEquals(listOf("001" to true, "002" to true, "003" to true, "004" to true, "005" to true), applied)
     }
 
     @Test
