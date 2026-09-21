@@ -4,7 +4,7 @@
 - Kotlin 2.4.10, Spring Boot 4.1.1, Java toolchain 25, Gradle Wrapper 9.7.1 / Kotlin DSL.
 - Spring MVC, Spring Data JPA, Actuator, Jackson Kotlin; PostgreSQL 전용이며 Flyway가 스키마를 소유하고 JPA는 validate만 한다.
 - 테스트는 Kotlin Test/JUnit 5, Spring REST Docs(MockMvc, test), Testcontainers PostgreSQL, ArchUnit, Fixture Monkey를 쓴다.
-- 단일 Gradle 프로젝트, 기본 패키지 `com.resilientpos`. Spring Modulith 2.1.1이 모듈 경계를 검증하고 Redis·Kafka는 아직 의존성에 없다.
+- 단일 Gradle 프로젝트, 기본 패키지 `com.resilientpos`. Spring Modulith 2.1.1이 모듈 경계를 검증하고 Event Publication Registry(`event_publication`)가 이벤트 발행 기록을 업무 상태와 같은 트랜잭션에 남긴다. Redis·Kafka는 아직 의존성에 없다.
 - 버전의 기준은 `build.gradle.kts`와 `gradle/wrapper/gradle-wrapper.properties`다. 변경 시 이 요약도 갱신한다.
 
 ## 개발 계약

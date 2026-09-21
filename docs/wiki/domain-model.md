@@ -116,6 +116,9 @@ Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰�
 
 ### 4.3 이벤트 전달과 저장 형식
 - 모듈 안 이벤트 전달은 Spring Modulith Event Publication Registry(`EVENT_PUBLICATION` 테이블)를 쓴다. 별도 outbox 테이블과 processed-event 보조 테이블은 만들지 않는다. 멱등성은 `(orderId, attemptNo)` 같은 natural unique key가 담당한다. 근거는 [ADR-004](../references/01_ResilientPOS_PRD_Backend_Requirements.md)이고, 보조 테이블을 두지 않는 것은 이 PR에서 정했다. "스키마 변경 검토" 절의 질문 1·4와 같은 판단이다. [README](../../README.md#engineering-principles)의 "Event Publication Registry 또는 outbox/inbox"에서 outbox는 외부 전달(Kafka)을 붙일 때의 이야기다.
+- `event_publication`은 테이블·컬럼 이름을 Modulith의 JPA 엔티티가 정한다. `t_` 접두어 규칙과 `BaseEntity` 공통 컬럼의 예외다. 엔티티가 라이브러리 안에 있어서 바꿀 수 없다. 스키마는 같은 버전 JDBC 모듈의 공식 PostgreSQL 스키마를 기준으로 Flyway 마이그레이션에 직접 쓴다. JPA가 `validate`라서 Modulith를 올릴 때 엔티티의 컬럼이 바뀌었는지 확인하고 마이그레이션을 함께 넣어야 한다([event-publication-registry](../spec/2026-09-21-event-publication-registry.md)).
+- **이벤트 클래스의 모양이 저장 형식이다.** 발행 기록은 이벤트를 JSON으로, `event_type`에는 클래스의 정규 이름을 저장한다. 미완료 기록이 남아 있는 동안 이벤트의 필드를 지우거나 이름·타입을 바꾸면, 또는 이벤트 클래스를 옮기거나 이름을 바꾸면 복원이 실패해서 그 이벤트를 다시 보낼 수 없다. 하위 호환인 변경은 기본값이 있는 필드 추가뿐이다. 그 밖의 변경은 새 이벤트 타입을 더하고 옛 타입의 미완료 기록이 비워진 뒤에 옛 타입을 지운다.
+- Facade는 커밋 전에, 트랜잭션 안에서 이벤트를 발행한다. 발행 기록이 업무 상태와 같은 커밋에 들어가려면 이 순서여야 한다. 리스너는 커밋 뒤에 실행된다.
 - 금액은 `NUMERIC(19,4)` + 통화 코드 컬럼, 식별자는 PostgreSQL native `uuid`다([개발 가이드 §3.1·§3.2](../references/03_Development_Guide.md)). 테이블 이름은 `t_` + 단수 명사(`t_order`, `t_payment_attempt`)다.
 
 ### 4.4 공개 타입은 모듈 루트에 둔다

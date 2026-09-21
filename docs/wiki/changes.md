@@ -280,3 +280,15 @@
 - 발견: 커밋 시점의 버전 충돌은 낙관적 잠금 예외로 나오지 않는다. `BaseEntity`의 `@UpdateTimestamp(source = DB)` 때문에 Hibernate 7.4.5가 `UPDATE ... RETURNING`을 쓰고, 0행이 갱신되면 `JpaSystemException`("The database returned no natively generated values")이 난다. HTTP에서는 500이다. 임시 통합 테스트로 확인했고 커밋하지 않았다. 커밋은 거절되므로 정합성은 지켜지지만 단말은 재시도해도 되는 오류인지 알 수 없다. #20부터 있던 성질이고 checkout endpoint는 행 잠금을 써서 이 경로에 닿지 않는다. 별도 PR로 고친다.
 - 다음 작업이 확인할 것: Facade는 커밋 전에 이벤트를 발행한다. Event Publication Registry나 리스너를 넣는 PR이 발행과 트랜잭션의 묶임을 확인한다. 지금 `CONCURRENT_REQUEST` 뒤의 재시도가 안전한 것은 리스너가 없기 때문이기도 하다.
 - 갱신: [현재 상태](current-state.md).
+
+## 2026-09-21 — Spring Modulith Event Publication Registry 도입
+- Spec: [event-publication-registry](../spec/2026-09-21-event-publication-registry.md)
+- 요구사항 영향: 제품 동작과 API는 바뀌지 않았다. 이벤트 발행 기록이 업무 상태와 같은 트랜잭션에 남는 기반이 들어갔다. `payment`가 `OrderPaymentRequested`를 받기 전에 필요한 전제다. 스키마에 Modulith의 `event_publication`이 늘었다. 프로덕션 리스너가 아직 없어서 지금 실제로 기록되는 이벤트는 없다.
+- 결정: 완료 처리는 UPDATE다. 완료 표시만 하고 행을 남겨서 이벤트가 언제 발행되고 처리됐는지를 DB에서 확인할 수 있다. 테이블이 계속 자라므로 정리 작업이 필요하고 `payment` 이후에 정한다.
+- 결정: 재기동 시 미완료 이벤트 재발행은 켜지 않았다. 인스턴스가 여럿이면 중복 재발행된다. 재전송 절차 전체를 `payment` PR이 정한다. 그때까지 실패한 이벤트는 미완료 기록으로 남기만 한다.
+- 결정: 테이블 이름은 프레임워크의 `event_publication` 그대로다. `t_` 접두어와 `BaseEntity` 공통 컬럼의 예외다.
+- 결정: Facade가 커밋 전에 이벤트를 발행하는 순서를 유지한다. 발행 기록이 같은 커밋에 들어가려면 그래야 한다. #33의 리뷰가 확인하라고 넘긴 항목이다.
+- 발견: Modulith의 자동 구성이 `@EnableAsync`를 켠다. `@ApplicationModuleListener`는 우리가 켜지 않아도 Spring Boot의 기본 task executor에서 비동기로 실행되고, 종료 대기 2초도 Modulith가 기본값으로 바꾼다. 처음 spec은 동기 실행이라고 잘못 적었고 테스트용 리스너의 실행 스레드를 보고 jar를 확인해 고쳤다.
+- 발견: JPA용 jar에는 스키마 SQL이 없다. JPA가 `validate`라서 의존성만 넣으면 `Schema validation: missing table [event_publication]`으로 기동이 막힌다. 같은 버전 JDBC 모듈의 공식 PostgreSQL 스키마 v2를 기준으로 마이그레이션을 썼다.
+- 발견: 이벤트 직렬화는 기본 구성으로 왕복이 성립한다. value class ID는 UUID 문자열, `Money`는 금액 숫자와 통화 코드로 저장되고 `30.00`처럼 끝자리가 0인 금액도 자릿수를 잃지 않는다.
+- 갱신: [현재 상태](current-state.md), [도메인 모델](domain-model.md), [AGENTS.md](../../AGENTS.md).
