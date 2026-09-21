@@ -45,7 +45,8 @@ class ApiControllerAdvice : ResponseEntityExceptionHandler() {
     }
 
     /**
-     * 같은 대상에 요청이 겹쳐서 난 잠금 대기 초과와 버전 충돌. 요청은 올바르고 다시 보내면 되므로 서버 오류로 집계하지 않는다.
+     * 같은 대상에 요청이 겹쳐서 난 잠금 대기 초과와 조회 시점의 버전 충돌. 서버 오류로 집계하지 않는다.
+     * 다시 보내도 되는지는 endpoint가 멱등인지에 달려 있어서 문구로 약속하지 않는다.
      */
     @ExceptionHandler(ConcurrencyFailureException::class)
     fun handleConcurrency(e: ConcurrencyFailureException): ResponseEntity<ApiResponse<Nothing>> =

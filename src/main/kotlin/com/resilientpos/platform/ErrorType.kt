@@ -12,5 +12,5 @@ enum class ErrorType(val status: HttpStatus, val message: String, val level: Lev
     BAD_REQUEST(HttpStatus.BAD_REQUEST, "요청을 처리할 수 없습니다.", Level.WARN),
     NOT_FOUND(HttpStatus.NOT_FOUND, "존재하지 않는 요청입니다.", Level.INFO),
     METHOD_NOT_ALLOWED(HttpStatus.METHOD_NOT_ALLOWED, "지원하지 않는 요청 방식입니다.", Level.WARN),
-    CONCURRENT_REQUEST(HttpStatus.CONFLICT, "같은 대상에 대한 다른 요청을 처리하고 있습니다. 다시 요청해 주세요.", Level.WARN),
+    CONCURRENT_REQUEST(HttpStatus.CONFLICT, "동시 처리 충돌로 요청을 완료하지 못했습니다.", Level.WARN),
 }

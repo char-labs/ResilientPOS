@@ -116,12 +116,14 @@ class OrderApiIntegrationTest(
         assertEquals(1L, orderRowCount(clientOrderId))
     }
 
+    private fun createOrder(body: String): String {
+        val created = post(body).andExpect { status { isCreated() } }.andReturn().response.contentAsString
+        return objectMapper.readTree(created).at("/data/orderId").asString()
+    }
+
     @Test
-    fun `주문을 만든 뒤 checkout을 요청하면 200과 확정 금액을 받고 재요청과 생성 재시도도 같은 주문을 가리킨다`() {
-        val clientOrderId = UUID.randomUUID()
-        val createBody = requestJson(clientOrderId)
-        val created = post(createBody).andExpect { status { isCreated() } }.andReturn().response.contentAsString
-        val orderId = objectMapper.readTree(created).at("/data/orderId").asString()
+    fun `주문을 만든 뒤 checkout을 요청하면 200과 확정 금액을 받고 재요청도 같은 본문이다`() {
+        val orderId = createOrder(requestJson(UUID.randomUUID()))
 
         val first = mockMvc.post("/v1/orders/$orderId/checkout").andExpect {
             status { isOk() }
@@ -142,6 +144,13 @@ class OrderApiIntegrationTest(
             1L,
             jdbcTemplate.queryForObject("select count(*) from t_order_checkout where order_id = ?", Long::class.java, UUID.fromString(orderId)),
         )
+    }
+
+    @Test
+    fun `checkout을 요청한 주문의 생성 재시도는 201과 CHECKOUT_REQUESTED다`() {
+        val createBody = requestJson(UUID.randomUUID())
+        val orderId = createOrder(createBody)
+        mockMvc.post("/v1/orders/$orderId/checkout").andExpect { status { isOk() } }
 
         post(createBody).andExpect {
             status { isCreated() }

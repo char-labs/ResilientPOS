@@ -116,12 +116,12 @@ class OrderCheckoutControllerTest(
             .andExpect(jsonPath("$.result").value("FAIL"))
             .andExpect(jsonPath("$.data").value(null))
             .andExpect(jsonPath("$.error.errorCode").value("CONCURRENT_REQUEST"))
-            .andExpect(jsonPath("$.error.message").value("같은 대상에 대한 다른 요청을 처리하고 있습니다. 다시 요청해 주세요."))
+            .andExpect(jsonPath("$.error.message").value("동시 처리 충돌로 요청을 완료하지 못했습니다."))
             .andDo(
                 document(
                     "orders-checkout-concurrent-request",
                     PATH_PARAMETERS,
-                    responseFields(failFields("CONCURRENT_REQUEST 고정 코드. 같은 요청을 다시 보내면 된다")),
+                    responseFields(failFields("CONCURRENT_REQUEST 고정 코드. 이 endpoint는 상태로 멱등을 판정하므로 같은 요청을 다시 보내면 된다")),
                 ),
             )
     }
@@ -131,7 +131,9 @@ class OrderCheckoutControllerTest(
         requestCheckout("not-a-uuid")
             .andExpect(status().isBadRequest)
             .andExpect(jsonPath("$.result").value("FAIL"))
+            .andExpect(jsonPath("$.data").value(null))
             .andExpect(jsonPath("$.error.errorCode").value("BAD_REQUEST"))
+            .andExpect(jsonPath("$.error.message").value("요청을 처리할 수 없습니다."))
             .andDo(document("orders-checkout-bad-request", PATH_PARAMETERS, responseFields(failFields("BAD_REQUEST 고정 코드"))))
 
         verifyNoInteractions(facade)
