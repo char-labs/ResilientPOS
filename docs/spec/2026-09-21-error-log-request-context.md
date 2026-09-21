@@ -69,7 +69,7 @@ RED 명령은 모두 `./gradlew test --tests '…ErrorLogRequestContextTest'`이
 | 성공 응답은 오류 로그를 남기지 않는다 | 처음부터 통과 | 같은 명령 — 통과 | `./gradlew test` — 통과 |
 
 ## 결과
-`./gradlew test` 132개 통과다(직전 126 + 신규 6).
+`./gradlew test` 136개 통과다(직전 130 + 신규 6).
 
 로그 형식은 `method=POST uri=/v1/orders errorCode=BAD_REQUEST : …`이다. 세 자리 모두에 적용된다. `handleExceptionInternal`은 `failBody`를 거치므로 표준 예외도 자동으로 따라왔다.
 
