@@ -296,5 +296,6 @@
 - 발견: `listener_id`에 리스너의 클래스 정규 이름·메서드·이벤트 타입이 저장되고 완료 표시가 이 값으로 행을 찾는다. 리스너의 이름도 저장 형식이다.
 - 발견: 트랜잭션 밖에서 발행하면 발행 기록은 남는데 리스너가 실행되지 않는다. 리뷰어는 "기록도 전달도 없다"고 예상했지만 실제로는 기록만 남아 미완료로 쌓인다. 이벤트 발행은 Facade의 트랜잭션 안에서만 한다는 규칙을 [도메인 모델](domain-model.md) 4.3절에 적었다.
 - 결정: 합의한 기본값 둘을 `application.yaml`에 명시했다. 동작은 바뀌지 않는다.
+- 결정: Modulith 버전을 올릴 때의 대응 절차를 [도메인 모델](domain-model.md) 4.3절에 적었다. 규칙만 있고 방법이 없다는 지적을 받아서다. 컬럼이 늘면 `validate`가 기동을 막고 통합 테스트가 컨텍스트를 띄우므로 CI가 먼저 잡는다(`V004`를 v1 스키마로 되돌려 확인했다). 무엇이 바뀌었는지는 Modulith가 버전으로 관리하는 `schemas/vN/schema-postgresql.sql`을 diff해서 안다. 라이브러리가 컬럼을 없애는 경우만 조용히 통과한다.
 - 다음 작업이 확인할 것: 종료할 때 task executor의 대기와 DataSource 종료의 순서(확인하지 않았다), 오래 머문 발행 기록을 감시하는 `spring.modulith.events.staleness.*` 설정, 완료 표시가 UPDATE라서 생기는 테이블 팽창과 정리 작업.
 - 갱신: [현재 상태](current-state.md), [도메인 모델](domain-model.md), [AGENTS.md](../../AGENTS.md).

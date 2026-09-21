@@ -117,6 +117,11 @@ Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰�
 ### 4.3 이벤트 전달과 저장 형식
 - 모듈 안 이벤트 전달은 Spring Modulith Event Publication Registry(`EVENT_PUBLICATION` 테이블)를 쓴다. 별도 outbox 테이블과 processed-event 보조 테이블은 만들지 않는다. 멱등성은 `(orderId, attemptNo)` 같은 natural unique key가 담당한다. 근거는 [ADR-004](../references/01_ResilientPOS_PRD_Backend_Requirements.md)이고, 보조 테이블을 두지 않는 것은 이 PR에서 정했다. "스키마 변경 검토" 절의 질문 1·4와 같은 판단이다. [README](../../README.md#engineering-principles)의 "Event Publication Registry 또는 outbox/inbox"에서 outbox는 외부 전달(Kafka)을 붙일 때의 이야기다.
 - `event_publication`은 테이블·컬럼 이름을 Modulith의 JPA 엔티티가 정한다. `t_` 접두어 규칙과 `BaseEntity` 공통 컬럼의 예외다. 엔티티가 라이브러리 안에 있어서 바꿀 수 없다. 스키마는 같은 버전 JDBC 모듈의 공식 PostgreSQL 스키마를 기준으로 Flyway 마이그레이션에 직접 쓴다. JPA가 `validate`라서 Modulith를 올릴 때 엔티티의 컬럼이 바뀌었는지 확인하고 마이그레이션을 함께 넣어야 한다([event-publication-registry](../spec/2026-09-21-event-publication-registry.md)).
+- **Modulith 버전을 올리는 PR의 절차.** 라이브러리는 이 테이블을 만들어 주지 않는다. JPA 모듈에는 스키마 SQL이 없고 스키마의 소유자는 Flyway다.
+  1. 새 버전 `spring-modulith-events-jdbc` jar의 `schemas/vN/schema-postgresql.sql`을 쓰던 버전의 것과 diff한다. Modulith가 자기 스키마를 버전으로 관리해서 두 버전이 jar에 함께 들어 있다. 실제 v1 → v2 변경은 nullable 컬럼 셋(`status`, `completion_attempts`, `last_resubmission_date`) 추가였다.
+  2. 바뀐 만큼 마이그레이션을 추가한다. 추가만 하는 변경이면 이전 버전 인스턴스는 모르는 컬럼이 늘어난 것뿐이라 함께 떠 있어도 된다.
+  3. 추가가 아닌 변경(이름·타입)이면 라이브러리 엔티티를 우리가 못 바꿔서 이중 쓰기를 할 수 없다. 남아 있는 미완료 기록을 어떻게 보존할지 함께 정한다.
+- **컬럼이 늘거나 타입·테이블 이름이 바뀌면 기동이 막히고 CI가 먼저 잡는다.** `Schema validation: missing column [이름] in table [event_publication]`처럼 대상이 메시지에 나온다. 통합 테스트가 컨텍스트를 띄우므로 버전을 올리는 PR에서 실패한다(2026-09-21에 `V004`를 v1 스키마로 되돌려 확인했다). **반대로 라이브러리가 컬럼을 없애면 조용히 통과한다.** `validate`는 매핑된 컬럼만 검사해서(4.7절 질문 8) 쓰이지 않는 컬럼이 남는다. 이건 사람이 정리한다.
 - **이벤트 클래스의 모양이 저장 형식이다.** 발행 기록은 이벤트를 JSON으로, `event_type`에는 클래스의 정규 이름을 저장한다. 미완료 기록이 남아 있는 동안 이벤트의 필드를 지우거나 이름·타입을 바꾸면, 또는 이벤트 클래스를 옮기거나 이름을 바꾸면 복원이 실패해서 그 이벤트를 다시 보낼 수 없다. 하위 호환인 변경은 기본값이 있는 필드 추가뿐이다. 그 밖의 변경은 새 이벤트 타입을 더하고 옛 타입의 미완료 기록이 비워진 뒤에 옛 타입을 지운다.
 - **리스너의 이름도 저장 형식이다.** `listener_id`에는 리스너의 클래스 정규 이름·메서드·이벤트 타입이 저장되고(`패키지.클래스.메서드(이벤트타입)`) Modulith는 `serialized_event`와 `listener_id`가 같은 행을 찾아 완료를 표시한다. 미완료 기록이 남은 동안 리스너의 패키지·클래스·메서드 이름을 바꾸면 그 기록을 끝낼 주체가 없어진다.
 - **이벤트는 Facade의 트랜잭션 안에서만 발행한다.** 발행 기록이 업무 상태와 같은 커밋에 들어가려면 발행이 커밋 전, 트랜잭션 안이어야 한다. 리스너는 커밋 뒤에 실행된다. 트랜잭션 밖에서 발행하면 발행 기록은 남는데 리스너가 실행되지 않아서 그 기록이 미완료로 남는다(2026-09-21 임시 테스트로 확인).
