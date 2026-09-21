@@ -400,9 +400,6 @@ class SchemaReviewGateTest(HarnessTest):
 class BypassTest(HarnessTest):
     """검사를 통과하면서 규칙을 어길 수 있는 경로가 있으면 실패한다. 하네스 변경은 우회를 따로 본다."""
 
-    def path_migration(self, path, statement='select 1;\n'):
-        self.write(path, statement)
-
     def assert_version_conflict_for(self, path):
         self.start()
         self.implementation()
@@ -496,17 +493,80 @@ class BypassTest(HarnessTest):
         self.commit()
         self.assertNotIn('Flyway 버전', self.errors())
 
-    def test_renaming_still_detects_a_real_conflict_on_base(self):
+    def test_renaming_still_detects_a_conflict_added_to_base_later(self):
+        """기준 브랜치가 merge-base 이후로 전진해 같은 버전이 생기면 파일명을 바꿨어도 잡는다."""
+        self.git('branch', '-M', 'main')
         self.start()
         self.implementation()
         self.migration('V002__order_create_orders.sql')
         self.add_to_spec(self.REVIEW + self.RECORD)
         self.commit()
-        self.base = self.git('rev-parse', 'HEAD').strip()
+        self.base = 'main'
+        merge_base = self.git('rev-parse', 'HEAD').strip()
 
+        self.git('checkout', '-qb', 'work')
         self.git('mv', 'src/main/resources/db/migration/V002__order_create_orders.sql',
                  'src/main/resources/db/migration/V002__order_create_order.sql')
+        self.commit()
+
+        self.git('checkout', '-q', 'main')
+        self.git('reset', '-q', '--hard', merge_base)
         self.migration('V002__payment_create_attempts.sql')
+        self.commit()
+        self.git('checkout', '-q', 'work')
+
+        self.assertIn('Flyway 버전 2', self.errors())
+
+    def test_pattern_without_literal_is_rejected(self):
+        """별표 하나를 막으면 별표 둘로 되살아난다. 리터럴이 없는 패턴은 범위 선언이 아니다."""
+        for pattern in ('- **', '- *', '- **/*'):
+            with self.subTest(pattern=pattern):
+                self.write(self.spec, '\n'.join(
+                    f'## {s}\n' + (pattern if s == '변경 경로' else '구체적인 내용') for s in SECTIONS))
+                self.commit()
+                self.assertIn('범위를 좁히지 않는 변경 경로', self.errors())
+
+    def test_unclosed_fence_hides_nothing(self):
+        body = '\n'.join(f'## {s}\n' + ('- docs/**\n- src/**' if s == '변경 경로' else '구체적인 내용')
+                         for s in SECTIONS if s != '결과')
+        self.write(self.spec, body + '\n\n```text\n## 결과\n닫는 표시가 없다\n')
+        self.commit()
+        self.assertIn('spec 항목 미작성: 결과', self.errors())
+
+    def test_unclosed_fence_does_not_satisfy_schema_review(self):
+        self.start()
+        self.implementation()
+        self.migration('V002__order_create_orders.sql')
+        self.add_to_spec('\n### 스키마 변경 검토\n```sql\n- 필요성: 답\n'
+                         + self.RECORD)
+        self.commit()
+        self.assertIn('스키마 변경 검토', self.errors())
+
+    def test_section_of_only_a_code_block_is_not_missing(self):
+        """검증 절에 명령만 적은 spec이 막히면 안 된다."""
+        body = '\n'.join(
+            f'## {s}\n' + ('- docs/**\n- src/**' if s == '변경 경로'
+                           else '```bash\n./gradlew test\n```' if s == '검증'
+                           else '구체적인 내용')
+            for s in SECTIONS)
+        self.write(self.spec, body)
+        self.commit()
+        self.implementation()
+        self.commit()
+        self.assertEqual('', self.errors())
+
+    def test_section_name_whitespace_does_not_evade_duplicate_check(self):
+        self.start()
+        self.implementation()
+        self.add_to_spec('\n## 변경 경로 \n- *\n')
+        self.commit()
+        self.assertIn('절 이름이 중복', self.errors())
+
+    def test_migration_outside_top_level_src_is_versioned(self):
+        self.start()
+        self.implementation()
+        self.migration('V002__order_create_orders.sql')
+        self.write('modules/order/src/main/resources/db/migration/V002__dup.sql', 'select 1;\n')
         self.commit()
         self.assertIn('Flyway 버전 2', self.errors())
 

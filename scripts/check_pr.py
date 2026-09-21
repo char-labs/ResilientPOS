@@ -13,11 +13,12 @@ SECTIONS = ('목적', '범위', '제외', '변경 경로', '인수 조건', '검
 # Flyway가 읽는 경로 전부다. 확장자 대소문자를 가리지 않고, 하위 디렉터리와 R(반복) 접두,
 # db.migration 패키지의 Java·Kotlin 마이그레이션도 읽는다. src 밖의 예시 SQL은 대상이 아니다.
 SCHEMA_CHANGE = re.compile(
-    r'^src/[^/]+/(?:resources/db/migration/.+\.sql|(?:kotlin|java)/db/migration/.+\.(?:kt|java))$', re.I)
+    r'^(?:.+/)?src/[^/]+/(?:resources/db/migration/.+\.sql|(?:kotlin|java)/db/migration/.+\.(?:kt|java))$', re.I)
 # 버전 중복 검사는 SCHEMA_CHANGE가 인정한 경로에서만 버전을 뽑는다. 두 판정이 갈라지면
 # 스키마 검토는 요구하면서 버전 중복은 놓치는 경로가 생긴다(대문자 확장자, 하위 디렉터리, Kotlin·Java).
 MIGRATION = re.compile(r'(?:^|/)V([0-9._]+)__', re.I)
 FENCE = re.compile(r'^(```|~~~).*?^\1[^\n]*$', re.M | re.S)
+FENCE_OPEN = re.compile(r'^(?:```|~~~)', re.M)
 SCHEMA_HEADING = re.compile(r'^(#{2,3}) 스키마 변경 검토(?:[ \t][^\n]*)?\n', re.M)
 SCHEMA_RECORD = re.compile(r'^- 대조 기록:[ \t]*\S', re.M)
 
@@ -98,17 +99,45 @@ def path_matcher(pattern):
     return re.compile(''.join(out) + r'\Z')
 
 
+def fenced_spans(content):
+    """코드 블록이 차지하는 구간이다. 닫는 표시가 없으면 여는 표시부터 문서 끝까지 코드 블록으로 본다."""
+    spans = [match.span() for match in FENCE.finditer(content)]
+    unclosed = next(
+        (match for match in FENCE_OPEN.finditer(content)
+         if not any(start <= match.start() < end for start, end in spans)), None)
+    return spans + [(unclosed.start(), len(content))] if unclosed else spans
+
+
+def strip_fences(content):
+    kept, last = [], 0
+    for start, end in sorted(fenced_spans(content)):
+        kept.append(content[last:start])
+        last = max(last, end)
+    kept.append(content[last:])
+    return ''.join(kept)
+
+
 def sections(content):
-    """필수 절의 본문을 돌려준다. 코드 블록 안의 제목은 절이 아니다(스키마 검토 판정과 같은 기준)."""
-    parts = re.split(r'^## (.+)\n', FENCE.sub('', content), flags=re.M)
-    names = parts[1::2]
+    """필수 절의 본문을 돌려준다. 코드 블록 안의 제목은 절이 아니다(스키마 검토 판정과 같은 기준).
+
+    본문은 원문 그대로다. 코드 블록을 지운 문자열로 본문까지 판정하면 명령만 적은 절이 빈 절로 보인다.
+    """
+    spans = fenced_spans(content)
+    headings = [match for match in re.finditer(r'^## (.+)$', content, flags=re.M)
+                if not any(start <= match.start() < end for start, end in spans)]
+    found, names = {}, []
+    for index, heading in enumerate(headings):
+        name = heading.group(1).strip()
+        end = headings[index + 1].start() if index + 1 < len(headings) else len(content)
+        names.append(name)
+        found.setdefault(name, content[heading.end():end])
     duplicates = sorted({name for name in names if names.count(name) > 1})
-    return dict(zip(names, parts[2::2])), duplicates
+    return found, duplicates
 
 
 def schema_review(content):
     """코드 블록을 뺀 spec에서 스키마 변경 검토 절의 본문을 돌려준다. 절이 없으면 None이다."""
-    text = FENCE.sub('', content)
+    text = strip_fences(content)
     heading = SCHEMA_HEADING.search(text)
     if not heading:
         return None
@@ -123,8 +152,12 @@ def check(base, head='HEAD', worktree=False, migrations_only=False):
     base_ref = base
     if migrations_only:
         # 워크플로는 머지 결과 위에서 돌아 spec 첫 커밋 판정이 달라진다. 버전 중복만 본다.
-        merge_base = git('merge-base', base_ref, head).decode().strip()
-        removed = tracked_paths(merge_base) - tracked_paths(head)
+        try:
+            merge_base = git('merge-base', base_ref, head).decode().strip()
+            removed = tracked_paths(merge_base) - tracked_paths(head)
+        except subprocess.CalledProcessError:
+            # 얕은 클론처럼 공통 조상을 못 찾는 경우다. 이 검사가 그 이유로 빨개지지 않게 이전 동작으로 돌아간다.
+            removed = set()
         conflicts = migration_conflicts((tracked_paths(head) | tracked_paths(base_ref)) - removed)
         return conflicts, [], f'마이그레이션 버전 검사 전용 (기준 {base_ref})'
     base = git('merge-base', base, head).decode().strip()
@@ -178,6 +211,10 @@ def check(base, head='HEAD', worktree=False, migrations_only=False):
         patterns = re.findall(r'^- (\S+)\s*$', doc.get('변경 경로', ''), flags=re.M)
         if not patterns:
             errors.append('spec에 변경 경로 목록이 필요합니다.')
+        # 별표 하나를 막으면 별표 둘로 되살아난다. 리터럴이 없는 패턴은 범위를 선언하지 않는다.
+        toothless = [p for p in patterns if not re.sub(r'[*?/]', '', p)]
+        if toothless:
+            errors.append(f'범위를 좁히지 않는 변경 경로 패턴입니다: {", ".join(sorted(toothless))}')
         for p in changed:
             if p != spec and not any(path_matcher(pattern).match(p) for pattern in patterns):
                 errors.append(f'spec 범위 밖 변경: {p}')
