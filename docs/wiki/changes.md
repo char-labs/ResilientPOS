@@ -250,4 +250,6 @@
 - 결정: 이미 요청된 주문의 재요청은 같은 주문과 빈 이벤트를 돌려준다. 요청 키는 두지 않았다. 결제 실패 뒤 재-checkout(2회차)을 넣는 PR이 늦게 도착한 재시도 문제를 다시 본다.
 - 결정: 0원 주문을 거절하지 않는다. 전액 할인·프로모션 주문의 고객 경험이 먼저이고 주문·결제 기록이 둘 다 남아야 조회가 쉽다. provider 호출을 건너뛰는 판단은 `payment`가 맡는다.
 - 결정: `OPEN`·`CHECKOUT_REQUESTED` 밖의 상태가 없어서 `INVALID_ORDER_STATE` 거절은 넣지 않았다. 분기가 else 없는 `when`이라 상태를 더하는 PR이 컴파일 오류로 이 전이의 처리를 함께 정한다.
+- 검토: 제출 전 multi-review(Claude 84점, Codex 93점, Gemini는 CLI가 없어 미실행)를 실행했고 둘 다 막는 결함은 없다고 판정했다. 재요청이 같은 인스턴스를 돌려주는지와 소수 자리 통화의 확정 금액을 테스트로 고정했다. `(orderId, checkoutNo)`는 `payment`의 attempt 키가 아니라 같은 checkout의 승인 attempt 중복을 막는 근거라고 문장을 좁혔다. 동시 요청에서 진 쪽의 응답, checkout 왕복 복원, `t_order_checkout`의 키는 영속화 PR이 정할 것으로 spec의 분할 계획에 옮겼다.
+- 볼트 후속: 볼트 `rules/domain-modeling-kotlin.md` 2절의 예시는 `check`로 시작하는 전이와 단수 `checkout`이다. 이 PR의 멱등 전이·회차 목록과 다르다. 볼트는 이 PR에서 고치지 않았다.
 - 갱신: [현재 상태](current-state.md), [도메인 모델](domain-model.md).
