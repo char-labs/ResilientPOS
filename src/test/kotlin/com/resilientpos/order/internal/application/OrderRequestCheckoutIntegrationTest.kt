@@ -17,6 +17,7 @@ import com.resilientpos.order.internal.domain.OrderRepository
 import java.util.Currency
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.ExecutionException
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import kotlin.test.Test
@@ -26,6 +27,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import org.springframework.beans.factory.annotation.Autowired
+import org.springframework.dao.PessimisticLockingFailureException
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.test.context.event.ApplicationEvents
 import org.springframework.test.context.event.RecordApplicationEvents
@@ -162,6 +164,42 @@ class OrderRequestCheckoutIntegrationTest(
             assertEquals(OrderStatus.CHECKOUT_REQUESTED, secondResult.status)
             assertEquals(firstResult, secondResult)
             assertEquals(1L, checkoutRowCount(orderId))
+        } finally {
+            releaseFirst.countDown()
+            executor.shutdown()
+            executor.awaitTermination(10, TimeUnit.SECONDS)
+        }
+    }
+
+    @Test
+    fun `잠금을 3초 넘게 기다린 요청은 잠금 실패로 끝나고 다시 요청하면 기존 결과를 받는다`() {
+        val orderId = facade.create(OrderFixtures.createOrderCommand()).orderId
+        val command = RequestCheckoutCommand(orderId)
+        val firstRequested = CountDownLatch(1)
+        val releaseFirst = CountDownLatch(1)
+        val executor = Executors.newFixedThreadPool(2)
+        try {
+            val first = executor.submit<RequestCheckoutResult> {
+                transaction.execute {
+                    facade.requestCheckout(command).also {
+                        firstRequested.countDown()
+                        check(releaseFirst.await(30, TimeUnit.SECONDS)) { "앞 트랜잭션을 풀어 주는 신호가 오지 않았다" }
+                    }
+                }
+            }
+            assertTrue(firstRequested.await(10, TimeUnit.SECONDS), "앞 요청이 잠금을 쥔 채 커밋 전 상태에 도달해야 한다")
+
+            val second = executor.submit<RequestCheckoutResult> { facade.requestCheckout(command) }
+            val failure = assertFailsWith<ExecutionException>("앞 트랜잭션이 잠금을 쥐고 있어도 무기한 기다리지 않아야 한다") {
+                second.get(8, TimeUnit.SECONDS)
+            }
+            assertTrue(failure.cause is PessimisticLockingFailureException, "cause=${failure.cause}")
+
+            releaseFirst.countDown()
+            val firstResult = first.get(10, TimeUnit.SECONDS)
+
+            assertEquals(1L, checkoutRowCount(orderId))
+            assertEquals(firstResult, facade.requestCheckout(command))
         } finally {
             releaseFirst.countDown()
             executor.shutdown()
