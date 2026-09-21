@@ -94,6 +94,7 @@ class Order private constructor(
         const val EMPTY_ORDER = "EMPTY_ORDER"
         const val CURRENCY_MISMATCH = "CURRENCY_MISMATCH"
         const val IDEMPOTENCY_CONFLICT = "IDEMPOTENCY_CONFLICT"
+        const val ORDER_NOT_FOUND = "ORDER_NOT_FOUND"
 
         /**
          * 이미 저장된 주문을 그대로 재구성한다. 주문 단위 생성 불변식은 최초 `create` 때 검증됐으므로 다시 묻지 않는다.

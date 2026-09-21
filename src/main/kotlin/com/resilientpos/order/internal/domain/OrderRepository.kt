@@ -9,6 +9,10 @@ import com.resilientpos.terminal.TerminalId
  */
 interface OrderRepository {
     fun findById(id: OrderId): Order?
+
+    /** 주문 행을 잠그고 읽는다. 읽고 판단한 뒤 쓰는 전이가 같은 주문에서 겹치지 않게 한다. 트랜잭션 안에서만 부른다. */
+    fun findByIdForUpdate(id: OrderId): Order?
+
     fun findByClientOrderId(terminalId: TerminalId, clientOrderId: ClientOrderId): Order?
     fun save(order: Order): Order
 }
