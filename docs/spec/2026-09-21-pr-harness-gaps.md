@@ -35,6 +35,7 @@
 - **`test_renaming_still_detects_a_real_conflict_on_base`가 이름이 말하는 것을 검증하지 않는다.** 충돌하는 두 파일이 모두 변경 뒤 트리에 있어서 제외 로직과 무관하게 통과한다. 기준 브랜치가 merge-base 이후로 전진한 경우로 고친다.
 - 절 이름의 앞뒤 공백을 정규화한다. 공백 한 칸 차이로 중복 판정을 피할 수 있었다.
 - 쓰이지 않는 테스트 helper를 지운다.
+- `AGENTS.md`의 부등호 서술을 고친다. 코드 블록 밖에 있을 때만 미작성으로 판정하도록 바뀌었다.
 - 사실 정정 둘. spec의 범위가 존재하지 않는 수정을 주장했다(위 "문서 끝에 개행"). 그리고 [개발 규칙](../wiki/development-workflow.md)의 다른 문단이 브랜치 보호가 켜져 있다는 전제로 쓰여 있어 이 PR이 새로 적는 사실과 모순이다. 함께 고친다.
 
 ## 제외
@@ -51,6 +52,7 @@
 - 스크립트의 성능(파일마다 `git show`를 띄우는 것, 매 실행 `ndiff`를 도는 것).
 
 ## 변경 경로
+- AGENTS.md
 - scripts/check_pr.py
 - scripts/test_check_pr.py
 - docs/spec/2026-09-21-pr-harness-gaps.md
