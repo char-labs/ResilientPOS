@@ -40,6 +40,7 @@
 7. 락과 크기: 새 테이블 `CREATE TABLE`이라 기존 테이블에 락을 잡지 않는다. unique 제약의 인덱스가 `order_id`로 시작하므로 주문별 조회용 인덱스를 따로 두지 않는다.
 8. 이전 버전 호환: 이전 버전은 `t_order_checkout`을 모르고 `JPA validate`는 매핑된 엔티티만 검사하므로 기동과 쓰기에 영향이 없다. 이전 버전은 `CHECKOUT_REQUESTED`를 이미 읽을 수 있다(#31에서 enum 상수를 먼저 배포했다).
 9. 이벤트·캐시: `amount`와 `checkout_no`가 `OrderPaymentRequested`에 실린다. payload는 #31에서 정했고 이 PR은 바꾸지 않는다. 직렬화 형태와 하위 호환은 Event Publication Registry를 넣는 PR이 확인한다. 캐시는 없다.
+- 대조 기록: code-reviewer 에이전트(구현자 아님), 2026-09-21, 불일치 항목: 없음. 서술 보강 두 건(답 2의 `order_id` 사용처, 답 6의 잠금 없는 읽기)은 대조 뒤에 구현자가 답에 더했다.
 
 ## 제외
 - `POST` endpoint, 요청·응답 DTO, REST Docs의 `data.status` 설명. 다음 PR `order-request-checkout-api`.
@@ -101,13 +102,19 @@
 
 | 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
 |---|---|---|---|
-| 인수 조건 7: 도메인 테스트의 식별자 순서 | 미실행 | 미실행 | 미실행 |
-| 인수 조건 1: `requestCheckout은 CHECKOUT_REQUESTED와 checkout 행을 저장하고 OrderPaymentRequested를 한 번 발행한다` | 미실행 | 미실행 | 미실행 |
-| 인수 조건 2: `checkout을 요청한 주문을 다시 읽으면 checkouts가 그대로 복원된다` | 미실행 | 미실행 | 미실행 |
-| 인수 조건 3: `같은 주문의 requestCheckout 재요청은 기존 결과를 돌려주고 행과 이벤트를 늘리지 않는다` | 미실행 | 미실행 | 미실행 |
-| 인수 조건 4: `없는 주문의 requestCheckout은 ORDER_NOT_FOUND다` | 미실행 | 미실행 | 미실행 |
-| 인수 조건 5: `커밋 전인 requestCheckout과 겹친 요청은 기다렸다가 같은 결과를 받는다` | 미실행 | 미실행 | 미실행 |
-| 인수 조건 6: `checkout을 요청한 주문의 생성 재시도는 CHECKOUT_REQUESTED를 돌려준다` | 미실행 | 미실행 | 미실행 |
+| 인수 조건 7: 도메인 테스트 4개의 식별자 순서(`OrderTest`) | `./gradlew test --tests 'com.resilientpos.order.internal.domain.OrderTest'`. `Checkout`에 `id`만 선언하고 도메인이 무작위 ID를 쓰는 상태에서 4개 실패: `Checkout`의 `id`가 생성기의 첫 값이 아니었고 이벤트의 `eventId`가 둘째 값이 아니었다 | 같은 명령. 15개 중 실패 0 | `./gradlew test`. 71개 중 실패 0 |
+| 인수 조건 1: `requestCheckout은 CHECKOUT_REQUESTED와 checkout 행을 저장하고 OrderPaymentRequested를 한 번 발행한다` | `./gradlew test --tests 'com.resilientpos.order.internal.application.OrderRequestCheckoutIntegrationTest'`. 마이그레이션·엔티티·Command·Result와 "저장도 전이도 하지 않는" Facade 최소 선언 상태에서 실패: `CHECKOUT_REQUESTED`를 기대했는데 `OPEN`이었다 | 같은 명령. 통과. 범위 조정으로 더한 `version` 0 확인은 RED 없이 통과했다 | `./gradlew test`. 71개 중 실패 0 |
+| 인수 조건 2: `checkout을 요청한 주문을 다시 읽으면 checkouts가 그대로 복원된다` | 같은 명령. 실패: 복원된 `checkouts`가 비어 `single()`이 `NoSuchElementException`을 던졌다 | 같은 명령. 통과 | `./gradlew test`. 71개 중 실패 0 |
+| 인수 조건 2 보강(범위 조정): `소수 자리가 있는 통화의 확정 금액도 저장하고 다시 읽으면 같은 값이다` | RED 없음. 구현 뒤에 더한 characterization 테스트라 처음부터 통과했다 | 같은 명령. 통과 | `./gradlew test`. 71개 중 실패 0 |
+| 인수 조건 3: `같은 주문의 requestCheckout 재요청은 기존 결과를 돌려주고 행과 이벤트를 늘리지 않는다` | 같은 명령. 실패: `CHECKOUT_REQUESTED`를 기대했는데 `OPEN`이었다 | 같은 명령. 통과 | `./gradlew test`. 71개 중 실패 0 |
+| 인수 조건 4: `없는 주문의 requestCheckout은 ORDER_NOT_FOUND다` | 같은 명령. 실패: `DomainException`을 기대했는데 `NoSuchElementException`이었다 | 같은 명령. 통과 | `./gradlew test`. 71개 중 실패 0 |
+| 인수 조건 5: `커밋 전인 requestCheckout과 겹친 요청은 기다렸다가 같은 결과를 받는다` | 같은 명령. RED를 두 번 관측했다. 최소 선언 상태에서 실패했고, 잠금 없이 Facade와 어댑터를 구현한 상태에서도 나머지 5개는 통과하고 이것만 실패했다. 뒤 요청이 기다리지 않고 먼저 끝났다(앞 트랜잭션은 flush 전이라 DB에 쓴 것이 없다). 범위 조정으로 판정을 `pg_stat_activity`의 잠금 대기 확인으로 바꾼 뒤에도 잠금을 빼고 실행해 "잠금 대기 세션 1을 기대했는데 0"으로 실패하는 것을 확인했다 | `findByIdForUpdate`를 넣은 뒤 같은 명령. 통과. `--rerun`으로 범위 조정 전 4회, 뒤 3회 반복해 모두 통과 | `./gradlew test`. 71개 중 실패 0 |
+| 인수 조건 6: `checkout을 요청한 주문의 생성 재시도는 CHECKOUT_REQUESTED를 돌려준다` | 같은 명령. 실패: `CHECKOUT_REQUESTED`를 기대했는데 `OPEN`이었다(checkout이 저장되지 않아서다). `create`의 코드는 바꾸지 않았다 | 같은 명령. 통과 | `./gradlew test`. 71개 중 실패 0 |
 
 ## 결과
-개발 전 작성. 개발 후 실행 결과와 변경 이유를 추가한다.
+- 인수 조건 1~8을 충족했다. `./gradlew test`는 71개(기존 64, 신규 7) 중 실패 0이다. 실측 규모는 19파일이다(예상 16파일, 통합 테스트를 새 파일로 나눴고 엔티티와 repository가 파일 둘이다).
+- 구현: `V003` `t_order_checkout`, `OrderCheckoutEntity`·`OrderCheckoutJpaRepository`, 어댑터의 checkout 저장·복원, `OrderRepository.findByIdForUpdate`, `OrderCommandFacade.requestCheckout`, `RequestCheckoutCommand`·`RequestCheckoutResult`, `CheckoutId`, `ORDER_NOT_FOUND`. `POST /v1/orders` 재시도의 `status`는 코드를 바꾸지 않고 테스트로 고정했다.
+- 개발 중 바뀐 것: checkout 통합 테스트를 기존 파일에 더하지 않고 `OrderRequestCheckoutIntegrationTest`로 나눴다(기존 파일이 200줄을 넘는다). spec의 변경 경로를 먼저 고쳤다.
+- 관측한 사실 두 가지를 기록한다. 잠금이 없으면 뒤 요청이 기다리지 않고 먼저 커밋한다. 같은 트랜잭션에서 먼저 일반 조회한 뒤 잠금 조회를 하면, 그 사이에 주문이 바뀐 경우 Hibernate 7.4.5가 `ObjectOptimisticLockingFailureException`으로 실패하고 checkout 행은 하나다. 뒤의 것은 임시 테스트로 확인했고 커밋하지 않았다.
+- multi-review: Claude 86점, Codex 84점, Gemini 미실행(CLI 없음). 스키마 대조는 `code-reviewer`가 했고 불일치가 없었다. 반영한 것은 위 범위 조정에 적었다. 반영하지 않은 것과 이유는 다음과 같다. `saved.checkouts.last()`에 방어 코드를 넣자는 제안은 `CHECKOUT_REQUESTED`인데 checkout 행이 없는 상태가 이 코드로는 만들어지지 않아서 넣지 않았다. 재요청 때 어댑터가 line과 checkout을 다시 읽는 쿼리 두 번은 port 계약을 흐리지 않으려고 그대로 뒀다. unique 제약에 이름을 붙이는 것과 `check (checkout_no > 0)`은 `V002`와 맞추려고 넣지 않았다. 복원 시 `setScale`이 던지는 `ArithmeticException`은 `OrderLineEntity`와 같은 기존 패턴이라 이 PR에서 바꾸지 않는다.
+- `tdd-driver`에 위임하지 않고 주 에이전트가 TDD 절차를 직접 수행했다.
