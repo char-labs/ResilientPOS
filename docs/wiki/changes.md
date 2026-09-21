@@ -268,3 +268,12 @@
 - 결정: 이 PR의 잠금은 DB 락뿐이다. 애플리케이션 락(분산 락)은 Redis를 도입할 때 Redis로 하고 그 전에는 만들지 않는다. Redis 락은 경합을 앞에서 줄이는 수단이고 DB의 행 잠금·unique 제약·`@Version`은 마지막 방어선으로 남는다.
 - 다음 PR로 넘긴 것: 잠금 대기 초과를 재시도 가능한 HTTP 응답으로 바꾸는 매핑, 인가가 없다는 알려진 빈틈의 기록.
 - 갱신: [현재 상태](current-state.md), [도메인 모델](domain-model.md).
+
+## 2026-09-21 — checkout 요청 endpoint와 경합 응답
+- Spec: [order-request-checkout-api](../spec/2026-09-21-order-request-checkout-api.md)
+- 요구사항 영향: 단말이 checkout을 요청할 수 있게 됐다. `POST /v1/orders/{orderId}/checkout`이 200과 회차·확정 금액·통화를 돌려준다. 이것으로 `RequestCheckout`이 끝났다. 공통 오류에 `409 CONCURRENT_REQUEST`가 늘었다. 스키마는 바뀌지 않았다.
+- 결정: 경로는 주문에 대한 행위를 하위 경로로 두고 성공은 첫 요청과 재요청 모두 200이다. 회차를 조회하는 endpoint가 없고 상태를 바꾸는 요청이라 201보다 200이 맞다.
+- 결정: 잠금 대기 초과와 버전 충돌은 `409 CONCURRENT_REQUEST`다. 원인이 단말의 중복·동시 요청이라 4xx다. `503`은 단순 중복 요청까지 5xx로 집계되고 프록시가 인스턴스 이상으로 볼 수 있어 버렸다. `platform`의 advice가 받으므로 모든 endpoint에 적용된다.
+- 결정: unique 제약 위반은 일반 매핑하지 않았다. 어떤 제약인지에 따라 뜻이 달라서다. `POST /v1/orders`의 같은 키 동시 요청은 계속 500이다.
+- 알려진 빈틈: 인가가 없다. endpoint가 열리면서 `orderId`만 알면 다른 매장의 주문을 전이시킬 수 있게 됐다. 단말 인증을 넣는 작업이 닫는다.
+- 갱신: [현재 상태](current-state.md).

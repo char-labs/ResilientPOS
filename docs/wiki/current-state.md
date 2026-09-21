@@ -13,7 +13,7 @@
 | 식별자 | `uuid-creator` 6.1.1 (UUID v7) |
 | 구조 검증 | Spring Modulith 경계 검증, ArchUnit 1.4.2 의존성 방향 가드 |
 | 통합 테스트 | Testcontainers 2.0.5 PostgreSQL 18. `./gradlew test` 실행에 Docker가 필요하다 |
-| 테스트 | Kotlin Test/JUnit 5, Spring Boot 테스트 starter, Fixture Monkey 1.2.3; 총 72개 (컨텍스트 1, 스키마 3, 모듈 구조 2, 의존성 방향 2, Money 8, 식별자 4, Order 15, OrderCommandFacade 9, RequestCheckout 통합 8, API advice 8, OrderController 8, 주문 API 통합 4) |
+| 테스트 | Kotlin Test/JUnit 5, Spring Boot 테스트 starter, Fixture Monkey 1.2.3; 총 80개 (컨텍스트 1, 스키마 3, 모듈 구조 2, 의존성 방향 2, Money 8, 식별자 4, Order 15, OrderCommandFacade 9, RequestCheckout 통합 8, API advice 9, OrderController 8, checkout Controller 5, 주문 API 통합 6) |
 | 로컬 하네스 | Python 3 표준 라이브러리 |
 
 근거: [build.gradle.kts](../../build.gradle.kts), [Gradle Wrapper](../../gradle/wrapper/gradle-wrapper.properties), [애플리케이션 설정](../../src/main/resources/application.yaml).
@@ -38,9 +38,12 @@
   합계가 0원이어도 똑같이 전이한다. store 정책과 정책 버전은 아직 없다([order-request-checkout-domain](../spec/2026-09-21-order-request-checkout-domain.md)).
   `OrderCommandFacade.requestCheckout(RequestCheckoutCommand)`이 `@Transactional` 안에서 주문 행을 잠그고 읽어(`findByIdForUpdate`, Hibernate가 PostgreSQL에 보내는 SQL은 `select ... for no key update`다) 전이를 저장하고
   `OrderPaymentRequested`를 발행(plain Spring 이벤트)한 뒤 `RequestCheckoutResult`(`orderId`·`status`·`checkoutNo`·`amount`)를 돌려준다. 없는 주문은 `ORDER_NOT_FOUND`(`NOT_FOUND`의 첫 사용처)다.
-  순차 재시도와 겹친 요청 모두 기존 결과를 받는다. 겹친 요청은 앞 커밋을 기다린 뒤 `CHECKOUT_REQUESTED`를 읽는다. 잠금 대기는 3초로 제한한다(`jakarta.persistence.lock.timeout` 힌트, Hibernate가 조회 앞뒤로 `set local lock_timeout`을 걸고 되돌린다). 넘으면 `PessimisticLockingFailureException` 계열 예외로 실패하고 아무것도 바꾸지 않는다. 이 예외를 HTTP 응답으로 바꾸는 매핑은 아직 없다. `findByIdForUpdate`는 트랜잭션에서 그 주문의 첫 접촉이어야 한다. 먼저 일반 조회한 뒤 그 사이에 주문이 바뀌었으면 낡은 값을 받지 않고 낙관적 잠금 예외로 실패한다. `V003__order_request_checkout.sql`이 `t_order_checkout`
+  순차 재시도와 겹친 요청 모두 기존 결과를 받는다. 겹친 요청은 앞 커밋을 기다린 뒤 `CHECKOUT_REQUESTED`를 읽는다. 잠금 대기는 3초로 제한한다(`jakarta.persistence.lock.timeout` 힌트, Hibernate가 조회 앞뒤로 `set local lock_timeout`을 걸고 되돌린다). 넘으면 `PessimisticLockingFailureException` 계열 예외로 실패하고 아무것도 바꾸지 않는다. HTTP에서는 `409 CONCURRENT_REQUEST`다. `findByIdForUpdate`는 트랜잭션에서 그 주문의 첫 접촉이어야 한다. 먼저 일반 조회한 뒤 그 사이에 주문이 바뀌었으면 낡은 값을 받지 않고 낙관적 잠금 예외로 실패한다. `V003__order_request_checkout.sql`이 `t_order_checkout`
   (`id`, `order_id`, `checkout_no`, `amount`, unique `(order_id, checkout_no)`)을 만들고 통화는 `t_order.currency`에서 읽는다. checkout 행은 넣기만 하고 갱신·삭제하지 않는다.
-  **checkout을 요청하는 endpoint는 아직 없다**([order-request-checkout-persistence](../spec/2026-09-21-order-request-checkout-persistence.md)).
+  ([order-request-checkout-persistence](../spec/2026-09-21-order-request-checkout-persistence.md)).
+  endpoint는 `POST /v1/orders/{orderId}/checkout`이다. 요청 본문이 없고 200과 `data{orderId, status, checkoutNo, amount, currency}`를 돌려준다. `amount`는 decimal 문자열이다.
+  첫 요청과 재요청이 같은 200과 같은 본문이다. 없는 주문은 `404 ORDER_NOT_FOUND`, UUID 형식이 아닌 `orderId`는 `400 BAD_REQUEST`다.
+  **인가가 없다.** 단말 인증이 아직 없어서 `orderId`만 알면 다른 매장의 주문도 `CHECKOUT_REQUESTED`로 전이시킬 수 있다. 알려진 빈틈이다([order-request-checkout-api](../spec/2026-09-21-order-request-checkout-api.md)).
   `OrderCommandFacade`가 `@Transactional` 안에서 같은 `(terminalId, clientOrderId)`의 주문을 찾으면 `order.verifySamePayload(command)`로
   payload를 확인한 뒤 기존 결과를 돌려주고, 아니면
   `Order.create` → `OrderRepository.save` → `OrderCreated` 발행(plain Spring 이벤트, EPR 없음) 순으로 진행한다. JPA adapter는
@@ -66,7 +69,7 @@
   (`version`·`created_at`·`updated_at`·`deleted_at`, Hibernate `@SoftDelete`)을 주는 `BaseEntity`를 가진다. `OrderEntity`·`OrderLineEntity`가 상속한다. 모듈은 9개다.
   HTTP 응답 공통 모양도 여기에 있다. `ApiResponseBodyAdvice`가 `com.resilientpos` Controller의 본문을 `ApiResponse`(`result`·`data`·`error`)로
   감싸고, `ApiControllerAdvice`가 Spring MVC 표준 예외와 처리하지 못한 예외를 `ErrorResponse`(`errorCode`·`message`)로 바꾼다.
-  `ErrorType`은 HTTP 공통 오류 4개만 가진다. 응답 메시지는 고정 문구이고 예외 메시지는 로그에만 남는다. `DomainException`만 예외로,
+  `ErrorType`은 HTTP 공통 오류 5개만 가진다. 다섯째 `CONCURRENT_REQUEST`(409)는 Spring의 `ConcurrencyFailureException` 계열(잠금 대기 초과, 버전 충돌)을 받는다. 요청은 올바르고 단말이 같은 요청을 다시 보내면 되는 경우라서 5xx로 집계하지 않는다. unique 제약 위반(`DataIntegrityViolationException`)은 이 계열이 아니라서 계속 500이다. 응답 메시지는 고정 문구이고 예외 메시지는 로그에만 남는다. `DomainException`만 예외로,
   `kind`가 정한 상태(`INVALID` 400, `NOT_FOUND` 404, `CONFLICT` 409, `UNPROCESSABLE` 422)와 함께 예외의 `code`·`message`가 `error`에 그대로 나간다.
   매핑은 else 없는 `when`이라 `kind`를 추가하고 매핑을 빠뜨리면 컴파일되지 않는다. Bean Validation은 쓰지 않는다([api-response-advice](../spec/2026-09-19-api-response-advice.md)).
 - 제공된 요구사항 문서 7개는 [원문 목록](../references/README.md)에 보관했다. 요구사항 재정리와 원문 간 정합성 검토는 아직 수행하지 않았다.
