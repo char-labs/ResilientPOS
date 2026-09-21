@@ -19,8 +19,10 @@ import java.util.concurrent.TimeUnit
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFails
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.fail
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.TestConfiguration
 import org.springframework.context.annotation.Bean
@@ -76,8 +78,12 @@ class OrderEventPublicationIntegrationTest(
 
     private fun publications(orderId: OrderId): List<Map<String, Any?>> =
         jdbcTemplate.queryForList(
-            "select event_type, serialized_event, completion_date, status from event_publication where serialized_event like ?",
+            """
+            select event_type, serialized_event, completion_date, status from event_publication
+            where serialized_event like ? and listener_id like ?
+            """.trimIndent(),
             "%${orderId.value}%",
+            "%${PaymentRequestedListener::class.java.simpleName}%",
         )
 
     private fun received(orderId: OrderId) = listener.received.filter { it.orderId == orderId }
@@ -86,7 +92,9 @@ class OrderEventPublicationIntegrationTest(
     private fun awaitUntil(description: String, condition: () -> Boolean) {
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
         while (!condition()) {
-            check(System.nanoTime() < deadline) { "10초 안에 충족되지 않았다: $description" }
+            if (System.nanoTime() >= deadline) {
+                fail("10초 안에 충족되지 않았다: $description. 발행 기록: " + jdbcTemplate.queryForList("select listener_id, status, completion_date from event_publication"))
+            }
             Thread.sleep(20)
         }
     }
@@ -131,7 +139,11 @@ class OrderEventPublicationIntegrationTest(
         }
 
         assertEquals(emptyList(), publications(orderId))
-        Thread.sleep(300) // 리스너가 실행됐다면 드러났을 시간
+
+        // 시간에 기대지 않으려고 다른 주문의 이벤트가 끝까지 처리되는 것을 기다린다. 롤백된 이벤트가 전달됐다면 그 전에 도착했다.
+        val otherOrderId = facade.create(OrderFixtures.createOrderCommand()).orderId
+        facade.requestCheckout(RequestCheckoutCommand(otherOrderId))
+        awaitUntil("뒤에 발행한 이벤트가 완료된다") { publications(otherOrderId).singleOrNull()?.get("completion_date") != null }
         assertEquals(emptyList(), received(orderId))
         assertEquals("OPEN", jdbcTemplate.queryForObject("select status from t_order where id = ?", String::class.java, orderId.value))
     }
@@ -169,6 +181,22 @@ class OrderEventPublicationIntegrationTest(
 
         assertEquals(event, restored)
         assertEquals(2, restored.amount.amount.scale())
+    }
+
+    @Test
+    fun `자릿수가 통화와 어긋난 금액은 복원을 거절한다`() {
+        val event = OrderPaymentRequested(
+            eventId = UUID.randomUUID(),
+            occurredAt = Instant.parse("2026-09-21T06:00:00Z"),
+            orderId = OrderId(UUID.randomUUID()),
+            storeId = StoreId(UUID.randomUUID()),
+            terminalId = TerminalId(UUID.randomUUID()),
+            checkoutNo = 1,
+            amount = Money.of("30.00", Currency.getInstance("USD")),
+        )
+        val tampered = eventSerializer.serialize(event).toString().replace("30.00", "30.0")
+
+        assertFails { eventSerializer.deserialize(tampered, OrderPaymentRequested::class.java) }
     }
 
     @Test
