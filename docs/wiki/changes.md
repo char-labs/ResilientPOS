@@ -276,4 +276,7 @@
 - 결정: 잠금 대기 초과와 버전 충돌은 `409 CONCURRENT_REQUEST`다. 원인이 단말의 중복·동시 요청이라 4xx다. `503`은 단순 중복 요청까지 5xx로 집계되고 프록시가 인스턴스 이상으로 볼 수 있어 버렸다. `platform`의 advice가 받으므로 모든 endpoint에 적용된다.
 - 결정: unique 제약 위반은 일반 매핑하지 않았다. 어떤 제약인지에 따라 뜻이 달라서다. `POST /v1/orders`의 같은 키 동시 요청은 계속 500이다.
 - 알려진 빈틈: 인가가 없다. endpoint가 열리면서 `orderId`만 알면 다른 매장의 주문을 전이시킬 수 있게 됐다. 단말 인증을 넣는 작업이 닫는다.
+- 검토: 제출 전 multi-review(Claude 88점, Codex 90점, Gemini는 CLI가 없어 미실행)를 실행했고 둘 다 막는 결함은 없다고 판정했다. `CONCURRENT_REQUEST`의 고정 문구에서 재시도 약속을 뺐다. 경합 예외는 DB 경합을 뜻할 뿐이고 endpoint가 멱등인지는 보장하지 않아서다. 재시도 안내는 checkout의 REST Docs에만 뒀다. 409 안에서 `errorCode`로 분기해야 한다는 점, deadlock·직렬화 실패의 관측, 인가 빈틈의 복구 불가성과 "인증·소유권 검사 전에는 외부에 노출하지 않는다"는 조건을 현재 상태에 적었다.
+- 발견: 커밋 시점의 버전 충돌은 낙관적 잠금 예외로 나오지 않는다. `BaseEntity`의 `@UpdateTimestamp(source = DB)` 때문에 Hibernate 7.4.5가 `UPDATE ... RETURNING`을 쓰고, 0행이 갱신되면 `JpaSystemException`("The database returned no natively generated values")이 난다. HTTP에서는 500이다. 임시 통합 테스트로 확인했고 커밋하지 않았다. 커밋은 거절되므로 정합성은 지켜지지만 단말은 재시도해도 되는 오류인지 알 수 없다. #20부터 있던 성질이고 checkout endpoint는 행 잠금을 써서 이 경로에 닿지 않는다. 별도 PR로 고친다.
+- 다음 작업이 확인할 것: Facade는 커밋 전에 이벤트를 발행한다. Event Publication Registry나 리스너를 넣는 PR이 발행과 트랜잭션의 묶임을 확인한다. 지금 `CONCURRENT_REQUEST` 뒤의 재시도가 안전한 것은 리스너가 없기 때문이기도 하다.
 - 갱신: [현재 상태](current-state.md).
