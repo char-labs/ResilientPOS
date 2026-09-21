@@ -20,8 +20,19 @@
 - 경로는 주문에 대한 행위를 하위 경로로 둔 `POST /v1/orders/{orderId}/checkout`이고 성공은 첫 요청과 재요청 모두 200이다. 회차를 조회하는 endpoint가 없고 주문의 상태를 바꾸는 요청이라 201보다 200이 맞다. 멱등 재시도가 "또 만들었다"로 읽히지 않는다.
 - 경합 예외는 `409 CONCURRENT_REQUEST`다. 원인이 단말의 중복·동시 요청이라 4xx가 맞다. `503`과 `Retry-After`는 단말의 단순 중복 요청까지 5xx로 집계되고 프록시가 인스턴스 이상으로 해석할 수 있어 버렸다. 500으로 두는 안은 단말이 재시도해도 되는 오류와 서버 오류를 구분할 수 없어 버렸다.
 
+### 범위 조정 (2026-09-21, 제출 전 multi-review 반영)
+응답 DTO의 프로퍼티 이름과 응답에 나가는 상수 `CONCURRENT_REQUEST`가 있고 `platform` advice가 모든 endpoint에 적용되므로 PR 템플릿 기준 🔴이다. multi-review(Claude, Codex 실행. Gemini는 CLI가 없어 미실행)를 돌렸고 둘 다 막는 결함은 없다고 판정했다.
+- 공통 문구가 재시도를 과하게 약속했다. `CONCURRENT_REQUEST`의 고정 문구에서 "다시 요청해 주세요"를 빼고 "동시 처리 충돌로 요청을 완료하지 못했습니다."로 좁힌다. `ConcurrencyFailureException`은 DB 경합을 뜻할 뿐이고 그 endpoint가 멱등인지는 보장하지 않는다. 같은 요청을 다시 보내면 된다는 안내는 checkout의 REST Docs에만 둔다. checkout에서도 "기존 결과를 받는다"는 앞 요청이 커밋한 경우의 이야기다. 앞 요청이 롤백했으면 재시도가 최초 전이를 수행한다.
+- 409에는 재시도하면 안 되는 `IDEMPOTENCY_CONFLICT`와 재시도해도 되는 `CONCURRENT_REQUEST`가 함께 있다. 단말은 상태 코드가 아니라 `errorCode`로 분기해야 한다는 점을 wiki에 적는다.
+- 이 계열에는 deadlock 패자와 직렬화 실패도 들어 있다. 트랜잭션이 롤백된 상태라 재시도는 안전하지만 단말의 중복 요청이 아니라 서버 코드의 잠금 순서 문제를 뜻할 수 있다. WARN 로그의 `errorCode=CONCURRENT_REQUEST`에서 따로 봐야 한다는 점을 wiki에 적는다.
+- 커밋 시점의 버전 충돌이 이 handler에 도달하는지를 두 리뷰어가 물었다. 임시 통합 테스트로 확인했다(커밋하지 않았다). **도달하지 않는다.** `BaseEntity`의 `@UpdateTimestamp(source = DB)` 때문에 Hibernate 7.4.5가 `UPDATE ... RETURNING`을 쓰고, 버전이 맞지 않아 0행이 갱신되면 "The database returned no natively generated values"라는 `HibernateException`을 던진다. Spring은 이것을 `JpaSystemException`으로 바꾸므로 HTTP에서는 `500 INTERNAL_ERROR`다. 커밋은 거절되어 정합성은 지켜진다. #20부터 있던 `BaseEntity`의 성질이고 이 PR의 endpoint는 행 잠금을 써서 이 경로에 닿지 않는다. 고치는 일은 `BaseEntity`의 시각 생성 방식을 다루는 별도 PR로 둔다. 인수 조건 5의 `OptimisticLockingFailureException` 매핑은 조회 시점 충돌(#32에서 확인한 "conflicting version" 경로)에 해당한다.
+- 인가 빈틈의 기록을 강화한다. 전이를 되돌리는 endpoint가 없어서 잘못 촉발된 checkout은 복구할 수 없다. 단말 인증과 주문의 매장·단말 소유권 검사가 들어오기 전에는 이 API를 외부에 노출하지 않는다. 인증만 넣고 소유권 검사를 하지 않으면 빈틈은 남는다.
+- `CONCURRENT_REQUEST`의 재시도가 안전한 것은 지금 `OrderPaymentRequested`의 리스너가 없기 때문이기도 하다. Facade는 커밋 전에 이벤트를 발행한다. Event Publication Registry나 리스너를 넣는 PR이 발행과 트랜잭션의 묶임을 확인한다.
+- 통합 테스트에서 주문 생성 재시도 시나리오를 별도 테스트로 떼고, 400 테스트에 `data`가 null인지와 고정 문구 확인을 더한다.
+
 ## 제외
 - 인가(요청한 단말이 주문의 단말·매장과 같은지 확인). 단말 인증이 아직 없다. `orderId`만 알면 다른 매장의 주문을 전이시킬 수 있다는 점을 알려진 빈틈으로 적는다.
+- 커밋 시점 버전 충돌이 `JpaSystemException`(500)으로 나오는 것의 수정. 위 범위 조정에 적은 `BaseEntity`의 성질이고 별도 PR이다.
 - unique 제약 위반(`DataIntegrityViolationException`)의 매핑. 경합 예외 계열이 아니고 어떤 제약인지에 따라 뜻이 달라서 일반 매핑하지 않는다. `POST /v1/orders`의 같은 키 동시 요청은 계속 500이다.
 - `Retry-After` 헤더와 재시도 간격 안내. 단말의 재시도 정책이 정해지면 다룬다.
 - Asciidoctor HTML 빌드. 스니펫까지만 만든다.
@@ -46,7 +57,7 @@
 3. Facade가 `PessimisticLockingFailureException` 계열을 던지면 409이고 `error.errorCode`가 `CONCURRENT_REQUEST`이며 `error.message`에 예외 메시지가 나가지 않는다.
 4. `orderId`가 UUID 형식이 아니면 `400 BAD_REQUEST`이고 Facade를 부르지 않는다.
 5. advice: `OptimisticLockingFailureException` 계열도 `409 CONCURRENT_REQUEST`이고, 처리하지 못한 다른 예외는 계속 `500 INTERNAL_ERROR`다.
-6. 실제 Facade와 PostgreSQL까지 연결한 통합 테스트에서 주문을 만든 뒤 checkout을 요청하면 200과 `CHECKOUT_REQUESTED`, 주문 합계 금액을 받고 `t_order.status`가 `CHECKOUT_REQUESTED`다. 같은 요청을 다시 보내면 같은 본문이고 `t_order_checkout`의 행이 하나다. 그 뒤 같은 본문으로 `POST /v1/orders`를 다시 보내면 201과 `data.status`가 `CHECKOUT_REQUESTED`다.
+6. 실제 Facade와 PostgreSQL까지 연결한 통합 테스트에서 주문을 만든 뒤 checkout을 요청하면 200과 `CHECKOUT_REQUESTED`, 주문 합계 금액을 받고 `t_order.status`가 `CHECKOUT_REQUESTED`다. 같은 요청을 다시 보내면 같은 본문이고 `t_order_checkout`의 행이 하나다. 별도 테스트에서, checkout을 요청한 주문에 같은 본문으로 `POST /v1/orders`를 다시 보내면 201과 `data.status`가 `CHECKOUT_REQUESTED`다.
 7. 통합 테스트에서 없는 주문의 checkout 요청은 `404 ORDER_NOT_FOUND`다.
 8. 1~4의 요청·응답으로 REST Docs 스니펫이 `build/generated-snippets`에 생긴다.
 9. 기존 테스트 72개가 그대로 통과한다.
