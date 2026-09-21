@@ -162,8 +162,6 @@ class HarnessTest(unittest.TestCase):
         self.assertIn('최초 spec 항목 미작성', self.errors(True))
 
 
-
-
 class MigrationVersionTest(HarnessTest):
     """같은 Flyway 버전이 둘 이상이면 배포 앱이 기동에 실패한다. 머지 전에 잡는다."""
 

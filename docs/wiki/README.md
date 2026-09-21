@@ -4,7 +4,7 @@
 자동 지침 탐색을 지원하지 않는 LLM에는 `AGENTS.md를 읽고 작업에 필요한 wiki를 찾아줘`라고 요청한다.
 
 ## 작업별 진입점
-- 공통 계약/기술 스택: [AGENTS.md](../../AGENTS.md).
+- 공통 계약: [AGENTS.md](../../AGENTS.md). 기술 스택 현황: [현재 상태](current-state.md).
 - 개발 시작/PR 제출: [개발 규칙](development-workflow.md)과 해당 PR의 `docs/spec/yyyy-mm-dd-slug.md`.
 - 애플리케이션/빌드 수정: [현재 상태](current-state.md). 필요한 도메인 원문만 [원문 목록](../references/README.md)에서 찾는다.
 - 이전 결정 추적: `docs/spec/`에서 날짜와 slug로 관련 spec을 찾아 읽는다.
