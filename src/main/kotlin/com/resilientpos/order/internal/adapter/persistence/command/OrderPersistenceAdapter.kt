@@ -5,17 +5,26 @@ import com.resilientpos.order.OrderId
 import com.resilientpos.order.internal.domain.Order
 import com.resilientpos.order.internal.domain.OrderRepository
 import com.resilientpos.terminal.TerminalId
+import jakarta.persistence.EntityManager
 import org.springframework.stereotype.Repository
+import org.springframework.transaction.annotation.Transactional
 
 /**
  * `OrderRepository`의 JPA 구현. 엔티티 사이에 연관관계 매핑이 없으므로 주문과 line의 조립과 변경 반영을 여기서 한다.
  * 새 행이면 `from`, 기존 행이면 `apply`로 저장하고 line과 checkout은 ID로 맞춘다.
+ * line과 checkout은 `@Version`이 없다. 도메인 ID를 저장 전에 만들기 때문에 Spring Data의 `save`는 이런 새 엔티티를 기존 행으로 보고
+ * `merge`해서 SELECT가 한 번 더 나간다. 그래서 새 자식 행은 `EntityManager.persist`로 넣는다. 기존 행은 같은 트랜잭션에서 읽은 관리 엔티티라
+ * `apply`만 하면 flush가 UPDATE한다.
+ * 호출 순서와 무관하게 새 자식 행의 INSERT가 soft delete UPDATE보다 먼저 flush된다(SQL 로그로 확인).
+ * `t_order_line`에 지금은 PK 말고 unique가 없어서 지워진 행의 `line_no`를 새 행이 물려받아도 충돌하지 않는다.
+ * partial unique를 더하려면 이 순서를 먼저 본다.
  */
 @Repository
 class OrderPersistenceAdapter(
     private val jpaRepository: OrderJpaRepository,
     private val lineJpaRepository: OrderLineJpaRepository,
     private val checkoutJpaRepository: OrderCheckoutJpaRepository,
+    private val entityManager: EntityManager,
 ) : OrderRepository {
 
     override fun findById(id: OrderId): Order? =
@@ -27,6 +36,11 @@ class OrderPersistenceAdapter(
     override fun findByClientOrderId(terminalId: TerminalId, clientOrderId: ClientOrderId): Order? =
         jpaRepository.findByTerminalIdAndClientOrderId(terminalId.value, clientOrderId.value)?.let(::toDomain)
 
+    /**
+     * 트랜잭션은 Facade가 소유하고 여기서는 합류한다. 선언은 트랜잭션 없이 직접 부른 경우의 안전망이다.
+     * 없으면 주문 행만 자기 트랜잭션으로 커밋되고 `persist`가 실패해 line 없는 주문이 남는다.
+     */
+    @Transactional
     override fun save(order: Order): Order {
         val orderId = order.id.value
         val existing = jpaRepository.findById(orderId).orElse(null)
@@ -38,14 +52,14 @@ class OrderPersistenceAdapter(
             existingLines[line.id.value]?.also { it.apply(lineNo, line) } ?: OrderLineEntity.from(orderId, lineNo, line)
         }
         lineJpaRepository.deleteAll(existingLines.values - lines.toSet())
-        lineJpaRepository.saveAll(lines)
+        (lines - existingLines.values.toSet()).forEach(entityManager::persist)
 
         // checkout은 확정 뒤에 바뀌지 않는다. 없는 ID만 넣고 갱신·삭제하지 않는다.
         val storedCheckoutIds = if (existing == null) emptySet()
         else checkoutJpaRepository.findAllByOrderIdOrderByCheckoutNo(orderId).map { it.id }.toSet()
-        checkoutJpaRepository.saveAll(
-            order.checkouts.filter { it.id.value !in storedCheckoutIds }.map { OrderCheckoutEntity.from(orderId, it) },
-        )
+        order.checkouts.filter { it.id.value !in storedCheckoutIds }
+            .map { OrderCheckoutEntity.from(orderId, it) }
+            .forEach(entityManager::persist)
         return order
     }
 

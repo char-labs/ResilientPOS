@@ -18,5 +18,10 @@ interface OrderRepository {
     fun findByIdForUpdate(id: OrderId): Order?
 
     fun findByClientOrderId(terminalId: TerminalId, clientOrderId: ClientOrderId): Order?
+
+    /**
+     * aggregate를 저장한다. 트랜잭션이 없으면 이 호출 하나가 한 트랜잭션이 되어 주문과 자식 행이 함께 커밋되거나 함께 롤백된다.
+     * 운영 경로는 Facade의 트랜잭션 안에서 부른다. `findByIdForUpdate`가 잡은 잠금은 그 트랜잭션이 끝날 때까지 유지된다.
+     */
     fun save(order: Order): Order
 }

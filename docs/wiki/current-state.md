@@ -13,7 +13,7 @@
 | 식별자 | `uuid-creator` 6.1.1 (UUID v7) |
 | 구조 검증 | Spring Modulith 경계 검증, ArchUnit 1.4.2 의존성 방향 가드 |
 | 통합 테스트 | Testcontainers 2.0.5 PostgreSQL 18. `./gradlew test` 실행에 Docker가 필요하다 |
-| 테스트 | Kotlin Test/JUnit 5, Spring Boot 테스트 starter, Fixture Monkey 1.2.3; 총 90개 (컨텍스트 1, 스키마 3, 모듈 구조 2, 의존성 방향 2, Money 8, 식별자 4, Order 15, OrderCommandFacade 9, RequestCheckout 통합 9, 버전 충돌 통합 1, 이벤트 발행 기록 통합 7, API advice 9, OrderController 8, checkout Controller 5, 주문 API 통합 7) |
+| 테스트 | Kotlin Test/JUnit 5, Spring Boot 테스트 starter, Fixture Monkey 1.2.3; 총 96개 (컨텍스트 1, 스키마 4, 모듈 구조 2, 의존성 방향 2, Money 8, 식별자 4, Order 15, OrderCommandFacade 11, RequestCheckout 통합 9, 버전 충돌 통합 1, 문장 수 통합 3, 이벤트 발행 기록 통합 7, API advice 9, OrderController 8, checkout Controller 5, 주문 API 통합 7) |
 | 로컬 하네스 | Python 3 표준 라이브러리 |
 
 근거: [build.gradle.kts](../../build.gradle.kts), [Gradle Wrapper](../../gradle/wrapper/gradle-wrapper.properties), [애플리케이션 설정](../../src/main/resources/application.yaml).
@@ -72,9 +72,11 @@
   `Money`는 통화의 표준 소수 자릿수를 canonical scale로 쓰고, scale 초과 입력과 통화 불일치 연산을 거절한다.
   나눗셈·퍼센트 할인·세금 계산은 없다. 반올림 정책은 매장 규칙이므로 `store` 정책과 checkout에서 다룬다.
 - `platform` 모듈은 `IdentifierGenerator`(UUID v7)와 `Clock`(UTC) 빈을 등록하는 `PlatformConfiguration`과 엔티티 공통 컬럼
-  (`version`·`created_at`·`updated_at`·`deleted_at`, Hibernate `@SoftDelete`)을 주는 `BaseEntity`를 가진다. `OrderEntity`·`OrderLineEntity`가 상속한다. 모듈은 9개다.
+  (`created_at`·`updated_at`·`deleted_at`, Hibernate `@SoftDelete`)을 주는 `BaseEntity`를 가진다. `OrderEntity`·`OrderLineEntity`·`OrderCheckoutEntity`가 상속한다. 모듈은 9개다.
+  낙관적 잠금 `@Version`은 `BaseEntity`에 없고 필요한 엔티티가 직접 선언한다. 지금은 `OrderEntity`뿐이라 `version` 컬럼은 `t_order`에만 있다. `@Version`이 없는 새 자식 행은
+  `OrderPersistenceAdapter`가 `EntityManager.persist`로 넣고, 어댑터의 `save`는 `@Transactional`로 Facade의 트랜잭션에 합류한다([base-entity-explicit-version](../spec/2026-09-21-base-entity-explicit-version.md)).
   `created_at`·`updated_at`은 Hibernate가 JVM에서 만드는 애플리케이션 시각이고(`SourceType.VM`) `deleted_at`만 DB `current_timestamp`다. 한 INSERT의 두 시각은 같지 않을 수 있어서
-  갱신된 적 없는 행은 `version = 0`으로 판정한다. `SourceType.DB`였을 때는 Hibernate 7.4.5가 UPDATE의 generated 값을 읽느라 갱신 행 수 검사를 건너뛰어서, 커밋 시점의 버전 충돌이
+  갱신된 적 없는 주문 행은 `version = 0`으로 판정한다. `SourceType.DB`였을 때는 Hibernate 7.4.5가 UPDATE의 generated 값을 읽느라 갱신 행 수 검사를 건너뛰어서, 커밋 시점의 버전 충돌이
   낙관적 잠금 예외가 아니라 `JpaSystemException`으로 나왔다. 지금은 `OptimisticLockingFailureException` 계열로 나오고 HTTP에서는 아래 `CONCURRENT_REQUEST` 매핑을 타서 409다([commit-version-conflict-optimistic-lock](../spec/2026-09-21-commit-version-conflict-optimistic-lock.md)).
   HTTP 응답 공통 모양도 여기에 있다. `ApiResponseBodyAdvice`가 `com.resilientpos` Controller의 본문을 `ApiResponse`(`result`·`data`·`error`)로
   감싸고, `ApiControllerAdvice`가 Spring MVC 표준 예외와 처리하지 못한 예외를 `ErrorResponse`(`errorCode`·`message`)로 바꾼다.
@@ -120,7 +122,7 @@ PostgreSQL이 유일한 엔진이다. H2는 제거했다. 테스트가 운영과
 애플리케이션이 테이블을 만들거나 바꾸지 않는다. 마이그레이션이 실패하면 애플리케이션이 뜨지 않는다.
 
 파일명은 `V(번호)__(소유 모듈)_(변경 내용).sql`이다. `V001__baseline.sql`은 의도적으로 비어 있고, 업무 테이블은 각
-모듈이 후속 마이그레이션으로 추가한다. 첫 업무 마이그레이션은 `V002__order_create_order.sql`(`t_order`, `t_order_line`)이고 `V003__order_request_checkout.sql`이 `t_order_checkout`을 더했다. `V004__platform_event_publication.sql`은 업무 테이블이 아니라 Modulith의 `event_publication`이다.
+모듈이 후속 마이그레이션으로 추가한다. 첫 업무 마이그레이션은 `V002__order_create_order.sql`(`t_order`, `t_order_line`)이고 `V003__order_request_checkout.sql`이 `t_order_checkout`을 더했다. `V004__platform_event_publication.sql`은 업무 테이블이 아니라 Modulith의 `event_publication`이다. `V005__order_drop_child_version.sql`은 `t_order_line`과 `t_order_checkout`의 `version` 컬럼을 없앴다.
 스키마를 바꾸는 PR은 [도메인 모델](domain-model.md)의 "스키마 변경 검토" 절 질문(필요성·정합성·반영)에 spec에서 답한다.
 
 통합 테스트는 Testcontainers로 실제 PostgreSQL 18을 띄운다. **`./gradlew test`에 Docker가 필요하다.** 컨테이너는

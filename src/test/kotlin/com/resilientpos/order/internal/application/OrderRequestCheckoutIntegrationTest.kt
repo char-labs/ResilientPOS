@@ -70,11 +70,6 @@ class OrderRequestCheckoutIntegrationTest(
         assertEquals("CHECKOUT_REQUESTED", storedStatus(orderId))
         assertEquals(1L, checkoutRowCount(orderId))
         assertEquals(1L, paymentRequestedCount(events, orderId))
-        assertEquals(
-            0L,
-            jdbcTemplate.queryForObject("select version from t_order_checkout where order_id = ?", Long::class.java, orderId.value),
-            "새 checkout은 INSERT 한 번이다. merge로 빠지면 UPDATE가 따라붙어 version이 1이 된다",
-        )
     }
 
     @Test

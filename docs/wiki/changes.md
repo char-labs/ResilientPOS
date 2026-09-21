@@ -310,3 +310,16 @@
 - 볼트: `rules/domain-modeling-kotlin.md` 5절의 `BaseEntity` 서술을 `SourceType.VM`으로 고치고 실행 시점 DB generated 값을 쓰지 않는다는 규칙을 더했다. 볼트는 git으로 관리되지 않아서 수정 전 사본을 `~/Documents/domain-modeling-kotlin.2026-09-21.before-vm-timestamps.md`에 남겼다.
 - 검토: 제출 전 multi-review(Claude 86점, Codex 92점, Gemini는 CLI가 없어 미실행)를 실행했다. 둘 다 코드에 막는 결함은 없다고 판정했다. 시각 단언을 시계에 기대지 않게 바꾸고, 충돌이 커밋에서 드러난다는 것을 테스트로 고정하고, 과장된 서술(시각 출처가 `Clock` 빈으로 모인다)을 고쳤다.
 - 갱신: [현재 상태](current-state.md), [도메인 모델](domain-model.md).
+
+## 2026-09-21 — BaseEntity의 @Version을 걷어내고 필요한 엔티티만 직접 선언
+- Spec: [base-entity-explicit-version](../spec/2026-09-21-base-entity-explicit-version.md)
+- 요구사항 영향: 제품 요구사항은 바뀌지 않았다. 저장 형식과 엔티티 작성 규칙이 바뀌었다. `t_order_line`과 `t_order_checkout`에서 `version` 컬럼이 없어졌고 `t_order`는 그대로다. HTTP API와 이벤트는 바뀌지 않았다.
+- 결정(사용자, 2026-09-21): `BaseEntity`에서 `@Version`을 빼고 낙관적 잠금이 실제로 필요한 엔티티만 직접 선언한다. 기반 클래스를 버전 있는 것과 없는 것 둘로 나누지 않는다. 공통 기반에 넣어 두면 "왜 모든 테이블에 version이 있는가"를 다른 개발자에게 매번 설명해야 하고, 필요 없는 곳에도 있다는 사실이 소통 비용이 된다. 필요한 곳에 명시적으로 붙어 있으면 그 선언이 의도를 말해 준다. 지금 선언하는 엔티티는 aggregate 루트인 `OrderEntity` 하나다.
+- 결정: `@Version`이 없는 새 자식 행은 `OrderPersistenceAdapter`가 `EntityManager.persist`로 넣는다. 도메인 ID를 저장 전에 만들기 때문에 Spring Data의 `saveAll`에 맡기면 새 행을 기존 행으로 보고 `merge`한다. 어댑터는 이미 기존 행을 조회해 ID로 구분하고 있어서 새 정보가 필요 없다. 엔티티가 `Persistable`을 구현하는 안은 엔티티마다 transient 상태와 JPA callback이 필요하고 Kotlin에서 `getId` 시그니처가 충돌해서 버렸다. `merge`의 추가 SELECT를 받아들이는 안은 "신규 저장은 INSERT 한 번"이라는 기존 테스트의 의도와 어긋나서 버렸다.
+- 확인: Hibernate 통계의 JDBC 문장 수로 쟀다(Spring Boot 4.1.1, Hibernate 7.4.5). `@Version`만 빼고 `saveAll`을 그대로 두면 새 자식 행마다 SELECT가 정확히 하나씩 더 나갔다. line 두 개짜리 새 주문 저장은 4에서 6, line 하나 추가와 checkout 하나 추가는 각각 4에서 5가 됐다. `persist`로 바꾸면 4로 돌아온다. `OrderInsertStatementCountIntegrationTest`가 이 수를 고정한다. checkout 행의 `version = 0`으로 같은 사실을 간접 확인하던 단언은 컬럼과 함께 없앴다.
+- 발견과 결정(범위 조정 1): `persist`로 바꾸면 트랜잭션 없이 부른 `save`가 line 없는 주문 행을 남긴다. 주문 행은 `OrderJpaRepository.save`가 자기 트랜잭션으로 먼저 커밋하고 `persist`는 트랜잭션이 없어 `InvalidDataAccessApiUsageException`으로 실패하기 때문이다. 어댑터의 `save`에 `@Transactional`(`REQUIRED`)을 선언해 막았다. Facade의 트랜잭션이 있으면 합류하고 없으면 `save` 하나가 한 트랜잭션이다. 트랜잭션 밖 호출이 line INSERT에서 실패하면 주문 행도 남지 않는다. 전에는 이 경우 주문 행이 남았다. `MANDATORY`는 지금까지 동작하던 직접 호출을 금지로 바꿀 이유가 없어서 버렸다.
+- 결정: 코드 제거와 컬럼 삭제를 한 PR로 했다. [도메인 모델](domain-model.md) 4.7절 질문 8의 원칙은 "컬럼 삭제는 그 컬럼을 쓰는 코드가 배포에서 빠진 다음 PR에서"다. 배포된 환경이 아직 없어서 보호할 이전 버전 인스턴스가 없다. 나누면 엔티티에서 `version`을 뺀 코드가 `not null` 컬럼에 INSERT할 수 없어서 default를 더하는 마이그레이션이 하나 더 필요하다. 이 판단은 배포 환경이 없는 지금에만 성립한다.
+- 받아들인 것: 같은 line 행을 두 트랜잭션이 동시에 고치면 뒤에 커밋한 쪽이 조용히 이긴다. 지금 기존 주문의 line을 고치는 명령이 없고, 행 단위 version은 서로 다른 line을 고치는 두 트랜잭션을 막지 못해 aggregate의 방어선이 아니었다. line 변경 명령을 넣는 PR이 주문 행 잠금 조회를 쓰거나 루트 version 증가를 정한다는 기존 계획은 그대로다.
+- 순서: PR #34(커밋 시점의 버전 충돌) 위에 stacked PR로 올렸다가 #34가 머지된 뒤 `main` 위로 rebase했다. 같은 `BaseEntity.kt`와 같은 wiki 절을 고치기 때문이다. 그 사이 Event Publication Registry PR(#35)이 먼저 머지되어 `V004`를 가져갔으므로 이 PR의 마이그레이션은 `V005`다. EPR이 문장 수 테스트의 기대값을 바꿀 것으로 봤으나 운영 코드에 `@ApplicationModuleListener`가 없어서 바뀌지 않았다. 리스너를 더하는 PR이 그 테스트를 함께 본다.
+- 볼트: `rules/domain-modeling-kotlin.md` 5절에서 `BaseEntity`가 주는 것 중 `@Version`을 빼고, 필요한 엔티티만 직접 선언한다는 규칙과 `@Version` 없는 새 행은 adapter가 `persist`한다는 규칙을 더했다. 안티패턴 목록에도 두 항목을 더했다. 볼트는 git으로 관리되지 않아서 수정 전 사본을 `~/Documents/domain-modeling-kotlin.2026-09-21.before-explicit-version.md`에 남겼다.
+- 갱신: [현재 상태](current-state.md), [도메인 모델](domain-model.md).
