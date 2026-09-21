@@ -299,3 +299,13 @@
 - 결정: Modulith 버전을 올릴 때의 대응 절차를 [도메인 모델](domain-model.md) 4.3절에 적었다. 규칙만 있고 방법이 없다는 지적을 받아서다. 컬럼이 늘면 `validate`가 기동을 막고 통합 테스트가 컨텍스트를 띄우므로 CI가 먼저 잡는다(`V004`를 v1 스키마로 되돌려 확인했다). 무엇이 바뀌었는지는 Modulith가 버전으로 관리하는 `schemas/vN/schema-postgresql.sql`을 diff해서 안다. 라이브러리가 컬럼을 없애는 경우만 조용히 통과한다.
 - 다음 작업이 확인할 것: 종료할 때 task executor의 대기와 DataSource 종료의 순서(확인하지 않았다), 오래 머문 발행 기록을 감시하는 `spring.modulith.events.staleness.*` 설정, 완료 표시가 UPDATE라서 생기는 테이블 팽창과 정리 작업.
 - 갱신: [현재 상태](current-state.md), [도메인 모델](domain-model.md), [AGENTS.md](../../AGENTS.md).
+
+## 2026-09-21 — 커밋 시점의 버전 충돌을 낙관적 잠금 예외로 되돌리기
+- Spec: [commit-version-conflict-optimistic-lock](../spec/2026-09-21-commit-version-conflict-optimistic-lock.md)
+- 요구사항 영향: 제품 요구사항은 바뀌지 않았다. 행 잠금 없이 `@Version`에 기대는 쓰기가 커밋 시점에 버전 충돌을 만나면 `JpaSystemException`이 아니라 `OptimisticLockingFailureException` 계열로 끝난다. 커밋이 거절되는 것은 전과 같다. HTTP에서 이 계열을 `409 CONCURRENT_REQUEST`로 바꾸는 매핑은 checkout endpoint PR(#33)에 있다.
+- 원인: `BaseEntity`의 `@CreationTimestamp`·`@UpdateTimestamp`가 `SourceType.DB`였다. Hibernate 7.4.5는 실행 시점 generated 값이 있는 엔티티의 INSERT·UPDATE에 generated 값 delegate를 붙이고, delegate가 있으면 갱신 행 수 검사(`OperationResultChecker`)를 거치지 않는다. 0행이 갱신되면 "The database returned no natively generated values"가 난다. Hibernate JIRA에서 같은 증상의 이슈를 찾지 못했고 hibernate-orm `main`도 같은 코드다. `hibernate.jdbc.use_get_generated_keys=false`로도 피할 수 없다(PostgreSQL에서는 `InsertReturningDelegate`가 대신 붙는다).
+- 결정: 두 시각을 `SourceType.VM`으로 바꿨다. `created_at`·`updated_at`은 애플리케이션 시각이 됐고 `deleted_at`만 DB `current_timestamp`다. 한 INSERT의 두 시각은 같지 않을 수 있어서 갱신된 적 없는 행은 `version = 0`으로 판정한다. 도메인 이벤트의 `occurredAt`이 이미 `Clock` 빈에서 오므로 시각 출처가 애플리케이션으로 모였다. 두 컬럼을 읽는 코드는 없다.
+- 버린 안: 컬럼 default와 트리거(테이블마다 트리거가 필요하고 엔티티 값이 채워지지 않는다), 트랜잭션마다 `select current_timestamp`를 읽는 custom generator(읽는 곳 없는 컬럼에 Hibernate SPI와 왕복 하나를 들인다), advice에서 `JpaSystemException`을 메시지로 식별하기(Hibernate 문구에 기대고 그 문구가 버전 충돌만 뜻하지 않는다).
+- 발견: generated 값 delegate가 있는 엔티티는 JDBC batch에서도 빠진다(`InsertCoordinatorStandard`·`UpdateCoordinatorStandard`가 batch key를 두지 않는다). 이 제약도 함께 없어졌다. batch 설정은 켜지 않았다.
+- 볼트: `rules/domain-modeling-kotlin.md` 5절의 `BaseEntity` 서술을 `SourceType.VM`으로 고치고 실행 시점 DB generated 값을 쓰지 않는다는 규칙을 더했다. 볼트는 git으로 관리되지 않아서 수정 전 사본을 `~/Documents/domain-modeling-kotlin.2026-09-21.before-vm-timestamps.md`에 남겼다.
+- 갱신: [현재 상태](current-state.md), [도메인 모델](domain-model.md).
