@@ -8,18 +8,18 @@
 
 **불변식을 지키는 순서를 바꾼다.** 지금 `Money.of`는 입력을 먼저 canonical scale로 맞추고(`setScale`) 그다음 불변식을 본다. 값을 펴는 일이 검사보다 앞에 있어서, 거절할 입력에도 펴는 비용을 먼저 치른다. 순서를 뒤집어 **값을 펴기 전에 메타데이터만 보고 판정**한다. `BigDecimal.precision()`과 `scale()`은 이미 가지고 있는 정수 두 개라 입력 크기와 무관하다.
 
-**통화 자릿수를 한 곳에서 판정한다.** `Currency.getDefaultFractionDigits()`는 금액 개념이 없는 통화 코드(`XAU`, `XDR`, `XXX`)에 `-1`을 돌려준다. `Money`는 이 값을 canonical scale로 그대로 쓰므로, `-1`이면 금액이 10 단위로 양자화된다. 이런 통화로는 `Money`의 불변식("통화 표준 자릿수를 canonical scale로 유지한다")을 세울 수 없으므로 값을 만들지 않고 거절한다. 판정은 생성자 `init`과 `of`가 같은 함수를 쓴다.
+**통화 자릿수를 한 곳에서 판정한다.** 생성자 `init`, `of`, 그리고 DB에서 읽은 행을 도메인으로 되돌리는 `OrderLineEntity`·`OrderCheckoutEntity`가 모두 같은 함수를 거치게 한다. 복원 경로는 `Money.of`를 부르게 바꿨다 — 유효한 행에서는 결과가 같고, 통화 자릿수로 정확히 떨어지지 않는 행에서는 `ArithmeticException`(500) 대신 `DomainException`(400)이 된다. `Currency.getDefaultFractionDigits()`는 금액 개념이 없는 통화 코드(`XAU`, `XDR`, `XXX`)에 `-1`을 돌려준다. `Money`는 이 값을 canonical scale로 그대로 쓰므로, `-1`이면 금액이 10 단위로 양자화된다. 이런 통화로는 `Money`의 불변식("통화 표준 자릿수를 canonical scale로 유지한다")을 세울 수 없으므로 값을 만들지 않고 거절한다. 위쪽도 막는다. 자릿수는 `java.util.currency.properties`로 런타임에 9까지 올릴 수 있는데 저장 컬럼의 소수부는 4다.
 
 **문자열 파싱 실패를 도메인 예외로 바꾼다.** `Money.of(String, Currency)`는 `foundation`의 공개 API다. 지금은 숫자가 아닌 문자열에 `NumberFormatException`이 그대로 올라가고, web advice는 `DomainException`만 클라이언트 오류로 바꾸므로 500이 된다.
 
 **요청 DTO가 문자열을 거치지 않게 한다.** `CreateOrderLineRequest.unitPrice`는 이미 `BigDecimal`인데 `toPlainString()`으로 문자열을 만든 뒤 다시 파싱한다. `BigDecimal`을 받는 `of` 오버로드를 더해 왕복을 없앤다.
 
-계약: 새 `DomainException` code 두 개가 응답 본문의 `code`로 나간다. 둘 다 `DomainErrorKind.INVALID`라서 400이다.
+계약: 새 `DomainException` code 두 개가 응답 본문의 `error.errorCode`로 나간다. 둘 다 `DomainErrorKind.INVALID`라서 400이다.
 
 | code | 의미 |
 |---|---|
 | `UNSUPPORTED_CURRENCY` | 금액을 표현할 수 없는 통화다. 언제 보내도 거절된다. |
-| `INVALID_MONEY_FORMAT` | 금액 문자열이 숫자가 아니다. |
+| `INVALID_MONEY_FORMAT` | 금액 문자열이 숫자가 아니다. **지금은 HTTP로 도달하지 않는다** — `unitPrice`가 `BigDecimal`이라 Jackson이 먼저 거절한다. `payment`·`sync`가 문자열 입구를 쓸 때 노출된다. |
 
 복구: 셋 다 요청 자체가 잘못된 경우라 재시도로 풀리지 않는다. 클라이언트가 값을 고쳐 다시 보내는 것이 유일한 경로다. 관측성은 기존 advice의 `WARN` 로그를 그대로 쓴다.
 
@@ -45,11 +45,13 @@
 3. `Money.of("abc", KRW)`는 `INVALID_MONEY_FORMAT`을 가진 `DomainException`이다. `NumberFormatException`이 밖으로 나가지 않는다.
 4. 정수부 15자리, 소수 자릿수가 통화와 같은 금액은 그대로 통과한다. 기존 테스트가 하나도 깨지지 않는다.
 5. `Money(BigDecimal, XAU)`를 생성자로 직접 만들어도 거절된다. `of`만 막으면 `copy`가 우회한다.
+6. 거절 비용이 Jackson의 길이 제한에 기대지 않는다. `1.` 뒤에 0이 십만 개 붙은 입력도 값을 펴지 않고 거절한다.
+7. `stripTrailingZeros()`를 지우면 테스트가 깨진다. 근거 코드가 테스트로 고정돼 있어야 한다.
 
 ## 검증
 - `./gradlew test` — 전부 통과.
 - `python3 scripts/check_pr.py --base origin/main --worktree` — PASS.
-- 반복 비용은 테스트 안에서 잰다. 시간을 단언하는 테스트는 머신에 따라 흔들리므로, 1000회 반복에 넉넉한 상한 1초를 두고 실패하면 비용이 돌아온 것으로 읽는다.
+- 반복 비용은 테스트 안에서 잰다. 반복 수는 100회로 둔다. 1000회로 두면 회귀했을 때 테스트가 6분을 돌다 실패해 CI 전체를 막는다. 100회면 37초에 실패하고 정상일 때는 수 ms다.
 
 ## Wiki 영향
 - [현재 상태](../wiki/current-state.md) — 알려진 빈틈에서 닫은 세 항목을 지운다.
@@ -100,3 +102,36 @@ RED는 두 단계로 관측했다. 새 입구 `of(BigDecimal, Currency)`는 존�
 3. `zero`가 `BigDecimal.ZERO`를 쓰도록 바뀌었는데 `of("0")`과 같은 값을 만드는지 검증이 없다. scale까지 비교하는 테스트를 더했다.
 
 반영하지 않은 지적 한 건을 적는다. `setScale`을 `try/catch`로 감싸자는 제안은 받지 않았다. 두 가드를 지난 값은 scale을 늘리는 변환만 남아 실패할 수 없고, 일어날 수 없는 경로에 처리를 두면 다음 사람이 그 경로가 가능하다고 읽는다. 이유를 코드 주석에 남겼다.
+
+## multi-review 반영 (2차)
+
+Claude 리뷰(78점)가 블로킹 1건과 중요 지적 5건을 냈다. Codex(81점)와 겹치는 것은 시간 단언 건이다.
+
+**블로킹 — 자릿수 계산의 `Int` 오버플로.** 같은 결함을 제출 전에 스스로 찾아 이미 닫아 둔 상태였다. 리뷰가 더 멀리 짚은 것은 경계다. `1E+2147483648`은 `scale`이 `Int.MIN_VALUE`이고 그 위(`1E+2147483649`)는 파서가 막는다는 것을 확인해 테스트에 넣었다.
+
+**중요 — `stripTrailingZeros()`가 가드보다 앞이라 평문 표기 큰 입력에 이차 비용이 남는다.** 받았다. 이 PR이 닫은 것은 지수 표기의 비용이고 평문 표기는 열려 있었다. `1.` 뒤에 0이 십만 개 붙은 입력은 자릿수 판정을 **정당하게 통과**한 뒤(`precision - scale = 1`) 0을 떼는 데만 41ms를 쓴다. 실측했다.
+
+고친 방식은 리뷰의 제안을 따랐다. `precision - scale`이 0이 아닌 값에서 strip에 불변이라는 성질을 확인하고(경계 7종에서 깨지는 값 없음), 가드를 strip 앞으로 옮겼다. 0에서만 불변이 깨지므로(`0E+10`이 정수부 11자리로 읽힌다) `signum() == 0` 빠른 경로를 앞에 뒀다. 그리고 뗄 0의 개수에 `MAX_TRAILING_ZEROS = 20` 상한을 뒀다. 두 가드를 지난 값은 적힌 자릿수가 39 이하로 묶이므로, 비용 상한이 Jackson의 길이 제한이 아니라 코드 자신에게 있다.
+
+**중요 — `stripTrailingZeros()`의 존재 이유가 테스트로 고정돼 있지 않다.** 받았다. 리뷰 지적대로 그 줄을 지워도 테스트가 전부 초록이었다. `1000.0000`(KRW)·`0.00`·`10.5000`(USD)과 strip 불변 경계(`999999999999990`)를 고정했다.
+
+**중요 — 시간 단언의 실패 모양.** 받았다. 문제는 흔들림보다 회귀했을 때 6분을 돌다 실패해 CI를 막는 것이다. 반복을 1000회에서 100회로 줄이고 상한을 1초로 뒀다. 회귀 시 37초에 실패하고 탐지력은 그대로다.
+
+**중요 — "한 곳에서 판정한다"가 실제로는 세 곳이다.** 받았다. `OrderLineEntity`·`OrderCheckoutEntity`의 복원 경로가 raw `defaultFractionDigits`로 `setScale`을 불러, 통화 자릿수로 떨어지지 않는 행에서 `ArithmeticException`(500)이 났다. 둘 다 `Money.of`를 부르게 바꿨다.
+
+**중요 — `current-state.md`의 테스트 수가 stale.** 받았다. 총 103개를 실제 값으로 갱신했다.
+
+**참고 — 통화 자릿수 상한, `code` vs `error.errorCode`, `INVALID_MONEY_FORMAT`의 도달 불가, `precision()`의 지연 계산, 오류 스니펫 부재, 낡은 주석.** 모두 받아 고쳤다. `fractionDigitsOf`가 `MAX_FRACTION_DIGITS = 4` 위쪽도 막고, `orders-create-unsupported-currency` 스니펫을 남긴다.
+
+### 바뀐 판정
+
+가드를 앞으로 옮기면서 금액 판정과 자릿수 판정의 **우선순위가 뒤집혔다.** 이전 구현과 갈리는 입력을 무작위 50만 건으로 다시 세어 전부 분류했다.
+
+| 입력군 | 이전 | 이 PR | 비고 |
+|---|---|---|---|
+| 금액 범위와 자릿수를 **동시에** 어김 (예: `6863292444430101.4479`, 통화 자릿수 2) | `INVALID_MONEY_SCALE` | `INVALID_MONEY_AMOUNT` | 50만 건 중 6953건. 둘 다 400이고 금액 쪽이 더 근본적인 위반이다 |
+| 지수가 `Int` 범위를 넘김 (`1E+2147483647` 이상) | `INVALID_MONEY_SCALE` | `INVALID_MONEY_AMOUNT` | 이전 구현이 삼킨 `ArithmeticException`을 scale 오류로 뭉뚱그리고 있었다 |
+| 통화 자릿수 위로 0을 21자리 넘게 씀 (`1.` + 0 21개, KRW) | `OK` | `INVALID_MONEY_SCALE` | 값으로는 `1`이지만 받지 않는다. 상한이 없으면 입력 크기가 그대로 비용이 된다 |
+
+**그 밖의 차이는 0건이다.** 위 세 군을 빼면 50만 건에서 판정이 완전히 일치한다.
+

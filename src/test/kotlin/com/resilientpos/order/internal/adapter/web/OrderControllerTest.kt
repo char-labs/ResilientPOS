@@ -145,6 +145,14 @@ class OrderControllerTest(
             status { isBadRequest() }
             jsonPath("$.result") { value("FAIL") }
             jsonPath("$.error.errorCode") { value("UNSUPPORTED_CURRENCY") }
+        }.andDo {
+            handle(
+                document(
+                    "orders-create-unsupported-currency",
+                    requestFields(HEADER_FIELDS + LINE_FIELDS),
+                    responseFields(failFields("UNSUPPORTED_CURRENCY 고정 코드")),
+                ),
+            )
         }
 
         verifyNoInteractions(facade)
@@ -186,7 +194,7 @@ class OrderControllerTest(
         }
     }
 
-    // "XXX"는 ISO 4217이 "통화 없음"으로 정의한 실제 코드라서 거절되지 않는다.
+    // "ZZZ"는 ISO 4217에 없는 코드라서 Currency 역직렬화 단계에서 끊긴다. "XXX"는 실재하는 코드라 도메인까지 가 UNSUPPORTED_CURRENCY가 된다.
     @Test
     fun `없는 통화 코드는 400 BAD_REQUEST이고 Facade를 부르지 않는다`() {
         expectBadRequest(requestJson(currency = "ZZZ"))
