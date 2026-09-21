@@ -9,11 +9,11 @@
 | 빌드 | Gradle Wrapper 9.7.1, Kotlin DSL, 단일 root project |
 | 서버/데이터 | Spring MVC, Spring Data JPA, Actuator, Jackson Kotlin |
 | DB | PostgreSQL 전용. Flyway가 스키마를 소유하고 JPA는 validate만 한다 |
-| 모듈 경계 | Spring Modulith 2.1.1 (BOM + `starter-core`, 테스트는 `starter-test`) |
+| 모듈 경계·이벤트 | Spring Modulith 2.1.1 (BOM + `starter-core`·`starter-jpa`, 테스트는 `starter-test`·`events-core`) |
 | 식별자 | `uuid-creator` 6.1.1 (UUID v7) |
 | 구조 검증 | Spring Modulith 경계 검증, ArchUnit 1.4.2 의존성 방향 가드 |
 | 통합 테스트 | Testcontainers 2.0.5 PostgreSQL 18. `./gradlew test` 실행에 Docker가 필요하다 |
-| 테스트 | Kotlin Test/JUnit 5, Spring Boot 테스트 starter, Fixture Monkey 1.2.3; 총 81개 (컨텍스트 1, 스키마 3, 모듈 구조 2, 의존성 방향 2, Money 8, 식별자 4, Order 15, OrderCommandFacade 9, RequestCheckout 통합 8, API advice 9, OrderController 8, checkout Controller 5, 주문 API 통합 7) |
+| 테스트 | Kotlin Test/JUnit 5, Spring Boot 테스트 starter, Fixture Monkey 1.2.3; 총 88개 (컨텍스트 1, 스키마 3, 모듈 구조 2, 의존성 방향 2, Money 8, 식별자 4, Order 15, OrderCommandFacade 9, RequestCheckout 통합 8, 이벤트 발행 기록 통합 7, API advice 9, OrderController 8, checkout Controller 5, 주문 API 통합 7) |
 | 로컬 하네스 | Python 3 표준 라이브러리 |
 
 근거: [build.gradle.kts](../../build.gradle.kts), [Gradle Wrapper](../../gradle/wrapper/gradle-wrapper.properties), [애플리케이션 설정](../../src/main/resources/application.yaml).
@@ -28,7 +28,14 @@
   `ModuleStructureTest`가 모듈 인식과 경계 위반을 검증한다. 위반 주입 시 `Module 'order' depends on non-exposed type ...`
   메시지로 실패하는 것을 확인했다.
 - Spring Modulith는 2.1.1로 도입했다. `spring-modulith-core` 2.1.1이 `spring-boot-autoconfigure` 4.1.1에 대해
-  빌드되어 현재 Boot 버전과 세대가 맞는다. Event Publication Registry(`starter-jpa`)와 `starter-insight`는 아직 없다.
+  빌드되어 현재 Boot 버전과 세대가 맞는다. `starter-insight`는 아직 없다.
+- Event Publication Registry(`starter-jpa`)를 도입했다. 트랜잭션 안에서 발행한 이벤트는 그 이벤트를 받는 트랜잭션 이벤트 리스너마다 `event_publication`에 한 행씩, 업무 상태와 같은 커밋으로 기록된다.
+  리스너가 성공하면 `completion_date`와 `status=COMPLETED`가 찍히고(완료 처리 UPDATE, 행은 남는다) 실패하면 `status=FAILED`인 미완료 기록으로 남는다. 업무 트랜잭션이 롤백되면 기록도 리스너 호출도 없다.
+  **받는 리스너가 없는 이벤트는 기록되지 않는다.** 프로덕션 리스너가 아직 없어서 지금 실제로 기록되는 이벤트는 없고, 동작은 테스트 전용 리스너로 검증한다.
+  Modulith의 자동 구성이 `@EnableAsync`를 켜므로 `@ApplicationModuleListener`는 Spring Boot의 기본 task executor에서 비동기로 실행된다. 업무 요청의 응답은 리스너를 기다리지 않는다. 그 실행기는 코어 8, 큐 무제한이다. 동시에 도는 리스너는 8개가 상한이고 밀린 작업은 메모리에 쌓인다. 종료할 때 진행 중인 리스너를 2초 기다리고(Modulith가 바꾸는 기본값) 그 안에 시작하지 못한 작업은 실행되지 않은 채 미완료 기록으로 남는다. 풀·큐·거절 정책은 provider를 호출하는 리스너를 넣는 `payment` PR이 정한다.
+  완료 처리 방식(`completion-mode: update`)과 재기동 시 재발행 끔은 기본값과 같지만 `application.yaml`에 적어 두었다.
+  이벤트는 JSON으로 저장된다. value class ID는 UUID 문자열, `Money`는 `{"amount":3500,"currency":"KRW"}` 모양이고 `30.00`처럼 끝자리가 0인 금액도 자릿수를 잃지 않고 복원된다.
+  **미완료 이벤트를 다시 보내는 절차가 없다.** 재기동 시 재발행은 꺼져 있고(인스턴스가 여럿이면 중복 재발행된다) 재전송 주기도 없다. 완료 행을 지우는 정리 작업도 없다. 첫 실제 리스너가 생기는 `payment` PR이 정한다. 알려진 빈틈이다([event-publication-registry](../spec/2026-09-21-event-publication-registry.md)).
 - Kafka, Redis, Kotlin JDSL, OpenTelemetry는 참고 문서의 설계 방향이며 현재 빌드 의존성에는 없다.
 - `order` 모듈은 공개 계약(`OrderCommandFacade` 클래스, `CreateOrderCommand`·`CreateOrderResult`, `OrderId`·`ClientOrderId`,
   `OrderStatus`, `OrderEvent`·`OrderCreated`)과 `internal/domain`의 `Order`·`OrderLine`이 있다. `Order.create`가 생성 불변식
@@ -37,7 +44,7 @@
   `CHECKOUT_REQUESTED`로 전이하면서 `OrderPaymentRequested`(`orderId`·`storeId`·`terminalId`·`checkoutNo`·`amount`)를 만든다. 이미 요청된 주문이면 같은 주문과 빈 이벤트를 돌려준다.
   합계가 0원이어도 똑같이 전이한다. store 정책과 정책 버전은 아직 없다([order-request-checkout-domain](../spec/2026-09-21-order-request-checkout-domain.md)).
   `OrderCommandFacade.requestCheckout(RequestCheckoutCommand)`이 `@Transactional` 안에서 주문 행을 잠그고 읽어(`findByIdForUpdate`, Hibernate가 PostgreSQL에 보내는 SQL은 `select ... for no key update`다) 전이를 저장하고
-  `OrderPaymentRequested`를 발행(plain Spring 이벤트)한 뒤 `RequestCheckoutResult`(`orderId`·`status`·`checkoutNo`·`amount`)를 돌려준다. 없는 주문은 `ORDER_NOT_FOUND`(`NOT_FOUND`의 첫 사용처)다.
+  `OrderPaymentRequested`를 발행한 뒤 `RequestCheckoutResult`(`orderId`·`status`·`checkoutNo`·`amount`)를 돌려준다. 없는 주문은 `ORDER_NOT_FOUND`(`NOT_FOUND`의 첫 사용처)다.
   순차 재시도와 겹친 요청 모두 기존 결과를 받는다. 겹친 요청은 앞 커밋을 기다린 뒤 `CHECKOUT_REQUESTED`를 읽는다. 잠금 대기는 3초로 제한한다(`jakarta.persistence.lock.timeout` 힌트, Hibernate가 조회 앞뒤로 `set local lock_timeout`을 걸고 되돌린다). 넘으면 `PessimisticLockingFailureException` 계열 예외로 실패하고 아무것도 바꾸지 않는다. HTTP에서는 `409 CONCURRENT_REQUEST`다. `findByIdForUpdate`는 트랜잭션에서 그 주문의 첫 접촉이어야 한다. 먼저 일반 조회한 뒤 그 사이에 주문이 바뀌었으면 낡은 값을 받지 않고 낙관적 잠금 예외로 실패한다. `V003__order_request_checkout.sql`이 `t_order_checkout`
   (`id`, `order_id`, `checkout_no`, `amount`, unique `(order_id, checkout_no)`)을 만들고 통화는 `t_order.currency`에서 읽는다. checkout 행은 넣기만 하고 갱신·삭제하지 않는다([order-request-checkout-persistence](../spec/2026-09-21-order-request-checkout-persistence.md)).
   endpoint는 `POST /v1/orders/{orderId}/checkout`이다. 요청 본문이 없고 200과 `data{orderId, status, checkoutNo, amount, currency}`를 돌려준다. `amount`는 decimal 문자열이다.
@@ -45,7 +52,7 @@
   **인가가 없다.** 단말 인증이 아직 없어서 `orderId`만 알면 다른 매장의 주문도 `CHECKOUT_REQUESTED`로 전이시킬 수 있다. 전이를 되돌리는 endpoint가 없어서 잘못 촉발된 checkout은 복구할 수 없다. **단말 인증과 주문의 매장·단말 소유권 검사가 들어오기 전에는 이 API를 외부에 노출하지 않는다.** 인증만 넣고 소유권 검사를 하지 않으면 빈틈은 남는다. 알려진 빈틈이다([order-request-checkout-api](../spec/2026-09-21-order-request-checkout-api.md)).
   `OrderCommandFacade`가 `@Transactional` 안에서 같은 `(terminalId, clientOrderId)`의 주문을 찾으면 `order.verifySamePayload(command)`로
   payload를 확인한 뒤 기존 결과를 돌려주고, 아니면
-  `Order.create` → `OrderRepository.save` → `OrderCreated` 발행(plain Spring 이벤트, EPR 없음) 순으로 진행한다. JPA adapter는
+  `Order.create` → `OrderRepository.save` → `OrderCreated` 발행 순으로 진행한다. JPA adapter는
   `internal/adapter/persistence/command`에 있고 `V002__order_create_order.sql`이 `t_order`·`t_order_line`을 만든다
   ([order-create-order-persistence](../spec/2026-09-16-order-create-order-persistence.md)).
   `verifySamePayload`는 저장된 주문과 command의 `storeId`·`currency`·line(`productCode`·`productName`·`unitPrice`·`quantity`)을 직접 비교한다.
@@ -110,7 +117,7 @@ PostgreSQL이 유일한 엔진이다. H2는 제거했다. 테스트가 운영과
 애플리케이션이 테이블을 만들거나 바꾸지 않는다. 마이그레이션이 실패하면 애플리케이션이 뜨지 않는다.
 
 파일명은 `V(번호)__(소유 모듈)_(변경 내용).sql`이다. `V001__baseline.sql`은 의도적으로 비어 있고, 업무 테이블은 각
-모듈이 후속 마이그레이션으로 추가한다. 첫 업무 마이그레이션은 `V002__order_create_order.sql`(`t_order`, `t_order_line`)이고 `V003__order_request_checkout.sql`이 `t_order_checkout`을 더했다.
+모듈이 후속 마이그레이션으로 추가한다. 첫 업무 마이그레이션은 `V002__order_create_order.sql`(`t_order`, `t_order_line`)이고 `V003__order_request_checkout.sql`이 `t_order_checkout`을 더했다. `V004__platform_event_publication.sql`은 업무 테이블이 아니라 Modulith의 `event_publication`이다.
 스키마를 바꾸는 PR은 [도메인 모델](domain-model.md)의 "스키마 변경 검토" 절 질문(필요성·정합성·반영)에 spec에서 답한다.
 
 통합 테스트는 Testcontainers로 실제 PostgreSQL 18을 띄운다. **`./gradlew test`에 Docker가 필요하다.** 컨테이너는

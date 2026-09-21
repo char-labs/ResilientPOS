@@ -280,3 +280,22 @@
 - 발견: 커밋 시점의 버전 충돌은 낙관적 잠금 예외로 나오지 않는다. `BaseEntity`의 `@UpdateTimestamp(source = DB)` 때문에 Hibernate 7.4.5가 `UPDATE ... RETURNING`을 쓰고, 0행이 갱신되면 `JpaSystemException`("The database returned no natively generated values")이 난다. HTTP에서는 500이다. 임시 통합 테스트로 확인했고 커밋하지 않았다. 커밋은 거절되므로 정합성은 지켜지지만 단말은 재시도해도 되는 오류인지 알 수 없다. #20부터 있던 성질이고 checkout endpoint는 행 잠금을 써서 이 경로에 닿지 않는다. 별도 PR로 고친다.
 - 다음 작업이 확인할 것: Facade는 커밋 전에 이벤트를 발행한다. Event Publication Registry나 리스너를 넣는 PR이 발행과 트랜잭션의 묶임을 확인한다. 지금 `CONCURRENT_REQUEST` 뒤의 재시도가 안전한 것은 리스너가 없기 때문이기도 하다.
 - 갱신: [현재 상태](current-state.md).
+
+## 2026-09-21 — Spring Modulith Event Publication Registry 도입
+- Spec: [event-publication-registry](../spec/2026-09-21-event-publication-registry.md)
+- 요구사항 영향: 제품 동작과 API는 바뀌지 않았다. 이벤트 발행 기록이 업무 상태와 같은 트랜잭션에 남는 기반이 들어갔다. `payment`가 `OrderPaymentRequested`를 받기 전에 필요한 전제다. 스키마에 Modulith의 `event_publication`이 늘었다. 프로덕션 리스너가 아직 없어서 지금 실제로 기록되는 이벤트는 없다.
+- 결정: 완료 처리는 UPDATE다. 완료 표시만 하고 행을 남겨서 이벤트가 언제 발행되고 처리됐는지를 DB에서 확인할 수 있다. 테이블이 계속 자라므로 정리 작업이 필요하고 `payment` 이후에 정한다.
+- 결정: 재기동 시 미완료 이벤트 재발행은 켜지 않았다. 인스턴스가 여럿이면 중복 재발행된다. 재전송 절차 전체를 `payment` PR이 정한다. 그때까지 실패한 이벤트는 미완료 기록으로 남기만 한다.
+- 결정: 테이블 이름은 프레임워크의 `event_publication` 그대로다. `t_` 접두어와 `BaseEntity` 공통 컬럼의 예외다.
+- 결정: Facade가 커밋 전에 이벤트를 발행하는 순서를 유지한다. 발행 기록이 같은 커밋에 들어가려면 그래야 한다. #33의 리뷰가 확인하라고 넘긴 항목이다.
+- 발견: Modulith의 자동 구성이 `@EnableAsync`를 켠다. `@ApplicationModuleListener`는 우리가 켜지 않아도 Spring Boot의 기본 task executor에서 비동기로 실행되고, 종료 대기 2초도 Modulith가 기본값으로 바꾼다. 처음 spec은 동기 실행이라고 잘못 적었고 테스트용 리스너의 실행 스레드를 보고 jar를 확인해 고쳤다.
+- 발견: JPA용 jar에는 스키마 SQL이 없다. JPA가 `validate`라서 의존성만 넣으면 `Schema validation: missing table [event_publication]`으로 기동이 막힌다. 같은 버전 JDBC 모듈의 공식 PostgreSQL 스키마 v2를 기준으로 마이그레이션을 썼다.
+- 발견: 이벤트 직렬화는 기본 구성으로 왕복이 성립한다. value class ID는 UUID 문자열, `Money`는 금액 숫자와 통화 코드로 저장되고 `30.00`처럼 끝자리가 0인 금액도 자릿수를 잃지 않는다.
+- 검토: 제출 전 multi-review(Claude 88점, Codex 87점, Gemini는 CLI가 없어 미실행)와 구현자가 아닌 `code-reviewer`의 스키마 대조(불일치 없음)를 실행했다. 셋 다 막는 결함은 없다고 판정했다. 리뷰어의 지적 중 사실 확인이 필요한 것은 jar와 임시 테스트로 확인하고 적었다.
+- 발견: 리스너를 실행하는 기본 task executor는 코어 8, 큐 무제한이다. 종료 대기 2초 안에 시작하지 못한 작업은 미완료 기록으로 남는다.
+- 발견: `listener_id`에 리스너의 클래스 정규 이름·메서드·이벤트 타입이 저장되고 완료 표시가 이 값으로 행을 찾는다. 리스너의 이름도 저장 형식이다.
+- 발견: 트랜잭션 밖에서 발행하면 발행 기록은 남는데 리스너가 실행되지 않는다. 리뷰어는 "기록도 전달도 없다"고 예상했지만 실제로는 기록만 남아 미완료로 쌓인다. 이벤트 발행은 Facade의 트랜잭션 안에서만 한다는 규칙을 [도메인 모델](domain-model.md) 4.3절에 적었다.
+- 결정: 합의한 기본값 둘을 `application.yaml`에 명시했다. 동작은 바뀌지 않는다.
+- 결정: Modulith 버전을 올릴 때의 대응 절차를 [도메인 모델](domain-model.md) 4.3절에 적었다. 규칙만 있고 방법이 없다는 지적을 받아서다. 컬럼이 늘면 `validate`가 기동을 막고 통합 테스트가 컨텍스트를 띄우므로 CI가 먼저 잡는다(`V004`를 v1 스키마로 되돌려 확인했다). 무엇이 바뀌었는지는 Modulith가 버전으로 관리하는 `schemas/vN/schema-postgresql.sql`을 diff해서 안다. 라이브러리가 컬럼을 없애는 경우만 조용히 통과한다.
+- 다음 작업이 확인할 것: 종료할 때 task executor의 대기와 DataSource 종료의 순서(확인하지 않았다), 오래 머문 발행 기록을 감시하는 `spring.modulith.events.staleness.*` 설정, 완료 표시가 UPDATE라서 생기는 테이블 팽창과 정리 작업.
+- 갱신: [현재 상태](current-state.md), [도메인 모델](domain-model.md), [AGENTS.md](../../AGENTS.md).
