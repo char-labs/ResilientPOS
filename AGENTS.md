@@ -30,4 +30,4 @@
 - 지침/컨벤션 점검은 [workflow 스킬](.claude/skills/resilientpos-workflow/SKILL.md)을 사용한다. Git 작업(브랜치·커밋·push·PR·충돌·리뷰 조회)은 [git 스킬](.claude/skills/resilientpos-git/SKILL.md)을 쓰고, 커밋/push 범위 판단은 [commit-push 스킬](.claude/skills/resilientpos-commit-push/SKILL.md)을 함께 적용한다. 전체 스킬·에이전트 목록과 모델 배정은 [차용 내역](docs/wiki/borrowed-workflows.md)과 [지침 설계 근거](docs/wiki/agent-instructions.md)에 있다.
 - squash merge된 로컬 브랜치는 `git branch -d`가 삭제를 거절한다. `gh pr view 번호 --json headRefOid`의 커밋이 로컬 tip과 같거나 로컬 tip이 그 커밋의 조상인지 확인한 뒤 `-D`로 지운다.
 - 개발 중: `python3 scripts/check_pr.py --base <PR-기준커밋> --worktree`를 실행한다. PR 제출 전에는 `--worktree` 없이 한 번 더 실행한다. 일부 검사는 개발 중에는 경고이고 제출 전에만 실패다. 문서만 바뀌면 링크·내용과 이 검사를 확인한다.
-- `check_pr.py`는 spec의 필수 절에 부등호 여는 문자가 있으면 그 절을 미작성으로 판정한다. 제네릭 타입 표기나 MockMvc의 상태 코드 불일치 메시지 같은 문구는 spec에서 글로 풀어 적는다.
+- `check_pr.py`는 spec의 필수 절에 부등호 여는 문자가 코드 블록 밖에 있으면 그 절을 미작성으로 판정한다. 제네릭 타입 표기나 MockMvc의 상태 코드 불일치 메시지 같은 문구는 spec에서 글로 풀어 적는다.
