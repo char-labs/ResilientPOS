@@ -5,7 +5,7 @@
 
 ## 범위
 - 소유 모듈: `order`. 전이 규칙은 `internal/domain`의 `Order`가 소유한다.
-- 상태: `OrderStatus`에 `CHECKOUT_REQUESTED`를 더한다. `t_order.status`는 `varchar(32)`이고 이 이름은 18자라 마이그레이션이 필요 없다. 이 값을 쓰는 코드(다음 PR)보다 enum 상수가 먼저 배포되므로 이전 버전 인스턴스가 모르는 문자열을 읽는 구간이 없다.
+- 상태: `OrderStatus`에 `CHECKOUT_REQUESTED`를 더한다. `t_order.status`는 `varchar(32)`이고 이 이름은 18자라 마이그레이션이 필요 없다. 이 값을 쓰는 코드(다음 PR)보다 enum 상수가 먼저 배포되므로 이전 버전 인스턴스가 모르는 문자열을 읽는 구간이 없다. 이 값은 응답 본문으로도 나간다. `OrderCommandFacade.create`의 재시도 경로가 저장된 주문의 `status`를 `POST /v1/orders` 응답에 그대로 싣기 때문이다. 이 PR에는 `CHECKOUT_REQUESTED` 주문이 저장되는 경로가 없어서 응답에 나타나지 않는다(범위 조정, 2026-09-21: PR 제출 뒤 Risk 점검에서 발견).
 - 값 객체 `Checkout`(`internal/domain`): 결제 시도 회차 `checkoutNo`와 확정 금액 `amount`(`Money`, 통화 포함)를 가진다. `Order`는 회차별 `checkouts` 목록을 가진다. 용어와 자식 구성은 [도메인 모델](../wiki/domain-model.md) 2절·3절을 따른다.
 - 전이 `order.requestCheckout(ids, now)`: [도메인 모델](../wiki/domain-model.md) 4.1절대로 자신을 바꾸지 않고 `Transition`을 돌려준다.
   - `OPEN`이면 `CHECKOUT_REQUESTED` 상태이고 `checkouts`에 `Checkout(기존 회차 수 + 1, total)`이 더해진 새 `Order`와 `OrderPaymentRequested` 한 건을 돌려준다.
@@ -81,6 +81,7 @@
 - `CHECKOUT_REQUESTED` 주문을 저장했다가 다시 읽으면 `checkouts`가 그대로 복원되는 왕복 통합 테스트. 복원이 빈 목록이면 회차 계산(`checkouts.size + 1`)이 컴파일과 기존 테스트를 통과한 채로 틀린다.
 - 재요청을 다시 저장해도 checkout 행이 늘지 않는 것.
 - 낙관적 잠금 충돌에서 진 요청이 다시 조회해 기존 checkout 결과를 받는 것.
+- checkout을 요청한 주문에 같은 키의 주문 생성 재시도가 오면 `POST /v1/orders`가 201과 `"status": "CHECKOUT_REQUESTED"`를 돌려주게 된다. 지금 wiki는 "재시도도 201과 같은 본문"이라고 적는다. 현재 상태를 돌려주는 것을 계약으로 삼을지, 생성 시점의 `OPEN`을 돌려줄지 정하고 REST Docs의 `data.status` 설명과 wiki를 맞춘다.
 
 ## TDD 검증 기록
 
