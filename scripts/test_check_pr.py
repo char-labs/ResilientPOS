@@ -169,8 +169,6 @@ class HarnessTest(unittest.TestCase):
         self.assertIn('최초 spec 항목 미작성', self.errors(True))
 
 
-if __name__ == '__main__':
-    unittest.main()
 
 
 class MigrationVersionTest(HarnessTest):
@@ -397,3 +395,121 @@ class SchemaReviewGateTest(HarnessTest):
         self.migration('V002__order_create_orders.sql')
         self.add_to_spec('\n## 스키마 변경 검토 (스키마를 바꿀 때만)\n<질문별 답>\n- 대조 기록: <리뷰어, 시점, 불일치 항목>\n')
         self.assertIn('placeholder', self.errors(True))
+
+
+class BypassTest(HarnessTest):
+    """검사를 통과하면서 규칙을 어길 수 있는 경로가 있으면 실패한다. 하네스 변경은 우회를 따로 본다."""
+
+    def path_migration(self, path, statement='select 1;\n'):
+        self.write(path, statement)
+
+    def assert_version_conflict_for(self, path):
+        self.start()
+        self.implementation()
+        self.migration('V002__order_create_orders.sql')
+        self.write(path, 'select 1;\n')
+        self.commit()
+        self.assertIn('Flyway 버전 2', self.errors())
+
+    def test_uppercase_extension_is_versioned(self):
+        self.assert_version_conflict_for('src/main/resources/db/migration/V002__upper.SQL')
+
+    def test_nested_directory_is_versioned(self):
+        self.assert_version_conflict_for('src/main/resources/db/migration/sub/V002__nested.sql')
+
+    def test_kotlin_migration_is_versioned(self):
+        self.assert_version_conflict_for('src/main/kotlin/db/migration/V002__Kotlin.kt')
+
+    def test_repeatable_migration_has_no_version(self):
+        self.start()
+        self.implementation()
+        self.migration('R__refresh_view.sql')
+        self.migration('V002__order_create_orders.sql')
+        self.add_to_spec(self.REVIEW + self.RECORD)
+        self.commit()
+        self.assertEqual('', self.errors())
+
+    def test_single_star_does_not_cross_path_separator(self):
+        """변경 경로에 별표 하나만 적어도 범위 검사가 살아 있어야 한다."""
+        self.write(self.spec, '\n'.join(
+            f'## {s}\n' + ('- *' if s == '변경 경로' else '구체적인 내용') for s in SECTIONS))
+        self.commit()
+        self.implementation()
+        self.write('src/main/kotlin/OutOfScope.kt', 'class OutOfScope\n')
+        self.commit()
+        self.assertIn('spec 범위 밖 변경', self.errors())
+
+    def test_double_star_crosses_but_single_star_does_not(self):
+        self.write(self.spec, '\n'.join(
+            f'## {s}\n' + ('- docs/**\n- src/**\n- scripts/*.py' if s == '변경 경로' else '구체적인 내용')
+            for s in SECTIONS))
+        self.commit()
+        self.implementation()
+        self.write('docs/wiki/deep/nested/note.md', 'deep\n')
+        self.write('scripts/tool.py', 'pass\n')
+        self.commit()
+        self.assertEqual('', self.errors())
+
+        self.write('scripts/sub/nested.py', 'pass\n')
+        self.commit()
+        self.assertIn('scripts/sub/nested.py', self.errors())
+
+    def test_duplicate_section_name_is_rejected(self):
+        """같은 이름의 절이 둘이면 리뷰어가 읽는 절과 검사기가 쓰는 절이 달라진다."""
+        self.start()
+        self.implementation()
+        self.add_to_spec('\n## 변경 경로\n- *\n')
+        self.commit()
+        self.assertIn('절 이름이 중복', self.errors())
+
+    def test_fenced_heading_is_not_a_section(self):
+        body = '\n'.join(f'## {s}\n구체적인 내용' for s in SECTIONS if s != '결과')
+        body = body.replace('## 변경 경로\n구체적인 내용', '## 변경 경로\n- docs/**\n- src/**')
+        self.write(self.spec, body + '\n\n```text\n## 결과\n코드 블록 안이라 절이 아니다\n```\n')
+        self.commit()
+        self.assertIn('spec 항목 미작성: 결과', self.errors())
+
+    def test_last_section_without_trailing_newline_is_found(self):
+        body = '\n'.join(
+            f'## {s}\n' + ('- docs/**\n- src/**' if s == '변경 경로' else '구체적인 내용')
+            for s in SECTIONS)
+        self.write(self.spec, body.rstrip('\n'))
+        self.commit()
+        self.implementation()
+        self.commit()
+        self.assertEqual('', self.errors())
+
+    def test_renaming_a_migration_is_not_a_version_conflict(self):
+        self.start()
+        self.implementation()
+        self.migration('V002__order_create_orders.sql')
+        self.add_to_spec(self.REVIEW + self.RECORD)
+        self.commit()
+        self.base = self.git('rev-parse', 'HEAD').strip()
+
+        self.write(self.spec.replace('example', 'rename'), Path(self.spec).read_text())
+        Path(self.spec).unlink()
+        self.spec = self.spec.replace('example', 'rename')
+        self.write('docs/wiki/changes.md', '# 기록\n[spec](../spec/2026-09-07-rename.md)\n요구사항 영향: 이름만 변경\n')
+        self.git('mv', 'src/main/resources/db/migration/V002__order_create_orders.sql',
+                 'src/main/resources/db/migration/V002__order_create_order.sql')
+        self.commit()
+        self.assertNotIn('Flyway 버전', self.errors())
+
+    def test_renaming_still_detects_a_real_conflict_on_base(self):
+        self.start()
+        self.implementation()
+        self.migration('V002__order_create_orders.sql')
+        self.add_to_spec(self.REVIEW + self.RECORD)
+        self.commit()
+        self.base = self.git('rev-parse', 'HEAD').strip()
+
+        self.git('mv', 'src/main/resources/db/migration/V002__order_create_orders.sql',
+                 'src/main/resources/db/migration/V002__order_create_order.sql')
+        self.migration('V002__payment_create_attempts.sql')
+        self.commit()
+        self.assertIn('Flyway 버전 2', self.errors())
+
+
+if __name__ == '__main__':
+    unittest.main()

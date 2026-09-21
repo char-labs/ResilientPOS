@@ -3,7 +3,6 @@
 import argparse
 import datetime
 import difflib
-import fnmatch
 import os
 import re
 import subprocess
@@ -11,11 +10,13 @@ from pathlib import Path
 
 SPEC = re.compile(r"docs/spec/(\d{4}-\d{2}-\d{2})-[a-z0-9]+(?:-[a-z0-9]+)*\.md$")
 SECTIONS = ('목적', '범위', '제외', '변경 경로', '인수 조건', '검증', 'Wiki 영향', '분할 계획', '결과')
-MIGRATION = re.compile(r'(?:^|/)db/migration/V([0-9._]+)__[^/]*\.sql$')
 # Flyway가 읽는 경로 전부다. 확장자 대소문자를 가리지 않고, 하위 디렉터리와 R(반복) 접두,
 # db.migration 패키지의 Java·Kotlin 마이그레이션도 읽는다. src 밖의 예시 SQL은 대상이 아니다.
 SCHEMA_CHANGE = re.compile(
     r'^src/[^/]+/(?:resources/db/migration/.+\.sql|(?:kotlin|java)/db/migration/.+\.(?:kt|java))$', re.I)
+# 버전 중복 검사는 SCHEMA_CHANGE가 인정한 경로에서만 버전을 뽑는다. 두 판정이 갈라지면
+# 스키마 검토는 요구하면서 버전 중복은 놓치는 경로가 생긴다(대문자 확장자, 하위 디렉터리, Kotlin·Java).
+MIGRATION = re.compile(r'(?:^|/)V([0-9._]+)__', re.I)
 FENCE = re.compile(r'^(```|~~~).*?^\1[^\n]*$', re.M | re.S)
 SCHEMA_HEADING = re.compile(r'^(#{2,3}) 스키마 변경 검토(?:[ \t][^\n]*)?\n', re.M)
 SCHEMA_RECORD = re.compile(r'^- 대조 기록:[ \t]*\S', re.M)
@@ -31,8 +32,10 @@ def tree(ref):
 
 
 def migration_version(path):
-    """Flyway는 버전을 숫자로 비교한다. V001과 V1은 같은 버전이다."""
-    matched = MIGRATION.search(path)
+    """Flyway는 버전을 숫자로 비교한다. V001과 V1은 같은 버전이다. 버전이 없는 R(반복)은 대상이 아니다."""
+    if not SCHEMA_CHANGE.match(path):
+        return None
+    matched = MIGRATION.search(Path(path).name)
     if not matched:
         return None
     try:
@@ -72,9 +75,35 @@ def migration_conflicts(paths):
     ]
 
 
+def path_matcher(pattern):
+    """glob을 정규식으로 옮긴다. 별표 하나는 한 경로 조각 안에서만, 별표 둘은 조각을 넘어 매칭한다.
+
+    `fnmatch`의 별표는 경로 구분자를 넘어서, 변경 경로에 별표 하나만 적으면 범위 검사가 무력해진다.
+    Python 3.13의 `PurePath.full_match`가 같은 일을 하지만 이 저장소는 3.9에서도 돌아야 한다.
+    """
+    out, i = [], 0
+    while i < len(pattern):
+        char = pattern[i]
+        if char == '*':
+            if pattern[i:i + 2] == '**':
+                out.append('.*')
+                i += 2
+                continue
+            out.append('[^/]*')
+        elif char == '?':
+            out.append('[^/]')
+        else:
+            out.append(re.escape(char))
+        i += 1
+    return re.compile(''.join(out) + r'\Z')
+
+
 def sections(content):
-    parts = re.split(r'^## (.+)\n', content, flags=re.M)
-    return dict(zip(parts[1::2], parts[2::2]))
+    """필수 절의 본문을 돌려준다. 코드 블록 안의 제목은 절이 아니다(스키마 검토 판정과 같은 기준)."""
+    parts = re.split(r'^## (.+)\n', FENCE.sub('', content), flags=re.M)
+    names = parts[1::2]
+    duplicates = sorted({name for name in names if names.count(name) > 1})
+    return dict(zip(names, parts[2::2])), duplicates
 
 
 def schema_review(content):
@@ -94,7 +123,9 @@ def check(base, head='HEAD', worktree=False, migrations_only=False):
     base_ref = base
     if migrations_only:
         # 워크플로는 머지 결과 위에서 돌아 spec 첫 커밋 판정이 달라진다. 버전 중복만 본다.
-        conflicts = migration_conflicts(tracked_paths(head) | tracked_paths(base_ref))
+        merge_base = git('merge-base', base_ref, head).decode().strip()
+        removed = tracked_paths(merge_base) - tracked_paths(head)
+        conflicts = migration_conflicts((tracked_paths(head) | tracked_paths(base_ref)) - removed)
         return conflicts, [], f'마이그레이션 버전 검사 전용 (기준 {base_ref})'
     base = git('merge-base', base, head).decode().strip()
     before, after = tree(base), tree(head)
@@ -133,11 +164,14 @@ def check(base, head='HEAD', worktree=False, migrations_only=False):
             if first_changed != [spec] or spec not in first:
                 errors.append('첫 커밋은 새 spec 파일 한 개만 포함해야 합니다.')
             else:
-                initial = sections(first[spec].decode('utf-8'))
+                initial, _ = sections(first[spec].decode('utf-8'))
                 for name in SECTIONS:
                     if not initial.get(name, '').strip() or '<' in initial.get(name, ''):
                         errors.append(f'최초 spec 항목 미작성: {name}')
-        doc = sections(after[spec].decode('utf-8'))
+        doc, duplicates = sections(after[spec].decode('utf-8'))
+        if duplicates:
+            # 리뷰어는 앞 절을 읽고 검사기는 뒤 절을 쓰게 된다. 어느 쪽을 쓸지 고르지 않고 spec을 고치게 한다.
+            errors.append(f'spec에 같은 절 이름이 중복됩니다: {", ".join(duplicates)}')
         for name in SECTIONS:
             if not doc.get(name, '').strip() or '<' in doc.get(name, ''):
                 errors.append(f'spec 항목 미작성: {name}')
@@ -145,7 +179,7 @@ def check(base, head='HEAD', worktree=False, migrations_only=False):
         if not patterns:
             errors.append('spec에 변경 경로 목록이 필요합니다.')
         for p in changed:
-            if p != spec and not any(fnmatch.fnmatchcase(p, pattern) for pattern in patterns):
+            if p != spec and not any(path_matcher(pattern).match(p) for pattern in patterns):
                 errors.append(f'spec 범위 밖 변경: {p}')
         if any(SCHEMA_CHANGE.search(p) for p in changed):
             body = schema_review(after[spec].decode('utf-8')) or ''
@@ -164,7 +198,8 @@ def check(base, head='HEAD', worktree=False, migrations_only=False):
             before.get(log, b'').decode('utf-8').splitlines(), new_log.splitlines()) if line.startswith('+ '))
         if log not in changed or f'../spec/{Path(spec).name}' not in added or '요구사항 영향:' not in added:
             errors.append('wiki 변경 기록에 이번 spec 링크와 요구사항 영향: 설명을 추가하세요.')
-    errors.extend(migration_conflicts(set(after) | tracked_paths(base_ref)))
+    # 이 PR이 지운 경로는 뺀다. 그러지 않으면 파일명만 바꾸는 변경이 옛 이름과 새 이름의 중복으로 잡힌다.
+    errors.extend(migration_conflicts((set(after) | tracked_paths(base_ref)) - (set(before) - set(after))))
     if remote_is_ahead(base_ref, head):
         warnings.append(f'기준의 원격 origin/{base_ref}이 head에 없습니다. fetch/rebase 후 다시 실행하세요.')
     regular_files = regular_lines = source_files = source_lines = 0
