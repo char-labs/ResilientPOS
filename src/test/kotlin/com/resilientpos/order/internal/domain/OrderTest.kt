@@ -192,6 +192,20 @@ class OrderTest {
     }
 
     @Test
+    fun `합계가 저장 범위를 넘으면 주문을 만들지 않는다`() {
+        val command = createOrderCommand(
+            lines = listOf(orderLine(unitPrice = Money.of("999999999999999", krw), quantity = 2)),
+        )
+
+        val failure = assertFailsWith<DomainException> {
+            Order.create(command, FixedIdentifierGenerator(emptyList()), now)
+        }
+
+        assertEquals(Money.INVALID_MONEY_AMOUNT, failure.code)
+        assertEquals(DomainErrorKind.INVALID, failure.kind)
+    }
+
+    @Test
     fun `합계는 line 단가 곱 수량의 합이다`() {
         val command = createOrderCommand(
             lines = listOf(

@@ -160,6 +160,35 @@ class OrderApiIntegrationTest(
     }
 
     @Test
+    fun `저장할 수 없는 금액의 주문은 400 INVALID_MONEY_AMOUNT이고 t_order에 행이 생기지 않는다`() {
+        // 단가 자체가 범위를 넘는 경우
+        val overLimit = UUID.randomUUID()
+        post(
+            requestJson(
+                overLimit,
+                lines = """{ "productCode": "SKU-1", "productName": "쌀", "unitPrice": "1000000000000000", "quantity": 1 }""",
+            ),
+        ).andExpect {
+            status { isBadRequest() }
+            jsonPath("$.error.errorCode") { value("INVALID_MONEY_AMOUNT") }
+        }
+        assertEquals(0L, orderRowCount(overLimit))
+
+        // 단가는 범위 안이지만 합계가 넘는 경우. 예전에는 201로 커밋된 뒤 checkout에서 500이 나고 복구할 수 없었다.
+        val overTotal = UUID.randomUUID()
+        post(
+            requestJson(
+                overTotal,
+                lines = """{ "productCode": "SKU-1", "productName": "쌀", "unitPrice": "999999999999999", "quantity": 2 }""",
+            ),
+        ).andExpect {
+            status { isBadRequest() }
+            jsonPath("$.error.errorCode") { value("INVALID_MONEY_AMOUNT") }
+        }
+        assertEquals(0L, orderRowCount(overTotal))
+    }
+
+    @Test
     fun `없는 주문의 checkout 요청은 404 ORDER_NOT_FOUND다`() {
         mockMvc.post("/v1/orders/${UUID.randomUUID()}/checkout").andExpect {
             status { isNotFound() }

@@ -131,6 +131,10 @@ class Order private constructor(
                 lines = command.lines.map { OrderLine(OrderLineId(ids.next()), it.productCode, it.productName, it.unitPrice, it.quantity) },
                 checkouts = emptyList(),
             )
+            // 합계는 lazy 계산이라 여기서 한 번 평가한다. 저장 범위를 넘는 합계는 `Money`가 거절한다.
+            // 이 평가가 없으면 범위를 넘는 주문이 커밋된 뒤 checkout에서야 드러나고 복구할 수 없다.
+            order.total
+
             val event = OrderCreated(
                 eventId = ids.next(),
                 occurredAt = now,
