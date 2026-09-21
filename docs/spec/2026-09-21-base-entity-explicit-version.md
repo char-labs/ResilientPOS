@@ -103,12 +103,22 @@ PR #34(`fix/commit-version-conflict-optimistic-lock`)가 같은 `BaseEntity.kt`�
 예상은 파일 11개, 300줄 안쪽이다. 경고 한도(20개, 600줄)에 닿지 않는다. 컬럼 삭제를 별도 PR로 나누지 않는 이유는 스키마 변경 검토의 답 8에 있다. 후속 PR은 없다.
 
 ## TDD 검증 기록
+명령의 공통 앞부분은 `./gradlew test --tests`다. 문장 수 테스트 세 개는 `@Version`이 아직 있는 코드에서 먼저 통과시켜 기준선으로 커밋했다. RED는 `BaseEntity`에서 `@Version`을 빼고 `V004`를 더한 뒤 어댑터의 `saveAll`을 그대로 둔 상태다.
+
 | 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
 |---|---|---|---|
-| 새 주문 저장의 문장 수 | 미실행 | 미실행 | 미실행 |
-| 기존 주문에 line을 바꾸고 더한 저장의 문장 수 | 미실행 | 미실행 | 미실행 |
-| checkout을 더한 저장의 문장 수 | 미실행 | 미실행 | 미실행 |
-| version 컬럼은 t_order에만 있다 | 미실행 | 미실행 | 미실행 |
+| 새 주문 저장은 주문 조회 한 번과 주문과 line의 INSERT뿐이다 | `'*OrderInsertStatementCountIntegrationTest'` 기대 4, 실제 6. 새 line 둘에 SELECT가 하나씩 붙었다 | 어댑터가 `persist`. 같은 명령 통과, 4 | `./gradlew test` 80개 통과 |
+| 기존 주문에 line을 바꾸고 더해 저장하면 새 line은 SELECT 없이 INSERT 한 번이다 | 같은 명령. 기대 4, 실제 5 | 같은 명령 통과, 4 | 위와 같음 |
+| checkout을 더한 주문을 저장하면 새 checkout은 SELECT 없이 INSERT 한 번이다 | 같은 명령. 기대 4, 실제 5 | 같은 명령 통과, 4 | 위와 같음 |
+| baseline 마이그레이션이 성공으로 기록된다, 낙관적 잠금 version 컬럼은 t_order에만 있다 | `'com.resilientpos.SchemaMigrationTest'` 2개 실패. `V004`가 없고 세 테이블 모두 `version`이 있다 | `V004` 추가 뒤 4개 통과 | 위와 같음 |
+| 트랜잭션 밖에서 부른 save도 주문과 line을 함께 저장한다 | `'*OrderCommandFacadeIntegrationTest'` `InvalidDataAccessApiUsageException`(트랜잭션 없는 persist) | 어댑터 `save`에 `@Transactional`. 11개 통과 | 위와 같음 |
+| 트랜잭션 밖에서 부른 save가 line INSERT에서 실패하면 주문 행도 남지 않는다 | 같은 명령. 기대한 `DataIntegrityViolationException` 대신 `InvalidDataAccessApiUsageException` | 같은 명령 통과. 주문 행 0, line 행 0 | 위와 같음 |
 
 ## 결과
-개발 전 작성. 개발 후 실행 결과와 변경 이유를 추가한다.
+- 인수 조건 1·2: `BaseEntity`에 `version`이 없고 `OrderEntity`가 `@Version var version: Long?`을 선언한다. `OrderVersionConflictIntegrationTest`와 "신규 저장은 INSERT 한 번" 테스트는 고치지 않고 통과했다.
+- 인수 조건 3~6: 범위의 표가 전제한 동작이 Spring Boot 4.1.1(Hibernate 7.4.5)에서 그대로 관측됐다. `@Version` 없는 새 엔티티를 `saveAll`에 넘기면 새 행마다 SELECT가 정확히 하나 더 나가고(4에서 6, 4에서 5, 4에서 5) `persist`로 바꾸면 4로 돌아온다. Hibernate 통계는 설정 없이 실행 중에 `isStatisticsEnabled`로 켜고 끌 수 있어서 테스트 컨텍스트를 따로 만들지 않았다.
+- 인수 조건 7: `V004` 적용 뒤 `version` 컬럼을 가진 업무 테이블은 `t_order`뿐이다.
+- 인수 조건 8: `./gradlew test` 80개 통과. `origin/main`(c317a1b, #33 포함)과 임시 worktree에서 합친 결과는 89개 통과. 합칠 때의 충돌은 `docs/wiki/changes.md`와 `docs/wiki/current-state.md` 두 문서뿐이었고 그 worktree는 커밋 없이 지웠다.
+- 인수 조건 10·11(범위 조정 1): 트랜잭션 밖 `save`가 line 없는 주문 행을 남기는 것을 임시 테스트로 관측하고(주문 행 1, line 행 0) `@Transactional`로 막았다. 기존의 unique 위반 테스트는 트랜잭션 밖에서 `save`를 부르는 그대로 `DataIntegrityViolationException`을 받는다.
+- 인수 조건 9: wiki 세 문서와 볼트 `rules/domain-modeling-kotlin.md` 5절을 고쳤다. 볼트의 수정 전 사본은 `~/Documents/domain-modeling-kotlin.2026-09-21.before-explicit-version.md`다.
+- 고치지 않은 것: `OrderLineEntity`, `OrderCheckoutEntity`, 두 Spring Data repository. `saveAll`을 부르는 곳은 없어졌지만 repository는 조회와 삭제에 계속 쓴다.
