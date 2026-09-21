@@ -13,7 +13,7 @@
 | 식별자 | `uuid-creator` 6.1.1 (UUID v7) |
 | 구조 검증 | Spring Modulith 경계 검증, ArchUnit 1.4.2 의존성 방향 가드 |
 | 통합 테스트 | Testcontainers 2.0.5 PostgreSQL 18. `./gradlew test` 실행에 Docker가 필요하다 |
-| 테스트 | Kotlin Test/JUnit 5, Spring Boot 테스트 starter, Fixture Monkey 1.2.3; 총 88개 (컨텍스트 1, 스키마 3, 모듈 구조 2, 의존성 방향 2, Money 8, 식별자 4, Order 15, OrderCommandFacade 9, RequestCheckout 통합 8, 이벤트 발행 기록 통합 7, API advice 9, OrderController 8, checkout Controller 5, 주문 API 통합 7) |
+| 테스트 | Kotlin Test/JUnit 5, Spring Boot 테스트 starter, Fixture Monkey 1.2.3; 총 90개 (컨텍스트 1, 스키마 3, 모듈 구조 2, 의존성 방향 2, Money 8, 식별자 4, Order 15, OrderCommandFacade 9, RequestCheckout 통합 9, 버전 충돌 통합 1, 이벤트 발행 기록 통합 7, API advice 9, OrderController 8, checkout Controller 5, 주문 API 통합 7) |
 | 로컬 하네스 | Python 3 표준 라이브러리 |
 
 근거: [build.gradle.kts](../../build.gradle.kts), [Gradle Wrapper](../../gradle/wrapper/gradle-wrapper.properties), [애플리케이션 설정](../../src/main/resources/application.yaml).
@@ -73,9 +73,12 @@
   나눗셈·퍼센트 할인·세금 계산은 없다. 반올림 정책은 매장 규칙이므로 `store` 정책과 checkout에서 다룬다.
 - `platform` 모듈은 `IdentifierGenerator`(UUID v7)와 `Clock`(UTC) 빈을 등록하는 `PlatformConfiguration`과 엔티티 공통 컬럼
   (`version`·`created_at`·`updated_at`·`deleted_at`, Hibernate `@SoftDelete`)을 주는 `BaseEntity`를 가진다. `OrderEntity`·`OrderLineEntity`가 상속한다. 모듈은 9개다.
+  `created_at`·`updated_at`은 Hibernate가 JVM에서 만드는 애플리케이션 시각이고(`SourceType.VM`) `deleted_at`만 DB `current_timestamp`다. 한 INSERT의 두 시각은 같지 않을 수 있어서
+  갱신된 적 없는 행은 `version = 0`으로 판정한다. `SourceType.DB`였을 때는 Hibernate 7.4.5가 UPDATE의 generated 값을 읽느라 갱신 행 수 검사를 건너뛰어서, 커밋 시점의 버전 충돌이
+  낙관적 잠금 예외가 아니라 `JpaSystemException`으로 나왔다. 지금은 `OptimisticLockingFailureException` 계열로 나오고 HTTP에서는 아래 `CONCURRENT_REQUEST` 매핑을 타서 409다([commit-version-conflict-optimistic-lock](../spec/2026-09-21-commit-version-conflict-optimistic-lock.md)).
   HTTP 응답 공통 모양도 여기에 있다. `ApiResponseBodyAdvice`가 `com.resilientpos` Controller의 본문을 `ApiResponse`(`result`·`data`·`error`)로
   감싸고, `ApiControllerAdvice`가 Spring MVC 표준 예외와 처리하지 못한 예외를 `ErrorResponse`(`errorCode`·`message`)로 바꾼다.
-  `ErrorType`은 HTTP 공통 오류 5개만 가진다. 다섯째 `CONCURRENT_REQUEST`(409)는 Spring의 `ConcurrencyFailureException` 계열(잠금 대기 초과, 버전 충돌)을 받는다. 5xx로 집계하지 않는다. 고정 문구는 재시도를 약속하지 않는다. 다시 보내도 되는지는 그 endpoint가 멱등인지에 달려 있고, 지금의 쓰기 endpoint 둘(`POST /v1/orders`는 `clientOrderId`로, checkout은 상태로)은 멱등이다. 멱등이 아닌 쓰기 endpoint를 더하는 PR이 이 전제를 다시 본다. 409에는 재시도하면 안 되는 `IDEMPOTENCY_CONFLICT`도 있으므로 단말은 상태 코드가 아니라 `errorCode`로 분기한다. 이 계열에는 deadlock 패자와 직렬화 실패도 들어 있다. 단말의 중복 요청이 아니라 서버 코드의 잠금 순서 문제일 수 있으므로 WARN 로그의 `errorCode=CONCURRENT_REQUEST`에서 따로 본다. **커밋 시점의 버전 충돌은 이 매핑에 닿지 않는다.** `BaseEntity`의 `@UpdateTimestamp(source = DB)` 때문에 Hibernate 7.4.5가 `UPDATE ... RETURNING`을 쓰고, 버전이 맞지 않아 0행이 갱신되면 낙관적 잠금 예외가 아니라 "The database returned no natively generated values"(`JpaSystemException`)가 나서 500이다. 커밋은 거절되므로 정합성은 지켜진다. 알려진 빈틈이다. unique 제약 위반(`DataIntegrityViolationException`)은 이 계열이 아니라서 계속 500이다. 응답 메시지는 고정 문구이고 예외 메시지는 로그에만 남는다. `DomainException`만 예외로,
+  `ErrorType`은 HTTP 공통 오류 5개만 가진다. 다섯째 `CONCURRENT_REQUEST`(409)는 Spring의 `ConcurrencyFailureException` 계열(잠금 대기 초과, 버전 충돌)을 받는다. 5xx로 집계하지 않는다. 고정 문구는 재시도를 약속하지 않는다. 다시 보내도 되는지는 그 endpoint가 멱등인지에 달려 있고, 지금의 쓰기 endpoint 둘(`POST /v1/orders`는 `clientOrderId`로, checkout은 상태로)은 멱등이다. 멱등이 아닌 쓰기 endpoint를 더하는 PR이 이 전제를 다시 본다. 409에는 재시도하면 안 되는 `IDEMPOTENCY_CONFLICT`도 있으므로 단말은 상태 코드가 아니라 `errorCode`로 분기한다. 이 계열에는 deadlock 패자와 직렬화 실패도 들어 있다. 단말의 중복 요청이 아니라 서버 코드의 잠금 순서 문제일 수 있으므로 WARN 로그의 `errorCode=CONCURRENT_REQUEST`에서 따로 본다. 커밋 시점의 버전 충돌도 이 매핑에 닿는다. 영속 계층이 `ObjectOptimisticLockingFailureException`을 내는 것은 `OrderVersionConflictIntegrationTest`가, 그 계열이 409가 되는 것은 `ApiAdviceTest`가 고정한다. 지금은 잠금 없이 `@Version`에 기대는 endpoint가 없어서 HTTP까지 잇는 테스트는 없다. unique 제약 위반(`DataIntegrityViolationException`)은 이 계열이 아니라서 계속 500이다. 응답 메시지는 고정 문구이고 예외 메시지는 로그에만 남는다. `DomainException`만 예외로,
   `kind`가 정한 상태(`INVALID` 400, `NOT_FOUND` 404, `CONFLICT` 409, `UNPROCESSABLE` 422)와 함께 예외의 `code`·`message`가 `error`에 그대로 나간다.
   매핑은 else 없는 `when`이라 `kind`를 추가하고 매핑을 빠뜨리면 컴파일되지 않는다. Bean Validation은 쓰지 않는다([api-response-advice](../spec/2026-09-19-api-response-advice.md)).
 - 제공된 요구사항 문서 7개는 [원문 목록](../references/README.md)에 보관했다. 요구사항 재정리와 원문 간 정합성 검토는 아직 수행하지 않았다.

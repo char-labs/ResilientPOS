@@ -74,7 +74,7 @@ class OrderCommandFacadeIntegrationTest(
     }
 
     @Test
-    fun `신규 저장은 INSERT 한 번이고 생성 시각과 수정 시각이 같으며 삭제 시각은 비어 있다`() {
+    fun `신규 저장은 INSERT 한 번이고 생성 시각과 수정 시각이 채워지며 삭제 시각은 비어 있다`() {
         val result = facade.create(OrderFixtures.createOrderCommand())
 
         val row = jdbcTemplate.queryForMap(
@@ -82,8 +82,9 @@ class OrderCommandFacadeIntegrationTest(
             result.orderId.value,
         )
 
+        // 두 시각은 Hibernate가 JVM에서 따로 만든다. 같다거나 순서가 있다고 보장하지 않는다. 갱신된 적 없는 행은 version 0으로 판정한다.
         assertNotNull(row["created_at"])
-        assertEquals(row["created_at"], row["updated_at"])
+        assertNotNull(row["updated_at"])
         assertNull(row["deleted_at"])
         assertEquals(0L, row["version"], "신규 저장은 INSERT 한 번이다. merge로 빠지면 UPDATE가 따라붙어 version이 1이 된다")
     }
