@@ -63,19 +63,22 @@
   201과 `data{orderId, status}`를 돌려준다. 같은 `(terminalId, clientOrderId)` 재시도도 201이고 `orderId`가 같다. `status`는 주문의 현재 상태라서 checkout을 요청한 뒤의 재시도는 `CHECKOUT_REQUESTED`를 받는다. 형식 오류는 타입이 있는 DTO의
   Jackson 역직렬화가 거절해 `400 BAD_REQUEST`가 되고 업무 규칙은 도메인이 거절한다. 같은 키에 다른 payload가 오면 `409 IDEMPOTENCY_CONFLICT`다.
   빈 문자열이거나 공백뿐인 `productCode`·`productName`은 `OrderLine`이 `BLANK_PRODUCT_CODE`·`BLANK_PRODUCT_NAME`(400)으로 거절하고 값은 다듬지 않는다. 이미 주문이 있는 키로 오면 멱등 판정이 먼저라서 409다([order-line-blank-product](../spec/2026-09-21-order-line-blank-product.md)).
-  단가를 지수 표기(`1E+100000`)로 보내면 요청 DTO가 `toPlainString()`으로 10만 자 문자열을 만든 뒤 `400 INVALID_MONEY_AMOUNT`로 거절한다. 지수를 더 키웠을 때의 비용은 확인하지 않았다.
-  소수 자릿수가 `-1`인 통화(`XAU`·`XDR`·`XXX`)는 `Money`가 받아들이고 금액을 10 단위로 양자화한다. 통화 allow-list가 없다.
+  단가를 지수 표기(`1E+100000`)로 보내면 `400 INVALID_MONEY_AMOUNT`다. 거절 비용은 지수 크기와 무관하다. `currency`가 `XAU`·`XDR`·`XXX`처럼 금액을 표현할 수 없는 통화면 `400 UNSUPPORTED_CURRENCY`다([money-input-boundary](../spec/2026-09-21-money-input-boundary.md)).
+  **매장이 어떤 통화로 영업할지 정하는 allow-list는 없다.** `Money`가 표현할 수 있는 통화(`defaultFractionDigits`가 0 이상)면 무엇이든 받는다. 알려진 빈틈이다.
   금액 상한은 개별 금액과 합계를 모두 막지만, **합계가 범위를 넘는 주문이 이미 저장돼 있다면 그 주문은 여전히 고착이다.** 조회와 주문 생성 재시도는 되고 checkout만 `400 INVALID_MONEY_AMOUNT`를 받으며 `OPEN`에 남는다(`Order.restore`는 합계를 평가하지 않는다). 배포된 환경이 없어서 지금 그런 행은 없다.
   `productCode` 64자·`productName` 255자를 넘는 입력이 DB 오류로 `500 INTERNAL_ERROR`가 되는 것과 같은 키의 동시 요청이 unique 제약 위반으로 끝나는 것은 알려진 빈틈이다. 주문을 soft delete하면 같은 키의 재시도가
   삭제된 주문을 찾지 못하고 unique 제약에 걸리는데, 지금은 주문을 삭제하는 코드가 없다([order-create-order-api](../spec/2026-09-20-order-create-order-api.md)).
 - `foundation` 모듈에 `Money`, `IdentifierGenerator`/`UuidV7IdentifierGenerator`, 모델링 원시 타입 `DomainEvent`·`Transition`,
   도메인 규칙 위반을 알리는 `DomainException(code, message, kind)`과 `DomainErrorKind`(`INVALID`·`NOT_FOUND`·`CONFLICT`·`UNPROCESSABLE`)가 있다. 프레임워크 의존성은 없다.
   `Order`·`OrderLine`·`Money`는 규칙 위반을 `DomainException`으로만 던진다. `code`는 API 오류 응답과 로그 `errorCode`에 쓰는 안정적인
-  식별자다. `kind`는 HTTP 숫자가 아닌 업무 의미이고 기본값은 `INVALID`다. 입력 거절 코드 8개는 `INVALID`이고 `IDEMPOTENCY_CONFLICT`가 `CONFLICT`의 첫 사용처다([foundation-domain-exception](../spec/2026-09-19-foundation-domain-exception.md)).
+  식별자다. `kind`는 HTTP 숫자가 아닌 업무 의미이고 기본값은 `INVALID`다. 입력 거절 코드 10개는 `INVALID`이고 `IDEMPOTENCY_CONFLICT`가 `CONFLICT`의 첫 사용처다([foundation-domain-exception](../spec/2026-09-19-foundation-domain-exception.md)).
   `Money`는 통화의 표준 소수 자릿수를 canonical scale로 쓰고, scale 초과 입력과 통화 불일치 연산을 거절한다.
   **정수부가 15자리를 넘는 금액도 `INVALID_MONEY_AMOUNT`로 거절한다.** 금액을 담는 컬럼이 `numeric(19,4)`라 19 − 4 = 15자리가 상한이고, 상수와 근거는 `Money.MAX_INTEGER_DIGITS`에 있다.
   검사는 `init`에 있어서 생성자·`of`·`copy`·연산이 모두 거친다. `Order.create`는 lazy인 합계를 생성 시점에 한 번 평가한다. 이 평가가 없으면 단가는 범위 안이고 합계만 넘는 주문이 커밋된 뒤
   checkout에서야 드러나 복구할 수 없었다. 실제로 그 고착을 재현한 뒤 고쳤다([money-amount-limit](../spec/2026-09-21-money-amount-limit.md)).
+  **`of`는 값을 펴기 전에 메타데이터(`precision`·`scale`)로 판정한다.** 거절 비용이 입력의 크기를 따라가지 않게 하려는 것이고, 이 순서를 뒤집으면 `1E+100000` 하나에 수백 ms가 돌아온다.
+  입구는 둘이다. `of(BigDecimal, Currency)`가 본체이고 `of(String, Currency)`는 파싱 실패를 `INVALID_MONEY_FORMAT`으로 바꿔 넘긴다. `defaultFractionDigits`가 음수인 통화는
+  canonical scale을 세울 수 없어 `UNSUPPORTED_CURRENCY`로 거절하며, 판정을 `init`과 `of`가 공유해 생성자·`copy`·`zero`도 같이 막힌다([money-input-boundary](../spec/2026-09-21-money-input-boundary.md)).
   나눗셈·퍼센트 할인·세금 계산은 없다. 반올림 정책은 매장 규칙이므로 `store` 정책과 checkout에서 다룬다.
 - `platform` 모듈은 `IdentifierGenerator`(UUID v7)와 `Clock`(UTC) 빈을 등록하는 `PlatformConfiguration`과 엔티티 공통 컬럼
   (`created_at`·`updated_at`·`deleted_at`, Hibernate `@SoftDelete`)을 주는 `BaseEntity`를 가진다. `OrderEntity`·`OrderLineEntity`·`OrderCheckoutEntity`가 상속한다. 모듈은 9개다.

@@ -356,3 +356,16 @@
 - 정정: 과거 기록과의 충돌. [flyway-version-guard](../spec/2026-09-15-flyway-version-guard.md)가 "저장소 소유자가 브랜치 보호에서 상태 검사 통과와 머지 전 최신 상태 요구를 켰다"고 적었지만, 지금 확인하면 브랜치 보호 API가 `403 Upgrade to GitHub Pro`를 돌려주고 저장소는 private이다. 그 설정은 지금 켜져 있지 않고 켤 수도 없다. spec은 이력이라 고치지 않고 개발 규칙의 서술만 맞췄다.
 - 범위 밖으로 남긴 한계: `V2`와 `V2.0`을 다른 버전으로 보는 것(Flyway의 실제 동작을 확인하지 못했고 이 PR 이전부터 같다), `spring.flyway.locations` 변경, glob의 문자 클래스 미지원, `**`가 디렉터리 0단계를 매칭하지 않는 것.
 - 갱신: [개발 규칙](development-workflow.md).
+
+## 2026-09-21 — Money가 받아들이는 입력의 경계를 닫는다
+- Spec: [money-input-boundary](../spec/2026-09-21-money-input-boundary.md)
+- 요구사항 영향: 입력 규칙이 두 개 늘었다. 금액을 표현할 수 없는 통화는 `UNSUPPORTED_CURRENCY`(400), 숫자로 읽을 수 없는 금액 문자열은 `INVALID_MONEY_FORMAT`(400)이다. 요청·응답의 모양과 스키마는 바뀌지 않았다.
+- 배경: 전체 코드 감사에서 찾아 전부 재현했다. `Money.of`가 값을 canonical scale로 먼저 맞추고 그다음 불변식을 보는 순서였다. 거절할 입력에도 펴는 비용을 먼저 치러서, 단가 `1E+100000` 하나를 거절하는 데 375ms가 걸렸다. 지수를 키우면 그대로 커진다.
+- 배경: `Currency.getDefaultFractionDigits()`가 `-1`을 돌려주는 통화(`XAU`·`XDR`·`XXX`)를 `Money`가 그대로 canonical scale로 썼다. `of("100", XAU)`는 `1.0E+2`를 만들어 금액을 10 단위로 양자화했고, `of("105", XAU)`는 "통화 표준 자릿수를 넘는 금액"이라는 엉뚱한 이유로 거절했다. `currency`는 요청 본문에서 오므로 클라이언트가 고를 수 있었다.
+- 배경: `Money.of(String, Currency)`가 `NumberFormatException`을 감싸지 않아 숫자가 아닌 문자열이 500이 됐다. 지금은 `order`의 DTO가 `BigDecimal`이라 Jackson이 먼저 막지만, `foundation`의 공개 API라 `payment`·`sync`가 쓰면 드러난다.
+- 결정: 검사 순서를 뒤집어 값을 펴기 전에 메타데이터로만 판정한다. `precision()`과 `scale()`은 `BigDecimal`이 이미 들고 있는 정수 두 개라 입력 크기와 무관하다. 뒤따르는 0은 `stripTrailingZeros()`로 떼는데, 이 비용은 유효 자릿수에 비례하고 값을 펴지 않는다.
+- 결정: 표현할 수 없는 통화는 값을 만들지 않고 거절한다. 판정을 `init`과 `of`가 같은 함수로 공유해 생성자·`copy`·`zero`도 함께 막힌다. `of`만 막으면 `copy`가 우회한다.
+- 결정: 요청 DTO가 `BigDecimal`을 그대로 넘기게 `of(BigDecimal, Currency)` 오버로드를 더했다. `toPlainString()` 왕복이 사라진다.
+- 범위 밖: 매장이 어떤 통화로 영업할지 정하는 allow-list. 이 PR은 `Money`가 표현할 수 없는 통화만 거절한다. [현재 상태](current-state.md)의 알려진 빈틈에 적었다.
+- 범위 밖: line 개수·요청 본문 크기의 상한, 커넥션·쿼리·트랜잭션 타임아웃, 로그 속성. 같은 감사에서 나왔고 목표가 달라 뒤따르는 PR에서 닫는다.
+- 갱신: [현재 상태](current-state.md).
