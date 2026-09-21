@@ -151,6 +151,18 @@ class OrderControllerTest(
     }
 
     @Test
+    fun `자릿수가 아주 많은 unitPrice는 본문을 읽는 단계에서 400으로 끊긴다`() {
+        // Jackson의 숫자 길이 제한(StreamReadConstraints, 기본 1000자)이 여기서 끊어 준다는 사실에
+        // Money의 판정 비용이 기대고 있다. 제한을 올리는 변경은 이 테스트를 깨뜨려 드러난다.
+        postOrder(requestJson(unitPrice = "1" + "0".repeat(1_000))).andExpect {
+            status { isBadRequest() }
+            jsonPath("$.result") { value("FAIL") }
+        }
+
+        verifyNoInteractions(facade)
+    }
+
+    @Test
     fun `unitPrice가 지수 표기로 저장 범위를 넘으면 400 INVALID_MONEY_AMOUNT이다`() {
         postOrder(requestJson(unitPrice = "1E+100000")).andExpect {
             status { isBadRequest() }

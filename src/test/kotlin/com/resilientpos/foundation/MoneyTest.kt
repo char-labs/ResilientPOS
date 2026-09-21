@@ -195,10 +195,23 @@ class MoneyTest {
         assertEquals(BigDecimal("100"), Money.of(BigDecimal("1E+2"), krw).amount)
     }
 
+    @Test
+    fun `zero는 문자열 0과 같은 값을 만든다`() {
+        // zero가 BigDecimal.ZERO를 쓰게 바뀌었다. scale까지 같아야 canonical 계약이 유지된다.
+        for (currency in listOf(krw, usd, Currency.getInstance("CLF"))) {
+            val code = currency.currencyCode
+            assertEquals(Money.of("0", currency), Money.zero(currency), code)
+            assertEquals(Money.of("0", currency).amount.scale(), Money.zero(currency).amount.scale(), code)
+        }
+    }
+
     private companion object {
         const val REPEAT_COUNT = 1_000
 
-        /** 펴지 않으면 1000회가 수 ms다. 머신 편차를 넉넉히 덮고도 375ms짜리 한 번보다 작은 상한을 고른다. */
-        const val REJECTION_BUDGET_MILLIS = 1_000L
+        /**
+         * 펴지 않으면 1000회가 수 ms로 끝난다. 상한은 느린 CI에서의 GC·JIT 편차를 덮을 만큼 크게 두되,
+         * 검사 순서가 되돌아가면 1000회가 6분이 되므로 어떤 값을 골라도 그 회귀는 잡힌다.
+         */
+        const val REJECTION_BUDGET_MILLIS = 5_000L
     }
 }

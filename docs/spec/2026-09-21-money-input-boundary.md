@@ -91,4 +91,4 @@ RED는 두 단계로 관측했다. 새 입구 `of(BigDecimal, Currency)`는 존�
 
 그 결과 이전 구현과 갈리는 입력이 이 군(群) 하나 남는다. 지수가 `Int` 범위를 넘게 만드는 입력에서 **main은 `INVALID_MONEY_SCALE`, 이 PR은 `INVALID_MONEY_AMOUNT`**를 돌려준다. 둘 다 400이고, 바뀐 쪽이 의미에 맞는다 — scale이 문제가 아니라 금액이 저장 범위를 넘은 것이다. main의 코드는 삼킨 `ArithmeticException`을 scale 오류로 뭉뚱그리고 있었다.
 
-두 가드를 지난 뒤 `setScale`이 실패할 수 있는지도 확인했다. 첫 가드가 `minimal.scale() <= digits`를 보장하므로 남는 변환은 scale을 늘리는 쪽뿐이고, 이는 0을 붙이는 일이라 `UNNECESSARY`로도 실패하지 않는다. main에 있던 `try/catch`는 그래서 뺐다.
+두 가드를 지난 뒤 `setScale`이 실패할 수 있는지도 확인했다. 첫 가드가 통과한 값은 scale이 통화 자릿수 이하임이 보장되므로 남는 변환은 scale을 늘리는 쪽뿐이고, 이는 0을 붙이는 일이라 `UNNECESSARY`로도 실패하지 않는다. main에 있던 `try/catch`는 그래서 뺐다.
