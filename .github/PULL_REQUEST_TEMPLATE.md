@@ -48,5 +48,4 @@ Risk 판정 기준
 - [ ] spec의 인수 조건과 관련 테스트를 검증하고 결과를 기록했다.
 - [ ] 로컬 PR harness 검사를 실행하고 통과했다.
 - [ ] 변경된 요구사항을 wiki 본문에 반영했다. 무영향이면 근거를 기록했다.
-- [ ] docs/wiki/changes.md에 spec 링크와 요구사항 영향을 추가했다.
 - multi-review: <!-- 🔴 항목이 있으면 resilientpos-multi-review를 실행하고 결과를 적는다. 없으면 "미실행(🔴 없음)"이라고 적는다. -->

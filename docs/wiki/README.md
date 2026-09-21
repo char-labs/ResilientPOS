@@ -4,10 +4,10 @@
 자동 지침 탐색을 지원하지 않는 LLM에는 `AGENTS.md를 읽고 작업에 필요한 wiki를 찾아줘`라고 요청한다.
 
 ## 작업별 진입점
-- 공통 계약/기술 스택: [AGENTS.md](../../AGENTS.md).
+- 공통 계약: [AGENTS.md](../../AGENTS.md). 기술 스택 현황: [현재 상태](current-state.md).
 - 개발 시작/PR 제출: [개발 규칙](development-workflow.md)과 해당 PR의 `docs/spec/yyyy-mm-dd-slug.md`.
 - 애플리케이션/빌드 수정: [현재 상태](current-state.md). 필요한 도메인 원문만 [원문 목록](../references/README.md)에서 찾는다.
-- 이전 결정 추적: [변경 기록](changes.md)에서 관련 spec을 찾아 읽는다.
+- 이전 결정 추적: `docs/spec/`에서 날짜와 slug로 관련 spec을 찾아 읽는다.
 - 비즈니스·도메인·Controller 개발: [TDD 테스트 전략](testing-strategy.md)과 [공통 스킬](../../.claude/skills/resilientpos-tdd/SKILL.md).
 - 도메인 용어·bounded context·유비쿼터스 언어 용어집: [도메인 모델](domain-model.md). 업무 spec을 쓰거나 새 타입·테이블·이벤트 이름을 만들 때 먼저 읽는다.
 - 새 기능·변경 요청의 설계 합의: [grill 스킬](../../.claude/skills/resilientpos-grill/SKILL.md). 합의 뒤 장기 스펙은 [spec-write 스킬](../../.claude/skills/resilientpos-spec-write/SKILL.md).
@@ -19,7 +19,7 @@
 - LLM 지침 수정·에이전트 모델 배정: [공식 문서 조사와 적용 근거](agent-instructions.md).
 
 ## 문서 역할
-- `docs/wiki/`: 현재 합의된 지식. 변경 시 해당 페이지를 고치고 변경 기록에서 spec과 연결한다.
+- `docs/wiki/`: 현재 합의된 지식. 변경 시 해당 페이지를 고치고 그 근거는 해당 PR spec에 남긴다.
 - `docs/spec/yyyy-mm-dd-slug.md`: PR별 의도·범위·검증·변경 이력. [spec 템플릿](../spec-template.md)으로 시작한다.
 - `docs/references/`: 제공받은 원문. 요구사항 체계화는 후속 작업이다.
 
