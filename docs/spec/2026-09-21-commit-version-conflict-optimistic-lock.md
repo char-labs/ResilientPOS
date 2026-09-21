@@ -26,6 +26,13 @@
 - 검토한 선택지에 Spring Data JPA Auditing을 더하고 버린 이유를 적었다. 제외에 지금의 `@Version`이 막는 범위를 적었다.
 - 반영하지 않은 것: `hibernate.testing.clock`으로 Hibernate 시계를 고정하자는 안은 테스트 전용 설정을 컨텍스트에 들이는 대신 위처럼 과거 값으로 돌려놓는 쪽이 작아서 받지 않았다. executor의 `awaitTermination` 결과를 확인하자는 안은 같은 패키지의 기존 동시성 테스트와 같은 방식이라 그대로 뒀다. `SourceType.DB`와 `@Generated`를 막는 ArchUnit 규칙은 이 PR의 통합 테스트가 `BaseEntity` 경로의 회귀를 잡으므로 넣지 않았다. 엔티티가 `BaseEntity` 밖에서 generated 값을 쓰기 시작하면 다시 본다.
 
+### 범위 조정 2 (2026-09-21, #33·#35 머지 뒤 rebase)
+이 PR을 올린 뒤 #33(checkout endpoint와 `409 CONCURRENT_REQUEST` 매핑)과 #35(Event Publication Registry)가 `main`에 먼저 머지됐다. 사용자 요청으로 `origin/main` 위에 rebase했다. 코드 충돌은 없었고 `docs/wiki/changes.md`(두 PR의 항목 뒤에 이 PR의 항목을 둔다)와 `docs/wiki/current-state.md`의 테스트 수 줄(88개에 이 PR의 2개를 더해 90개)만 풀었다.
+- 위 "실패·재시도·복구"와 "관측성"이 조건으로 적은 "#33 머지 뒤"가 성립했다. 커밋 시점 버전 충돌은 이제 HTTP에서 `409 CONCURRENT_REQUEST`이고 WARN 로그의 `errorCode=CONCURRENT_REQUEST`로 남는다.
+- Wiki 영향에 적은 대로 #33이 [현재 상태](../wiki/current-state.md)에 더한 "커밋 시점의 버전 충돌은 이 매핑에 닿지 않는다 ... 알려진 빈틈이다" 서술을 고쳤다. 이 PR이 앞서 적은 "#33 머지 전에는 HTTP에서 계속 500이다"도 함께 고쳤다.
+- HTTP까지 잇는 통합 테스트는 더하지 않았다. 잠금 없이 `@Version`에 기대는 endpoint가 아직 없어서 테스트 전용 endpoint를 만들어야 한다. 영속 계층의 예외 타입은 이 PR의 `OrderVersionConflictIntegrationTest`가, 그 계열의 409는 #33의 `ApiAdviceTest`가 고정한다. 그런 endpoint를 처음 더하는 PR이 HTTP 테스트를 함께 넣는다.
+- #35의 발행 기록 테이블은 Modulith의 것이고 `BaseEntity`를 쓰지 않는다. 이 PR의 변경과 닿지 않는다.
+
 ### 검토한 선택지
 - `SourceType.VM`(채택): 두 줄 변경이고 마이그레이션이 없다. Hibernate의 표준 경로(행 수 검사)를 그대로 쓴다. 잃는 것은 위 "달라지는 성질"의 DB 시각과 한 INSERT의 두 시각 일치다. 둘 다 지금 기대는 코드가 없다.
 - DB 시각 유지, 컬럼 default와 트리거: 테이블마다 트리거가 필요하고 앞으로 생기는 모든 테이블이 같은 짐을 진다. 엔티티의 `createdAt`·`updatedAt`은 저장 뒤에도 채워지지 않는다(다시 읽게 하면 같은 delegate가 돌아온다). 마이그레이션과 스키마 변경 검토가 필요하다. 감사 컬럼의 시각 출처를 지키려고 치르기에는 크다.
@@ -83,10 +90,10 @@
 | 인수 조건 3: `requestCheckout으로 주문 행이 갱신되면 생성 시각은 그대로이고 수정 시각만 새로 찍힌다`(`OrderRequestCheckoutIntegrationTest`) | `SourceType.DB`에서도 통과하는 회귀 방지 테스트라 RED가 없다. generator를 바꿔도 갱신 때 `updated_at`만 새로 찍히는지를 본다 | 같은 명령. 통과 | `./gradlew test`. 74개 중 실패 0 |
 
 ## 결과
-- 인수 조건 1~4를 충족했다. `./gradlew test`는 74개(기존 72, 신규 2) 중 실패 0이다. `python3 scripts/check_pr.py --base origin/main`은 통과했다.
+- 인수 조건 1~4를 충족했다. `./gradlew test`는 rebase 전 74개(기존 72, 신규 2) 중 실패 0이었고, #33·#35 위로 rebase한 뒤에는 90개(기존 88, 신규 2) 중 실패 0이다. `python3 scripts/check_pr.py --base origin/main`은 통과했다.
 - 구현은 `BaseEntity`의 `SourceType.DB` 두 곳을 `SourceType.VM`으로 바꾼 것과 KDoc이다. 마이그레이션과 설정 변경은 없다.
 - 테스트: 신규 `OrderVersionConflictIntegrationTest` 1개와 `OrderRequestCheckoutIntegrationTest`의 시각 테스트 1개, `OrderCommandFacadeIntegrationTest`의 신규 저장 테스트는 이름과 단언을 고쳤다.
 - 알려진 이슈인지는 Hibernate JIRA 검색과 hibernate-orm `main` 소스로 확인했고 찾지 못했다. 이슈를 올릴지는 사용자에게 제안한다.
 - multi-review: Claude 86점, Codex 92점, Gemini 미실행(CLI 없음). 반영한 것과 반영하지 않은 것은 위 범위 조정에 적었다. `reviewer-codex` 에이전트는 Codex CLI가 끝나기 전에 자기 분석을 대신 적어 돌려줬다. 그 결과는 버리고 `codex exec`를 직접 끝까지 실행한 출력을 썼다.
-- PR #33과의 관계: 이 PR은 `main` 기준이고 #33과 `docs/wiki/current-state.md`의 테스트 수 줄, `docs/wiki/changes.md`의 끝에서 겹친다. 나중에 머지되는 쪽이 `main`을 병합하면서 푼다. #33이 먼저면 이 PR에서 "알려진 빈틈" 서술을 고친다.
+- PR #33과의 관계: #33이 먼저 머지됐다. rebase하면서 겹친 두 곳을 풀고 "알려진 빈틈" 서술을 고쳤다(범위 조정 2).
 - `tdd-driver`에 위임하지 않고 주 에이전트가 TDD 절차를 직접 수행했다.
