@@ -28,6 +28,13 @@
 - 스키마 변경 검토의 답 2에 `order_id`를 읽는 곳을, 답 6에 잠금 없는 읽기의 성질과 line만 바꾸는 저장의 version, unique 위반의 관측을 더했다.
 - 잠금 대기 시간 제한은 두 리뷰어가 모두 다시 보라고 했다. 대기하는 요청이 커넥션을 쥐고 있어서 한 주문의 경합이 풀 전체로 번질 수 있고, 잠금은 Facade 메서드가 아니라 바깥 트랜잭션이 끝날 때까지 유지되며, `publishEvent`의 동기 리스너도 그 안에서 돈다. endpoint가 열리는 다음 PR의 결정 항목으로 분할 계획에 옮겼다.
 
+### 범위 조정 2 (2026-09-21, 잠금 대기 시간 제한을 이 PR에 넣는다)
+처음에는 잠금 대기 시간 제한을 다음 PR의 결정 항목으로 넘겼다. 사용자가 이 PR의 범위에 드는 Risk는 여기서 반영하도록 요청했다. 이 PR이 주문 행 잠금을 도입했으므로 그 잠금이 만드는 위험의 완화도 이 PR의 몫이다.
+- 위험: 잠금을 기다리는 요청은 스레드와 DB 커넥션을 쥔 채로 기다린다. PostgreSQL 기본값은 무제한 대기라서, 잠금을 쥔 세션이 오래 살아 있으면(끊긴 뒤 남은 세션, 긴 GC 멈춤) 같은 주문의 재시도가 쌓여 커넥션 풀이 마르고 다른 주문의 요청까지 멈춘다.
+- 결정: 주문 행 잠금의 대기를 3초로 제한한다. 넘으면 Spring의 `PessimisticLockingFailureException` 계열 예외로 실패하고 아무것도 바꾸지 않는다. 단말은 응답이 없을 때와 같이 다시 요청하면 되고, 그때는 앞 요청이 끝나 있어서 기존 결과를 받는다. 3초는 트랜잭션이 DB 왕복 몇 번뿐이라 정상 경합은 수십 밀리초에 풀린다는 점과 단말의 요청 타임아웃보다 짧아야 한다는 점에서 골랐다. 단말 타임아웃이 정해지면 다시 본다.
+- 적용 위치: 잠금 조회 한 곳에만 건다. 커넥션 전체에 `lock_timeout`을 걸면 Flyway 마이그레이션과 다른 쿼리의 동작까지 바뀐다. 구현 방식(JPA 힌트가 PostgreSQL에서 동작하는지, 아니면 같은 트랜잭션 안의 `set local lock_timeout`)은 실행으로 확인해서 정하고 결과 절에 적는다.
+- 여전히 다음 PR의 몫: 이 예외를 재시도 가능한 HTTP 응답으로 바꾸는 매핑(지금은 endpoint가 없다)과 인가가 없다는 알려진 빈틈의 기록. `idle_in_transaction_session_timeout`처럼 세션 전체에 거는 값은 운영 배포 설정을 다루는 PR이 정한다.
+
 ## 스키마 변경 검토
 [도메인 모델](../wiki/domain-model.md) 4.7절 질문의 답이다.
 
@@ -45,7 +52,7 @@
 ## 제외
 - `POST` endpoint, 요청·응답 DTO, REST Docs의 `data.status` 설명. 다음 PR `order-request-checkout-api`.
 - Event Publication Registry. `payment` PR 전에 도입한다.
-- 잠금 대기 시간 제한. PostgreSQL 기본값은 무제한 대기다. 트랜잭션이 짧고 같은 주문에 한정된 경합이라 지금은 두지 않는다. provider 호출처럼 긴 작업을 주문 트랜잭션 안에서 하지 않는다는 기존 원칙이 전제다.
+- 잠금 대기 초과를 HTTP 응답으로 바꾸는 매핑. 대기 제한 자체는 범위 조정 2로 이 PR에 넣었다. provider 호출처럼 긴 작업을 주문 트랜잭션 안에서 하지 않는다는 기존 원칙은 그대로 전제다.
 - `CreateOrder`의 같은 키 동시 요청 빈틈. 주문 행이 아직 없어서 행 잠금으로 풀 수 없는 별개의 문제다.
 - 요청한 단말이 주문의 단말·매장과 같은지 확인하는 인가. 단말 인증이 아직 없다.
 
@@ -78,6 +85,7 @@
 6. checkout을 요청한 주문에 같은 키와 같은 payload로 `facade.create`를 다시 부르면 같은 `orderId`와 `CHECKOUT_REQUESTED`를 돌려준다.
 7. 도메인: `requestCheckout`이 만든 `Checkout`의 `id`는 식별자 생성기의 첫 값이고 이벤트의 `eventId`는 둘째 값이다.
 8. 기존 테스트 64개가 그대로 통과한다(7에 맞춰 고친 도메인 테스트 포함).
+9. (범위 조정 2) 한 트랜잭션이 `requestCheckout`을 부르고 커밋하지 않은 채 3초를 넘기면 겹친 요청은 `PessimisticLockingFailureException` 계열 예외로 실패한다. 앞 트랜잭션이 커밋한 뒤 `t_order_checkout`의 행은 하나이고, 다시 요청하면 기존 결과를 받는다.
 
 ## 검증
 - 도메인: `./gradlew test --tests 'com.resilientpos.order.internal.domain.OrderTest'`
@@ -95,7 +103,7 @@
 예상 규모는 구현 약 150줄, 테스트 약 170줄, 문서 약 170줄로 총 490줄·16파일 내외다. 경고 한도(600줄·20파일) 안이다. 초과하면 동시성 테스트(인수 조건 5)와 잠금 조회를 후속 PR로 옮기지 않고 wiki의 도메인 모델 갱신을 줄인다. 잠금은 이 PR의 정합성 답이라 나누지 않는다. 후속은 `order-request-checkout-api`(endpoint, 요청·응답 DTO, REST Docs, `ORDER_NOT_FOUND`의 404 문서화, `data.status` 설명)다.
 
 다음 PR이 정할 것:
-- 잠금 대기 시간 제한. 후보는 Hikari `connection-init-sql`의 `set lock_timeout`이나 JDBC URL 옵션이고, 초과했을 때의 응답(재시도 가능한 오류 코드)을 함께 정한다. `idle_in_transaction_session_timeout`도 같이 본다.
+- 잠금 대기 초과(`PessimisticLockingFailureException` 계열)를 재시도 가능한 오류 응답으로 바꾸는 매핑과 오류 코드.
 - 인가가 없다는 점을 [현재 상태](../wiki/current-state.md)의 알려진 빈틈에 적는다. endpoint가 열리면 `orderId`만 알아도 다른 매장의 주문을 전이시킬 수 있다.
 
 ## TDD 검증 기록
