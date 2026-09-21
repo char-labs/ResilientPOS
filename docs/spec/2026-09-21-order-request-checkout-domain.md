@@ -14,7 +14,7 @@
 - 이벤트 `OrderPaymentRequested`(모듈 루트, `OrderEvent`): `eventId`, `occurredAt`, `orderId`, `storeId`, `terminalId`, `checkoutNo`, `amount`. `payment`가 attempt를 만들 때 필요한 값이고 `(orderId, checkoutNo)`가 그쪽 멱등 판정의 근거가 된다.
 - 0원 주문: 합계가 0이어도 똑같이 전이하고 0원 `Checkout`과 이벤트를 남긴다. 전액 할인·프로모션 주문이 계산대에서 거절되지 않아야 하고, 주문·결제·영수증 조회가 같은 경로로 보여야 한다. PG 호출을 건너뛰는 판단은 `payment`가 맡는다. `payment` PR은 0원 attempt를 provider 호출 없이 승인으로 기록하고 `PaymentApproved`를 내야 한다.
 - 정합성 불변식: checkout 이후 금액·통화는 바뀌지 않는다. 지금은 line을 바꾸는 명령이 없어서 `Checkout.amount`와 `total`이 어긋날 경로가 없다. `ChangeOrderLine`을 넣는 PR이 `OPEN`에서만 허용하도록 막는다.
-- `Order.restore`에 `checkouts` 인자를 더한다. `OrderEntity.toDomain()`은 다음 PR이 `t_order_checkout`을 읽을 때까지 빈 목록을 넘긴다. 이 PR에는 `CHECKOUT_REQUESTED` 주문을 저장하는 경로(Facade)가 없어서 빈 목록이 틀린 값이 되는 경우가 없다.
+- `Order.restore`에 `checkouts` 인자를 더한다. 기존 통합 테스트의 helper `withLines`가 `restore`를 직접 부르므로 인자만 맞춘다(범위 조정, 2026-09-21: 컴파일 오류로 발견). `OrderEntity.toDomain()`은 다음 PR이 `t_order_checkout`을 읽을 때까지 빈 목록을 넘긴다. 이 PR에는 `CHECKOUT_REQUESTED` 주문을 저장하는 경로(Facade)가 없어서 빈 목록이 틀린 값이 되는 경우가 없다.
 - 실패·재시도·복구, 관측성: 이 PR은 저장·외부 호출·트랜잭션이 없어 해당 없다. 재시도 판정의 도메인 쪽 절반(위 두 번째 분기)만 여기에 있다.
 
 ### 합의한 결정 (2026-09-21 grill)
@@ -41,6 +41,7 @@
 - src/main/kotlin/com/resilientpos/order/internal/domain/Checkout.kt
 - src/main/kotlin/com/resilientpos/order/internal/adapter/persistence/command/OrderEntity.kt
 - src/test/kotlin/com/resilientpos/order/internal/domain/OrderTest.kt
+- src/test/kotlin/com/resilientpos/order/internal/application/OrderCommandFacadeIntegrationTest.kt
 - docs/spec/2026-09-21-order-request-checkout-domain.md
 - docs/wiki/current-state.md
 - docs/wiki/domain-model.md
