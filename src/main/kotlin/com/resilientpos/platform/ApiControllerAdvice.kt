@@ -3,6 +3,7 @@ package com.resilientpos.platform
 import com.resilientpos.foundation.DomainErrorKind
 import com.resilientpos.foundation.DomainException
 import org.slf4j.LoggerFactory
+import org.springframework.dao.ConcurrencyFailureException
 import org.springframework.http.HttpHeaders
 import org.springframework.http.HttpStatus
 import org.springframework.http.HttpStatusCode
@@ -42,6 +43,13 @@ class ApiControllerAdvice : ResponseEntityExceptionHandler() {
         log.warn("errorCode={} : {}", e.code, e.message)
         return ResponseEntity.status(e.kind.toHttpStatus()).body(ApiResponse.fail(ErrorResponse(e.code, e.message)))
     }
+
+    /**
+     * 같은 대상에 요청이 겹쳐서 난 잠금 대기 초과와 버전 충돌. 요청은 올바르고 다시 보내면 되므로 서버 오류로 집계하지 않는다.
+     */
+    @ExceptionHandler(ConcurrencyFailureException::class)
+    fun handleConcurrency(e: ConcurrencyFailureException): ResponseEntity<ApiResponse<Nothing>> =
+        ResponseEntity.status(ErrorType.CONCURRENT_REQUEST.status).body(failBody(ErrorType.CONCURRENT_REQUEST, e))
 
     @ExceptionHandler(Exception::class)
     fun handleUnexpected(e: Exception): ResponseEntity<ApiResponse<Nothing>> =
