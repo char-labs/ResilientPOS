@@ -366,6 +366,8 @@
 - 결정: 검사 순서를 뒤집어 값을 펴기 전에 메타데이터로만 판정한다. `precision()`과 `scale()`은 `BigDecimal`이 이미 들고 있는 정수 두 개라 입력 크기와 무관하다. 뒤따르는 0은 `stripTrailingZeros()`로 떼는데, 이 비용은 유효 자릿수에 비례하고 값을 펴지 않는다.
 - 결정: 표현할 수 없는 통화는 값을 만들지 않고 거절한다. 판정을 `init`과 `of`가 같은 함수로 공유해 생성자·`copy`·`zero`도 함께 막힌다. `of`만 막으면 `copy`가 우회한다.
 - 결정: 요청 DTO가 `BigDecimal`을 그대로 넘기게 `of(BigDecimal, Currency)` 오버로드를 더했다. `toPlainString()` 왕복이 사라진다.
+- 발견: 자릿수 계산이 `Int`로는 넘친다. `1E+2147483647`은 `precision - scale`이 `Int.MIN_VALUE`로 넘쳐 금액 상한 검사를 통과하고, 13자라 Jackson의 1000자 제한도 지나간다. 이 상태의 첫 구현은 `setScale`의 `ArithmeticException`이 새어 500이었고 main은 400이었으므로 회귀였다. 자릿수 계산을 `Long`으로 바꿔 닫았다. 이 입력군의 `errorCode`는 `INVALID_MONEY_SCALE`에서 `INVALID_MONEY_AMOUNT`로 바뀐다. 둘 다 400이고 바뀐 쪽이 의미에 맞는다.
+- 반영: 이전 구현과 판정이 갈리는 입력이 있는지 경계값 33종 × 통화 자릿수 3종과 무작위 30만 건으로 대조했다. 위 지수 입력군을 빼면 불일치가 없다.
 - 범위 밖: 매장이 어떤 통화로 영업할지 정하는 allow-list. 이 PR은 `Money`가 표현할 수 없는 통화만 거절한다. [현재 상태](current-state.md)의 알려진 빈틈에 적었다.
 - 범위 밖: line 개수·요청 본문 크기의 상한, 커넥션·쿼리·트랜잭션 타임아웃, 로그 속성. 같은 감사에서 나왔고 목표가 달라 뒤따르는 PR에서 닫는다.
 - 갱신: [현재 상태](current-state.md).

@@ -86,3 +86,9 @@ RED는 두 단계로 관측했다. 새 입구 `of(BigDecimal, Currency)`는 존�
 `stripTrailingZeros()`가 비싸지는 입력이 도달 가능한지 확인했다. 자릿수가 실제로 적힌 리터럴에서는 비싸다 — 100만 자리에 1.4초가 걸린다. 그러나 **Jackson이 숫자 길이를 1000자로 제한한다**(`StreamReadConstraints.maxNumberLength`, 리터럴과 문자열 양쪽 모두 `StreamConstraintsException`으로 거절). 1000자리에서 `stripTrailingZeros()`는 0ms였다. 이 상한을 올리는 변경은 이 비용을 되살리므로 함께 본다.
 
 이전 구현과 판정이 갈리는 입력이 있는지 따로 대조했다. 경계값 33종(`999999999999999`, `1000000000000000`, `0E+10`, `1000.0000`, `0.00`, 음수, `1E+15`/`1E+16` 등) × 통화 자릿수 3종과 무작위 30만 건에서 **불일치 0건**이다. 새 순서가 기존 `MAX_INTEGER_DIGITS` 계약과 같은 집합을 거절한다.
+
+이 대조가 처음에는 결함을 덮었다. 지수를 극단으로 키운 입력을 넣지 않았기 때문이다. **`precision() - scale()`을 `Int`로 계산하면 넘친다.** `1E+2147483647`은 `precision = 1`, `scale = -2147483647`이라 차가 `Int.MIN_VALUE`로 넘쳐 상한 검사를 통과한다. 13자짜리 입력이라 Jackson의 1000자 제한도 지나간다. 그 상태로 작성했던 첫 구현은 뒤이은 `setScale`에서 `ArithmeticException`이 도메인 밖으로 새어 **500**이 됐다. main은 `setScale`을 `try/catch`로 감싸고 있어 같은 입력에 400을 돌려주므로, 이대로 두면 회귀였다. 자릿수 계산을 `Long`으로 바꿔(`BigDecimal.integerDigits()`) 닫고 회귀 테스트를 남겼다.
+
+그 결과 이전 구현과 갈리는 입력이 이 군(群) 하나 남는다. 지수가 `Int` 범위를 넘게 만드는 입력에서 **main은 `INVALID_MONEY_SCALE`, 이 PR은 `INVALID_MONEY_AMOUNT`**를 돌려준다. 둘 다 400이고, 바뀐 쪽이 의미에 맞는다 — scale이 문제가 아니라 금액이 저장 범위를 넘은 것이다. main의 코드는 삼킨 `ArithmeticException`을 scale 오류로 뭉뚱그리고 있었다.
+
+두 가드를 지난 뒤 `setScale`이 실패할 수 있는지도 확인했다. 첫 가드가 `minimal.scale() <= digits`를 보장하므로 남는 변환은 scale을 늘리는 쪽뿐이고, 이는 0을 붙이는 일이라 `UNNECESSARY`로도 실패하지 않는다. main에 있던 `try/catch`는 그래서 뺐다.

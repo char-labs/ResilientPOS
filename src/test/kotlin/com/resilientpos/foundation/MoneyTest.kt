@@ -144,6 +144,19 @@ class MoneyTest {
     }
 
     @Test
+    fun `자릿수 계산이 int를 넘는 지수도 도메인 예외로 거절한다`() {
+        // precision - scale을 int로 계산하면 1 - (-2147483647)이 Int.MIN_VALUE로 넘쳐 상한 검사를 통과한다.
+        // 13자짜리 입력이라 Jackson의 숫자 길이 제한(1000자)도 그대로 지나간다.
+        for (raw in listOf("1E+2147483647", "-1E+2147483647", "9E+2147483640")) {
+            val failure = assertFailsWith<DomainException>(raw) { Money.of(BigDecimal(raw), krw) }
+
+            assertEquals("INVALID_MONEY_AMOUNT", failure.code, raw)
+        }
+
+        assertEquals("INVALID_MONEY_SCALE", assertFailsWith<DomainException> { Money.of(BigDecimal("1E-2147483647"), krw) }.code)
+    }
+
+    @Test
     fun `소수 자릿수가 없는 통화로는 금액을 만들지 않는다`() {
         // XAU·XDR·XXX는 defaultFractionDigits가 -1이다. canonical scale로 쓰면 금액이 10 단위로 반올림된다.
         for (code in listOf("XAU", "XDR", "XXX")) {

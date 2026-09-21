@@ -17,8 +17,7 @@ data class Money(val amount: BigDecimal, val currency: Currency) {
         if (amount.scale() != fractionDigitsOf(currency)) {
             throw DomainException(INVALID_MONEY_SCALE, "통화 표준 자릿수를 넘는 금액입니다")
         }
-        // 정수부 자릿수만 센다. BigDecimal의 메타데이터만 읽으므로 값을 문자열로 펴지 않는다.
-        if (amount.precision() - amount.scale() > MAX_INTEGER_DIGITS) {
+        if (amount.integerDigits() > MAX_INTEGER_DIGITS) {
             throw DomainException(INVALID_MONEY_AMOUNT, "저장할 수 있는 금액 범위를 넘습니다")
         }
     }
@@ -68,9 +67,11 @@ data class Money(val amount: BigDecimal, val currency: Currency) {
             if (minimal.scale() > digits) {
                 throw DomainException(INVALID_MONEY_SCALE, "통화 표준 자릿수를 넘는 금액입니다")
             }
-            if (minimal.precision() - minimal.scale() > MAX_INTEGER_DIGITS) {
+            if (minimal.integerDigits() > MAX_INTEGER_DIGITS) {
                 throw DomainException(INVALID_MONEY_AMOUNT, "저장할 수 있는 금액 범위를 넘습니다")
             }
+            // 두 검사를 지난 값은 scale이 [정수부 상한의 음수, digits] 안이라 scale을 늘리는 변환만 남는다.
+            // 0을 붙이는 일이라 값이 커지지 않고 UNNECESSARY로도 실패하지 않는다.
             return Money(minimal.setScale(digits, RoundingMode.UNNECESSARY), currency)
         }
 
@@ -82,6 +83,14 @@ data class Money(val amount: BigDecimal, val currency: Currency) {
             }
             return of(parsed, currency)
         }
+
+        /**
+         * 정수부 자릿수. `BigDecimal`의 메타데이터만 읽으므로 값을 문자열로 펴지 않는다.
+         * `Long`으로 세는 이유는 `scale`이 `Int.MIN_VALUE`까지 가기 때문이다. `1E+2147483647`은 13자라
+         * 어떤 길이 제한도 지나가는데, `precision - scale`을 `Int`로 계산하면 `Int.MIN_VALUE`로 넘쳐
+         * 상한 검사를 통과해 버린다. 그다음 `setScale`이 `ArithmeticException`을 던져 도메인 밖으로 샌다.
+         */
+        private fun BigDecimal.integerDigits(): Long = precision().toLong() - scale().toLong()
 
         /**
          * `Currency`는 금액 개념이 없는 코드(`XAU`, `XDR`, `XXX`)에 `-1`을 돌려준다. 그 값을 canonical scale로
