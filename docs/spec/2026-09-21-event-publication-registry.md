@@ -18,9 +18,16 @@
 
 ### 합의한 결정 (2026-09-21 grill)
 - 완료 처리는 UPDATE다. 초기에 "이 이벤트가 언제 발행되고 언제 처리됐는지"를 DB에서 바로 확인할 수 있다. 테이블이 계속 자라므로 오래된 완료 행을 지우는 정리 작업이 필요해지고, 이벤트 양이 실제로 생기는 `payment` 이후에 정한다. DELETE는 처리 이력이 사라지고 ARCHIVE는 테이블이 하나 더 필요해서 버렸다.
-- 이 PR은 기반만 넣는다. 실제 리스너, 재전송 정책, 비동기 실행(`@EnableAsync`)은 `payment` PR이 정한다.
+- 이 PR은 기반만 넣는다. 실제 리스너, 재전송 정책, 리스너를 실행하는 스레드 풀의 조정은 `payment` PR이 정한다.
 - 테이블 이름은 프레임워크가 정한 `event_publication` 그대로다. `t_` 접두어 규칙의 예외다. 엔티티가 라이브러리 안에 있어서 이름을 바꿀 수 없고, 별도 outbox 테이블을 만들지 않고 Modulith의 것을 그대로 쓴다는 기존 결정([도메인 모델](../wiki/domain-model.md) 4.3절)을 따른다.
 - 재기동 시 미완료 이벤트 재발행은 켜지 않는다. 인스턴스가 여럿이면 같은 이벤트를 여러 인스턴스가 다시 보낸다.
+
+### 범위 조정 (2026-09-21, 개발 중 확인한 사실로 서술을 고친다)
+처음 spec은 "비동기를 켜지 않으면 리스너가 커밋 뒤에 발행한 스레드에서 실행된다"고 적었다. 틀렸다. 테스트용 리스너가 `task-1` 같은 별도 스레드에서 실행되는 것을 보고 Modulith 2.1.1의 jar를 확인했다.
+- `EventPublicationAutoConfiguration`의 `AsyncEnablingConfiguration`이 `@EnableAsync`를 켠다(다른 비동기 구성이 없을 때). 그래서 `@ApplicationModuleListener`는 Spring Boot의 기본 task executor에서 비동기로 실행된다. 우리 코드에 `@EnableAsync`가 없어도 그렇다.
+- 같은 자동 구성의 `AsyncPropertiesDefaulter`가 `spring.task.execution.shutdown.await-termination`을 켜고 대기 시간을 2초로 둔다. 종료할 때 진행 중인 리스너를 2초 기다린다는 뜻이다.
+- 영향: 업무 요청의 응답은 리스너를 기다리지 않는다. 리스너의 성공·실패는 요청 스레드 밖에서 기록된다. 그래서 검증 테스트는 발행 기록의 상태가 바뀔 때까지 기다린 뒤 확인한다. 종료 대기 2초 안에 끝나지 못한 리스너의 이벤트는 미완료 기록으로 남고, 다시 보내는 절차가 없는 동안은 그대로 남는다(제외 참고).
+- `EventSerializer`가 든 `spring-modulith-events-core`는 starter에서 runtime 범위라 테스트가 컴파일되지 않았다. 테스트 범위 의존성 한 줄을 더했다.
 
 ## 스키마 변경 검토
 [도메인 모델](../wiki/domain-model.md) 4.7절 질문의 답이다. 이 테이블은 프레임워크가 소유하고 컬럼을 읽고 쓰는 코드도 Modulith 안에 있다.
@@ -38,7 +45,7 @@
 ## 제외
 - 실제 리스너와 `payment` 모듈. 다음 작업이다.
 - 미완료 이벤트 재전송(주기, 재기동 시 재발행, 다중 인스턴스 중복 방지)과 완료 행 정리 작업.
-- 비동기 리스너 실행(`@EnableAsync`)과 스레드 풀. `@ApplicationModuleListener`는 `@Async`를 포함하지만 비동기를 켜지 않으면 커밋 뒤에 발행한 스레드에서 실행된다. 실제 리스너가 하는 일(provider 호출 여부)을 보고 정한다.
+- 리스너를 실행하는 스레드 풀의 조정(크기, 큐, 거절 정책)과 종료 대기 시간. 아래 범위 조정에 적은 대로 비동기 실행 자체는 Modulith가 켠다. 실제 리스너가 하는 일(provider 호출 여부)을 보고 정한다.
 - Kafka로의 외부 전달(`@Externalized`)과 `spring-modulith-starter-insight`.
 - `OrderCreated`를 받는 리스너. 지금은 받는 곳이 없어서 기록되지 않는다.
 
