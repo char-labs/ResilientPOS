@@ -65,7 +65,7 @@ class OrderControllerTest(
                     responseFields(
                         fieldWithPath("result").type(JsonFieldType.STRING).description("SUCCESS 또는 FAIL"),
                         fieldWithPath("data.orderId").type(JsonFieldType.STRING).description("생성된 주문 ID"),
-                        fieldWithPath("data.status").type(JsonFieldType.STRING).description("주문 상태"),
+                        fieldWithPath("data.status").type(JsonFieldType.STRING).description("주문의 현재 상태. 생성 직후에는 OPEN이고 checkout을 요청한 주문의 재시도면 CHECKOUT_REQUESTED"),
                         fieldWithPath("error").type(JsonFieldType.NULL).description("성공 응답에서는 null"),
                     ),
                 ),

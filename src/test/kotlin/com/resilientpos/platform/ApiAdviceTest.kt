@@ -8,6 +8,8 @@ import org.hamcrest.Matchers.containsString
 import org.hamcrest.Matchers.not
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest
+import org.springframework.dao.CannotAcquireLockException
+import org.springframework.dao.OptimisticLockingFailureException
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.get
 import org.springframework.test.web.servlet.post
@@ -50,6 +52,19 @@ class ApiAdviceTest(@Autowired private val mockMvc: MockMvc) {
             jsonPath("$.data") { value(null) }
             jsonPath("$.error.errorCode") { value("INTERNAL_ERROR") }
             jsonPath("$.error.message") { value(not(containsString(SECRET))) }
+        }
+    }
+
+    @Test
+    fun `잠금 대기 초과와 버전 충돌은 메시지를 노출하지 않는 409 CONCURRENT_REQUEST다`() {
+        listOf("pessimistic", "optimistic").forEach { kind ->
+            mockMvc.get("/test-advice/concurrency/$kind").andExpect {
+                status { isEqualTo(409) }
+                jsonPath("$.result") { value("FAIL") }
+                jsonPath("$.data") { value(null) }
+                jsonPath("$.error.errorCode") { value("CONCURRENT_REQUEST") }
+                jsonPath("$.error.message") { value(not(containsString(SECRET))) }
+            }
         }
     }
 
@@ -131,6 +146,12 @@ class ApiAdviceTestController {
 
     @GetMapping("/boom")
     fun boom(): Sample = throw IllegalStateException(ApiAdviceTest.SECRET)
+
+    @GetMapping("/concurrency/{kind}")
+    fun concurrency(@PathVariable kind: String): Sample = throw when (kind) {
+        "pessimistic" -> CannotAcquireLockException(ApiAdviceTest.SECRET)
+        else -> OptimisticLockingFailureException(ApiAdviceTest.SECRET)
+    }
 
     @GetMapping("/domain")
     fun domain(): Sample = throw DomainException("EMPTY_ORDER", "주문에는 line이 1개 이상 필요합니다")
