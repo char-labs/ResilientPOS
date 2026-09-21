@@ -1,0 +1,81 @@
+# PR spec: checkout 요청 endpoint POST /v1/orders/{orderId}/checkout
+
+## 목적
+`OrderCommandFacade.requestCheckout`은 있지만(#32) 단말이 부를 HTTP endpoint가 없다. endpoint와 REST Docs를 더하고, 같은 주문에 요청이 겹쳤을 때 나는 경합 예외를 단말이 재시도해도 되는 응답으로 바꾼다. `RequestCheckout` 세 PR의 마지막이다.
+
+## 범위
+- 소유 모듈: `order`(endpoint와 응답 DTO), `platform`(경합 예외의 공통 응답).
+- endpoint: `POST /v1/orders/{orderId}/checkout`. 요청 본문이 없다. `OrderController`가 경로의 `orderId`를 `RequestCheckoutCommand`로 옮겨 Facade를 부른다.
+- 성공 응답: 200과 `data{orderId, status, checkoutNo, amount, currency}`. `amount`는 주문 통화 기준 decimal 문자열이고(`POST /v1/orders`의 `unitPrice`와 같은 표기) `currency`는 ISO 4217 코드다. 첫 요청과 재요청이 같은 200과 같은 본문이다.
+- 오류 응답:
+  - 없는 주문은 `404 ORDER_NOT_FOUND`다. `DomainErrorKind.NOT_FOUND`의 기존 매핑을 그대로 쓴다.
+  - `orderId`가 UUID 형식이 아니면 `400 BAD_REQUEST`이고 Facade를 부르지 않는다.
+  - 경합 예외는 `409 CONCURRENT_REQUEST`다. Spring의 `ConcurrencyFailureException` 계열(잠금 대기 초과의 `PessimisticLockingFailureException`, 버전 충돌의 `OptimisticLockingFailureException`)을 `ApiControllerAdvice`의 handler 하나가 받는다. `ErrorType`에 `CONCURRENT_REQUEST`를 더한다. 메시지는 고정 문구이고 예외 메시지는 로그에만 남는다. 로그 수준은 WARN이다.
+- 관측성: 경합 응답은 기존 `failBody` 경로로 `errorCode=CONCURRENT_REQUEST`와 예외를 남긴다. 5xx가 아니라서 서버 오류율 지표에 섞이지 않는다.
+- 실패·재시도·복구: `409 CONCURRENT_REQUEST`를 받은 단말은 같은 요청을 다시 보낸다. `RequestCheckout`은 상태로 멱등을 판정하므로 그때는 기존 결과를 받는다.
+- REST Docs: 성공, `ORDER_NOT_FOUND`, `CONCURRENT_REQUEST`, 형식이 틀린 `orderId`를 문서화한다. `POST /v1/orders`의 `data.status` 설명을 "주문의 현재 상태"로 고친다(#32에서 checkout을 요청한 주문의 생성 재시도가 `CHECKOUT_REQUESTED`를 받는 것을 계약으로 삼았다).
+- 인가가 없다는 점을 [현재 상태](../wiki/current-state.md)의 알려진 빈틈에 적는다.
+
+### 합의한 결정 (2026-09-21 grill)
+- 경로는 주문에 대한 행위를 하위 경로로 둔 `POST /v1/orders/{orderId}/checkout`이고 성공은 첫 요청과 재요청 모두 200이다. 회차를 조회하는 endpoint가 없고 주문의 상태를 바꾸는 요청이라 201보다 200이 맞다. 멱등 재시도가 "또 만들었다"로 읽히지 않는다.
+- 경합 예외는 `409 CONCURRENT_REQUEST`다. 원인이 단말의 중복·동시 요청이라 4xx가 맞다. `503`과 `Retry-After`는 단말의 단순 중복 요청까지 5xx로 집계되고 프록시가 인스턴스 이상으로 해석할 수 있어 버렸다. 500으로 두는 안은 단말이 재시도해도 되는 오류와 서버 오류를 구분할 수 없어 버렸다.
+
+## 제외
+- 인가(요청한 단말이 주문의 단말·매장과 같은지 확인). 단말 인증이 아직 없다. `orderId`만 알면 다른 매장의 주문을 전이시킬 수 있다는 점을 알려진 빈틈으로 적는다.
+- unique 제약 위반(`DataIntegrityViolationException`)의 매핑. 경합 예외 계열이 아니고 어떤 제약인지에 따라 뜻이 달라서 일반 매핑하지 않는다. `POST /v1/orders`의 같은 키 동시 요청은 계속 500이다.
+- `Retry-After` 헤더와 재시도 간격 안내. 단말의 재시도 정책이 정해지면 다룬다.
+- Asciidoctor HTML 빌드. 스니펫까지만 만든다.
+- Event Publication Registry, `payment` 모듈. 다음 작업이다.
+
+## 관련 문서
+없음.
+
+## 변경 경로
+- src/main/kotlin/com/resilientpos/order/internal/adapter/web/**
+- src/main/kotlin/com/resilientpos/platform/ApiControllerAdvice.kt
+- src/main/kotlin/com/resilientpos/platform/ErrorType.kt
+- src/test/kotlin/com/resilientpos/order/internal/adapter/web/**
+- src/test/kotlin/com/resilientpos/platform/ApiAdviceTest.kt
+- docs/spec/2026-09-21-order-request-checkout-api.md
+- docs/wiki/current-state.md
+- docs/wiki/changes.md
+
+## 인수 조건
+1. `POST /v1/orders/{orderId}/checkout`은 경로의 `orderId`를 `RequestCheckoutCommand`로 옮겨 Facade를 부르고 200과 `data.orderId`·`data.status`·`data.checkoutNo`·`data.amount`(decimal 문자열)·`data.currency`를 돌려준다.
+2. Facade가 `ORDER_NOT_FOUND`(`NOT_FOUND`)를 던지면 404이고 `error.errorCode`가 `ORDER_NOT_FOUND`다.
+3. Facade가 `PessimisticLockingFailureException` 계열을 던지면 409이고 `error.errorCode`가 `CONCURRENT_REQUEST`이며 `error.message`에 예외 메시지가 나가지 않는다.
+4. `orderId`가 UUID 형식이 아니면 `400 BAD_REQUEST`이고 Facade를 부르지 않는다.
+5. advice: `OptimisticLockingFailureException` 계열도 `409 CONCURRENT_REQUEST`이고, 처리하지 못한 다른 예외는 계속 `500 INTERNAL_ERROR`다.
+6. 실제 Facade와 PostgreSQL까지 연결한 통합 테스트에서 주문을 만든 뒤 checkout을 요청하면 200과 `CHECKOUT_REQUESTED`, 주문 합계 금액을 받고 `t_order.status`가 `CHECKOUT_REQUESTED`다. 같은 요청을 다시 보내면 같은 본문이고 `t_order_checkout`의 행이 하나다. 그 뒤 같은 본문으로 `POST /v1/orders`를 다시 보내면 201과 `data.status`가 `CHECKOUT_REQUESTED`다.
+7. 통합 테스트에서 없는 주문의 checkout 요청은 `404 ORDER_NOT_FOUND`다.
+8. 1~4의 요청·응답으로 REST Docs 스니펫이 `build/generated-snippets`에 생긴다.
+9. 기존 테스트 72개가 그대로 통과한다.
+
+## 검증
+- 웹 슬라이스: `./gradlew test --tests 'com.resilientpos.order.internal.adapter.web.*'`
+- advice: `./gradlew test --tests 'com.resilientpos.platform.ApiAdviceTest'`
+- 전체 회귀: `./gradlew test` (Docker 필요)
+- 하네스: `python3 scripts/check_pr.py --base origin/main --worktree`, 제출 전 `--worktree` 없이 한 번 더.
+- 정상 시나리오: 인수 조건 1·6. 실패 시나리오: 2·3·4·5·7.
+
+## Wiki 영향
+- [현재 상태](../wiki/current-state.md): checkout endpoint와 응답 모양, `409 CONCURRENT_REQUEST` 매핑과 `ErrorType` 항목 수, 알려진 빈틈(인가 없음, unique 위반은 계속 500), 테스트 수를 반영한다. "checkout을 요청하는 endpoint는 아직 없다"와 "이 예외를 HTTP 응답으로 바꾸는 매핑은 아직 없다"를 지운다.
+- [변경 기록](../wiki/changes.md): 이 spec 링크와 결정을 적는다.
+- [도메인 모델](../wiki/domain-model.md): 무영향. 용어·aggregate 경계·스키마가 바뀌지 않는다.
+
+## 분할 계획
+예상 규모는 구현 약 50줄, 테스트 약 250줄, 문서 약 150줄로 총 450줄·10파일 내외다. 경고 한도(600줄·20파일) 안이다. 초과하면 advice의 `OptimisticLockingFailureException` 테스트(인수 조건 5)를 줄이지 않고 wiki 서술을 줄인다. 이 PR로 `RequestCheckout`이 끝난다. 다음 작업은 Event Publication Registry 도입과 `payment` 모듈이다.
+
+## TDD 검증 기록
+
+| 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
+|---|---|---|---|
+| 인수 조건 5: advice의 경합 예외 매핑 | 미실행 | 미실행 | 미실행 |
+| 인수 조건 1: checkout 요청 성공 응답과 문서 | 미실행 | 미실행 | 미실행 |
+| 인수 조건 2: `ORDER_NOT_FOUND` 404와 문서 | 미실행 | 미실행 | 미실행 |
+| 인수 조건 3: `CONCURRENT_REQUEST` 409와 문서 | 미실행 | 미실행 | 미실행 |
+| 인수 조건 4: 형식이 틀린 `orderId` 400과 문서 | 미실행 | 미실행 | 미실행 |
+| 인수 조건 6·7: HTTP 통합 | 미실행 | 미실행 | 미실행 |
+
+## 결과
+개발 전 작성. 개발 후 실행 결과와 변경 이유를 추가한다.
