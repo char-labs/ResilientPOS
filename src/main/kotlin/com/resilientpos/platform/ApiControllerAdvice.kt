@@ -2,6 +2,7 @@ package com.resilientpos.platform
 
 import com.resilientpos.foundation.DomainErrorKind
 import com.resilientpos.foundation.DomainException
+import jakarta.servlet.http.HttpServletRequest
 import org.slf4j.LoggerFactory
 import org.springframework.dao.ConcurrencyFailureException
 import org.springframework.http.HttpHeaders
@@ -10,6 +11,7 @@ import org.springframework.http.HttpStatusCode
 import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.ExceptionHandler
 import org.springframework.web.bind.annotation.RestControllerAdvice
+import org.springframework.web.context.request.ServletWebRequest
 import org.springframework.web.context.request.WebRequest
 import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExceptionHandler
 
@@ -34,13 +36,13 @@ class ApiControllerAdvice : ResponseEntityExceptionHandler() {
             statusCode.is4xxClientError -> ErrorType.BAD_REQUEST
             else -> ErrorType.INTERNAL_ERROR
         }
-        return super.handleExceptionInternal(ex, failBody(errorType, ex), headers, statusCode, request)
+        return super.handleExceptionInternal(ex, failBody(errorType, ex, request.describe()), headers, statusCode, request)
     }
 
     /** 도메인 규칙 위반은 예외의 `code`와 응답용 `message`를 그대로 내보내고 `kind`가 상태 코드를 정한다. */
     @ExceptionHandler(DomainException::class)
-    fun handleDomain(e: DomainException): ResponseEntity<ApiResponse<Nothing>> {
-        log.warn("errorCode={} : {}", e.code, e.message)
+    fun handleDomain(e: DomainException, request: HttpServletRequest): ResponseEntity<ApiResponse<Nothing>> {
+        log.warn("{} errorCode={} : {}", request.describe(), e.code, e.message)
         return ResponseEntity.status(e.kind.toHttpStatus()).body(ApiResponse.fail(ErrorResponse(e.code, e.message)))
     }
 
@@ -49,12 +51,14 @@ class ApiControllerAdvice : ResponseEntityExceptionHandler() {
      * 다시 보내도 되는지는 endpoint가 멱등인지에 달려 있어서 문구로 약속하지 않는다.
      */
     @ExceptionHandler(ConcurrencyFailureException::class)
-    fun handleConcurrency(e: ConcurrencyFailureException): ResponseEntity<ApiResponse<Nothing>> =
-        ResponseEntity.status(ErrorType.CONCURRENT_REQUEST.status).body(failBody(ErrorType.CONCURRENT_REQUEST, e))
+    fun handleConcurrency(e: ConcurrencyFailureException, request: HttpServletRequest): ResponseEntity<ApiResponse<Nothing>> =
+        ResponseEntity.status(ErrorType.CONCURRENT_REQUEST.status)
+            .body(failBody(ErrorType.CONCURRENT_REQUEST, e, request.describe()))
 
     @ExceptionHandler(Exception::class)
-    fun handleUnexpected(e: Exception): ResponseEntity<ApiResponse<Nothing>> =
-        ResponseEntity.status(ErrorType.INTERNAL_ERROR.status).body(failBody(ErrorType.INTERNAL_ERROR, e))
+    fun handleUnexpected(e: Exception, request: HttpServletRequest): ResponseEntity<ApiResponse<Nothing>> =
+        ResponseEntity.status(ErrorType.INTERNAL_ERROR.status)
+            .body(failBody(ErrorType.INTERNAL_ERROR, e, request.describe()))
 
     // else를 두지 않는다. `DomainErrorKind`에 항목을 더하고 매핑을 빠뜨리면 컴파일되지 않는다.
     private fun DomainErrorKind.toHttpStatus(): HttpStatus = when (this) {
@@ -64,10 +68,25 @@ class ApiControllerAdvice : ResponseEntityExceptionHandler() {
         DomainErrorKind.UNPROCESSABLE -> HttpStatus.UNPROCESSABLE_CONTENT
     }
 
-    private fun failBody(errorType: ErrorType, e: Exception): ApiResponse<Nothing> {
-        log.atLevel(errorType.level).setCause(e).log("errorCode={} : {}", errorType.name, e.message)
+    private fun failBody(errorType: ErrorType, e: Exception, request: String): ApiResponse<Nothing> {
+        log.atLevel(errorType.level).setCause(e).log("{} errorCode={} : {}", request, errorType.name, e.message)
         return ApiResponse.fail(ErrorResponse(errorType.name, errorType.message))
     }
+
+    /**
+     * 로그 한 줄로 요청을 특정하기 위한 최소 정보. 경로 변수가 URI에 그대로 있어서
+     * `/v1/orders/{orderId}/checkout`의 주문 식별자는 URI만으로 드러난다. advice가 endpoint별로
+     * 식별자를 뽑으려 들면 endpoint가 늘 때마다 여기를 고쳐야 한다.
+     * 쿼리 문자열은 넣지 않는다. 개인정보가 로그로 흘러 들어가는 경로가 된다.
+     */
+    private fun HttpServletRequest.describe(): String = "method=$method uri=$requestURI"
+
+    /**
+     * MVC는 여기에 늘 `ServletWebRequest`를 넘기지만 타입이 `WebRequest`라 단정할 수 없다.
+     * 단언으로 깨면 예외를 처리하는 자리에서 새 예외가 나므로, 형식을 유지한 채 값만 비운다.
+     */
+    private fun WebRequest.describe(): String =
+        (this as? ServletWebRequest)?.request?.describe() ?: "method=? uri=?"
 
     companion object {
         private val log = LoggerFactory.getLogger(ApiControllerAdvice::class.java)

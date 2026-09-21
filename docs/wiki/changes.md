@@ -397,3 +397,14 @@
 - 확인: Jackson 3의 기본 문자열 길이는 실측 1억이다(`StreamReadConstraints.defaults()`). 리뷰가 지적한 2천만은 jackson-core 2.15의 값이라 이 버전에는 해당하지 않는다.
 - 범위 밖: 속도 제한(rate limit), 톰캣·커넥션 풀 크기, profile 분리, 로그에 주문·요청 식별자를 남기는 것. [현재 상태](current-state.md)의 알려진 빈틈에 적었다.
 - 갱신: [현재 상태](current-state.md).
+
+## 2026-09-21 — 오류 로그가 어떤 요청이었는지 말하게 한다
+- Spec: [error-log-request-context](../spec/2026-09-21-error-log-request-context.md)
+- 요구사항 영향: 없다. 응답 본문과 스키마가 그대로이고 새 오류 코드도 없다. 로그 형식만 바뀐다.
+- 배경: 전체 코드 감사에서 나왔다. 오류 로그에 `errorCode`와 예외 메시지만 있어서, 운영에서 `errorCode=ORDER_NOT_FOUND : 주문을 찾을 수 없습니다` 한 줄을 봐도 어떤 endpoint의 어떤 주문인지 알 수 없었다. 한 건을 추적하려면 클라이언트 로그를 받아야 했다.
+- 결정: HTTP 메서드와 요청 URI를 더했다. 경로 변수가 URI에 그대로 있어서 `POST /v1/orders/{orderId}/checkout`의 주문 식별자는 URI만으로 드러난다. advice가 endpoint별로 식별자를 뽑으면 endpoint가 늘 때마다 advice를 고쳐야 한다.
+- 결정: 쿼리 문자열은 남기지 않는다. 지금 쿼리 파라미터를 쓰는 endpoint가 없고, 나중에 생겼을 때 개인정보가 로그로 흘러 들어가는 경로가 된다. 남길 필요가 생기면 그때 무엇을 남길지 정한다.
+- 결정: 요청 정보는 핸들러 시그니처의 `HttpServletRequest`로 받는다. Spring MVC가 `@ExceptionHandler` 메서드에 주입해 주는 표준 인자라서 필터나 `ThreadLocal` 같은 새 장치가 필요 없다.
+- 결정: 형식을 실제 로그를 가로채서 확인한다. 눈으로 보고 넘어가면 다음 변경이 조용히 지운다.
+- 범위 밖: 요청 상관관계 ID(correlation id)와 MDC, 접근 로그, 구조화 로그(JSON), 요청 본문·헤더, 클라이언트 IP. [현재 상태](current-state.md)의 알려진 빈틈에 적었다.
+- 갱신: [현재 상태](current-state.md).
