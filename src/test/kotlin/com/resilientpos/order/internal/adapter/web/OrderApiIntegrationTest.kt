@@ -115,4 +115,55 @@ class OrderApiIntegrationTest(
 
         assertEquals(1L, orderRowCount(clientOrderId))
     }
+
+    private fun createOrder(body: String): String {
+        val created = post(body).andExpect { status { isCreated() } }.andReturn().response.contentAsString
+        return objectMapper.readTree(created).at("/data/orderId").asString()
+    }
+
+    @Test
+    fun `주문을 만든 뒤 checkout을 요청하면 200과 확정 금액을 받고 재요청도 같은 본문이다`() {
+        val orderId = createOrder(requestJson(UUID.randomUUID()))
+
+        val first = mockMvc.post("/v1/orders/$orderId/checkout").andExpect {
+            status { isOk() }
+            jsonPath("$.data.orderId") { value(orderId) }
+            jsonPath("$.data.status") { value("CHECKOUT_REQUESTED") }
+            jsonPath("$.data.checkoutNo") { value(1) }
+            jsonPath("$.data.amount") { value("9000") }
+            jsonPath("$.data.currency") { value("KRW") }
+        }.andReturn().response.contentAsString
+        val second = mockMvc.post("/v1/orders/$orderId/checkout").andExpect { status { isOk() } }.andReturn().response.contentAsString
+
+        assertEquals(objectMapper.readTree(first), objectMapper.readTree(second))
+        assertEquals(
+            "CHECKOUT_REQUESTED",
+            jdbcTemplate.queryForObject("select status from t_order where id = ?", String::class.java, UUID.fromString(orderId)),
+        )
+        assertEquals(
+            1L,
+            jdbcTemplate.queryForObject("select count(*) from t_order_checkout where order_id = ?", Long::class.java, UUID.fromString(orderId)),
+        )
+    }
+
+    @Test
+    fun `checkout을 요청한 주문의 생성 재시도는 201과 CHECKOUT_REQUESTED다`() {
+        val createBody = requestJson(UUID.randomUUID())
+        val orderId = createOrder(createBody)
+        mockMvc.post("/v1/orders/$orderId/checkout").andExpect { status { isOk() } }
+
+        post(createBody).andExpect {
+            status { isCreated() }
+            jsonPath("$.data.orderId") { value(orderId) }
+            jsonPath("$.data.status") { value("CHECKOUT_REQUESTED") }
+        }
+    }
+
+    @Test
+    fun `없는 주문의 checkout 요청은 404 ORDER_NOT_FOUND다`() {
+        mockMvc.post("/v1/orders/${UUID.randomUUID()}/checkout").andExpect {
+            status { isNotFound() }
+            jsonPath("$.error.errorCode") { value("ORDER_NOT_FOUND") }
+        }
+    }
 }
