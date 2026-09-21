@@ -4,22 +4,25 @@ import com.resilientpos.PostgresIntegrationTest
 import com.resilientpos.foundation.DomainErrorKind
 import com.resilientpos.foundation.DomainException
 import com.resilientpos.foundation.Money
+import com.resilientpos.order.CreateOrderLine
 import com.resilientpos.order.OrderCommandFacade
 import com.resilientpos.order.OrderFixtures
 import com.resilientpos.order.OrderId
 import com.resilientpos.order.OrderPaymentRequested
 import com.resilientpos.order.OrderStatus
 import com.resilientpos.order.RequestCheckoutCommand
+import com.resilientpos.order.RequestCheckoutResult
 import com.resilientpos.order.internal.domain.Order
 import com.resilientpos.order.internal.domain.OrderRepository
+import java.util.Currency
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.TimeoutException
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import org.springframework.beans.factory.annotation.Autowired
@@ -64,6 +67,26 @@ class OrderRequestCheckoutIntegrationTest(
         assertEquals("CHECKOUT_REQUESTED", storedStatus(orderId))
         assertEquals(1L, checkoutRowCount(orderId))
         assertEquals(1L, paymentRequestedCount(events, orderId))
+        assertEquals(
+            0L,
+            jdbcTemplate.queryForObject("select version from t_order_checkout where order_id = ?", Long::class.java, orderId.value),
+            "새 checkout은 INSERT 한 번이다. merge로 빠지면 UPDATE가 따라붙어 version이 1이 된다",
+        )
+    }
+
+    @Test
+    fun `소수 자리가 있는 통화의 확정 금액도 저장하고 다시 읽으면 같은 값이다`() {
+        val usd = Currency.getInstance("USD")
+        val command = OrderFixtures.createOrderCommand(
+            currency = usd,
+            lines = listOf(CreateOrderLine("SKU-1", "Americano", Money.of("10.10", usd), 3)),
+        )
+        val orderId = facade.create(command).orderId
+
+        val result = facade.requestCheckout(RequestCheckoutCommand(orderId))
+
+        assertEquals(Money.of("30.30", usd), result.amount)
+        assertEquals(Money.of("30.30", usd), assertNotNull(repository.findById(orderId)).checkouts.single().amount)
     }
 
     @Test
@@ -104,6 +127,10 @@ class OrderRequestCheckoutIntegrationTest(
         assertEquals(DomainErrorKind.NOT_FOUND, failure.kind)
     }
 
+    /** 다른 세션이 쥔 잠금을 기다리는 세션 수. 테스트는 한 번에 한 클래스만 돌므로 이 테스트가 만든 대기만 잡힌다. */
+    private fun sessionsWaitingForLock(): Long =
+        jdbcTemplate.queryForObject("select count(*) from pg_stat_activity where wait_event_type = 'Lock'", Long::class.java) ?: 0L
+
     @Test
     fun `커밋 전인 requestCheckout과 겹친 요청은 기다렸다가 같은 결과를 받는다`() {
         val orderId = facade.create(OrderFixtures.createOrderCommand()).orderId
@@ -112,18 +139,21 @@ class OrderRequestCheckoutIntegrationTest(
         val releaseFirst = CountDownLatch(1)
         val executor = Executors.newFixedThreadPool(2)
         try {
-            val first = executor.submit<com.resilientpos.order.RequestCheckoutResult> {
+            val first = executor.submit<RequestCheckoutResult> {
                 transaction.execute {
                     facade.requestCheckout(command).also {
                         firstRequested.countDown()
-                        releaseFirst.await(10, TimeUnit.SECONDS)
+                        check(releaseFirst.await(30, TimeUnit.SECONDS)) { "앞 트랜잭션을 풀어 주는 신호가 오지 않았다" }
                     }
                 }
             }
-            assertTrue(firstRequested.await(10, TimeUnit.SECONDS))
+            assertTrue(firstRequested.await(10, TimeUnit.SECONDS), "앞 요청이 잠금을 쥔 채 커밋 전 상태에 도달해야 한다")
 
-            val second = executor.submit<com.resilientpos.order.RequestCheckoutResult> { facade.requestCheckout(command) }
-            assertFailsWith<TimeoutException>("앞 트랜잭션이 커밋하기 전에는 끝나지 않아야 한다") { second.get(1, TimeUnit.SECONDS) }
+            val second = executor.submit<RequestCheckoutResult> { facade.requestCheckout(command) }
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
+            while (sessionsWaitingForLock() == 0L && System.nanoTime() < deadline) Thread.sleep(20)
+            assertEquals(1L, sessionsWaitingForLock(), "뒤 요청이 주문 행 잠금을 기다리고 있어야 한다")
+            assertFalse(second.isDone, "앞 트랜잭션이 커밋하기 전에는 끝나지 않아야 한다")
 
             releaseFirst.countDown()
             val firstResult = first.get(10, TimeUnit.SECONDS)
@@ -134,7 +164,8 @@ class OrderRequestCheckoutIntegrationTest(
             assertEquals(1L, checkoutRowCount(orderId))
         } finally {
             releaseFirst.countDown()
-            executor.shutdownNow()
+            executor.shutdown()
+            executor.awaitTermination(10, TimeUnit.SECONDS)
         }
     }
 
