@@ -223,8 +223,8 @@ class OrderControllerTest(
         )
 
         private val LINE_FIELDS: List<FieldDescriptor> = listOf(
-            fieldWithPath("lines[].productCode").type(JsonFieldType.STRING).description("상품 코드"),
-            fieldWithPath("lines[].productName").type(JsonFieldType.STRING).description("상품명"),
+            fieldWithPath("lines[].productCode").type(JsonFieldType.STRING).description("상품 코드. 비어 있거나 공백뿐이면 BLANK_PRODUCT_CODE"),
+            fieldWithPath("lines[].productName").type(JsonFieldType.STRING).description("상품명. 비어 있거나 공백뿐이면 BLANK_PRODUCT_NAME"),
             fieldWithPath("lines[].unitPrice").type(JsonFieldType.STRING).description("단가. 주문 통화 기준 decimal string"),
             fieldWithPath("lines[].quantity").type(JsonFieldType.NUMBER).description("수량"),
         )

@@ -78,6 +78,22 @@ class OrderApiIntegrationTest(
     }
 
     @Test
+    fun `productCode가 빈 line은 400 BLANK_PRODUCT_CODE이고 t_order에 행이 생기지 않는다`() {
+        val clientOrderId = UUID.randomUUID()
+        val body = requestJson(
+            clientOrderId,
+            lines = """{ "productCode": "", "productName": "아메리카노", "unitPrice": "4500", "quantity": 2 }""",
+        )
+
+        post(body).andExpect {
+            status { isBadRequest() }
+            jsonPath("$.error.errorCode") { value("BLANK_PRODUCT_CODE") }
+        }
+
+        assertEquals(0L, orderRowCount(clientOrderId))
+    }
+
+    @Test
     fun `같은 storeId terminalId clientOrderId로 수량만 다른 요청을 이어서 보내면 두 번째는 409 IDEMPOTENCY_CONFLICT다`() {
         val storeId = UUID.randomUUID()
         val terminalId = UUID.randomUUID()
