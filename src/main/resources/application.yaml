@@ -6,6 +6,9 @@ spring:
     username: ${POSTGRES_USER:resilientpos}
     # 기본값을 두지 않는다. 빈 문자열을 기본값으로 두면 환경 변수를 빠뜨린 인스턴스가 그대로 떠서
     # 실패가 기동이 아니라 첫 요청에서 드러난다. 테스트는 Testcontainers가 접속 값을 준다.
+    # 주의: 해석되지 않은 placeholder는 예외가 아니라 리터럴 문자열로 바인딩된다. 그래서 기동이 멈추는
+    # 실제 지점은 Hikari의 인증 실패이고 로그도 "password authentication failed"로 나온다.
+    # DB가 trust 인증이면 아무 값이나 통과하므로 이 줄은 아무것도 막지 못한다. 알려진 한계다.
     password: ${POSTGRES_PASSWORD}
     hikari:
       # 풀이 비었을 때 기다리는 시간. 넘으면 요청이 실패하고 스레드를 돌려준다.

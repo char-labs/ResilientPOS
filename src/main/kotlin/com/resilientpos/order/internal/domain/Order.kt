@@ -104,12 +104,25 @@ class Order private constructor(
         const val TOO_MANY_ORDER_LINES = "TOO_MANY_ORDER_LINES"
 
         /**
-         * 영수증 한 장에 담기는 품목 수의 상한. line 하나마다 `t_order_line` 행이 하나씩 들어가고
-         * 합계를 접는 비용도 개수를 따라가므로, 상한이 없으면 요청 하나가 쓰는 일의 양에 끝이 없다.
+         * 영수증 한 장에 담기는 품목 수의 상한. line 하나마다 `t_order_line` INSERT가 한 번씩 나가고
+         * 지금은 JDBC 배치가 없어서 DB 왕복도 개수를 그대로 따라간다. 상한이 없으면 요청 하나가 쓰는 일의 양에 끝이 없다.
          * 소매 영수증은 수십 건이고 도매·창고 주문에 여유를 둬서 500으로 잡았다.
          * 이보다 큰 주문이 실제로 필요해지면 주문을 나누는 대신 이 값을 올릴지를 그 PR이 정한다.
+         * 본문 크기 상한과 함께 보는 값이다. 최악의 정상 주문(모든 필드가 컬럼 상한)이 1 MiB의 절반이라
+         * 이 값을 두 배로 올리면 정상 주문이 전송 단계에서 끊긴다.
          */
         const val MAX_LINES = 500
+
+        /**
+         * line 개수 불변식. `create`만이 아니라 **line을 더하는 명령을 새로 만드는 PR도 이것을 부른다.**
+         * `restore`는 부르지 않는다. 이미 저장된 주문은 최초 `create` 때 검증됐고, 나중에 상한을 낮추더라도
+         * 저장된 주문이 조회·checkout되지 못하게 막아 세우지 않기 위해서다.
+         */
+        fun requireLineCountWithinLimit(size: Int) {
+            if (size > MAX_LINES) {
+                throw DomainException(TOO_MANY_ORDER_LINES, "주문 line은 ${'$'}{MAX_LINES}개를 넘을 수 없습니다")
+            }
+        }
         const val CURRENCY_MISMATCH = "CURRENCY_MISMATCH"
         const val IDEMPOTENCY_CONFLICT = "IDEMPOTENCY_CONFLICT"
         const val ORDER_NOT_FOUND = "ORDER_NOT_FOUND"
@@ -134,9 +147,7 @@ class Order private constructor(
             if (command.lines.isEmpty()) {
                 throw DomainException(EMPTY_ORDER, "주문에는 line이 1개 이상 필요합니다")
             }
-            if (command.lines.size > MAX_LINES) {
-                throw DomainException(TOO_MANY_ORDER_LINES, "주문 line은 ${MAX_LINES}개를 넘을 수 없습니다")
-            }
+            requireLineCountWithinLimit(command.lines.size)
             if (command.lines.any { it.unitPrice.currency != command.currency }) {
                 throw DomainException(CURRENCY_MISMATCH, "line 통화가 주문 통화와 다릅니다")
             }

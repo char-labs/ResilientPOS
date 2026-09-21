@@ -1,5 +1,6 @@
 package com.resilientpos.order.internal.adapter.web
 
+import com.resilientpos.order.internal.domain.Order
 import com.resilientpos.PostgresIntegrationTest
 import java.util.UUID
 import kotlin.test.Test
@@ -62,6 +63,42 @@ class OrderApiIntegrationTest(
 
         assertEquals(firstOrderId, secondOrderId)
         assertEquals(1L, orderRowCount(clientOrderId))
+    }
+
+    @Test
+    fun `line 상한과 같은 개수의 최대 길이 주문이 201로 저장된다`() {
+        // 본문 크기 상한과 line 개수 상한이 서로 모순되지 않는지 본다. 여유가 두 배뿐이라
+        // MAX_LINES를 올리거나 line DTO에 필드를 더하면 정상 주문이 전송 단계에서 끊긴다.
+        // 그때 나가는 것은 TOO_MANY_ORDER_LINES가 아니라 이유를 알 수 없는 일반 400이다.
+        val clientOrderId = UUID.randomUUID()
+        val maxLine = """{ "productCode": "${"S".repeat(64)}", "productName": "${"가".repeat(255)}", "unitPrice": "999999999999", "quantity": 1 }"""
+        val body = requestJson(clientOrderId, lines = List(Order.MAX_LINES) { maxLine }.joinToString(","))
+
+        post(body).andExpect { status { isCreated() } }
+
+        assertEquals(1L, orderRowCount(clientOrderId))
+        assertEquals(
+            Order.MAX_LINES.toLong(),
+            jdbcTemplate.queryForObject(
+                "select count(*) from t_order_line l join t_order o on o.id = l.order_id where o.client_order_id = ?",
+                Long::class.java,
+                clientOrderId,
+            ),
+        )
+    }
+
+    @Test
+    fun `line 상한을 하나 넘는 주문은 400 TOO_MANY_ORDER_LINES이고 행이 생기지 않는다`() {
+        val clientOrderId = UUID.randomUUID()
+        val line = """{ "productCode": "SKU-1", "productName": "아메리카노", "unitPrice": "4500", "quantity": 1 }"""
+        val body = requestJson(clientOrderId, lines = List(Order.MAX_LINES + 1) { line }.joinToString(","))
+
+        post(body).andExpect {
+            status { isBadRequest() }
+            jsonPath("$.error.errorCode") { value("TOO_MANY_ORDER_LINES") }
+        }
+
+        assertEquals(0L, orderRowCount(clientOrderId))
     }
 
     @Test

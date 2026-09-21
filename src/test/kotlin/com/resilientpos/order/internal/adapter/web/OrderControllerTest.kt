@@ -182,11 +182,25 @@ class OrderControllerTest(
     }
 
     @Test
-    fun `상한을 넘는 본문은 읽는 단계에서 400으로 끊기고 Facade에 닿지 않는다`() {
-        // max-document-length(1 MiB)를 넘긴다. productName 하나를 크게 키워 본문만 부풀린다.
-        val huge = """{ "productCode": "SKU-1", "productName": "${"가".repeat(400_000)}", "unitPrice": "4500", "quantity": 1 }"""
+    fun `문서 길이 상한을 넘는 본문은 읽는 단계에서 400으로 끊긴다`() {
+        // 문자열 하나하나는 상한(65536자) 안이고 문서 전체만 1 MiB를 넘긴다.
+        // 이렇게 갈라 놓아야 어느 상한이 끊었는지가 테스트로 드러난다.
+        val shortLine = """{ "productCode": "SKU-1", "productName": "아메리카노", "unitPrice": "4500", "quantity": 1 }"""
 
-        postOrder(requestJson(lines = huge)).andExpect {
+        postOrder(requestJson(lines = List(20_000) { shortLine }.joinToString(","))).andExpect {
+            status { isBadRequest() }
+            jsonPath("$.result") { value("FAIL") }
+        }
+
+        verifyNoInteractions(facade)
+    }
+
+    @Test
+    fun `문자열 길이 상한을 넘는 값은 문서가 작아도 400으로 끊긴다`() {
+        // 본문 전체는 약 70 KB로 1 MiB에 한참 못 미치고 문자열 하나만 65536자를 넘긴다.
+        val longName = """{ "productCode": "SKU-1", "productName": "${"a".repeat(70_000)}", "unitPrice": "4500", "quantity": 1 }"""
+
+        postOrder(requestJson(lines = longName)).andExpect {
             status { isBadRequest() }
             jsonPath("$.result") { value("FAIL") }
         }

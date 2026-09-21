@@ -24,6 +24,11 @@ class OrderCommandFacade(
 
     @Transactional
     fun create(command: CreateOrderCommand): CreateOrderResult {
+        // 가장 싼 거절을 가장 먼저 한다. line 개수는 command만 보면 알 수 있는데 `Order.create`까지 미루면
+        // 조회 문장이 먼저 나가면서 커넥션을 잡는다. Hibernate는 첫 문장에서 커넥션을 얻으므로
+        // 여기서 거절하면 상한을 넘는 요청은 커넥션을 아예 건드리지 않는다.
+        Order.requireLineCountWithinLimit(command.lines.size)
+
         val existing = repository.findByClientOrderId(command.terminalId, command.clientOrderId)
         if (existing != null) {
             existing.verifySamePayload(command)

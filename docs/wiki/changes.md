@@ -390,5 +390,10 @@
 - 확인: 본문 상한이 정상 주문을 막지 않는다. 최악의 정상 주문(line 500개, `productCode` 64자, `productName` 255자 전부 한글, 정수부 15자리 단가)이 465,192바이트로 1 MiB의 절반이 안 된다. 문서 상한에 걸리는 지점은 line 1100개 부근이라 **먼저 걸리는 것은 언제나 line 개수 상한**이고, 그래야 일반적인 파싱 실패 대신 이유가 붙은 400이 나간다.
 - 확인: 이미 500개를 넘는 주문이 있어도 조회와 checkout이 그대로 동작한다. `Order.restore`는 이 검사를 거치지 않으며 이는 "생성 불변식은 최초 `create` 때 검증했다"는 기존 계약과 같다. 상한을 더하면서 기존 데이터를 막아 세우지 않는다.
 - 주의: `socketTimeout: 30`은 Flyway 마이그레이션에도 걸린다. 같은 `DataSource`를 쓰기 때문이다. 지금 마이그레이션 4개는 모두 작아서 문제가 없지만, 30초를 넘길 수 있는 마이그레이션(큰 테이블의 인덱스 생성, 백필)을 더하는 PR은 이 값을 함께 봐야 한다.
+- 반영: multi-review(Claude 85점, 블로킹 없음)가 짚은 것을 받았다. line 개수 검사가 `repository.findByClientOrderId` 뒤에 있어서, 상한을 넘는 요청도 조회 문장을 먼저 내보내며 커넥션을 잡았다. 검사를 `Order.requireLineCountWithinLimit`으로 빼고 Facade가 저장소를 건드리기 전에 부르게 했다.
+- 반영: 정상 최대 주문(line 500개, 모든 필드 컬럼 상한)이 본문 상한을 통과하는지 통합 테스트로 잠갔다. 여유가 두 배뿐이라 `MAX_LINES`를 올리거나 line DTO에 필드를 더하면 정상 주문이 전송 단계에서 끊긴다.
+- 발견: 본문 크기가 아니라 **합계 상한이 실질 한계다.** 단가를 최댓값(15자리)으로 잡으면 500개를 더할 때 18자리가 되어 `INVALID_MONEY_AMOUNT`가 난다. 500 line을 담으려면 단가가 12자리 이하여야 한다.
+- 발견: `POSTGRES_PASSWORD`의 실패 모드가 주석과 달랐다. 해석되지 않은 placeholder는 `@ConfigurationProperties` 바인딩에서 예외가 아니라 **리터럴 문자열**이 된다. 기동이 멈추는 실제 지점은 Hikari의 인증 실패이고, DB가 `trust` 인증이면 아무것도 막지 못한다. 주석과 wiki를 실제 동작으로 고쳤다.
+- 확인: Jackson 3의 기본 문자열 길이는 실측 1억이다(`StreamReadConstraints.defaults()`). 리뷰가 지적한 2천만은 jackson-core 2.15의 값이라 이 버전에는 해당하지 않는다.
 - 범위 밖: 속도 제한(rate limit), 톰캣·커넥션 풀 크기, profile 분리, 로그에 주문·요청 식별자를 남기는 것. [현재 상태](current-state.md)의 알려진 빈틈에 적었다.
 - 갱신: [현재 상태](current-state.md).
