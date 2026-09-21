@@ -78,17 +78,17 @@ class OrderRequestCheckoutIntegrationTest(
     }
 
     @Test
-    fun `requestCheckout으로 주문 행이 갱신되면 생성 시각은 그대로이고 수정 시각은 그 뒤다`() {
+    fun `requestCheckout으로 주문 행이 갱신되면 생성 시각은 그대로이고 수정 시각만 새로 찍힌다`() {
         val orderId = facade.create(OrderFixtures.createOrderCommand()).orderId
-        val createdAtBefore = jdbcTemplate.queryForObject("select created_at from t_order where id = ?", Timestamp::class.java, orderId.value)
+        // 시계에 기대지 않으려고 두 시각을 먼 과거로 돌려놓는다. version은 건드리지 않는다.
+        val past = Timestamp.valueOf("2000-01-01 00:00:00")
+        jdbcTemplate.update("update t_order set created_at = ?, updated_at = ? where id = ?", past, past, orderId.value)
 
         facade.requestCheckout(RequestCheckoutCommand(orderId))
 
         val row = jdbcTemplate.queryForMap("select created_at, updated_at from t_order where id = ?", orderId.value)
-        val createdAt = row["created_at"] as Timestamp
-        val updatedAt = row["updated_at"] as Timestamp
-        assertEquals(createdAtBefore, createdAt)
-        assertTrue(updatedAt.after(createdAt), "created_at=$createdAt, updated_at=$updatedAt")
+        assertEquals(past, row["created_at"])
+        assertTrue((row["updated_at"] as Timestamp).after(past), "updated_at=${row["updated_at"]}")
     }
 
     @Test

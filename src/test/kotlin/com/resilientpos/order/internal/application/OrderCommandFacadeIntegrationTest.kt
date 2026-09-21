@@ -16,13 +16,11 @@ import com.resilientpos.order.internal.domain.Order
 import com.resilientpos.order.internal.domain.OrderLine
 import com.resilientpos.order.internal.domain.OrderRepository
 import com.resilientpos.terminal.TerminalId
-import java.sql.Timestamp
 import java.time.Clock
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
-import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -84,10 +82,9 @@ class OrderCommandFacadeIntegrationTest(
             result.orderId.value,
         )
 
-        // 두 시각은 Hibernate가 JVM에서 따로 만들어서 같지 않을 수 있다. 갱신된 적 없는 행은 version 0으로 판정한다.
-        val createdAt = assertNotNull(row["created_at"] as Timestamp?)
-        val updatedAt = assertNotNull(row["updated_at"] as Timestamp?)
-        assertFalse(updatedAt.before(createdAt), "수정 시각이 생성 시각보다 앞설 수 없다. created_at=$createdAt, updated_at=$updatedAt")
+        // 두 시각은 Hibernate가 JVM에서 따로 만든다. 같다거나 순서가 있다고 보장하지 않는다. 갱신된 적 없는 행은 version 0으로 판정한다.
+        assertNotNull(row["created_at"])
+        assertNotNull(row["updated_at"])
         assertNull(row["deleted_at"])
         assertEquals(0L, row["version"], "신규 저장은 INSERT 한 번이다. merge로 빠지면 UPDATE가 따라붙어 version이 1이 된다")
     }
