@@ -24,6 +24,7 @@ class OrderTest {
     private val krw = Currency.getInstance("KRW")
     private val usd = Currency.getInstance("USD")
     private val now = Instant.parse("2026-09-16T00:00:00Z")
+    private val blankValues = listOf("", "   ", "\t", "\n", "\u00A0")
 
     private val storeId = StoreId(UUID.fromString("00000000-0000-0000-0000-000000000001"))
     private val terminalId = TerminalId(UUID.fromString("00000000-0000-0000-0000-000000000002"))
@@ -122,6 +123,52 @@ class OrderTest {
         assertEquals(OrderLine.NEGATIVE_UNIT_PRICE, negativeUnitPrice.code)
         assertTrue(negativeUnitPrice.message.isNotBlank())
         assertTrue(negativeUnitPrice.message != negativeUnitPrice.code)
+    }
+
+    @Test
+    fun `빈 productCode를 BLANK_PRODUCT_CODE로 거절한다`() {
+        blankValues.forEach { blank ->
+            val failure = assertFailsWith<DomainException>("productCode='$blank'") {
+                Order.create(
+                    createOrderCommand(lines = listOf(orderLine(productCode = blank))),
+                    FixedIdentifierGenerator(emptyList()),
+                    now,
+                )
+            }
+
+            assertEquals(OrderLine.BLANK_PRODUCT_CODE, failure.code)
+            assertEquals(DomainErrorKind.INVALID, failure.kind)
+            assertTrue(failure.message.isNotBlank())
+            assertTrue(failure.message != failure.code)
+        }
+    }
+
+    @Test
+    fun `빈 productName을 BLANK_PRODUCT_NAME으로 거절한다`() {
+        blankValues.forEach { blank ->
+            val failure = assertFailsWith<DomainException>("productName='$blank'") {
+                Order.create(
+                    createOrderCommand(lines = listOf(orderLine(productName = blank))),
+                    FixedIdentifierGenerator(emptyList()),
+                    now,
+                )
+            }
+
+            assertEquals(OrderLine.BLANK_PRODUCT_NAME, failure.code)
+            assertEquals(DomainErrorKind.INVALID, failure.kind)
+            assertTrue(failure.message.isNotBlank())
+            assertTrue(failure.message != failure.code)
+        }
+    }
+
+    @Test
+    fun `앞뒤 공백이 있는 상품 코드와 상품명은 다듬지 않고 받는다`() {
+        val command = createOrderCommand(lines = listOf(orderLine(productCode = " SKU-1 ", productName = " 아메리카노 ")))
+
+        val line = Order.create(command, FixedIdentifierGenerator(emptyList()), now).aggregate.lines.single()
+
+        assertEquals(" SKU-1 ", line.productCode)
+        assertEquals(" 아메리카노 ", line.productName)
     }
 
     @Test
