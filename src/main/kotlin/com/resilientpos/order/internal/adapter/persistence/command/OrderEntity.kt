@@ -13,6 +13,7 @@ import jakarta.persistence.EnumType
 import jakarta.persistence.Enumerated
 import jakarta.persistence.Id
 import jakarta.persistence.Table
+import jakarta.persistence.Version
 import java.util.Currency
 import java.util.UUID
 import org.hibernate.annotations.JdbcTypeCode
@@ -36,6 +37,15 @@ class OrderEntity(
     @Enumerated(EnumType.STRING)
     var status: OrderStatus,
 ) : BaseEntity() {
+
+    /**
+     * aggregate 루트의 낙관적 잠금. 행 잠금 없이 저장하는 경로에서 동시 수정을 막는 마지막 방어선이다.
+     * 단 `t_order` 행이 실제로 UPDATE될 때만 오른다. 자식 행만 바뀌는 저장은 이 값으로 보호되지 않는다.
+     * nullable인 이유: 도메인 ID를 저장 전에 만들기 때문에 primitive면 Spring Data가 새 엔티티를 기존 행으로 보고 `merge`해 SELECT와 UPDATE가 더 나간다.
+     */
+    @Version
+    var version: Long? = null
+        protected set
 
     /** 관리 엔티티에 최신 aggregate 상태를 반영한다. */
     fun apply(order: Order) {
