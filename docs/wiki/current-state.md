@@ -13,12 +13,17 @@
 | 식별자 | `uuid-creator` 6.1.1 (UUID v7) |
 | 구조 검증 | Spring Modulith 경계 검증, ArchUnit 1.4.2 의존성 방향 가드 |
 | 통합 테스트 | Testcontainers 2.0.5 PostgreSQL 18. `./gradlew test` 실행에 Docker가 필요하다 |
-| 테스트 | Kotlin Test/JUnit 5, Spring Boot 테스트 starter, Fixture Monkey 1.2.3; 총 120개 (컨텍스트 1, 스키마 4, 모듈 구조 2, 의존성 방향 2, Money 25, 식별자 4, Order 17, OrderCommandFacade 11, RequestCheckout 통합 9, 버전 충돌 통합 1, 문장 수 통합 3, 이벤트 발행 기록 통합 7, API advice 9, OrderController 11, checkout Controller 5, 주문 API 통합 9) |
+| 테스트 | Kotlin Test/JUnit 5, Spring Boot 테스트 starter, Fixture Monkey 1.2.3; 총 126개 (컨텍스트 1, 스키마 4, 모듈 구조 2, 의존성 방향 2, Money 25, 식별자 4, Order 19, 자원 상한 설정 3, OrderCommandFacade 11, RequestCheckout 통합 9, 버전 충돌 통합 1, 문장 수 통합 3, 이벤트 발행 기록 통합 7, API advice 9, OrderController 12, checkout Controller 5, 주문 API 통합 9) |
 | 로컬 하네스 | Python 3 표준 라이브러리 |
 
 근거: [build.gradle.kts](../../build.gradle.kts), [Gradle Wrapper](../../gradle/wrapper/gradle-wrapper.properties), [애플리케이션 설정](../../src/main/resources/application.yaml).
 애플리케이션 설정에 PostgreSQL 접속과 Flyway, JPA validate가 있다. 접속 값은 환경 변수로 주입하며 비밀값을
-하드코딩하지 않는다. 운영 배포 설정과 커넥션 풀 튜닝은 아직 없다.
+하드코딩하지 않는다. `POSTGRES_PASSWORD`에는 기본값이 없어서 없으면 기동하지 못한다.
+**요청 하나가 쓰는 자원에 상한이 있다.** 본문은 1 MiB, 문자열 하나는 65536자, 숫자 하나는 1000자까지 읽는다(Jackson 기본값은 차례로 무제한·1억·1000이다).
+커넥션 대기 3초, 검증 1초, JDBC 연결 3초·소켓 30초, 쿼리 10초, 트랜잭션 30초다. 이 값들이 실제 빈에 반영되는지는 `ResourceLimitConfigurationTest`가 확인한다 —
+프로퍼티 이름이 틀리면 Spring이 조용히 무시하므로 적었다는 사실만으로는 적용됐다고 말할 수 없다([request-resource-limits](../spec/2026-09-21-request-resource-limits.md)).
+**톰캣 스레드 풀과 커넥션 풀의 크기는 아직 기본값이다.** 배포 환경이 없어 정할 근거가 없다. 상한을 두는 것과 크기를 정하는 것은 다른 결정이다.
+속도 제한(rate limit)도 없다. 이 설정은 요청 **하나**의 상한이고 요청의 **빈도**는 다루지 않는다. 알려진 빈틈이다.
 이 표는 빌드 선언을 확인한 결과이며, 의존성 다운로드·앱 실행 검증 결과를 의미하지 않는다.
 
 ## 계획과 구현 구분
@@ -39,7 +44,7 @@
 - Kafka, Redis, Kotlin JDSL, OpenTelemetry는 참고 문서의 설계 방향이며 현재 빌드 의존성에는 없다.
 - `order` 모듈은 공개 계약(`OrderCommandFacade` 클래스, `CreateOrderCommand`·`CreateOrderResult`, `OrderId`·`ClientOrderId`,
   `OrderStatus`, `OrderEvent`·`OrderCreated`)과 `internal/domain`의 `Order`·`OrderLine`이 있다. `Order.create`가 생성 불변식
-  (line 1개 이상, 상품 코드·상품명 blank 아님, 수량 1 이상, 단가 0 이상, 통화 일치)을 검증하고 `Transition`을 돌려준다([order-domain-model](../spec/2026-09-16-order-domain-model.md)).
+  (line 1개 이상 500개 이하, 상품 코드·상품명 blank 아님, 수량 1 이상, 단가 0 이상, 통화 일치)을 검증하고 `Transition`을 돌려준다([order-domain-model](../spec/2026-09-16-order-domain-model.md)).
   상태는 `OPEN`과 `CHECKOUT_REQUESTED` 둘이다. `order.requestCheckout(ids, now)`가 `OPEN` 주문의 합계를 다음 회차 `Checkout`(`id`, `checkoutNo`, `amount`)으로 확정하고
   `CHECKOUT_REQUESTED`로 전이하면서 `OrderPaymentRequested`(`orderId`·`storeId`·`terminalId`·`checkoutNo`·`amount`)를 만든다. 이미 요청된 주문이면 같은 주문과 빈 이벤트를 돌려준다.
   합계가 0원이어도 똑같이 전이한다. store 정책과 정책 버전은 아직 없다([order-request-checkout-domain](../spec/2026-09-21-order-request-checkout-domain.md)).

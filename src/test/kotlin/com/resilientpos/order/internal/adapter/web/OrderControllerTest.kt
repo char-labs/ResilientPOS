@@ -182,6 +182,19 @@ class OrderControllerTest(
     }
 
     @Test
+    fun `상한을 넘는 본문은 읽는 단계에서 400으로 끊기고 Facade에 닿지 않는다`() {
+        // max-document-length(1 MiB)를 넘긴다. productName 하나를 크게 키워 본문만 부풀린다.
+        val huge = """{ "productCode": "SKU-1", "productName": "${"가".repeat(400_000)}", "unitPrice": "4500", "quantity": 1 }"""
+
+        postOrder(requestJson(lines = huge)).andExpect {
+            status { isBadRequest() }
+            jsonPath("$.result") { value("FAIL") }
+        }
+
+        verifyNoInteractions(facade)
+    }
+
+    @Test
     fun `terminalId가 UUID 형식이 아니면 400 BAD_REQUEST이고 Facade를 부르지 않는다`() {
         expectBadRequest(requestJson(terminalId = "not-a-uuid")).andDo {
             handle(

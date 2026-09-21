@@ -101,6 +101,15 @@ class Order private constructor(
 
     companion object {
         const val EMPTY_ORDER = "EMPTY_ORDER"
+        const val TOO_MANY_ORDER_LINES = "TOO_MANY_ORDER_LINES"
+
+        /**
+         * 영수증 한 장에 담기는 품목 수의 상한. line 하나마다 `t_order_line` 행이 하나씩 들어가고
+         * 합계를 접는 비용도 개수를 따라가므로, 상한이 없으면 요청 하나가 쓰는 일의 양에 끝이 없다.
+         * 소매 영수증은 수십 건이고 도매·창고 주문에 여유를 둬서 500으로 잡았다.
+         * 이보다 큰 주문이 실제로 필요해지면 주문을 나누는 대신 이 값을 올릴지를 그 PR이 정한다.
+         */
+        const val MAX_LINES = 500
         const val CURRENCY_MISMATCH = "CURRENCY_MISMATCH"
         const val IDEMPOTENCY_CONFLICT = "IDEMPOTENCY_CONFLICT"
         const val ORDER_NOT_FOUND = "ORDER_NOT_FOUND"
@@ -124,6 +133,9 @@ class Order private constructor(
         fun create(command: CreateOrderCommand, ids: IdentifierGenerator, now: Instant): Transition<Order, OrderEvent> {
             if (command.lines.isEmpty()) {
                 throw DomainException(EMPTY_ORDER, "주문에는 line이 1개 이상 필요합니다")
+            }
+            if (command.lines.size > MAX_LINES) {
+                throw DomainException(TOO_MANY_ORDER_LINES, "주문 line은 ${MAX_LINES}개를 넘을 수 없습니다")
             }
             if (command.lines.any { it.unitPrice.currency != command.currency }) {
                 throw DomainException(CURRENCY_MISMATCH, "line 통화가 주문 통화와 다릅니다")

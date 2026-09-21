@@ -376,3 +376,16 @@
 - 반영: 가드 순서가 바뀌면서 금액·자릿수를 동시에 어긴 입력의 `errorCode`가 `INVALID_MONEY_SCALE`에서 `INVALID_MONEY_AMOUNT`로 바뀐다. 무작위 50만 건에서 갈리는 입력을 전부 분류했고 그 밖의 차이는 0건이다.
 - 범위 밖: line 개수·요청 본문 크기의 상한, 커넥션·쿼리·트랜잭션 타임아웃, 로그 속성. 같은 감사에서 나왔고 목표가 달라 뒤따르는 PR에서 닫는다.
 - 갱신: [현재 상태](current-state.md).
+
+## 2026-09-21 — 요청 하나가 자원을 무한정 잡지 않게 한다
+- Spec: [request-resource-limits](../spec/2026-09-21-request-resource-limits.md)
+- 요구사항 영향: 주문 line 개수에 상한이 생겼다. 500개를 넘으면 `TOO_MANY_ORDER_LINES`(400)다. 요청 본문은 1 MiB까지만 읽는다. 응답의 모양과 스키마는 바뀌지 않았다.
+- 배경: 전체 코드 감사에서 나왔다. 요청 하나가 쓸 수 있는 자원에 상한이 하나도 없었다. 본문 크기, line 개수, 커넥션을 기다리는 시간, 쿼리와 트랜잭션이 도는 시간 전부다. DB가 느려지면 요청 스레드가 무기한 묶이고, 톰캣 스레드가 다 묶이면 상태 조회조차 응답하지 못한다.
+- 배경: Jackson의 기본값이 문서 길이 무제한, 문자열 하나 1억 자다. 숫자 길이만 1000자로 막혀 있는데 [money-input-boundary](../spec/2026-09-21-money-input-boundary.md)의 거절 비용이 그 값에 기대고 있었다.
+- 결정: line 개수 상한은 도메인 불변식으로 뒀다. 본문 크기가 간접적으로 막지만 그것은 전송 계층의 사실이지 업무 규칙이 아니다. `MAX_LINES = 500`은 소매 영수증(수십 건)에 도매·창고 주문의 여유를 더해 잡은 값이고 근거를 상수 주석에 남겼다.
+- 결정: `POSTGRES_PASSWORD`의 기본값을 없앴다. 빈 문자열이 기본값이면 환경 변수를 빠뜨린 인스턴스가 그대로 떠서 실패가 기동이 아니라 첫 요청에서 드러난다.
+- 결정: 풀 크기는 건드리지 않았다. 배포 환경이 없어 정할 근거가 없고, 상한을 두는 것과 크기를 정하는 것은 다른 결정이다.
+- 발견: 설정을 적기만 하고 확인하지 않으면 오타를 잡지 못한다. 실재하지 않는 이름(`connect-timeout`, `max-doc-length`)과 `spring.jpa.properties`의 오타(`query.timeoutt`)를 넣어 보니 Spring이 **조용히 무시**했다. 값을 읽어 확인하는 테스트를 남겼다.
+- 발견: 이름의 kebab/camel 차이는 오타가 아니다. `connectionTimeout`·`maxDocumentLength`는 relaxed binding이 받아들여 그대로 적용된다. 반면 `spring.jpa.properties.*`는 그대로 넘기는 map이라 relaxed binding이 없고 오타가 조용히 사라진다. 위험이 가장 큰 쪽이 거기다.
+- 범위 밖: 속도 제한(rate limit), 톰캣·커넥션 풀 크기, profile 분리, 로그에 주문·요청 식별자를 남기는 것. [현재 상태](current-state.md)의 알려진 빈틈에 적었다.
+- 갱신: [현재 상태](current-state.md).
