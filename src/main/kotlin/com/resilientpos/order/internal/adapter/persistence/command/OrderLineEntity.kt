@@ -8,7 +8,6 @@ import jakarta.persistence.Entity
 import jakarta.persistence.Id
 import jakarta.persistence.Table
 import java.math.BigDecimal
-import java.math.RoundingMode
 import java.util.Currency
 import java.util.UUID
 
@@ -41,7 +40,7 @@ class OrderLineEntity(
         id = OrderLineId(id),
         productCode = productCode,
         productName = productName,
-        unitPrice = Money(unitPrice.setScale(currency.defaultFractionDigits, RoundingMode.UNNECESSARY), currency),
+        unitPrice = Money.of(unitPrice, currency),
         quantity = quantity,
     )
 

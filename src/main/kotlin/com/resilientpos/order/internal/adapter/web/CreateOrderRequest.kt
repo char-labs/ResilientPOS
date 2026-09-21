@@ -39,5 +39,5 @@ data class CreateOrderLineRequest(
     val quantity: Int,
 ) {
     fun toCommand(currency: Currency): CreateOrderLine =
-        CreateOrderLine(productCode, productName, Money.of(unitPrice.toPlainString(), currency), quantity)
+        CreateOrderLine(productCode, productName, Money.of(unitPrice, currency), quantity)
 }

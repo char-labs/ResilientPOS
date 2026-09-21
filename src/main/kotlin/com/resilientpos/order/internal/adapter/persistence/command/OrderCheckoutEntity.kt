@@ -8,7 +8,6 @@ import jakarta.persistence.Entity
 import jakarta.persistence.Id
 import jakarta.persistence.Table
 import java.math.BigDecimal
-import java.math.RoundingMode
 import java.util.Currency
 import java.util.UUID
 
@@ -29,7 +28,7 @@ class OrderCheckoutEntity(
     fun toDomain(currency: Currency): Checkout = Checkout(
         id = CheckoutId(id),
         checkoutNo = checkoutNo,
-        amount = Money(amount.setScale(currency.defaultFractionDigits, RoundingMode.UNNECESSARY), currency),
+        amount = Money.of(amount, currency),
     )
 
     companion object {
