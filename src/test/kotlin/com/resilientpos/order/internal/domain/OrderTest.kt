@@ -18,6 +18,7 @@ import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 class OrderTest {
@@ -317,12 +318,24 @@ class OrderTest {
     }
 
     @Test
+    fun `소수 자리가 있는 통화도 확정 금액이 통화 자릿수를 지킨다`() {
+        val command = createOrderCommand(currency = usd, lines = listOf(orderLine(unitPrice = Money.of("10.10", usd), quantity = 3)))
+        val order = Order.create(command, FixedIdentifierGenerator(emptyList()), now).aggregate
+
+        val transition = order.requestCheckout(FixedIdentifierGenerator(emptyList()), now)
+
+        assertEquals(listOf(Checkout(1, Money.of("30.30", usd))), transition.aggregate.checkouts)
+        assertEquals(Money.of("30.30", usd), (transition.events.single() as OrderPaymentRequested).amount)
+    }
+
+    @Test
     fun `이미 CHECKOUT_REQUESTED인 주문의 requestCheckout은 같은 주문과 빈 이벤트를 돌려준다`() {
         val order = Order.create(createOrderCommand(), FixedIdentifierGenerator(emptyList()), now).aggregate
         val requested = order.requestCheckout(FixedIdentifierGenerator(emptyList()), now).aggregate
 
         val again = requested.requestCheckout(FixedIdentifierGenerator(emptyList()), now)
 
+        assertSame(requested, again.aggregate)
         assertEquals(OrderStatus.CHECKOUT_REQUESTED, again.aggregate.status)
         assertEquals(requested.checkouts, again.aggregate.checkouts)
         assertEquals(emptyList(), again.events)

@@ -66,7 +66,14 @@ class Order private constructor(
             OrderStatus.OPEN -> {
                 val checkout = Checkout(checkouts.size + 1, total)
                 val requested = Order(
-                    id, storeId, terminalId, clientOrderId, currency, OrderStatus.CHECKOUT_REQUESTED, lines, checkouts + checkout,
+                    id = id,
+                    storeId = storeId,
+                    terminalId = terminalId,
+                    clientOrderId = clientOrderId,
+                    currency = currency,
+                    status = OrderStatus.CHECKOUT_REQUESTED,
+                    lines = lines,
+                    checkouts = checkouts + checkout,
                 )
                 val event = OrderPaymentRequested(
                     eventId = ids.next(),
