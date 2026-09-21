@@ -323,3 +323,16 @@
 - 순서: PR #34(커밋 시점의 버전 충돌) 위에 stacked PR로 올렸다가 #34가 머지된 뒤 `main` 위로 rebase했다. 같은 `BaseEntity.kt`와 같은 wiki 절을 고치기 때문이다. 그 사이 Event Publication Registry PR(#35)이 먼저 머지되어 `V004`를 가져갔으므로 이 PR의 마이그레이션은 `V005`다. EPR이 문장 수 테스트의 기대값을 바꿀 것으로 봤으나 운영 코드에 `@ApplicationModuleListener`가 없어서 바뀌지 않았다. 리스너를 더하는 PR이 그 테스트를 함께 본다.
 - 볼트: `rules/domain-modeling-kotlin.md` 5절에서 `BaseEntity`가 주는 것 중 `@Version`을 빼고, 필요한 엔티티만 직접 선언한다는 규칙과 `@Version` 없는 새 행은 adapter가 `persist`한다는 규칙을 더했다. 안티패턴 목록에도 두 항목을 더했다. 볼트는 git으로 관리되지 않아서 수정 전 사본을 `~/Documents/domain-modeling-kotlin.2026-09-21.before-explicit-version.md`에 남겼다.
 - 갱신: [현재 상태](current-state.md), [도메인 모델](domain-model.md).
+
+## 2026-09-21 — Money가 저장 가능한 금액 범위를 불변식으로 지킨다
+- Spec: [money-amount-limit](../spec/2026-09-21-money-amount-limit.md)
+- 요구사항 영향: 금액 입력 규칙이 하나 늘었다. 정수부가 15자리를 넘는 금액은 `INVALID_MONEY_AMOUNT`(400)로 거절한다. 요청·응답의 모양과 스키마는 바뀌지 않았다.
+- 배경: 전체 코드 감사에서 찾아 실제 요청으로 재현한 결함이다. 단가 `999999999999999`에 수량 2로 주문을 만들면 `201`로 커밋되고, checkout에서 `t_order_checkout.amount`(`numeric(19,4)`) INSERT가 실패해 `500`이 났다. 재시도해도 같고 line을 고치거나 주문을 취소하는 명령이 없어 복구 경로가 없었다.
+- 결정: 상한을 `Money`의 불변식으로 뒀다. `Order`·`OrderLine`의 업무 규칙으로 두면 같은 검사를 두 곳에 써야 하고 `payment`·`sync`가 `Money`를 쓸 때 같은 구멍이 다시 생긴다. 컬럼 precision을 키우는 안은 도메인이 상한을 모르는 상태가 그대로라 더 큰 값에서 같은 고착이 생긴다. 대가로 `foundation`이 저장 형식을 알게 되므로 근거를 `Money.MAX_INTEGER_DIGITS`의 주석에 남겼다.
+- 발견: `Money`에 상한을 넣는 것만으로는 닫히지 않았다. `OrderLine.amount`와 `Order.total`이 lazy 계산이라 `Order.create`가 합계를 평가하지 않아, 합계만 넘는 주문은 여전히 `201`로 커밋됐다(상한을 넣은 뒤 확인). 달라진 것은 checkout의 응답이 `500`에서 `400`으로 바뀐 것뿐이었다. 그래서 `Order.create`가 생성 시점에 합계를 한 번 평가하게 했다.
+- 범위 밖: 지수 표기 입력의 비용, 소수 자릿수가 `-1`인 통화, `Money.of`가 `NumberFormatException`을 감싸지 않는 것, `quantity`와 line 개수의 상한. 모두 같은 감사에서 나왔고 [현재 상태](current-state.md)의 알려진 빈틈에 적었다.
+- 검토: 제출 전 multi-review(Claude 89점, Codex 90점, Gemini는 CLI가 없어 미실행)를 실행했고 둘 다 막는 결함은 없다고 판정했다. 상한 식에서 반례를 찾지 못했다는 것도 둘 다 같았다.
+- 정정: 두 리뷰어가 함께 짚은 사실 오류를 고쳤다. spec이 "범위를 넘는 행이 저장된 적이 없다(컬럼 제약이 막아 왔다)"고 적었는데 틀렸다. **컬럼 제약은 개별 금액만 막았고 합계는 막은 적이 없다.** 합계가 범위를 넘는 주문이 이미 저장돼 있으면 이 변경 뒤에도 고착이고, 달라지는 것은 checkout 응답이 500에서 400으로 바뀌는 것뿐이다. 알려진 빈틈에 적었다.
+- 반영: 상한 상수와 `numeric(19,4)`를 이어 붙이는 왕복 테스트를 더했다(15자리 주문이 실제로 저장되고 checkout까지 간다). 거절만 확인하면 상한을 14로 잘못 적어도 단위 테스트만 고쳐 통과한다는 지적이었다. `Order.create`의 합계 평가에 `requireStorableTotal`이라는 이름과 KDoc을 줘서 line을 바꾸는 명령이 생길 때 같은 경로에서 불러야 한다는 계약을 남겼다. `minus`, 소수 4자리 통화(CLF), 여러 line의 합산 경계도 고정했다.
+- 정정: `Money`를 Jackson으로 역직렬화하는 경로가 지금 없어서 검사 경로 열거에서 뺐다.
+- 갱신: [현재 상태](current-state.md).

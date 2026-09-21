@@ -192,6 +192,41 @@ class OrderTest {
     }
 
     @Test
+    fun `합계가 저장 범위를 넘으면 주문을 만들지 않는다`() {
+        val command = createOrderCommand(
+            lines = listOf(orderLine(unitPrice = Money.of("999999999999999", krw), quantity = 2)),
+        )
+
+        val failure = assertFailsWith<DomainException> {
+            Order.create(command, FixedIdentifierGenerator(emptyList()), now)
+        }
+
+        assertEquals(Money.INVALID_MONEY_AMOUNT, failure.code)
+        assertEquals(DomainErrorKind.INVALID, failure.kind)
+    }
+
+    @Test
+    fun `여러 line의 합산도 저장 범위를 기준으로 판정한다`() {
+        val half = Money.of("500000000000000", krw)
+        val justUnder = Money.of("999999999999998", krw)
+
+        assertFailsWith<DomainException>("합이 16자리") {
+            Order.create(
+                createOrderCommand(lines = listOf(orderLine(unitPrice = half), orderLine(productCode = "SKU-2", unitPrice = half))),
+                FixedIdentifierGenerator(emptyList()),
+                now,
+            )
+        }
+
+        val ok = Order.create(
+            createOrderCommand(lines = listOf(orderLine(unitPrice = justUnder), orderLine(productCode = "SKU-2", unitPrice = Money.of("1", krw)))),
+            FixedIdentifierGenerator(emptyList()),
+            now,
+        )
+        assertEquals(Money.of("999999999999999", krw), ok.aggregate.total)
+    }
+
+    @Test
     fun `합계는 line 단가 곱 수량의 합이다`() {
         val command = createOrderCommand(
             lines = listOf(
