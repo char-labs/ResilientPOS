@@ -39,6 +39,12 @@
 - 테스트를 고친다. 발행 기록 조회에 `listener_id` 조건을 더한다(실제 리스너가 생기면 같은 이벤트에 행이 둘이 된다). 롤백 테스트의 300ms 대기를 없애고, 롤백 뒤에 다른 주문의 checkout을 커밋해 그 완료를 기다린 다음 롤백된 주문의 수신이 0건인지 본다. 기다리다 시간이 넘으면 그때의 발행 기록 상태를 메시지에 담는다. 자릿수가 어긋난 금액의 JSON은 `Money`의 검증이 복원을 거절한다는 것을 테스트로 고정한다.
 - 공식 스키마와 다르게 쓴 곳을 스키마 변경 검토 끝에 적는다.
 
+### 범위 조정 3 (2026-09-21, Modulith 업그레이드 대응 절차를 적는다)
+"Modulith를 올릴 때 엔티티의 컬럼이 바뀌었는지 확인하고 마이그레이션을 함께 넣어야 한다"는 규칙만 있고 **어떻게 확인하고 대응하는지**가 없었다. 사용자가 그 점을 물어서 실제 동작을 확인하고 절차를 [도메인 모델](../wiki/domain-model.md) 4.3절에 적는다.
+- `V004`를 v1 스키마로 되돌려 "라이브러리만 올라간" 상황을 재현했다(임시 변경이고 커밋하지 않았다). `Schema validation: missing column [completion_attempts] in table [event_publication]`으로 기동이 막혔고 `SchemaMigrationTest` 3개가 모두 실패했다. 통합 테스트가 컨텍스트를 띄우므로 버전을 올리는 PR의 CI에서 먼저 잡힌다.
+- Modulith는 자기 스키마를 버전으로 관리한다. `spring-modulith-events-jdbc` jar에 `schemas/v1/`과 `schemas/v2/`가 함께 들어 있어서 두 버전을 diff하면 무엇이 바뀌었는지 알 수 있다. 실제 v1 → v2 변경은 nullable 컬럼 셋(`status`, `completion_attempts`, `last_resubmission_date`) 추가였다.
+- CI가 잡지 못하는 경우는 라이브러리가 컬럼을 없앨 때다. `validate`는 매핑된 컬럼만 검사하므로(4.7절 질문 8에 기록된 확인) 조용히 통과하고 쓰이지 않는 컬럼이 남는다.
+
 ## 스키마 변경 검토
 [도메인 모델](../wiki/domain-model.md) 4.7절 질문의 답이다. 이 테이블은 프레임워크가 소유하고 컬럼을 읽고 쓰는 코드도 Modulith 안에 있다.
 
