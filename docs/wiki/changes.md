@@ -387,5 +387,8 @@
 - 결정: 풀 크기는 건드리지 않았다. 배포 환경이 없어 정할 근거가 없고, 상한을 두는 것과 크기를 정하는 것은 다른 결정이다.
 - 발견: 설정을 적기만 하고 확인하지 않으면 오타를 잡지 못한다. 실재하지 않는 이름(`connect-timeout`, `max-doc-length`)과 `spring.jpa.properties`의 오타(`query.timeoutt`)를 넣어 보니 Spring이 **조용히 무시**했다. 값을 읽어 확인하는 테스트를 남겼다.
 - 발견: 이름의 kebab/camel 차이는 오타가 아니다. `connectionTimeout`·`maxDocumentLength`는 relaxed binding이 받아들여 그대로 적용된다. 반면 `spring.jpa.properties.*`는 그대로 넘기는 map이라 relaxed binding이 없고 오타가 조용히 사라진다. 위험이 가장 큰 쪽이 거기다.
+- 확인: 본문 상한이 정상 주문을 막지 않는다. 최악의 정상 주문(line 500개, `productCode` 64자, `productName` 255자 전부 한글, 정수부 15자리 단가)이 465,192바이트로 1 MiB의 절반이 안 된다. 문서 상한에 걸리는 지점은 line 1100개 부근이라 **먼저 걸리는 것은 언제나 line 개수 상한**이고, 그래야 일반적인 파싱 실패 대신 이유가 붙은 400이 나간다.
+- 확인: 이미 500개를 넘는 주문이 있어도 조회와 checkout이 그대로 동작한다. `Order.restore`는 이 검사를 거치지 않으며 이는 "생성 불변식은 최초 `create` 때 검증했다"는 기존 계약과 같다. 상한을 더하면서 기존 데이터를 막아 세우지 않는다.
+- 주의: `socketTimeout: 30`은 Flyway 마이그레이션에도 걸린다. 같은 `DataSource`를 쓰기 때문이다. 지금 마이그레이션 4개는 모두 작아서 문제가 없지만, 30초를 넘길 수 있는 마이그레이션(큰 테이블의 인덱스 생성, 백필)을 더하는 PR은 이 값을 함께 봐야 한다.
 - 범위 밖: 속도 제한(rate limit), 톰캣·커넥션 풀 크기, profile 분리, 로그에 주문·요청 식별자를 남기는 것. [현재 상태](current-state.md)의 알려진 빈틈에 적었다.
 - 갱신: [현재 상태](current-state.md).
