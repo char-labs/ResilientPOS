@@ -13,7 +13,7 @@
 | 식별자 | `uuid-creator` 6.1.1 (UUID v7) |
 | 구조 검증 | Spring Modulith 경계 검증, ArchUnit 1.4.2 의존성 방향 가드 |
 | 통합 테스트 | Testcontainers 2.0.5 PostgreSQL 18. `./gradlew test` 실행에 Docker가 필요하다 |
-| 테스트 | Kotlin Test/JUnit 5, Spring Boot 테스트 starter, Fixture Monkey 1.2.3; 총 87개 (컨텍스트 1, 스키마 3, 모듈 구조 2, 의존성 방향 2, Money 8, 식별자 4, Order 15, OrderCommandFacade 9, RequestCheckout 통합 8, 이벤트 발행 기록 통합 6, API advice 9, OrderController 8, checkout Controller 5, 주문 API 통합 7) |
+| 테스트 | Kotlin Test/JUnit 5, Spring Boot 테스트 starter, Fixture Monkey 1.2.3; 총 88개 (컨텍스트 1, 스키마 3, 모듈 구조 2, 의존성 방향 2, Money 8, 식별자 4, Order 15, OrderCommandFacade 9, RequestCheckout 통합 8, 이벤트 발행 기록 통합 7, API advice 9, OrderController 8, checkout Controller 5, 주문 API 통합 7) |
 | 로컬 하네스 | Python 3 표준 라이브러리 |
 
 근거: [build.gradle.kts](../../build.gradle.kts), [Gradle Wrapper](../../gradle/wrapper/gradle-wrapper.properties), [애플리케이션 설정](../../src/main/resources/application.yaml).
@@ -32,7 +32,8 @@
 - Event Publication Registry(`starter-jpa`)를 도입했다. 트랜잭션 안에서 발행한 이벤트는 그 이벤트를 받는 트랜잭션 이벤트 리스너마다 `event_publication`에 한 행씩, 업무 상태와 같은 커밋으로 기록된다.
   리스너가 성공하면 `completion_date`와 `status=COMPLETED`가 찍히고(완료 처리 UPDATE, 행은 남는다) 실패하면 `status=FAILED`인 미완료 기록으로 남는다. 업무 트랜잭션이 롤백되면 기록도 리스너 호출도 없다.
   **받는 리스너가 없는 이벤트는 기록되지 않는다.** 프로덕션 리스너가 아직 없어서 지금 실제로 기록되는 이벤트는 없고, 동작은 테스트 전용 리스너로 검증한다.
-  Modulith의 자동 구성이 `@EnableAsync`를 켜므로 `@ApplicationModuleListener`는 Spring Boot의 기본 task executor에서 비동기로 실행된다. 업무 요청의 응답은 리스너를 기다리지 않는다. 종료할 때 진행 중인 리스너를 2초 기다린다(Modulith가 바꾸는 기본값).
+  Modulith의 자동 구성이 `@EnableAsync`를 켜므로 `@ApplicationModuleListener`는 Spring Boot의 기본 task executor에서 비동기로 실행된다. 업무 요청의 응답은 리스너를 기다리지 않는다. 그 실행기는 코어 8, 큐 무제한이다. 동시에 도는 리스너는 8개가 상한이고 밀린 작업은 메모리에 쌓인다. 종료할 때 진행 중인 리스너를 2초 기다리고(Modulith가 바꾸는 기본값) 그 안에 시작하지 못한 작업은 실행되지 않은 채 미완료 기록으로 남는다. 풀·큐·거절 정책은 provider를 호출하는 리스너를 넣는 `payment` PR이 정한다.
+  완료 처리 방식(`completion-mode: update`)과 재기동 시 재발행 끔은 기본값과 같지만 `application.yaml`에 적어 두었다.
   이벤트는 JSON으로 저장된다. value class ID는 UUID 문자열, `Money`는 `{"amount":3500,"currency":"KRW"}` 모양이고 `30.00`처럼 끝자리가 0인 금액도 자릿수를 잃지 않고 복원된다.
   **미완료 이벤트를 다시 보내는 절차가 없다.** 재기동 시 재발행은 꺼져 있고(인스턴스가 여럿이면 중복 재발행된다) 재전송 주기도 없다. 완료 행을 지우는 정리 작업도 없다. 첫 실제 리스너가 생기는 `payment` PR이 정한다. 알려진 빈틈이다([event-publication-registry](../spec/2026-09-21-event-publication-registry.md)).
 - Kafka, Redis, Kotlin JDSL, OpenTelemetry는 참고 문서의 설계 방향이며 현재 빌드 의존성에는 없다.

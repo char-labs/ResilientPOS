@@ -291,4 +291,10 @@
 - 발견: Modulith의 자동 구성이 `@EnableAsync`를 켠다. `@ApplicationModuleListener`는 우리가 켜지 않아도 Spring Boot의 기본 task executor에서 비동기로 실행되고, 종료 대기 2초도 Modulith가 기본값으로 바꾼다. 처음 spec은 동기 실행이라고 잘못 적었고 테스트용 리스너의 실행 스레드를 보고 jar를 확인해 고쳤다.
 - 발견: JPA용 jar에는 스키마 SQL이 없다. JPA가 `validate`라서 의존성만 넣으면 `Schema validation: missing table [event_publication]`으로 기동이 막힌다. 같은 버전 JDBC 모듈의 공식 PostgreSQL 스키마 v2를 기준으로 마이그레이션을 썼다.
 - 발견: 이벤트 직렬화는 기본 구성으로 왕복이 성립한다. value class ID는 UUID 문자열, `Money`는 금액 숫자와 통화 코드로 저장되고 `30.00`처럼 끝자리가 0인 금액도 자릿수를 잃지 않는다.
+- 검토: 제출 전 multi-review(Claude 88점, Codex 87점, Gemini는 CLI가 없어 미실행)와 구현자가 아닌 `code-reviewer`의 스키마 대조(불일치 없음)를 실행했다. 셋 다 막는 결함은 없다고 판정했다. 리뷰어의 지적 중 사실 확인이 필요한 것은 jar와 임시 테스트로 확인하고 적었다.
+- 발견: 리스너를 실행하는 기본 task executor는 코어 8, 큐 무제한이다. 종료 대기 2초 안에 시작하지 못한 작업은 미완료 기록으로 남는다.
+- 발견: `listener_id`에 리스너의 클래스 정규 이름·메서드·이벤트 타입이 저장되고 완료 표시가 이 값으로 행을 찾는다. 리스너의 이름도 저장 형식이다.
+- 발견: 트랜잭션 밖에서 발행하면 발행 기록은 남는데 리스너가 실행되지 않는다. 리뷰어는 "기록도 전달도 없다"고 예상했지만 실제로는 기록만 남아 미완료로 쌓인다. 이벤트 발행은 Facade의 트랜잭션 안에서만 한다는 규칙을 [도메인 모델](domain-model.md) 4.3절에 적었다.
+- 결정: 합의한 기본값 둘을 `application.yaml`에 명시했다. 동작은 바뀌지 않는다.
+- 다음 작업이 확인할 것: 종료할 때 task executor의 대기와 DataSource 종료의 순서(확인하지 않았다), 오래 머문 발행 기록을 감시하는 `spring.modulith.events.staleness.*` 설정, 완료 표시가 UPDATE라서 생기는 테이블 팽창과 정리 작업.
 - 갱신: [현재 상태](current-state.md), [도메인 모델](domain-model.md), [AGENTS.md](../../AGENTS.md).
