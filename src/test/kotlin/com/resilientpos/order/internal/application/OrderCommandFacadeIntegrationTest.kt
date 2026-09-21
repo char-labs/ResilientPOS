@@ -139,7 +139,7 @@ class OrderCommandFacadeIntegrationTest(
     }
 
     private fun Order.withLines(lines: List<OrderLine>): Order =
-        Order.restore(id, storeId, terminalId, clientOrderId, currency, status, lines)
+        Order.restore(id, storeId, terminalId, clientOrderId, currency, status, lines, checkouts)
 
     @Test
     fun `line이 바뀐 주문을 다시 저장하면 같은 ID는 갱신하고 새 ID는 추가하고 없어진 ID는 soft delete한다`() {

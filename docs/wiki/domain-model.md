@@ -48,6 +48,7 @@ Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰�
 컨텍스트 사이의 소유 규칙:
 - `payment`만 결제 정본 상태를 바꾼다. `reconciliation`은 case와 근거를 소유하고 결론을 `PaymentManagement.resolveFromReconciliation(command)` 같은 좁은 공개 command로 요청한다.
 - `order`와 `payment`는 서로의 테이블·엔티티·repository를 읽거나 쓰지 않는다. 사실은 이벤트로 건너간다(`OrderPaymentRequested` → payment, `PaymentApproved` → order·reconciliation, `OrderPaid` → fulfillment).
+- `order`는 합계가 0원인 주문도 똑같이 checkout을 확정하고 `OrderPaymentRequested`를 낸다. 전액 할인·프로모션 주문이 거절되지 않고 주문·결제·영수증 조회가 같은 경로로 보이게 하려는 것이다. `payment`는 0원 attempt를 provider 호출 없이 승인으로 기록하고 `PaymentApproved`를 내야 한다.
 - `sync`는 접수·중복·순서만 판정하고, 받아들인 명령은 소유 컨텍스트의 Command Facade로 넘긴다. `SyncOperationApplied`는 기술 감사 이벤트이며 `OrderCreated`를 대체하지 않는다.
 - `foundation`은 프레임워크 없는 값 타입(`Money`, 식별자 생성기)과 모델링 원시 타입(`Transition`, `DomainEvent`, §4.5)만 공유한다. 주문·결제 같은 업무 개념을 두는 곳이 아니다.
 
@@ -56,7 +57,7 @@ Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰�
 
 | 루트 | 자식 엔티티 (같은 트랜잭션) | 왜 같은 aggregate인가 |
 |---|---|---|
-| `Order` | `OrderLine`(판매 시점 상품 코드·이름·단가·수량), checkout(회차별 확정 금액·통화·정책 버전) | line 변경과 금액, checkout 확정과 상태 전이가 한 커밋으로 맞아야 한다 |
+| `Order` | `OrderLine`(판매 시점 상품 코드·이름·단가·수량), checkout(회차별 확정 금액·통화. 정책 버전은 store 정책이 생길 때 더한다. 도메인에서는 식별자 없는 값 객체 `Checkout`이고 `t_order_checkout`의 키는 영속화 PR이 정한다) | line 변경과 금액, checkout 확정과 상태 전이가 한 커밋으로 맞아야 한다 |
 | `PaymentAttempt` | provider 요청·응답 결과. provider idempotency 기록이 attempt의 자식인지 컨텍스트 공용 테이블인지는 payment PR spec에서 정한다 | "provider 결과를 한 번만 적용했다"를 같은 트랜잭션의 기록이 증명한다. 취소는 별도 attempt다([외부 연동 전략](../references/04_External_Integration_Strategy.md)) |
 | `Terminal` | credential rotation 이력 | 회전과 이력이 따로 커밋되면 어느 자격증명이 유효한지 알 수 없다 |
 | `TerminalSyncState` | operation 접수 기록(`t_sync_operation`) | watermark 전진과 접수 기록이 함께 커밋돼야 gap을 건너뛰지 않는다 |
@@ -78,7 +79,7 @@ Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰�
 | `operation` (sync) | 단말이 오프라인에서 만든 명령 한 건. 식별자는 `operationId`(UUID v7) | `receipt` | 한 스키마에서 receipt가 접수증과 고객 영수증 두 뜻으로 쓰였다. 봉투의 `operationId`와 어휘를 맞췄다. 테이블은 `t_sync_operation` |
 | `watermark` | 단말별로 서버가 확정한 마지막 sequence(`lastAckedSequence`) | `terminal sync state` | state는 모든 테이블에 해당해 아무 말도 하지 않는다. 기획 문서가 이미 쓰는 단어다. 테이블은 `t_sync_watermark` |
 | `sequence` (terminal sequence) | 한 단말 안에서 단조 증가하는 명령 순번. 누락(gap) 탐지의 근거 | — | UUID 생성 순서, Kafka 순서, aggregate version과 다르다. 서로 대체하지 않는다 |
-| `checkout` | 결제 시도 회차에 대해 확정한 금액·통화·정책 버전 | `checkout snapshot` | snapshot은 구현 용어다. 이 값은 "N회차 결제 시도의 확정 금액"이라는 업무 사실이다. 테이블은 `t_order_checkout`. [청사진 §1.1](../references/05_Domain_Development_Blueprint.md)의 `CheckoutSnapshot`·`snapshotOf`는 `Checkout`·`checkoutOf`로 대체한다 |
+| `checkout` | 결제 시도 회차에 대해 확정한 금액·통화·정책 버전(정책 버전은 store 정책이 생길 때 더한다) | `checkout snapshot` | snapshot은 구현 용어다. 이 값은 "N회차 결제 시도의 확정 금액"이라는 업무 사실이다. 테이블은 `t_order_checkout`. [청사진 §1.1](../references/05_Domain_Development_Blueprint.md)의 `CheckoutSnapshot`·`snapshotOf`는 `Checkout`·`checkoutOf`로 대체한다 |
 | `attempt` (payment) | 한 주문에 대한 provider 요청 1회. `(orderId, attemptNo)`. 승인과 취소는 각각 별도 attempt다 | `payment`, `transaction` | 한 요청의 결과(승인·거절·`UNKNOWN`)를 한 회차에 담아야 한다. transaction은 DB 용어와 충돌한다 |
 | `UNKNOWN` | provider 결과를 아직 확인하지 못한 결제 상태. 실패가 아니다 | `FAILED`, `TIMEOUT` | timeout은 전송 관찰의 실패이고 결제 결과의 실패가 아니다. `UNKNOWN`에서 새 승인 요청을 재시도하지 않고 provider 조회 → reconciliation으로 수렴한다 |
 | `gap` / `duplicate` / `conflict` | sync 판정 결과. 순번 누락 / 이미 접수한 operation의 재전송 / 같은 키에 다른 내용 | 일반 `error`, HTTP 500 | 세 가지는 각각 다른 복구 경로를 가진 업무 결과다. 항목 단위 결과로 돌려주고 부분 성공을 200 하나로 숨기지 않는다 |
@@ -101,7 +102,7 @@ Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰�
 ## 4. 확정한 설계 결정
 
 ### 4.1 Aggregate 상태 전이는 불변 객체가 새 인스턴스를 반환한다
-- 전이 메서드는 자신을 바꾸지 않고 바뀐 aggregate와 발생한 이벤트를 돌려준다. 예: `order.requestCheckout(policy)`는 `CHECKOUT_REQUESTED` 상태의 새 `Order`와 `OrderPaymentRequested`를 반환한다.
+- 전이 메서드는 자신을 바꾸지 않고 바뀐 aggregate와 발생한 이벤트를 돌려준다. 예: `order.requestCheckout(ids, now)`는 `CHECKOUT_REQUESTED` 상태의 새 `Order`와 `OrderPaymentRequested`를 반환한다. 처음 설계의 인자는 `policy`였다. 합계가 단가 곱 수량의 합뿐이고 `Money`가 통화 자릿수를 강제해서 반올림할 계산이 없으므로 `CheckoutPolicy`와 정책 버전은 할인·세금처럼 반올림이 필요한 첫 PR이 store 정책과 함께 도입한다([order-request-checkout-domain](../spec/2026-09-21-order-request-checkout-domain.md)).
 - 근거: 볼트 규칙 `effective-java-for-kotlin.md` Item 17과 `kotlin-idioms-and-design-patterns.md` §1(`order.cancelled(reason)`)이 이미 이 방향이다. 도메인 테스트가 Spring 없이 값 비교로 끝나고, 전이 실패 시 원본이 그대로 남아 실패 원자성(Item 76)이 공짜로 따라온다.
 - 원문 [청사진 §1.1](../references/05_Domain_Development_Blueprint.md)의 `status = OrderStatus.CHECKOUT_REQUESTED` 예시는 이 결정으로 대체한다. `@Version` 낙관적 잠금은 JPA 엔티티에 남고, Repository 구현이 새 aggregate를 관리 엔티티에 적용할 때 버전 충돌을 감지한다.
 

@@ -12,6 +12,7 @@ import com.resilientpos.order.OrderCreated
 import com.resilientpos.order.OrderEvent
 import com.resilientpos.order.OrderId
 import com.resilientpos.order.OrderLineId
+import com.resilientpos.order.OrderPaymentRequested
 import com.resilientpos.order.OrderStatus
 import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.TerminalId
@@ -29,6 +30,7 @@ class Order private constructor(
     val currency: Currency,
     val status: OrderStatus,
     val lines: List<OrderLine>,
+    val checkouts: List<Checkout>,
 ) {
 
     val total: Money get() = lines.fold(Money.zero(currency)) { acc, line -> acc + line.amount }
@@ -55,6 +57,38 @@ class Order private constructor(
         }
     }
 
+    /**
+     * 결제를 요청하는 시점의 금액을 다음 회차 checkout으로 확정한다.
+     * 이미 요청된 주문이면 같은 주문과 빈 이벤트를 돌려줘서 재시도가 이벤트를 두 번 내지 않게 한다.
+     */
+    fun requestCheckout(ids: IdentifierGenerator, now: Instant): Transition<Order, OrderEvent> =
+        when (status) {
+            OrderStatus.OPEN -> {
+                val checkout = Checkout(checkouts.size + 1, total)
+                val requested = Order(
+                    id = id,
+                    storeId = storeId,
+                    terminalId = terminalId,
+                    clientOrderId = clientOrderId,
+                    currency = currency,
+                    status = OrderStatus.CHECKOUT_REQUESTED,
+                    lines = lines,
+                    checkouts = checkouts + checkout,
+                )
+                val event = OrderPaymentRequested(
+                    eventId = ids.next(),
+                    occurredAt = now,
+                    orderId = id,
+                    storeId = storeId,
+                    terminalId = terminalId,
+                    checkoutNo = checkout.checkoutNo,
+                    amount = checkout.amount,
+                )
+                Transition(requested, listOf(event))
+            }
+            OrderStatus.CHECKOUT_REQUESTED -> Transition(this, emptyList())
+        }
+
     companion object {
         const val EMPTY_ORDER = "EMPTY_ORDER"
         const val CURRENCY_MISMATCH = "CURRENCY_MISMATCH"
@@ -73,7 +107,8 @@ class Order private constructor(
             currency: Currency,
             status: OrderStatus,
             lines: List<OrderLine>,
-        ): Order = Order(id, storeId, terminalId, clientOrderId, currency, status, lines)
+            checkouts: List<Checkout>,
+        ): Order = Order(id, storeId, terminalId, clientOrderId, currency, status, lines, checkouts)
 
         fun create(command: CreateOrderCommand, ids: IdentifierGenerator, now: Instant): Transition<Order, OrderEvent> {
             if (command.lines.isEmpty()) {
@@ -92,6 +127,7 @@ class Order private constructor(
                 currency = command.currency,
                 status = OrderStatus.OPEN,
                 lines = command.lines.map { OrderLine(OrderLineId(ids.next()), it.productCode, it.productName, it.unitPrice, it.quantity) },
+                checkouts = emptyList(),
             )
             val event = OrderCreated(
                 eventId = ids.next(),
