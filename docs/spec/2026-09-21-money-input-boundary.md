@@ -35,6 +35,7 @@
 ## 변경 경로
 - src/main/kotlin/com/resilientpos/foundation/Money.kt
 - src/main/kotlin/com/resilientpos/order/internal/adapter/web/CreateOrderRequest.kt
+- src/main/kotlin/com/resilientpos/order/internal/adapter/persistence/command/**
 - src/test/kotlin/com/resilientpos/foundation/MoneyTest.kt
 - src/test/kotlin/com/resilientpos/order/**
 - docs/**
