@@ -82,3 +82,7 @@ RED는 두 단계로 관측했다. 새 입구 `of(BigDecimal, Currency)`는 존�
 인수 조건 5번(생성자 우회)은 실제로 필요했다. `of`에만 통화 판정을 두면 `Money(BigDecimal("1.0E+2"), XAU)`와 `zero(XAU)`가 그대로 통과한다. 판정을 `fractionDigitsOf`로 빼 `init`이 쓰게 해서 닫았다.
 
 `stripTrailingZeros()`를 쓴 이유를 남긴다. 판정을 `amount.scale()`로 직접 하면 `1000.0000`(KRW)처럼 뒤따르는 0만 있는 입력이 거절된다. 0을 떼면 유효 자릿수가 드러나고, 떼는 비용은 `precision()`에 비례해 지수 표기에서는 한 자리다. canonical 값도 원본이 아닌 뗀 값에서 만들어야 `setScale`이 큰 `BigInteger`를 만들지 않는다.
+
+`stripTrailingZeros()`가 비싸지는 입력이 도달 가능한지 확인했다. 자릿수가 실제로 적힌 리터럴에서는 비싸다 — 100만 자리에 1.4초가 걸린다. 그러나 **Jackson이 숫자 길이를 1000자로 제한한다**(`StreamReadConstraints.maxNumberLength`, 리터럴과 문자열 양쪽 모두 `StreamConstraintsException`으로 거절). 1000자리에서 `stripTrailingZeros()`는 0ms였다. 이 상한을 올리는 변경은 이 비용을 되살리므로 함께 본다.
+
+이전 구현과 판정이 갈리는 입력이 있는지 따로 대조했다. 경계값 33종(`999999999999999`, `1000000000000000`, `0E+10`, `1000.0000`, `0.00`, 음수, `1E+15`/`1E+16` 등) × 통화 자릿수 3종과 무작위 30만 건에서 **불일치 0건**이다. 새 순서가 기존 `MAX_INTEGER_DIGITS` 계약과 같은 집합을 거절한다.

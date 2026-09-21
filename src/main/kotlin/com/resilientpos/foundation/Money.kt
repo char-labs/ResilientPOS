@@ -62,7 +62,8 @@ data class Money(val amount: BigDecimal, val currency: Currency) {
          */
         fun of(amount: BigDecimal, currency: Currency): Money {
             val digits = fractionDigitsOf(currency)
-            // 뒤따르는 0을 떼어야 유효 자릿수가 드러난다. 떼는 비용은 정수부 자릿수에 비례하고 값을 펴지 않는다.
+            // 뒤따르는 0을 떼어야 유효 자릿수가 드러난다. `1000.0000`을 scale만 보고 거절하면 안 되기 때문이다.
+            // 떼는 비용은 `precision()`, 즉 입력에 실제로 적힌 자릿수에 비례한다. 지수 표기는 한 자리라 공짜다.
             val minimal = amount.stripTrailingZeros()
             if (minimal.scale() > digits) {
                 throw DomainException(INVALID_MONEY_SCALE, "통화 표준 자릿수를 넘는 금액입니다")
