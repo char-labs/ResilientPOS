@@ -14,7 +14,7 @@ import java.util.Currency
 data class Money(val amount: BigDecimal, val currency: Currency) {
 
     init {
-        if (amount.scale() != currency.defaultFractionDigits) {
+        if (amount.scale() != fractionDigitsOf(currency)) {
             throw DomainException(INVALID_MONEY_SCALE, "통화 표준 자릿수를 넘는 금액입니다")
         }
         // 정수부 자릿수만 센다. BigDecimal의 메타데이터만 읽으므로 값을 문자열로 펴지 않는다.
@@ -50,16 +50,48 @@ data class Money(val amount: BigDecimal, val currency: Currency) {
          */
         const val MAX_INTEGER_DIGITS = 15
         const val CURRENCY_MISMATCH = "CURRENCY_MISMATCH"
+        const val UNSUPPORTED_CURRENCY = "UNSUPPORTED_CURRENCY"
+        const val INVALID_MONEY_FORMAT = "INVALID_MONEY_FORMAT"
 
-        fun zero(currency: Currency): Money = of("0", currency)
+        fun zero(currency: Currency): Money = of(BigDecimal.ZERO, currency)
 
-        fun of(raw: String, currency: Currency): Money {
-            val canonical = try {
-                BigDecimal(raw).setScale(currency.defaultFractionDigits, RoundingMode.UNNECESSARY)
-            } catch (e: ArithmeticException) {
+        /**
+         * 값을 펴기 전에 메타데이터로 먼저 판정한다. `precision()`과 `scale()`은 `BigDecimal`이 이미 들고 있는
+         * 정수 두 개라 입력 크기와 무관하지만, `setScale`은 자릿수만큼의 `BigInteger`를 실제로 만든다.
+         * 검사를 뒤에 두면 `1E+100000` 하나를 거절하는 데만 수백 ms가 든다.
+         */
+        fun of(amount: BigDecimal, currency: Currency): Money {
+            val digits = fractionDigitsOf(currency)
+            // 뒤따르는 0을 떼어야 유효 자릿수가 드러난다. 떼는 비용은 정수부 자릿수에 비례하고 값을 펴지 않는다.
+            val minimal = amount.stripTrailingZeros()
+            if (minimal.scale() > digits) {
                 throw DomainException(INVALID_MONEY_SCALE, "통화 표준 자릿수를 넘는 금액입니다")
             }
-            return Money(canonical, currency)
+            if (minimal.precision() - minimal.scale() > MAX_INTEGER_DIGITS) {
+                throw DomainException(INVALID_MONEY_AMOUNT, "저장할 수 있는 금액 범위를 넘습니다")
+            }
+            return Money(minimal.setScale(digits, RoundingMode.UNNECESSARY), currency)
+        }
+
+        fun of(raw: String, currency: Currency): Money {
+            val parsed = try {
+                BigDecimal(raw)
+            } catch (e: NumberFormatException) {
+                throw DomainException(INVALID_MONEY_FORMAT, "금액으로 읽을 수 없는 문자열입니다")
+            }
+            return of(parsed, currency)
+        }
+
+        /**
+         * `Currency`는 금액 개념이 없는 코드(`XAU`, `XDR`, `XXX`)에 `-1`을 돌려준다. 그 값을 canonical scale로
+         * 쓰면 금액이 10 단위로 반올림되므로 [Money]의 불변식을 세울 수 없다. 값을 만들지 않고 거절한다.
+         */
+        private fun fractionDigitsOf(currency: Currency): Int {
+            val digits = currency.defaultFractionDigits
+            if (digits < 0) {
+                throw DomainException(UNSUPPORTED_CURRENCY, "금액을 표현할 수 없는 통화입니다")
+            }
+            return digits
         }
     }
 }

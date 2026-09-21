@@ -2,6 +2,7 @@ package com.resilientpos.foundation
 
 import java.math.BigDecimal
 import java.util.Currency
+import kotlin.system.measureTimeMillis
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -114,5 +115,77 @@ class MoneyTest {
         assertEquals(BigDecimal("0.00"), Money.zero(usd).amount)
         assertEquals(BigDecimal("-999999999999999"), Money.of("-999999999999999", krw).amount)
         assertFailsWith<DomainException> { Money.of("-1000000000000000", krw) }
+    }
+
+    @Test
+    fun `지수 표기 금액을 값을 펴지 않고 거절한다`() {
+        val huge = BigDecimal("1E+100000")
+
+        val failure = assertFailsWith<DomainException> { Money.of(huge, krw) }
+        assertEquals("INVALID_MONEY_AMOUNT", failure.code)
+
+        // 거절 비용이 입력의 크기를 따라가면 안 된다. 펴면 한 번에 수백 ms가 든다.
+        val elapsed = measureTimeMillis {
+            repeat(REPEAT_COUNT) { assertFailsWith<DomainException> { Money.of(huge, krw) } }
+        }
+        assertTrue(elapsed < REJECTION_BUDGET_MILLIS, "${REPEAT_COUNT}회 거절에 ${elapsed}ms가 들었다")
+    }
+
+    @Test
+    fun `지수 표기를 쓴 소수도 값을 펴지 않고 거절한다`() {
+        val tiny = BigDecimal("1E-100000")
+
+        val elapsed = measureTimeMillis {
+            repeat(REPEAT_COUNT) {
+                assertEquals("INVALID_MONEY_SCALE", assertFailsWith<DomainException> { Money.of(tiny, krw) }.code)
+            }
+        }
+        assertTrue(elapsed < REJECTION_BUDGET_MILLIS, "${REPEAT_COUNT}회 거절에 ${elapsed}ms가 들었다")
+    }
+
+    @Test
+    fun `소수 자릿수가 없는 통화로는 금액을 만들지 않는다`() {
+        // XAU·XDR·XXX는 defaultFractionDigits가 -1이다. canonical scale로 쓰면 금액이 10 단위로 반올림된다.
+        for (code in listOf("XAU", "XDR", "XXX")) {
+            val currency = Currency.getInstance(code)
+            val failure = assertFailsWith<DomainException>(code) { Money.of("100", currency) }
+
+            assertEquals("UNSUPPORTED_CURRENCY", failure.code, code)
+            assertTrue(failure.message.isNotBlank())
+            assertTrue(failure.message != failure.code)
+        }
+    }
+
+    @Test
+    fun `소수 자릿수가 없는 통화는 생성자와 zero로도 우회할 수 없다`() {
+        val xau = Currency.getInstance("XAU")
+
+        assertFailsWith<DomainException>("생성자") { Money(BigDecimal("1.0E+2"), xau) }
+        assertFailsWith<DomainException>("zero") { Money.zero(xau) }
+    }
+
+    @Test
+    fun `숫자가 아닌 금액 문자열은 도메인 예외다`() {
+        for (raw in listOf("abc", "", " ", "1,000", "1.0.0")) {
+            val failure = assertFailsWith<DomainException>(raw) { Money.of(raw, krw) }
+
+            assertEquals("INVALID_MONEY_FORMAT", failure.code, raw)
+            assertTrue(failure.message.isNotBlank())
+            assertTrue(failure.message != failure.code)
+        }
+    }
+
+    @Test
+    fun `BigDecimal을 그대로 받는 입구도 문자열 입구와 같은 값을 만든다`() {
+        assertEquals(Money.of("1000", krw), Money.of(BigDecimal("1000"), krw))
+        assertEquals(Money.of("10.5", usd), Money.of(BigDecimal("10.5"), usd))
+        assertEquals(BigDecimal("100"), Money.of(BigDecimal("1E+2"), krw).amount)
+    }
+
+    private companion object {
+        const val REPEAT_COUNT = 1_000
+
+        /** 펴지 않으면 1000회가 수 ms다. 머신 편차를 넉넉히 덮고도 375ms짜리 한 번보다 작은 상한을 고른다. */
+        const val REJECTION_BUDGET_MILLIS = 1_000L
     }
 }

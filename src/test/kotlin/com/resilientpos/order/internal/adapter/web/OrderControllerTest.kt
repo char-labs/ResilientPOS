@@ -140,6 +140,28 @@ class OrderControllerTest(
     }
 
     @Test
+    fun `currency가 금액을 표현할 수 없는 통화면 400 UNSUPPORTED_CURRENCY이다`() {
+        postOrder(requestJson(currency = "XAU")).andExpect {
+            status { isBadRequest() }
+            jsonPath("$.result") { value("FAIL") }
+            jsonPath("$.error.errorCode") { value("UNSUPPORTED_CURRENCY") }
+        }
+
+        verifyNoInteractions(facade)
+    }
+
+    @Test
+    fun `unitPrice가 지수 표기로 저장 범위를 넘으면 400 INVALID_MONEY_AMOUNT이다`() {
+        postOrder(requestJson(unitPrice = "1E+100000")).andExpect {
+            status { isBadRequest() }
+            jsonPath("$.result") { value("FAIL") }
+            jsonPath("$.error.errorCode") { value("INVALID_MONEY_AMOUNT") }
+        }
+
+        verifyNoInteractions(facade)
+    }
+
+    @Test
     fun `terminalId가 UUID 형식이 아니면 400 BAD_REQUEST이고 Facade를 부르지 않는다`() {
         expectBadRequest(requestJson(terminalId = "not-a-uuid")).andDo {
             handle(
