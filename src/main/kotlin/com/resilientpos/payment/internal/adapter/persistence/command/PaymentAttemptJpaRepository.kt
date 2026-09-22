@@ -23,6 +23,9 @@ interface PaymentAttemptJpaRepository : Repository<PaymentAttemptEntity, UUID> {
     /**
      * 조건이 `ux_payment_attempt_inflight_authorization`의 술어와 같다. 둘이 갈라지면
      * 조회는 없다고 하는데 INSERT는 거절당하는 상태가 된다.
+     *
+     * 술어의 `deleted_at is null`은 여기 적지 않아도 `BaseEntity`의 `@SoftDelete`가 붙여 준다.
+     * 실제로 나가는 SQL이 `... and status in (?,?,?) and deleted_at is null`인 것을 확인했다.
      */
     fun findFirstByOrderIdAndCheckoutNoAndKindAndStatusIn(
         orderId: UUID,

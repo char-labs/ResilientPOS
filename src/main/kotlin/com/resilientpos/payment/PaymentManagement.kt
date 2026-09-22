@@ -27,8 +27,9 @@ class PaymentManagement(
      * 소비자가 같은 사실을 두 번 보게 되고, 이 시도는 새로 일어난 일이 아니다.
      *
      * 읽은 뒤 넣기 전에 다른 트랜잭션이 끼어드는 창은 이 읽기로 닫히지 않는다. DB의 partial unique가 닫고
-     * 진 쪽은 실패한다. 그 예외를 여기서 잡아 다시 읽을 수는 없다 — 제약 위반이 트랜잭션을 rollback-only로
-     * 만들기 때문이다. 행이 둘이 되지 않는 것이 지켜야 할 불변식이고 그것은 지켜진다.
+     * 진 쪽은 실패한다. 그 예외는 **여기서 잡을 수 있는 것이 아니다.** `persist`가 flush를 미뤄서
+     * 제약 위반이 이 메서드가 반환한 뒤 커밋에서 터지기 때문이다. 행이 둘이 되지 않는 것이
+     * 지켜야 할 불변식이고 그것은 지켜진다.
      */
     @Transactional
     fun createAttempt(command: CreatePaymentAttemptCommand): CreatePaymentAttemptResult {

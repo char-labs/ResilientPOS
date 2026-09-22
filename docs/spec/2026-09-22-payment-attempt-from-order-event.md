@@ -12,7 +12,9 @@
 
 **같은 이벤트가 두 번 와도 시도는 하나다.** 넣기 전에 그 checkout의 진행 중인 승인을 읽고, 있으면 그것을 돌려준다. `order`가 같은 `clientOrderId`에 기존 결과를 돌려주는 것과 같은 어법이다. 순차 재전달은 이 읽기가 전부 걸러 낸다.
 
-읽기와 쓰기 사이에 다른 트랜잭션이 끼어드는 **동시 경합은 읽기로 닫히지 않는다.** 그 창은 `ux_payment_attempt_inflight_authorization`이 닫는다. 진 쪽은 unique 위반으로 실패한다. 그 예외를 같은 트랜잭션 안에서 잡아 다시 읽을 수는 없다 — 제약 위반이 트랜잭션을 rollback-only로 만들기 때문이고, `@ApplicationModuleListener`가 이미 트랜잭션을 소유해 그 위에서 새 트랜잭션을 열 자리도 없다. 그래서 잡지 않고 실패시킨다. 미완료 발행 기록이 남고 재전달은 Kafka 설계가 맡는다. **행이 두 개가 되지 않는 것이 여기서 지켜야 할 불변식이고, 그것은 지켜진다.**
+읽기와 쓰기 사이에 다른 트랜잭션이 끼어드는 **동시 경합은 읽기로 닫히지 않는다.** 그 창은 `ux_payment_attempt_inflight_authorization`이 닫는다. 진 쪽은 unique 위반으로 실패한다.
+
+**그 예외는 Facade 안에서 잡을 수 있는 것이 아니다.** `EntityManager.persist`는 flush를 미루므로 제약 위반이 `save` 호출이 아니라 **커밋에서** 터진다. 실측으로 확인했다 — 같은 트랜잭션에서 충돌하는 두 건을 넣어도 두 번째 `save`는 조용히 지나가고 커밋이 `DataIntegrityViolationException`을 낸다. 그때는 `createAttempt`가 이미 반환한 뒤라 메서드 안에 잡을 것이 없다. 미완료 발행 기록이 남고 재전달은 Kafka 설계가 맡는다. **행이 두 개가 되지 않는 것이 여기서 지켜야 할 불변식이고, 그것은 지켜진다.**
 
 **새 행은 `EntityManager.persist`로 넣는다.** `PaymentAttemptEntity`는 할당식 `@Id`에 `@Version`이 없어서 Spring Data의 `save`가 `merge`로 가고 행마다 SELECT가 하나씩 더 나간다. [도메인 모델](../wiki/domain-model.md) §4.2가 정한 규약이고 `OrderPersistenceAdapter`의 선례를 따른다.
 
@@ -84,6 +86,8 @@ RED는 타입이 없어 컴파일이 먼저 실패했다. [테스트 전략](../
 - **중복 이벤트는 읽기가 걸러 낸다.** 같은 checkout으로 Facade를 다시 부르면 행이 늘지 않고 같은 `paymentId`가 돌아온다. 이벤트도 다시 내지 않는다 — 다시 내면 소비자가 같은 사실을 두 번 본다.
 - **기존 이벤트 테스트 4건이 깨졌는데 원인은 설계가 아니라 이름이었다.** `OrderEventPublicationIntegrationTest`가 `listener_id like '%PaymentRequestedListener%'`로 자기 리스너를 거르는데, 새 리스너 이름 `OrderPaymentRequestedListener`가 그 문자열을 포함한다. 필터를 정규화된 클래스 이름으로 좁혔다. 이 저장소에 프로덕션 리스너가 처음 생기면서 드러난 것이라 다음 리스너에서도 같은 일이 나지 않게 이유를 주석에 남겼다.
 - **리스너가 예외를 삼키지 않는다.** 삼키면 Modulith가 성공으로 기록해 미완료 기록마저 사라진다. 재전달이 Kafka 설계로 미뤄진 지금, 그 기록이 사람이 볼 수 있는 유일한 흔적이다.
+- **멱등 조회가 인덱스 술어와 정확히 같다.** 조회에 `deleted_at`을 적지 않았는데 `@SoftDelete`가 붙여 준다. 실제로 나가는 SQL이 `where order_id=? and checkout_no=? and kind=? and status in (?,?,?) and deleted_at is null`인 것을 Hibernate SQL 로그로 확인했다. 조회와 제약이 갈라지면 "조회는 없다는데 INSERT는 거절당하는" 상태가 되므로 눈으로 넘기지 않았다.
+- **제약 위반은 `save`가 아니라 커밋에서 터진다.** `persist`가 flush를 미루기 때문이다. 같은 트랜잭션에 충돌하는 두 건을 넣어 확인했다 — 두 번째 `save`는 조용히 지나가고 커밋이 `DataIntegrityViolationException`을 낸다. 그래서 "rollback-only라 못 잡는다"가 아니라 **"메서드 안에 잡을 것이 없다"**가 정확한 이유다. 결론은 같지만 근거를 고쳤다.
 - **`payment -> order` 의존이 생겼고 아직 순환은 아니다.** 프로브로 확인했다. `order/internal/application`에 `PaymentApproved`를 받는 클래스를 임시로 두면 `Cycle detected: Slice order -> ...`로 실패하고, 빼면 통과한다. 위 "알려진 한계"에 적었다.
 
 경합 테스트는 두지 않았다. 두 트랜잭션이 읽기와 쓰기 사이에서 정확히 겹치게 만들려면 테스트가 스케줄링을 통제해야 하는데, 이 저장소에 그 장치가 없다. 대신 DB 제약이 그 창을 닫는다는 것은 [payment-attempt-persistence](2026-09-22-payment-attempt-persistence.md)가 같은 checkout에 진행 중인 승인을 두 번 넣어 확인했다.
