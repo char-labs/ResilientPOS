@@ -98,17 +98,20 @@ class HarnessTest(unittest.TestCase):
     def test_size_and_warning(self):
         self.start()
         self.implementation()
-        self.write('src/large.txt', 'line\n' * 600)
+        self.write('src/large.txt', 'line\n' * 900)
         self.assertTrue(check(self.base, worktree=True)[1])
-        self.write('src/large.txt', 'line\n' * 801)
-        self.assertIn('800줄 초과', self.errors(True))
+        self.write('src/large.txt', 'line\n' * 1401)
+        self.assertIn('1400줄 초과', self.errors(True))
 
-    def test_file_limit(self):
+    def test_file_count_does_not_fail(self):
+        """파일 수는 판정하지 않는다. 패키지 이동처럼 파일만 많은 변경을 막지 않기 위해서다."""
         self.start()
         self.implementation()
-        for i in range(26):
+        for i in range(40):
             self.write(f'src/file-{i}.txt', 'x')
-        self.assertIn('800줄 초과', self.errors(True))
+        errors, warnings, _ = check(self.base, worktree=True)
+        self.assertEqual([], errors)
+        self.assertEqual([], warnings)
 
     def test_binary_rejected(self):
         self.start()
