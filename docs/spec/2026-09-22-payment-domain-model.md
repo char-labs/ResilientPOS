@@ -81,13 +81,30 @@ DESIGN 계층은 없다. 정본은 [도메인 모델](../wiki/domain-model.md) �
 
 ## TDD 검증 기록
 
+RED는 새 타입이 없어 컴파일이 먼저 실패했다(`Unresolved reference 'PaymentAttempt'` 등 6건). 타입이 없는 상태에서 동작 실패를 따로 만들 방법이 없어, 컴파일 실패를 RED로 삼고 GREEN 뒤에 **되돌려서** 각 테스트가 실제로 무언가를 지키는지 확인했다.
+
 | 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
 |---|---|---|---|
-| 양수 금액 시도는 REQUESTED이고 생성 이벤트 하나를 낸다 | 미실행 | 미실행 | 미실행 |
-| 0원 시도는 provider 없이 APPROVED이고 이벤트 둘을 낸다 | 미실행 | 미실행 | 미실행 |
-| 음수 금액을 거절한다 | 미실행 | 미실행 | 미실행 |
-| 1 미만인 회차를 거절한다 | 미실행 | 미실행 | 미실행 |
-| FakePaymentGateway가 같은 요청에 같은 결과를 준다 | 미실행 | 미실행 | 미실행 |
+| 양수 금액 시도는 REQUESTED이고 생성 사실 하나만 낸다 | `./gradlew compileTestKotlin` — 타입 없음 | `./gradlew test --tests '…payment.*'` — 통과 | `./gradlew test` — 통과 |
+| 0원 시도는 provider를 부르지 않고 APPROVED이며 승인 사실까지 낸다 | 같은 이유 | 같은 명령 — 통과 | `./gradlew test` — 통과 |
+| 0원 승인에는 provider 참조가 없다 | 같은 이유 | 같은 명령 — 통과 | `./gradlew test` — 통과 |
+| 음수 금액을 거절한다 | 같은 이유 | 같은 명령 — 통과 | `./gradlew test` — 통과 |
+| 1 미만인 회차를 거절한다 | 같은 이유 | 같은 명령 — 통과 | `./gradlew test` — 통과 |
+| 초기 정책에서 시도 회차는 언제나 1이다 | 같은 이유 | 같은 명령 — 통과 | `./gradlew test` — 통과 |
+| 같은 merchantReference는 언제나 같은 provider 참조를 받는다 | 같은 이유 | 같은 명령 — 통과 | `./gradlew test` — 통과 |
+| 도메인 레이어 의존성 가드가 payment도 덮는다 | `PaymentAttempt`에 `@Component`를 붙이면 `DependencyDirectionTest` FAILED | 되돌린 뒤 통과 | `./gradlew test` — 통과 |
 
 ## 결과
-개발 전 작성. 개발 후 실행 결과와 변경 이유를 추가한다.
+`./gradlew test` 145개 통과다(직전 136 + 신규 9).
+
+**인수 조건 5는 실제로 확인했다.** `DependencyDirectionTest`의 규칙이 `..internal.domain..` 와일드카드라 `payment`도 자동으로 덮일 것이라고 적었는데, 적은 것만으로는 덮인다고 말할 수 없다. `PaymentAttempt`에 `@Component`를 붙여 보니 그 어노테이션이 붙어 있다는 이유로 실패했다. 새 규칙을 더할 필요가 없다는 판단이 맞았다.
+
+**0원 승인의 `providerReference`를 `null`로 뒀다.** 값을 지어내면 그 참조가 거짓이 되고, 나중에 provider 조회로 수렴할 때 존재하지 않는 참조를 찾게 된다. `null`이 "provider가 모르는 승인"이라는 사실을 그대로 나타낸다. 이 점을 테스트로 고정했다.
+
+**0원이어도 `PaymentAttemptCreated`를 먼저 낸다.** 승인만 내면 0원 주문의 시도가 조회에 보이지 않아, "주문·결제·영수증 조회가 같은 경로로 보이게 한다"는 원래 목적이 깨진다.
+
+**`FakePaymentGateway`의 `providerReference`를 요청에서 유도했다.** 무작위 값을 쓰면 같은 요청을 다시 보냈을 때 참조가 달라져서 재전송과 중복 승인을 구별하지 못한다. 결함 주입 시나리오는 넣지 않았다. 그 경로를 실제로 타는 호출부가 없는 상태에서 만들면 무엇이 옳은 동작인지 검증할 수단이 없다.
+
+**포트를 `authorize` 하나로 좁혔다.** 원문은 `cancel`과 `findByMerchantReference`까지 그렸지만, 부르는 쪽 없이 인터페이스를 넓히면 그 모양이 맞는지 확인할 방법이 없다. 각 전이를 만드는 PR이 필요한 메서드를 그때 더한다.
+
+**아직 부르는 쪽이 없다는 점은 이 PR의 알려진 한계다.** `FakePaymentGateway`는 `@Component`로 등록되지만 주입받는 곳이 없고, `PaymentManagement`도 구현이 없다. 영속화·Facade·`OrderPaymentRequested` 리스너가 다음 PR에서 이 셋을 잇는다.

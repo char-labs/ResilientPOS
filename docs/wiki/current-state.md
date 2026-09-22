@@ -13,7 +13,7 @@
 | 식별자 | `uuid-creator` 6.1.1 (UUID v7) |
 | 구조 검증 | Spring Modulith 경계 검증, ArchUnit 1.4.2 의존성 방향 가드 |
 | 통합 테스트 | Testcontainers 2.0.5 PostgreSQL 18. `./gradlew test` 실행에 Docker가 필요하다 |
-| 테스트 | Kotlin Test/JUnit 5, Spring Boot 테스트 starter, Fixture Monkey 1.2.3; 총 136개 (컨텍스트 1, 스키마 4, 모듈 구조 2, 의존성 방향 2, Money 25, 식별자 4, Order 19, 자원 상한 설정 3, Facade line 상한 1, 오류 로그 요청 정보 6, OrderCommandFacade 11, RequestCheckout 통합 9, 버전 충돌 통합 1, 문장 수 통합 3, 이벤트 발행 기록 통합 7, API advice 9, OrderController 13, checkout Controller 5, 주문 API 통합 11) |
+| 테스트 | Kotlin Test/JUnit 5, Spring Boot 테스트 starter, Fixture Monkey 1.2.3; 총 145개 (컨텍스트 1, 스키마 4, 모듈 구조 2, 의존성 방향 2, Money 25, 식별자 4, Order 19, PaymentAttempt 6, Fake 결제 provider 3, 자원 상한 설정 3, Facade line 상한 1, 오류 로그 요청 정보 6, OrderCommandFacade 11, RequestCheckout 통합 9, 버전 충돌 통합 1, 문장 수 통합 3, 이벤트 발행 기록 통합 7, API advice 9, OrderController 13, checkout Controller 5, 주문 API 통합 11) |
 | 로컬 하네스 | Python 3 표준 라이브러리 |
 
 근거: [build.gradle.kts](../../build.gradle.kts), [Gradle Wrapper](../../gradle/wrapper/gradle-wrapper.properties), [애플리케이션 설정](../../src/main/resources/application.yaml).
@@ -36,7 +36,7 @@
 ## 계획과 구현 구분
 - `com.resilientpos`에 애플리케이션 진입점이 있다. bounded context 7개(`store`, `terminal`, `order`, `payment`,
   `sync`, `reconciliation`, `fulfillment`)는 `package-info.java`의 `@ApplicationModule`로 선언했다. `order`에 첫 타입이 있고
-  `store`·`terminal`은 ID 값 타입(`StoreId`, `TerminalId`)만 있으며 나머지 4개는 비어 있다.
+  `store`·`terminal`은 ID 값 타입(`StoreId`, `TerminalId`)만 있고, `payment`에 `PaymentAttempt`가 생겼으며 나머지 3개(`sync`, `reconciliation`, `fulfillment`)는 비어 있다.
   `ModuleStructureTest`가 모듈 인식과 경계 위반을 검증한다. 위반 주입 시 `Module 'order' depends on non-exposed type ...`
   메시지로 실패하는 것을 확인했다.
 - Spring Modulith는 2.1.1로 도입했다. `spring-modulith-core` 2.1.1이 `spring-boot-autoconfigure` 4.1.1에 대해
@@ -92,6 +92,17 @@
   입구는 둘이다. `of(BigDecimal, Currency)`가 본체이고 `of(String, Currency)`는 파싱 실패를 `INVALID_MONEY_FORMAT`으로 바꿔 넘긴다. `defaultFractionDigits`가 음수인 통화는
   canonical scale을 세울 수 없어 `UNSUPPORTED_CURRENCY`로 거절하며, 판정을 `init`과 `of`가 공유해 생성자·`copy`·`zero`도 같이 막힌다([money-input-boundary](../spec/2026-09-21-money-input-boundary.md)).
   나눗셈·퍼센트 할인·세금 계산은 없다. 반올림 정책은 매장 규칙이므로 `store` 정책과 checkout에서 다룬다.
+- `payment` 모듈에 `PaymentAttempt` aggregate가 있다. 공개 계약은 `PaymentManagement`(인터페이스), `CreatePaymentAttemptCommand`·`CreatePaymentAttemptResult`,
+  `PaymentId`, `PaymentAttemptStatus`, `sealed interface PaymentEvent`와 `PaymentAttemptCreated`·`PaymentApproved`다. `Order`와 별개 aggregate라 `orderId`로만 참조하고 사실은 이벤트로 건너간다.
+  **상태는 `REQUESTED`·`APPROVED`·`DECLINED`·`UNKNOWN` 넷이다.** 원문 세 개가 다른 이름을 써서(`CONFIRMED`·`PROCESSING`·`PENDING`) 용어집의 `PaymentApproved` 줄기로 통일했다.
+  `UNKNOWN`은 실패가 아니다. 새 승인 요청으로 재시도하지 않고 조회와 reconciliation으로 수렴한다.
+  `PaymentAttempt.create`가 생성 불변식(금액 0 이상, 회차 1 이상)을 검증하고 `Transition`을 돌려준다.
+  **0원 주문은 provider를 부르지 않고 `APPROVED`로 만들며 `PaymentAttemptCreated`와 `PaymentApproved`를 함께 낸다.** 시도를 기록으로 남겨야 0원 주문도 조회 경로가 같다.
+  provider를 부르지 않았으므로 `providerReference`가 `null`이고 그 `null`이 "provider가 모르는 승인"이라는 사실을 그대로 나타낸다.
+  **시도 회차는 언제나 1이다.** 초기 정책이 주문당 시도 한 건이고 `(orderId, attemptNo)` unique가 그것을 강제한다. 채번은 repository가 생기는 PR이 정한다.
+  외부 provider 경계는 `PaymentGateway` 포트다. `authorize` 하나만 있고 결과는 `Approved`·`Declined`·`Unknown` 세 갈래 sealed 타입이라 "timeout은 실패가 아니다"가 타입으로 드러난다.
+  원문의 포트는 `suspend`지만 이 저장소에 코루틴 의존성이 없어 블로킹으로 뒀다. 구현은 `FakePaymentGateway` 하나이고 외부 연동 전략이 "항상 유지"로 정한 것이라 실제 provider가 붙어도 지우지 않는다.
+  **아직 부르는 쪽이 없다.** Facade 구현·영속화·`OrderPaymentRequested` 리스너는 다음 PR이 만든다([payment-domain-model](../spec/2026-09-22-payment-domain-model.md)).
 - `platform` 모듈은 `IdentifierGenerator`(UUID v7)와 `Clock`(UTC) 빈을 등록하는 `PlatformConfiguration`과 엔티티 공통 컬럼
   (`created_at`·`updated_at`·`deleted_at`, Hibernate `@SoftDelete`)을 주는 `BaseEntity`를 가진다. `OrderEntity`·`OrderLineEntity`·`OrderCheckoutEntity`가 상속한다. 모듈은 9개다.
   낙관적 잠금 `@Version`은 `BaseEntity`에 없고 필요한 엔티티가 직접 선언한다. 지금은 `OrderEntity`뿐이라 `version` 컬럼은 `t_order`에만 있다. `@Version`이 없는 새 자식 행은
@@ -118,8 +129,8 @@ TDD 스킬과 Claude/Codex 에이전트를 구성했다. 정본은 Obsidian 볼�
 
 ## Gradle 프로젝트 구조와 분할 조건
 단일 Gradle 프로젝트를 유지한다. [개발 가이드 1절](../references/03_Development_Guide.md)은 패키지 경계가 안정되고 독립
-build/test/dependency 또는 외부 contract artifact가 실제로 필요할 때만 subproject를 추가하라고 정한다. 현재 모듈 7개는
-비어 있고 전체 테스트가 하나의 태스크로 끝난다. 지금 나누면 담길 코드보다 빌드 코드가 많아진다.
+build/test/dependency 또는 외부 contract artifact가 실제로 필요할 때만 subproject를 추가하라고 정한다. 현재 모듈 7개 중 다섯이 비어 있거나 ID 타입만 가지고 있고
+전체 테스트가 하나의 태스크로 끝난다. 지금 나누면 담길 코드보다 빌드 코드가 많아진다.
 
 아래 중 하나라도 충족하면 별도 PR로 분할을 검토한다.
 - `pos-client`처럼 별도 실행체가 생겨 domain이나 contract 코드를 공유해야 한다.
