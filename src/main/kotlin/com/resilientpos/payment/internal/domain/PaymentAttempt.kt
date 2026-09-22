@@ -10,7 +10,6 @@ import com.resilientpos.payment.PaymentAttemptCreated
 import com.resilientpos.contract.PaymentAttemptKind
 import com.resilientpos.payment.PaymentAttemptStatus
 import com.resilientpos.foundation.DomainEvent
-import com.resilientpos.payment.PaymentEvent
 import com.resilientpos.payment.PaymentId
 import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.TerminalId

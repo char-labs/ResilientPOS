@@ -95,7 +95,7 @@
   canonical scale을 세울 수 없어 `UNSUPPORTED_CURRENCY`로 거절하며, 판정을 `init`과 `of`가 공유해 생성자·`copy`·`zero`도 같이 막힌다([money-input-boundary](../spec/2026-09-21-money-input-boundary.md)).
   나눗셈·퍼센트 할인·세금 계산은 없다. 반올림 정책은 매장 규칙이므로 `store` 정책과 checkout에서 다룬다.
 - `payment` 모듈에 `PaymentAttempt` aggregate가 있다. 공개 계약은 `CreatePaymentAttemptCommand`·`CreatePaymentAttemptResult`,
-  `PaymentId`, `PaymentAttemptStatus`, `sealed interface PaymentEvent`와 `PaymentAttemptCreated`·`PaymentApproved`다. `Order`와 별개 aggregate라 `orderId`로만 참조하고 사실은 이벤트로 건너간다.
+  `PaymentId`, `PaymentAttemptStatus`, `sealed interface PaymentEvent`와 `PaymentAttemptCreated`다. `PaymentApproved`는 `order`·`reconciliation`이 받으므로 `contract`가 소유한다(아래 참조). `Order`와 별개 aggregate라 `orderId`로만 참조하고 사실은 이벤트로 건너간다.
   **`payment`의 공개 타입은 `order` 타입을 들지 않는다.** `orderId`를 raw `UUID`로 든다. 모듈 간선 `payment -> order`는 리스너가 이미 만들었으므로 이 선택이 그 간선을 막지는 않는다.
   순환을 푸는 PR이 `OrderPaymentRequested`를 다른 곳으로 옮기더라도 `payment`의 공개 계약을 손대지 않아도 되게 하려는 것이다. `order`는 받은 값을 `OrderId`로 감싼다.
   **상태는 `REQUESTED`·`APPROVED`·`DECLINED`·`UNKNOWN` 넷이다.** 원문 세 개가 다른 이름을 써서(`CONFIRMED`·`PROCESSING`·`PENDING`) 용어집의 `PaymentApproved` 줄기로 통일했다.
@@ -114,7 +114,8 @@
   **같은 이벤트가 두 번 와도 시도는 하나다.** 넣기 전에 그 checkout의 진행 중인 승인을 읽고 있으면 그것을 돌려주며 이벤트를 다시 내지 않는다. 동시 경합은 이 읽기로 닫히지 않고 partial unique가 닫는다. 진 쪽은 실패하고 미완료 발행 기록으로 남는다.
   **미완료 이벤트를 다시 보내는 절차는 아직 없다.** 리스너 실패에 자동 재시도가 없고, 재전달은 **Kafka를 들이는 별도 설계**가 맡기로 했다. 스레드 풀(코어 8, 큐 무제한)과 종료 대기 2초도 기본값 그대로다. 외부 provider를 부르는 리스너가 생기는 PR이 정한다. 알려진 빈틈이다.
   **모듈을 건너가는 이벤트는 `contract` 모듈에 있다.** `OrderPaymentRequested`·`PaymentApproved`와 그 payload인 `PaymentAttemptKind`다. `order`와 `payment`가 그것을 함께 의존하므로 양쪽이 같은 방향으로만 의존한다.
-  `contract`는 bounded context가 아니고 업무 모듈의 타입을 들지 않는다 — 식별자를 raw `UUID`로 든다. `ModuleStructureTest`가 그 방향을 검사한다.
+  `contract`는 bounded context가 아니고 업무 모듈의 타입을 들지 않는다 — 식별자를 raw `UUID`로 든다. `ModuleStructureTest`가 그 방향을 ArchUnit으로 검사한다.
+  **Modulith의 순환 검사는 소비자가 실제로 생긴 뒤에야 걸리므로** 그 전에 방향을 지킬 검사가 따로 필요하다. 옮긴 이벤트는 소유 모듈의 sealed 계층에 남을 수 없다 — Kotlin이 sealed 구현을 같은 패키지로 제한한다.
   소비자가 없는 `OrderCreated`·`PaymentAttemptCreated`는 소유 모듈에 남는다([contract-module-for-cross-module-events](../spec/2026-09-22-contract-module-for-cross-module-events.md)).
   외부 provider 경계(`PaymentGateway` 포트, `FakePaymentGateway`)와 provider 결과 적용 전이는 다음 PR이 만든다.
   **같은 checkout에 진행 중인 승인 시도는 partial unique가 하나로 묶는다**(`ux_payment_attempt_inflight_authorization`, 술어는 `kind = 'AUTHORIZATION' and status in ('REQUESTED','APPROVED','UNKNOWN') and deleted_at is null`).
@@ -122,7 +123,7 @@
   Event Publication Registry의 완료 기록은 리스너의 업무 커밋과 같은 트랜잭션이 아니어서(비동기·`AFTER_COMMIT`·`REQUIRES_NEW`) 그 사이에 프로세스가 죽으면 행은 있고 발행은 미완료로 남는다. 재전송이 돌면 두 번째 승인이 들어오는데 이 인덱스가 그것을 막는다.
   재발행을 켜면 at-least-once가 되므로 그때는 업무 수준 멱등 근거가 따로 필요하다. 알려진 빈틈이다([payment-domain-model](../spec/2026-09-22-payment-domain-model.md)).
 - `platform` 모듈은 `IdentifierGenerator`(UUID v7)와 `Clock`(UTC) 빈을 등록하는 `PlatformConfiguration`과 엔티티 공통 컬럼
-  (`created_at`·`updated_at`·`deleted_at`, Hibernate `@SoftDelete`)을 주는 `BaseEntity`를 가진다. `OrderEntity`·`OrderLineEntity`·`OrderCheckoutEntity`가 상속한다. 모듈은 9개다.
+  (`created_at`·`updated_at`·`deleted_at`, Hibernate `@SoftDelete`)을 주는 `BaseEntity`를 가진다. `OrderEntity`·`OrderLineEntity`·`OrderCheckoutEntity`가 상속한다. 모듈은 10개다.
   낙관적 잠금 `@Version`은 `BaseEntity`에 없고 필요한 엔티티가 직접 선언한다. 지금은 `OrderEntity`뿐이라 `version` 컬럼은 `t_order`에만 있다. `@Version`이 없는 새 자식 행은
   `OrderPersistenceAdapter`가 `EntityManager.persist`로 넣고, 어댑터의 `save`는 `@Transactional`로 Facade의 트랜잭션에 합류한다([base-entity-explicit-version](../spec/2026-09-21-base-entity-explicit-version.md)).
   `created_at`·`updated_at`은 Hibernate가 JVM에서 만드는 애플리케이션 시각이고(`SourceType.VM`) `deleted_at`만 DB `current_timestamp`다. 한 INSERT의 두 시각은 같지 않을 수 있어서

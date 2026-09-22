@@ -11,7 +11,6 @@ import com.resilientpos.order.CreateOrderCommand
 import com.resilientpos.order.CreateOrderLine
 import com.resilientpos.order.OrderCreated
 import com.resilientpos.foundation.DomainEvent
-import com.resilientpos.order.OrderEvent
 import com.resilientpos.order.OrderId
 import com.resilientpos.order.OrderLineId
 import com.resilientpos.contract.OrderPaymentRequested

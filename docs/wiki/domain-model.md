@@ -29,7 +29,7 @@ Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰�
 | 명령 / 조회 / 결과 / 뷰 | 쓰기 의도(`*Command`)와 그 결과(`*Result`), 읽기 의도(`*Query`/`*Criteria`)와 그 투영(`*View`). 규약은 [README](../../README.md#engineering-principles) | 상태를 바꾸면 Command, 바꾸지 않으면 Query. Command는 Facade의 공개 입력이라 aggregate 안에 중첩하지 않는다 | `CreateOrderCommand → CreateOrderResult`, `FindOrdersQuery(OrderSearchCriteria) → OrderSummaryView`. 전체 카탈로그는 [청사진 §4](../references/05_Domain_Development_Blueprint.md) |
 | 도메인 이벤트 (Domain Event) | 이미 일어난 한 가지 사실. 불변이고 과거형이다 | aggregate가 상태 전이의 결과로 만들고, Facade가 커밋 안에서 발행하고, Event Publication Registry가 전달한다 | `OrderPaymentRequested`, `PaymentApproved`, `PaymentUnknown`, `SyncGapDetected`, `KitchenTicketCreated`. `OrderCompleted`처럼 여러 사실을 뭉친 이름은 쓰지 않는다 |
 | 리포지토리 (Repository) | aggregate 단위로 읽고 저장하는 port | aggregate 전체를 다루면 Repository, 화면용 투영을 만들면 Query repository(§4.2) | `OrderRepository.findById(OrderId): Order?`, `save(Order)` |
-| 공개 API (module public surface) | 다른 모듈이 import할 수 있는 것. Facade·ID 값 타입·이벤트만 | `internal` 패키지 아래는 비공개. Modulith 검증이 위반을 빌드 실패로 만든다 | `payment/PaymentManagement.kt`, `PaymentId.kt`, `PaymentApproved.kt`처럼 모듈 루트(§4.4) |
+| 공개 API (module public surface) | 다른 모듈이 import할 수 있는 것. Facade·ID 값 타입·이벤트만 | `internal` 패키지 아래는 비공개. Modulith 검증이 위반을 빌드 실패로 만든다. 모듈을 건너가는 이벤트만 예외로 `contract`가 소유한다(§4.4) | `payment/PaymentManagement.kt`, `PaymentId.kt`, `PaymentAttemptCreated.kt`처럼 모듈 루트(§4.4) |
 
 ## 2. Bounded context 요약
 
@@ -90,6 +90,7 @@ Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰�
 | `receipt` (fulfillment) | 고객 영수증 전달(`ReceiptDelivery`) | — | sync 쪽에서는 이 단어를 쓰지 않는다(위 `operation` 참고) |
 | `store policy` | 통화·반올림·판매 규칙. 버전이 있다 | `settings`, `config` | 정책은 업무 규칙이고 버전으로 과거 주문에 적용된 값을 추적한다 |
 | `aggregate version` | 한 aggregate의 상태 순서(`@Version`) | — | 동시 수정 충돌 감지용이다. terminal sequence와 다르다 |
+| `contract` (모듈) | 모듈을 건너가는 이벤트와 그 payload를 소유하는 모듈. bounded context가 아니다 | `shared`, `common`, `api` | "공개 계약"이라는 일반어와 겹치지만, 여기서는 **그 계약을 담는 모듈 이름**으로만 쓴다. 모듈 자신의 공개 surface는 §1의 "공개 API"로 부른다. `shared`·`common`은 무엇이든 들어와도 되는 이름이라 경계가 서지 않고, `api`는 §4.4가 쓰지 않기로 한 하위 패키지 이름과 충돌한다 |
 
 이벤트 이름은 과거형 한 가지 사실이다.
 
@@ -130,13 +131,15 @@ Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰�
 - 금액은 `NUMERIC(19,4)` + 통화 코드 컬럼, 식별자는 PostgreSQL native `uuid`다([개발 가이드 §3.1·§3.2](../references/03_Development_Guide.md)). 테이블 이름은 `t_` + 단수 명사(`t_order`, `t_payment_attempt`)다.
 
 ### 4.4 공개 타입은 모듈 루트에 둔다
-- Facade, `*Command`/`*Result`, `*Query`/`*Criteria`/`*View`, 도메인 이벤트, ID 값 타입은 모듈 기본 패키지(`com.resilientpos.order`)에 두고, 그 밖은 전부 `internal/` 아래다. Facade는 인터페이스를 따로 두지 않는 구체 클래스(`class OrderCommandFacade`)다. 구현이 둘이 될 때 인터페이스를 뽑는다. [ADR-002](../references/01_ResilientPOS_PRD_Backend_Requirements.md)를 따르고 [청사진 §6.1](../references/05_Domain_Development_Blueprint.md)의 `api/` 하위 패키지는 쓰지 않는다.
+- Facade, `*Command`/`*Result`, `*Query`/`*Criteria`/`*View`, 도메인 이벤트, ID 값 타입은 모듈 기본 패키지(`com.resilientpos.order`)에 두고, 그 밖은 전부 `internal/` 아래다.
+- **예외는 모듈을 건너가는 이벤트다.** 소유 모듈에 두면 보내는 쪽과 받는 쪽이 서로를 의존해 순환이 된다. 그런 이벤트와 그 payload는 `com.resilientpos.contract`가 소유하고, 양쪽이 그 모듈을 함께 의존한다. 소비자가 없는 이벤트는 소유 모듈에 남는다 — 경계를 넘는 것만 옮긴다([contract-module-for-cross-module-events](../spec/2026-09-22-contract-module-for-cross-module-events.md)). Facade는 인터페이스를 따로 두지 않는 구체 클래스(`class OrderCommandFacade`)다. 구현이 둘이 될 때 인터페이스를 뽑는다. [ADR-002](../references/01_ResilientPOS_PRD_Backend_Requirements.md)를 따르고 [청사진 §6.1](../references/05_Domain_Development_Blueprint.md)의 `api/` 하위 패키지는 쓰지 않는다.
 - 근거: Spring Modulith는 모듈 기본 패키지만 공개로 보므로 애너테이션 없이 지금의 `ModuleStructureTest`가 그대로 경계를 지킨다. `api/`를 쓰려면 모듈마다 `@NamedInterface`가 필요하다.
 - 다시 볼 조건: 한 모듈의 루트 파일이 20개를 넘거나 공개 surface를 `api`/`events`처럼 나눠 의존을 허용해야 할 때 `@NamedInterface`로 옮긴다. 그때도 패키지 이름만 바뀌는 파일 이동이다.
 
 ### 4.5 `Transition`과 `DomainEvent`는 `foundation`에 둔다
 - `data class Transition<A, E : DomainEvent>(val aggregate: A, val events: List<E>)`와 `interface DomainEvent { val eventId: UUID; val occurredAt: Instant }`를 `Money` 옆에 둔다. 둘 다 프레임워크 의존이 없어 `DependencyDirectionTest`의 `foundation` 규칙 안에 있다.
-- `eventId`는 소비자 멱등성 기록 `(consumer, eventId)`([개발 가이드 §4.2](../references/03_Development_Guide.md))의 키다. 모듈별 이벤트는 `sealed interface OrderEvent : DomainEvent`처럼 닫아 `when` 누락을 컴파일러가 잡게 한다.
+- `eventId`는 소비자 멱등성 기록 `(consumer, eventId)`([개발 가이드 §4.2](../references/03_Development_Guide.md))의 키다. 모듈 안에만 머무는 이벤트는 `sealed interface OrderEvent : DomainEvent`처럼 닫아 `when` 누락을 컴파일러가 잡게 한다.
+- **§4.4의 `contract` 이벤트는 닫힌 계층에 들어가지 않는다.** 선택이 아니라 언어 제약이다. Kotlin은 sealed 타입의 구현을 같은 패키지로 제한해서(`A class can only extend a sealed class or interface declared in the same package.` — 실제로 컴파일해 확인했다) 다른 패키지로 옮긴 이벤트는 `OrderEvent`·`PaymentEvent`를 구현할 수 없다. `DomainEvent`를 직접 구현하고, 그래서 한 aggregate가 두 종류를 내므로 `Transition`의 이벤트 타입 인자가 `DomainEvent`까지 넓어진다. 잃는 것은 그 이벤트들에 대한 `when` 누락 검사인데, 지금 그 닫힘을 쓰는 `when`이 코드에 하나도 없다.
 - 이것은 §2의 "업무 개념을 두지 않는다"에 어긋나지 않는다. 주문·결제를 모르는 모델링 원시 타입이며, 모듈마다 복제하면 이벤트 공통 필드를 강제할 수 없다. 처음 필요한 도메인 PR에서 추가한다.
 
 ### 4.6 컨텍스트 사이 동기 호출은 sync intake 한 곳만, 한 트랜잭션으로

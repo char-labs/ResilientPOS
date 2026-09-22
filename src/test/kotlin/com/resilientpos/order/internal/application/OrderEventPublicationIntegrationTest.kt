@@ -109,7 +109,8 @@ class OrderEventPublicationIntegrationTest(
 
         awaitUntil("발행 기록에 완료 시각이 찍힌다") { publications(orderId).singleOrNull()?.get("completion_date") != null }
         val publication = publications(orderId).single()
-        assertEquals(OrderPaymentRequested::class.java.name, publication["event_type"])
+        // 클래스에서 기대값을 다시 계산하면 이벤트를 옮겨도 통과해 버린다. event_type은 저장 형식이므로 리터럴로 고정한다.
+        assertEquals("com.resilientpos.contract.OrderPaymentRequested", publication["event_type"])
         assertEquals("COMPLETED", publication["status"])
         assertEquals(1, received(orderId).size)
     }
