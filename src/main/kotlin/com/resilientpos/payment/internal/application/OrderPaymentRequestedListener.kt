@@ -1,0 +1,67 @@
+package com.resilientpos.payment.internal.application
+
+import com.resilientpos.order.OrderPaymentRequested
+import com.resilientpos.payment.CreatePaymentAttemptCommand
+import com.resilientpos.payment.PaymentManagement
+import org.slf4j.LoggerFactory
+import org.springframework.modulith.events.ApplicationModuleListener
+import org.springframework.stereotype.Component
+import org.springframework.transaction.support.TransactionSynchronization
+import org.springframework.transaction.support.TransactionSynchronizationManager
+
+/**
+ * `order`가 결제를 요청한 사실을 받아 시도를 기록한다. 이 저장소의 첫 프로덕션 리스너다.
+ *
+ * 옮기는 일만 하고 판단하지 않는다. 멱등 판정과 트랜잭션은 [PaymentManagement]가 소유한다.
+ *
+ * `@ApplicationModuleListener`는 비동기이고 커밋 뒤에 자기 트랜잭션에서 돈다. 여기서 실패하면
+ * `event_publication`에 미완료로 남고 자동 재시도가 없다. 재전달은 Kafka를 들이는 설계가 맡는다.
+ * 그래서 예외를 삼키지 않는다 — 삼키면 성공으로 기록되어 미완료 기록마저 사라진다.
+ */
+@Component
+class OrderPaymentRequestedListener(
+    private val paymentManagement: PaymentManagement,
+) {
+
+    @ApplicationModuleListener
+    fun on(event: OrderPaymentRequested) {
+        val result = paymentManagement.createAttempt(
+            CreatePaymentAttemptCommand(
+                orderId = event.orderId.value,
+                storeId = event.storeId,
+                terminalId = event.terminalId,
+                checkoutNo = event.checkoutNo,
+                amount = event.amount,
+            ),
+        )
+
+        // 커밋 뒤에 남긴다. 이 메서드 전체가 트랜잭션 안이라 여기서 바로 찍으면 아직 커밋되지 않은 것을
+        // "기록했다"고 말하게 된다. 경합에서 진 쪽은 정상 반환한 뒤 커밋에서 unique 위반으로 롤백되는데,
+        // 그때 존재하지 않는 paymentId가 기록됐다는 로그만 남는다.
+        afterCommit {
+            log.info(
+                "결제 시도 기록 orderId={} checkoutNo={} paymentId={} status={}",
+                event.orderId.value,
+                event.checkoutNo,
+                result.paymentId.value,
+                result.status,
+            )
+        }
+    }
+
+    private fun afterCommit(action: () -> Unit) {
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            action()
+            return
+        }
+        TransactionSynchronizationManager.registerSynchronization(
+            object : TransactionSynchronization {
+                override fun afterCommit() = action()
+            },
+        )
+    }
+
+    companion object {
+        private val log = LoggerFactory.getLogger(OrderPaymentRequestedListener::class.java)
+    }
+}

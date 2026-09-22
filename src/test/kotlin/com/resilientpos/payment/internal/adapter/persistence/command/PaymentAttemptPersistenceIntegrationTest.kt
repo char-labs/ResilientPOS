@@ -23,8 +23,9 @@ import org.springframework.dao.DataIntegrityViolationException
 /**
  * 한 주문에 결제 시도가 여러 건 달리는지, 그러면서도 같은 checkout의 승인이 중복되지 않는지 실제 PostgreSQL에서 확인한다.
  *
- * `testing-strategy.md`는 Repository 전용 테스트를 TDD 대상에서 빼지만, 이 PR은 Facade도 리스너도 없어서
- * 스키마 결정을 확인할 다른 경로가 없다. 어댑터·리스너 PR이 Facade 통합 테스트를 넣으면 복원 검증은 그쪽으로 옮긴다.
+ * `testing-strategy.md`는 Repository 전용 테스트를 TDD 대상에서 빼지만, 이 검사들은 스키마 결정 자체를 지킨다.
+ * Facade 통합 테스트가 생긴 뒤에도 옮기지 않았다 — 그쪽은 이벤트 경로를 보고, 여기는 통화·금액 scale·종류처럼
+ * 한 행이 온전히 오가는지를 본다. 둘의 목적이 다르다.
  *
  * **`@Transactional`을 붙이지 않는다.** 붙이면 저장 직후의 조회가 같은 영속성 컨텍스트의 관리 엔티티를 돌려줘
  * DB를 한 번도 읽지 않고 통과한다. 통화 왕복도 금액 scale도 검증되지 않는다.
