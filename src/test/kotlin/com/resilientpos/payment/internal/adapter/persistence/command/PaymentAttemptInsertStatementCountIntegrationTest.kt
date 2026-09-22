@@ -27,6 +27,10 @@ import org.springframework.transaction.support.TransactionTemplate
  * 도메인 ID를 저장 전에 만들기 때문에 Spring Data의 `save`는 `@Version`이 없는 새 엔티티를 기존 행으로 보고
  * `merge`한다. 그러면 SELECT가 하나 더 나간다. 어댑터가 `EntityManager.persist`를 쓴다는 것을
  * 코드로 읽지 않고 문장 수로 확인한다.
+ *
+ * **통계는 `SessionFactory` 전체의 누적값이다.** 이제 비동기 리스너가 같은 `SessionFactory`로 SQL을 내므로
+ * 앞 테스트의 리스너 작업이 아직 큐에 남아 있으면 그 문장이 이 델타에 섞여 간헐 실패가 날 수 있다.
+ * 제대로 고치려면 `statement_inspector`로 자기 스레드의 문장만 세야 하고, 그것은 별도 PR이 한다.
  */
 class PaymentAttemptInsertStatementCountIntegrationTest(
     @Autowired private val repository: PaymentAttemptRepository,

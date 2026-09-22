@@ -5,14 +5,14 @@ import com.resilientpos.payment.internal.domain.PaymentAttempt
 import com.resilientpos.payment.internal.domain.PaymentAttemptRepository
 import java.time.Clock
 import org.springframework.context.ApplicationEventPublisher
-import org.springframework.stereotype.Component
+import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 
 /**
  * `payment` 모듈의 유일한 진입점. 결제 정본 상태를 바꾸는 일은 전부 여기를 거친다.
  * 인터페이스를 따로 두지 않는 구체 클래스다. 구현이 둘이 될 때 뽑는다.
  */
-@Component
+@Service
 class PaymentManagement(
     private val repository: PaymentAttemptRepository,
     private val identifierGenerator: IdentifierGenerator,

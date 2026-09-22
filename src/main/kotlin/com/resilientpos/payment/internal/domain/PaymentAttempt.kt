@@ -22,7 +22,7 @@ import java.util.UUID
  * 한 주문에 시도가 여럿 달린다. 승인이 거절되면 다음 시도가 생기고 취소·환불도 각각 별도 시도다.
  * 식별은 [PaymentId] 하나가 하고 `orderId`는 참조일 뿐이라, 한 주문에 몇 건이 달리든 제약이 없다.
  * 무엇을 요청한 시도인지는 [PaymentAttemptKind]가 말한다.
- * 그 `orderId`는 raw `UUID`다. `order.OrderId`를 쓰면 `order`가 이 모듈의 이벤트를 소비할 때 순환이 된다.
+ * 그 `orderId`는 raw `UUID`다. 모듈 간선은 리스너가 이미 만들었고, 이 선택의 목적은 공개 계약을 `order` 타입에서 떼어 놓는 것이다.
  */
 class PaymentAttempt private constructor(
     val id: PaymentId,
