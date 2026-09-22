@@ -1,6 +1,6 @@
 package com.resilientpos.payment.internal.adapter.persistence.command
 
-import com.resilientpos.payment.PaymentAttemptKind
+import com.resilientpos.contract.PaymentAttemptKind
 import com.resilientpos.payment.PaymentAttemptStatus
 import java.util.UUID
 import org.springframework.data.repository.Repository

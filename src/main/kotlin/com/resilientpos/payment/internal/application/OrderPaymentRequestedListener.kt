@@ -1,6 +1,6 @@
 package com.resilientpos.payment.internal.application
 
-import com.resilientpos.order.OrderPaymentRequested
+import com.resilientpos.contract.OrderPaymentRequested
 import com.resilientpos.payment.CreatePaymentAttemptCommand
 import com.resilientpos.payment.PaymentManagement
 import org.slf4j.LoggerFactory
@@ -27,7 +27,7 @@ class OrderPaymentRequestedListener(
     fun on(event: OrderPaymentRequested) {
         val result = paymentManagement.createAttempt(
             CreatePaymentAttemptCommand(
-                orderId = event.orderId.value,
+                orderId = event.orderId,
                 storeId = event.storeId,
                 terminalId = event.terminalId,
                 checkoutNo = event.checkoutNo,
@@ -41,7 +41,7 @@ class OrderPaymentRequestedListener(
         afterCommit {
             log.info(
                 "결제 시도 기록 orderId={} checkoutNo={} paymentId={} status={}",
-                event.orderId.value,
+                event.orderId,
                 event.checkoutNo,
                 result.paymentId.value,
                 result.status,

@@ -1,5 +1,6 @@
 package com.resilientpos.payment
 
+import com.resilientpos.contract.PaymentAttemptKind
 import kotlin.test.Test
 import kotlin.test.assertEquals
 

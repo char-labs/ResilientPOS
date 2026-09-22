@@ -6,7 +6,7 @@ import com.resilientpos.order.OrderCommandFacade
 import com.resilientpos.order.OrderCreated
 import com.resilientpos.order.OrderFixtures
 import com.resilientpos.order.OrderId
-import com.resilientpos.order.OrderPaymentRequested
+import com.resilientpos.contract.OrderPaymentRequested
 import com.resilientpos.order.OrderStatus
 import com.resilientpos.order.RequestCheckoutCommand
 import com.resilientpos.store.StoreId
@@ -88,7 +88,7 @@ class OrderEventPublicationIntegrationTest(
             "%${PaymentRequestedListener::class.java.name}%",
         )
 
-    private fun received(orderId: OrderId) = listener.received.filter { it.orderId == orderId }
+    private fun received(orderId: OrderId) = listener.received.filter { it.orderId == orderId.value }
 
     /** 리스너는 요청 스레드 밖에서 돌므로 결과가 기록될 때까지 기다린다. */
     private fun awaitUntil(description: String, condition: () -> Boolean) {
@@ -109,7 +109,8 @@ class OrderEventPublicationIntegrationTest(
 
         awaitUntil("발행 기록에 완료 시각이 찍힌다") { publications(orderId).singleOrNull()?.get("completion_date") != null }
         val publication = publications(orderId).single()
-        assertEquals(OrderPaymentRequested::class.java.name, publication["event_type"])
+        // 클래스에서 기대값을 다시 계산하면 이벤트를 옮겨도 통과해 버린다. event_type은 저장 형식이므로 리터럴로 고정한다.
+        assertEquals("com.resilientpos.contract.OrderPaymentRequested", publication["event_type"])
         assertEquals("COMPLETED", publication["status"])
         assertEquals(1, received(orderId).size)
     }
@@ -172,7 +173,7 @@ class OrderEventPublicationIntegrationTest(
         val event = OrderPaymentRequested(
             eventId = UUID.randomUUID(),
             occurredAt = Instant.parse("2026-09-21T06:00:00Z"),
-            orderId = OrderId(UUID.randomUUID()),
+            orderId = UUID.randomUUID(),
             storeId = StoreId(UUID.randomUUID()),
             terminalId = TerminalId(UUID.randomUUID()),
             checkoutNo = 1,
@@ -190,7 +191,7 @@ class OrderEventPublicationIntegrationTest(
         val event = OrderPaymentRequested(
             eventId = UUID.randomUUID(),
             occurredAt = Instant.parse("2026-09-21T06:00:00Z"),
-            orderId = OrderId(UUID.randomUUID()),
+            orderId = UUID.randomUUID(),
             storeId = StoreId(UUID.randomUUID()),
             terminalId = TerminalId(UUID.randomUUID()),
             checkoutNo = 1,

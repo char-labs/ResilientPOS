@@ -9,7 +9,7 @@ import com.resilientpos.order.ClientOrderId
 import com.resilientpos.order.CreateOrderCommand
 import com.resilientpos.order.CreateOrderLine
 import com.resilientpos.order.OrderCreated
-import com.resilientpos.order.OrderPaymentRequested
+import com.resilientpos.contract.OrderPaymentRequested
 import com.resilientpos.order.OrderStatus
 import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.TerminalId
@@ -353,7 +353,7 @@ class OrderTest {
                 OrderPaymentRequested(
                     eventId = eventId,
                     occurredAt = requestedAt,
-                    orderId = order.id,
+                    orderId = order.id.value,
                     storeId = storeId,
                     terminalId = terminalId,
                     checkoutNo = 1,

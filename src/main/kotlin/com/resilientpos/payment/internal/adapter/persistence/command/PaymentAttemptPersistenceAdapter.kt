@@ -1,6 +1,6 @@
 package com.resilientpos.payment.internal.adapter.persistence.command
 
-import com.resilientpos.payment.PaymentAttemptKind
+import com.resilientpos.contract.PaymentAttemptKind
 import com.resilientpos.payment.internal.domain.PaymentAttempt
 import com.resilientpos.payment.internal.domain.PaymentAttemptRepository
 import jakarta.persistence.EntityManager

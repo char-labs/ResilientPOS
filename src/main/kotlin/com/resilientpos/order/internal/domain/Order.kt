@@ -10,10 +10,10 @@ import com.resilientpos.order.ClientOrderId
 import com.resilientpos.order.CreateOrderCommand
 import com.resilientpos.order.CreateOrderLine
 import com.resilientpos.order.OrderCreated
-import com.resilientpos.order.OrderEvent
+import com.resilientpos.foundation.DomainEvent
 import com.resilientpos.order.OrderId
 import com.resilientpos.order.OrderLineId
-import com.resilientpos.order.OrderPaymentRequested
+import com.resilientpos.contract.OrderPaymentRequested
 import com.resilientpos.order.OrderStatus
 import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.TerminalId
@@ -71,7 +71,7 @@ class Order private constructor(
      * 결제를 요청하는 시점의 금액을 다음 회차 checkout으로 확정한다.
      * 이미 요청된 주문이면 같은 주문과 빈 이벤트를 돌려줘서 재시도가 이벤트를 두 번 내지 않게 한다.
      */
-    fun requestCheckout(ids: IdentifierGenerator, now: Instant): Transition<Order, OrderEvent> =
+    fun requestCheckout(ids: IdentifierGenerator, now: Instant): Transition<Order, DomainEvent> =
         when (status) {
             OrderStatus.OPEN -> {
                 val checkout = Checkout(CheckoutId(ids.next()), checkouts.size + 1, total)
@@ -88,7 +88,7 @@ class Order private constructor(
                 val event = OrderPaymentRequested(
                     eventId = ids.next(),
                     occurredAt = now,
-                    orderId = id,
+                    orderId = id.value,
                     storeId = storeId,
                     terminalId = terminalId,
                     checkoutNo = checkout.checkoutNo,
@@ -143,7 +143,7 @@ class Order private constructor(
             checkouts: List<Checkout>,
         ): Order = Order(id, storeId, terminalId, clientOrderId, currency, status, lines, checkouts)
 
-        fun create(command: CreateOrderCommand, ids: IdentifierGenerator, now: Instant): Transition<Order, OrderEvent> {
+        fun create(command: CreateOrderCommand, ids: IdentifierGenerator, now: Instant): Transition<Order, DomainEvent> {
             if (command.lines.isEmpty()) {
                 throw DomainException(EMPTY_ORDER, "주문에는 line이 1개 이상 필요합니다")
             }
