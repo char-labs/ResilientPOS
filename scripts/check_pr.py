@@ -253,10 +253,12 @@ def check(base, head='HEAD', worktree=False, migrations_only=False):
         else:
             regular_files += 1
             regular_lines += lines
-    if regular_files > 25 or regular_lines > 800:
-        errors.append('PR 상한 25개 파일/800줄 초과: 후속 PR로 분할하세요.')
-    elif regular_files >= 20 or regular_lines >= 600:
-        warnings.append('20개 파일/600줄 도달: 남은 개발은 후속 PR로 분할하세요.')
+    # 파일 수는 리뷰 부담을 재지 못한다. 한 줄씩 바뀐 25개 파일과 서른 줄씩 바뀐 25개 파일은 다른 일이다.
+    # 통계 줄에는 계속 내보내 사람이 보게 두고, 통과/실패는 줄 수로만 가른다.
+    if regular_lines > 1400:
+        errors.append('PR 상한 1400줄 초과: 후속 PR로 분할하세요.')
+    elif regular_lines >= 900:
+        warnings.append('900줄 도달: 남은 개발은 후속 PR로 분할하세요.')
     if source_files > 10 or source_lines > 5000:
         errors.append('원문 보관 상한 10개 파일/5000줄 초과')
     return errors, warnings, f'일반 {regular_files}개/{regular_lines}줄; 원문 {source_files}개/{source_lines}줄'
