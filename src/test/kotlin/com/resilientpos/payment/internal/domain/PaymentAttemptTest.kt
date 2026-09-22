@@ -5,9 +5,9 @@ import com.resilientpos.foundation.DomainException
 import com.resilientpos.foundation.IdentifierGenerator
 import com.resilientpos.foundation.Money
 import com.resilientpos.payment.CreatePaymentAttemptCommand
-import com.resilientpos.payment.PaymentApproved
+import com.resilientpos.contract.PaymentApproved
 import com.resilientpos.payment.PaymentAttemptCreated
-import com.resilientpos.payment.PaymentAttemptKind
+import com.resilientpos.contract.PaymentAttemptKind
 import com.resilientpos.payment.PaymentAttemptStatus
 import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.TerminalId
@@ -77,7 +77,7 @@ class PaymentAttemptTest {
         assertTrue(transition.events[0] is PaymentAttemptCreated)
 
         val approved = transition.events[1] as PaymentApproved
-        assertEquals(transition.aggregate.id, approved.paymentId)
+        assertEquals(transition.aggregate.id.value, approved.paymentId)
         assertEquals(orderId, approved.orderId)
         assertEquals(Money.of("0", krw), approved.amount)
     }

@@ -7,7 +7,7 @@ import com.resilientpos.order.OrderCommandFacade
 import com.resilientpos.order.OrderFixtures
 import com.resilientpos.order.RequestCheckoutCommand
 import com.resilientpos.payment.CreatePaymentAttemptCommand
-import com.resilientpos.payment.PaymentAttemptKind
+import com.resilientpos.contract.PaymentAttemptKind
 import com.resilientpos.payment.PaymentAttemptStatus
 import com.resilientpos.payment.PaymentManagement
 import com.resilientpos.store.StoreId

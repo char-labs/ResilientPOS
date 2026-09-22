@@ -14,7 +14,7 @@
 
 소비자가 없는 `OrderCreated`·`PaymentAttemptCreated`는 소유 모듈에 남는다. 경계를 넘는 것만 공유한다는 의도가 타입에 드러난다.
 
-**옮긴 이벤트는 소유 모듈의 sealed 계층에 남을 수 없다.** 남기면 `contract`가 `order`·`payment`를 의존하게 되어 순환이 되돌아온다. `DomainEvent`를 직접 구현한다. 그래서 한 aggregate가 두 종류를 내고, `Transition`의 타입 인자가 `OrderEvent`에서 `DomainEvent`로 넓어진다. 지금 그 sealed 닫힘을 쓰는 `when`은 없다.
+**옮긴 이벤트는 소유 모듈의 sealed 계층에 남을 수 없다.** 남기면 `contract`가 `order`·`payment`를 의존하게 되어 순환이 되돌아온다. `DomainEvent`를 직접 구현한다. 그래서 한 aggregate가 두 종류를 내고, `Transition`의 이벤트 타입 인자가 `OrderEvent`에서 `DomainEvent`로 넓어진다. 지금 그 sealed 닫힘을 쓰는 `when`은 없다.
 
 **`contract`의 타입은 다른 업무 모듈의 타입을 들지 않는다.** `OrderPaymentRequested.orderId`와 `PaymentApproved.paymentId`가 raw `UUID`가 된다. 들면 그 방향으로 간선이 생겨 순환이 되돌아온다. `store`·`terminal`의 ID 값 타입과 `foundation`의 `Money`는 그대로 쓴다 — 그 모듈들은 `contract`를 의존하지 않는다.
 
@@ -42,6 +42,7 @@
 - src/main/kotlin/com/resilientpos/order/**
 - src/main/kotlin/com/resilientpos/payment/**
 - src/test/kotlin/com/resilientpos/**
+- src/test/kotlin/com/resilientpos/ModuleStructureTest.kt
 - docs/**
 
 ## 인수 조건
@@ -66,12 +67,21 @@
 예상 10개 파일 안팎 / 약 300줄. 한도 안이다. 대부분 import와 패키지 이동이다.
 
 ## TDD 검증 기록
+RED를 먼저 관측했다. `order/internal/application`에 `PaymentApproved`를 받는 임시 소비자를 두고 `ModuleStructureTest`를 돌리니 `Cycle detected: Slice order -> Slice payment -> Slice order`로 실패했다. 이벤트를 옮긴 뒤 같은 소비자를 둔 채 다시 돌리니 통과했고, 그다음 소비자를 지웠다.
 
 | 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
 |---|---|---|---|
-| order가 PaymentApproved를 소비해도 순환이 없다 | 미실행 | 미실행 | 미실행 |
-| contract를 application module로 인식한다 | 미실행 | 미실행 | 미실행 |
-| 옮긴 이벤트를 저장했다 복원해도 값이 같다 | 미실행 | 미실행 | 미실행 |
+| order가 PaymentApproved를 소비해도 순환이 없다 | `./gradlew test --tests '…ModuleStructureTest'` — `Cycle detected` | 이벤트 이동 뒤 같은 명령 — 통과 | `./gradlew test` — 통과 |
+| contract를 application module로 인식한다 | 같은 명령 — 목록에 `contract`가 없음 | 목록에 더한 뒤 통과 | `./gradlew test` — 통과 |
+| contract는 업무 모듈을 의존하지 않는다 | `PaymentApproved.kt`에 `import com.resilientpos.order.OrderId`를 넣으면 FAILED | 빼면 통과 | `./gradlew test` — 통과 |
 
 ## 결과
-개발 전 작성. 개발 후 실행 결과와 변경 이유를 추가한다.
+`./gradlew test` 167개 통과다(직전 165 + 신규 2).
+
+- **순환이 풀렸다.** 임시 소비자를 둔 채 확인했고, 지운 뒤에도 회귀 테스트 둘이 방향을 지킨다. 하나는 두 이벤트가 `contract` 패키지에 있다는 것을, 다른 하나는 `contract` 소스가 업무 모듈을 import하지 않는다는 것을 본다. Modulith의 순환 검사는 **소비자가 실제로 생긴 뒤에야** 걸리므로 그 전에 방향을 지킬 검사가 따로 필요하다.
+- **`PaymentAttemptKind`도 함께 옮겼다.** `PaymentApproved`의 payload라서 남겨 두면 `contract -> payment` 간선이 생겨 순환이 되돌아온다. 소비자가 환불 승인을 결제 승인으로 읽지 않으려면 읽어야 하는 값이므로 계약의 일부가 맞다.
+- **식별자가 raw `UUID`가 됐다.** `OrderPaymentRequested.orderId`와 `PaymentApproved.paymentId`다. 계약이 업무 모듈의 타입을 들면 간선이 생긴다. 받는 쪽이 자기 타입으로 감싼다.
+- **`Transition`의 타입 인자가 넓어졌다.** 옮긴 이벤트가 소유 모듈의 sealed 계층에서 빠지므로 한 aggregate가 두 종류를 낸다. `Transition`의 이벤트 타입 인자가 `OrderEvent`에서 `DomainEvent`로 바뀌었다. 그 sealed 닫힘을 쓰는 `when`이 없어서 잃은 것이 없다.
+- **`OrderCreated`는 그대로다.** 소비자가 없어 옮기지 않았다. 일괄 치환이 `OrderCreated.orderId`까지 `UUID`로 바꿔 테스트가 깨졌고, 되돌렸다.
+
+이벤트의 패키지가 바뀌므로 이미 저장된 `event_publication` 행은 복원되지 않는다. 배포된 환경이 없어 그런 행이 없다.

@@ -8,7 +8,7 @@ import com.resilientpos.order.CreateOrderLine
 import com.resilientpos.order.OrderCommandFacade
 import com.resilientpos.order.OrderFixtures
 import com.resilientpos.order.OrderId
-import com.resilientpos.order.OrderPaymentRequested
+import com.resilientpos.contract.OrderPaymentRequested
 import com.resilientpos.order.OrderStatus
 import com.resilientpos.order.RequestCheckoutCommand
 import com.resilientpos.order.RequestCheckoutResult
@@ -55,7 +55,7 @@ class OrderRequestCheckoutIntegrationTest(
         jdbcTemplate.queryForObject("select status from t_order where id = ?", String::class.java, orderId.value)
 
     private fun paymentRequestedCount(events: ApplicationEvents, orderId: OrderId): Long =
-        events.stream(OrderPaymentRequested::class.java).filter { it.orderId == orderId }.count()
+        events.stream(OrderPaymentRequested::class.java).filter { it.orderId == orderId.value }.count()
 
     @Test
     fun `requestCheckout은 CHECKOUT_REQUESTED와 checkout 행을 저장하고 OrderPaymentRequested를 한 번 발행한다`(events: ApplicationEvents) {

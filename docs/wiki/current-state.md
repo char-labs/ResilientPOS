@@ -13,7 +13,7 @@
 | 식별자 | `uuid-creator` 6.1.1 (UUID v7) |
 | 구조 검증 | Spring Modulith 경계 검증, ArchUnit 1.4.2 의존성 방향 가드 |
 | 통합 테스트 | Testcontainers 2.0.5 PostgreSQL 18. `./gradlew test` 실행에 Docker가 필요하다 |
-| 테스트 | Kotlin Test/JUnit 5, Spring Boot 테스트 starter, Fixture Monkey 1.2.3; 총 165개 (컨텍스트 1, 스키마 4, 모듈 구조 2, 의존성 방향 2, Money 25, 식별자 4, Order 19, PaymentAttempt 11, 결제 enum 이름 2, 결제 시도 영속화 통합 6, 결제 테이블 스키마 2, 결제 문장 수 통합 1, 주문 이벤트→결제 통합 4, 결제 Facade 3, 자원 상한 설정 3, Facade line 상한 1, 오류 로그 요청 정보 6, OrderCommandFacade 11, RequestCheckout 통합 9, 버전 충돌 통합 1, 문장 수 통합 3, 이벤트 발행 기록 통합 7, API advice 9, OrderController 13, checkout Controller 5, 주문 API 통합 11) |
+| 테스트 | Kotlin Test/JUnit 5, Spring Boot 테스트 starter, Fixture Monkey 1.2.3; 총 167개 (컨텍스트 1, 스키마 4, 모듈 구조 4, 의존성 방향 2, Money 25, 식별자 4, Order 19, PaymentAttempt 11, 결제 enum 이름 2, 결제 시도 영속화 통합 6, 결제 테이블 스키마 2, 결제 문장 수 통합 1, 주문 이벤트→결제 통합 4, 결제 Facade 3, 자원 상한 설정 3, Facade line 상한 1, 오류 로그 요청 정보 6, OrderCommandFacade 11, RequestCheckout 통합 9, 버전 충돌 통합 1, 문장 수 통합 3, 이벤트 발행 기록 통합 7, API advice 9, OrderController 13, checkout Controller 5, 주문 API 통합 11) |
 | 로컬 하네스 | Python 3 표준 라이브러리 |
 
 근거: [build.gradle.kts](../../build.gradle.kts), [Gradle Wrapper](../../gradle/wrapper/gradle-wrapper.properties), [애플리케이션 설정](../../src/main/resources/application.yaml).
@@ -35,7 +35,7 @@
 
 ## 계획과 구현 구분
 - `com.resilientpos`에 애플리케이션 진입점이 있다. bounded context 7개(`store`, `terminal`, `order`, `payment`,
-  `sync`, `reconciliation`, `fulfillment`)는 `package-info.java`의 `@ApplicationModule`로 선언했다. `order`에 첫 타입이 있고
+  `sync`, `reconciliation`, `fulfillment`)는 `package-info.java`의 `@ApplicationModule`로 선언했다. 여기에 context가 아닌 모듈 셋(`foundation`, `platform`, `contract`)이 더 있다. `order`에 첫 타입이 있고
   `store`·`terminal`은 ID 값 타입(`StoreId`, `TerminalId`)만 있고, `payment`에 `PaymentAttempt`가 생겼으며 나머지 3개(`sync`, `reconciliation`, `fulfillment`)는 비어 있다.
   `ModuleStructureTest`가 모듈 인식과 경계 위반을 검증한다. 위반 주입 시 `Module 'order' depends on non-exposed type ...`
   메시지로 실패하는 것을 확인했다. 순환도 잡는다(`Cycle detected: Slice order -> Slice payment -> Slice order`를 실제로 재현했다).
@@ -113,7 +113,9 @@
   `OrderPaymentRequestedListener`가 **이 저장소의 첫 프로덕션 이벤트 리스너**다. `order`의 `OrderPaymentRequested`를 받아 command로 옮기고 Facade를 부른다. 판단은 하지 않고, 예외도 삼키지 않는다 — 삼키면 Modulith가 성공으로 기록해 미완료 기록마저 사라진다.
   **같은 이벤트가 두 번 와도 시도는 하나다.** 넣기 전에 그 checkout의 진행 중인 승인을 읽고 있으면 그것을 돌려주며 이벤트를 다시 내지 않는다. 동시 경합은 이 읽기로 닫히지 않고 partial unique가 닫는다. 진 쪽은 실패하고 미완료 발행 기록으로 남는다.
   **미완료 이벤트를 다시 보내는 절차는 아직 없다.** 리스너 실패에 자동 재시도가 없고, 재전달은 **Kafka를 들이는 별도 설계**가 맡기로 했다. 스레드 풀(코어 8, 큐 무제한)과 종료 대기 2초도 기본값 그대로다. 외부 provider를 부르는 리스너가 생기는 PR이 정한다. 알려진 빈틈이다.
-  **`payment`가 `order`를 import한다**(리스너가 `OrderPaymentRequested`를 받으므로). `order`는 `payment`를 import하지 않아 아직 순환이 아니다. 다만 도메인 모델 §2가 `PaymentApproved`를 `order`가 소비한다고 정했으므로, **그 리스너를 만드는 PR은 먼저 순환을 풀어야 한다** — 재현해 확인했다. 알려진 빈틈이다([payment-attempt-from-order-event](../spec/2026-09-22-payment-attempt-from-order-event.md)).
+  **모듈을 건너가는 이벤트는 `contract` 모듈에 있다.** `OrderPaymentRequested`·`PaymentApproved`와 그 payload인 `PaymentAttemptKind`다. `order`와 `payment`가 그것을 함께 의존하므로 양쪽이 같은 방향으로만 의존한다.
+  `contract`는 bounded context가 아니고 업무 모듈의 타입을 들지 않는다 — 식별자를 raw `UUID`로 든다. `ModuleStructureTest`가 그 방향을 검사한다.
+  소비자가 없는 `OrderCreated`·`PaymentAttemptCreated`는 소유 모듈에 남는다([contract-module-for-cross-module-events](../spec/2026-09-22-contract-module-for-cross-module-events.md)).
   외부 provider 경계(`PaymentGateway` 포트, `FakePaymentGateway`)와 provider 결과 적용 전이는 다음 PR이 만든다.
   **같은 checkout에 진행 중인 승인 시도는 partial unique가 하나로 묶는다**(`ux_payment_attempt_inflight_authorization`, 술어는 `kind = 'AUTHORIZATION' and status in ('REQUESTED','APPROVED','UNKNOWN') and deleted_at is null`).
   거절된 시도는 술어에서 빠져 재시도가 들어가고 취소·환불은 `kind`가 달라 술어 밖이라, 이 제약이 1-to-many를 막지 않는다.

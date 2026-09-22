@@ -1,7 +1,6 @@
 package com.resilientpos.order
 
 import com.resilientpos.foundation.DomainEvent
-import com.resilientpos.foundation.Money
 import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.TerminalId
 import java.time.Instant
@@ -22,18 +21,4 @@ data class OrderCreated(
     val storeId: StoreId,
     val terminalId: TerminalId,
     val clientOrderId: ClientOrderId,
-) : OrderEvent
-
-/**
- * 주문이 `checkoutNo`회차 결제를 `amount`로 확정해 요청했다는 사실. `payment`가 이 값으로 attempt를 만든다.
- * `(orderId, checkoutNo)`는 같은 checkout에 대한 승인 attempt를 두 번 만들지 않는 근거다.
- */
-data class OrderPaymentRequested(
-    override val eventId: UUID,
-    override val occurredAt: Instant,
-    val orderId: OrderId,
-    val storeId: StoreId,
-    val terminalId: TerminalId,
-    val checkoutNo: Int,
-    val amount: Money,
 ) : OrderEvent

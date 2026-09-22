@@ -5,10 +5,11 @@ import com.resilientpos.foundation.IdentifierGenerator
 import com.resilientpos.foundation.Money
 import com.resilientpos.foundation.Transition
 import com.resilientpos.payment.CreatePaymentAttemptCommand
-import com.resilientpos.payment.PaymentApproved
+import com.resilientpos.contract.PaymentApproved
 import com.resilientpos.payment.PaymentAttemptCreated
-import com.resilientpos.payment.PaymentAttemptKind
+import com.resilientpos.contract.PaymentAttemptKind
 import com.resilientpos.payment.PaymentAttemptStatus
+import com.resilientpos.foundation.DomainEvent
 import com.resilientpos.payment.PaymentEvent
 import com.resilientpos.payment.PaymentId
 import com.resilientpos.store.StoreId
@@ -78,7 +79,7 @@ class PaymentAttempt private constructor(
             command: CreatePaymentAttemptCommand,
             ids: IdentifierGenerator,
             now: Instant,
-        ): Transition<PaymentAttempt, PaymentEvent> {
+        ): Transition<PaymentAttempt, DomainEvent> {
             if (command.amount < Money.zero(command.amount.currency)) {
                 throw DomainException(NEGATIVE_PAYMENT_AMOUNT, "결제 금액은 음수일 수 없습니다")
             }
@@ -121,7 +122,7 @@ class PaymentAttempt private constructor(
             val approved = PaymentApproved(
                 eventId = ids.next(),
                 occurredAt = now,
-                paymentId = paymentId,
+                paymentId = paymentId.value,
                 orderId = command.orderId,
                 storeId = command.storeId,
                 terminalId = command.terminalId,

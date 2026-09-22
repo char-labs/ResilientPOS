@@ -4,7 +4,7 @@ import com.resilientpos.PostgresIntegrationTest
 import com.resilientpos.foundation.Money
 import com.resilientpos.foundation.UuidV7IdentifierGenerator
 import com.resilientpos.payment.CreatePaymentAttemptCommand
-import com.resilientpos.payment.PaymentAttemptKind
+import com.resilientpos.contract.PaymentAttemptKind
 import com.resilientpos.payment.PaymentAttemptStatus
 import com.resilientpos.payment.PaymentId
 import com.resilientpos.payment.internal.domain.PaymentAttempt

@@ -6,7 +6,7 @@ import com.resilientpos.order.OrderCommandFacade
 import com.resilientpos.order.OrderCreated
 import com.resilientpos.order.OrderFixtures
 import com.resilientpos.order.OrderId
-import com.resilientpos.order.OrderPaymentRequested
+import com.resilientpos.contract.OrderPaymentRequested
 import com.resilientpos.order.OrderStatus
 import com.resilientpos.order.RequestCheckoutCommand
 import com.resilientpos.store.StoreId
@@ -88,7 +88,7 @@ class OrderEventPublicationIntegrationTest(
             "%${PaymentRequestedListener::class.java.name}%",
         )
 
-    private fun received(orderId: OrderId) = listener.received.filter { it.orderId == orderId }
+    private fun received(orderId: OrderId) = listener.received.filter { it.orderId == orderId.value }
 
     /** 리스너는 요청 스레드 밖에서 돌므로 결과가 기록될 때까지 기다린다. */
     private fun awaitUntil(description: String, condition: () -> Boolean) {
@@ -172,7 +172,7 @@ class OrderEventPublicationIntegrationTest(
         val event = OrderPaymentRequested(
             eventId = UUID.randomUUID(),
             occurredAt = Instant.parse("2026-09-21T06:00:00Z"),
-            orderId = OrderId(UUID.randomUUID()),
+            orderId = UUID.randomUUID(),
             storeId = StoreId(UUID.randomUUID()),
             terminalId = TerminalId(UUID.randomUUID()),
             checkoutNo = 1,
@@ -190,7 +190,7 @@ class OrderEventPublicationIntegrationTest(
         val event = OrderPaymentRequested(
             eventId = UUID.randomUUID(),
             occurredAt = Instant.parse("2026-09-21T06:00:00Z"),
-            orderId = OrderId(UUID.randomUUID()),
+            orderId = UUID.randomUUID(),
             storeId = StoreId(UUID.randomUUID()),
             terminalId = TerminalId(UUID.randomUUID()),
             checkoutNo = 1,
