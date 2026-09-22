@@ -17,7 +17,7 @@
 
 네 값을 모두 선언한다. 이 PR이 만드는 전이는 `REQUESTED`와 `APPROVED`뿐이지만, 상태 집합 자체가 이 PR이 고정하는 계약이고 `when`이 exhaustive라서 전이를 더하는 PR이 매핑을 빠뜨리면 컴파일되지 않는다.
 
-**생성 불변식을 aggregate가 소유한다.** 금액은 음수일 수 없고 `checkoutNo`와 `attemptNo`는 1 이상이다. 금액의 자릿수·범위 검증은 `Money`가 이미 한다.
+**생성 불변식을 aggregate가 소유한다.** 금액은 음수일 수 없고 `checkoutNo`는 1 이상이다. `attemptNo`는 명령이 주는 값이 아니라 aggregate가 정하므로 검증 대상이 아니다. 금액의 자릿수·범위 검증은 `Money`가 이미 한다.
 
 **0원은 provider를 부르지 않고 승인으로 기록한다.** [도메인 모델](../wiki/domain-model.md) §3이 정한 규칙이다. `order`가 0원 주문도 똑같이 checkout을 확정하고 `OrderPaymentRequested`를 내므로, `payment`가 여기서 거절하면 전액 할인·프로모션 주문이 결제 단계에서 막힌다. 생성 결과가 `APPROVED`이고 이벤트를 두 개(`PaymentAttemptCreated`, `PaymentApproved`) 낸다. 시도를 기록으로 남겨야 주문·결제·영수증 조회가 0원 주문에서도 같은 경로로 보인다.
 
@@ -34,7 +34,7 @@
 | code | 의미 |
 |---|---|
 | `NEGATIVE_PAYMENT_AMOUNT` | 결제 금액이 음수다 |
-| `INVALID_ATTEMPT_NO` | 시도 회차가 1 미만이다 |
+| `INVALID_CHECKOUT_NO` | checkout 회차가 1 미만이다 |
 
 복구: 둘 다 요청 자체가 잘못된 경우라 재시도로 풀리지 않는다.
 
@@ -61,7 +61,7 @@ DESIGN 계층은 없다. 정본은 [도메인 모델](../wiki/domain-model.md) �
 ## 인수 조건
 1. 양수 금액으로 시도를 만들면 `REQUESTED`이고 `PaymentAttemptCreated` 하나가 난다.
 2. 0원으로 시도를 만들면 `APPROVED`이고 `PaymentAttemptCreated`와 `PaymentApproved`가 순서대로 난다. provider를 부르지 않는다.
-3. 음수 금액은 `NEGATIVE_PAYMENT_AMOUNT`로, 1 미만인 `checkoutNo`·`attemptNo`는 `INVALID_ATTEMPT_NO`로 거절한다.
+3. 음수 금액은 `NEGATIVE_PAYMENT_AMOUNT`로, 1 미만인 `checkoutNo`는 `INVALID_CHECKOUT_NO`로 거절한다.
 4. `attemptNo`는 언제나 1이다.
 5. `PaymentAttempt`는 `payment.internal.domain`에 있고 Spring·JPA·Jackson·adapter·application에 의존하지 않는다. `DependencyDirectionTest`의 기존 규칙이 자동으로 덮는다.
 6. `FakePaymentGateway`가 `PaymentGateway`를 구현하고 같은 요청에 같은 결과를 돌려준다.
@@ -89,7 +89,7 @@ RED는 새 타입이 없어 컴파일이 먼저 실패했다(`Unresolved referen
 | 0원 시도는 provider를 부르지 않고 APPROVED이며 승인 사실까지 낸다 | 같은 이유 | 같은 명령 — 통과 | `./gradlew test` — 통과 |
 | 0원 승인에는 provider 참조가 없다 | 같은 이유 | 같은 명령 — 통과 | `./gradlew test` — 통과 |
 | 음수 금액을 거절한다 | 같은 이유 | 같은 명령 — 통과 | `./gradlew test` — 통과 |
-| 1 미만인 회차를 거절한다 | 같은 이유 | 같은 명령 — 통과 | `./gradlew test` — 통과 |
+| 1 미만인 checkout 회차를 거절한다 | 같은 이유 | 같은 명령 — 통과 | `./gradlew test` — 통과 |
 | 초기 정책에서 시도 회차는 언제나 1이다 | 같은 이유 | 같은 명령 — 통과 | `./gradlew test` — 통과 |
 | 같은 merchantReference는 언제나 같은 provider 참조를 받는다 | 같은 이유 | 같은 명령 — 통과 | `./gradlew test` — 통과 |
 | 도메인 레이어 의존성 가드가 payment도 덮는다 | `PaymentAttempt`에 `@Component`를 붙이면 `DependencyDirectionTest` FAILED | 되돌린 뒤 통과 | `./gradlew test` — 통과 |
@@ -108,3 +108,5 @@ RED는 새 타입이 없어 컴파일이 먼저 실패했다(`Unresolved referen
 **포트를 `authorize` 하나로 좁혔다.** 원문은 `cancel`과 `findByMerchantReference`까지 그렸지만, 부르는 쪽 없이 인터페이스를 넓히면 그 모양이 맞는지 확인할 방법이 없다. 각 전이를 만드는 PR이 필요한 메서드를 그때 더한다.
 
 **아직 부르는 쪽이 없다는 점은 이 PR의 알려진 한계다.** `FakePaymentGateway`는 `@Component`로 등록되지만 주입받는 곳이 없고, `PaymentManagement`도 구현이 없다. 영속화·Facade·`OrderPaymentRequested` 리스너가 다음 PR에서 이 셋을 잇는다.
+
+**오류 code 이름을 고쳤다.** 처음에는 `INVALID_ATTEMPT_NO`라고 붙였는데 실제로 거절하는 값은 `checkoutNo`다. `attemptNo`는 명령이 주는 값이 아니라 aggregate가 정하므로 잘못될 수가 없다. code는 응답 본문의 `error.errorCode`로 나가는 계약이라, 이름이 틀리면 단말이 엉뚱한 필드를 고친다. `INVALID_CHECKOUT_NO`로 바꿨다.

@@ -86,11 +86,11 @@ class PaymentAttemptTest {
     }
 
     @Test
-    fun `1 미만인 회차를 거절한다`() {
+    fun `1 미만인 checkout 회차를 거절한다`() {
         for (checkoutNo in listOf(0, -1)) {
             val failure = assertFailsWithDomain { PaymentAttempt.create(command(checkoutNo = checkoutNo), ids(), now) }
 
-            assertEquals(PaymentAttempt.INVALID_ATTEMPT_NO, failure.code, checkoutNo.toString())
+            assertEquals(PaymentAttempt.INVALID_CHECKOUT_NO, failure.code, checkoutNo.toString())
         }
     }
 

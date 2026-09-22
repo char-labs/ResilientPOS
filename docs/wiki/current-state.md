@@ -96,7 +96,7 @@
   `PaymentId`, `PaymentAttemptStatus`, `sealed interface PaymentEvent`와 `PaymentAttemptCreated`·`PaymentApproved`다. `Order`와 별개 aggregate라 `orderId`로만 참조하고 사실은 이벤트로 건너간다.
   **상태는 `REQUESTED`·`APPROVED`·`DECLINED`·`UNKNOWN` 넷이다.** 원문 세 개가 다른 이름을 써서(`CONFIRMED`·`PROCESSING`·`PENDING`) 용어집의 `PaymentApproved` 줄기로 통일했다.
   `UNKNOWN`은 실패가 아니다. 새 승인 요청으로 재시도하지 않고 조회와 reconciliation으로 수렴한다.
-  `PaymentAttempt.create`가 생성 불변식(금액 0 이상, 회차 1 이상)을 검증하고 `Transition`을 돌려준다.
+  `PaymentAttempt.create`가 생성 불변식(금액 0 이상은 `NEGATIVE_PAYMENT_AMOUNT`, checkout 회차 1 이상은 `INVALID_CHECKOUT_NO`)을 검증하고 `Transition`을 돌려준다.
   **0원 주문은 provider를 부르지 않고 `APPROVED`로 만들며 `PaymentAttemptCreated`와 `PaymentApproved`를 함께 낸다.** 시도를 기록으로 남겨야 0원 주문도 조회 경로가 같다.
   provider를 부르지 않았으므로 `providerReference`가 `null`이고 그 `null`이 "provider가 모르는 승인"이라는 사실을 그대로 나타낸다.
   **시도 회차는 언제나 1이다.** 초기 정책이 주문당 시도 한 건이고 `(orderId, attemptNo)` unique가 그것을 강제한다. 채번은 repository가 생기는 PR이 정한다.

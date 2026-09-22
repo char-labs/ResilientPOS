@@ -36,7 +36,7 @@ class PaymentAttempt private constructor(
 
     companion object {
         const val NEGATIVE_PAYMENT_AMOUNT = "NEGATIVE_PAYMENT_AMOUNT"
-        const val INVALID_ATTEMPT_NO = "INVALID_ATTEMPT_NO"
+        const val INVALID_CHECKOUT_NO = "INVALID_CHECKOUT_NO"
 
         /**
          * 초기 정책은 주문당 시도 한 건이라 회차가 언제나 1이다. `(orderId, attemptNo)` unique가 그것을 강제한다.
@@ -54,7 +54,7 @@ class PaymentAttempt private constructor(
                 throw DomainException(NEGATIVE_PAYMENT_AMOUNT, "결제 금액은 음수일 수 없습니다")
             }
             if (command.checkoutNo < 1) {
-                throw DomainException(INVALID_ATTEMPT_NO, "결제 회차는 1 이상이어야 합니다")
+                throw DomainException(INVALID_CHECKOUT_NO, "checkout 회차는 1 이상이어야 합니다")
             }
 
             // 0원은 provider를 부를 것이 없다. 여기서 거절하면 전액 할인·프로모션 주문이 결제 단계에서 막힌다.
