@@ -18,6 +18,7 @@ import java.util.UUID
 /**
  * 결제 시도 aggregate 루트. 한 주문의 한 회차 provider 요청과 그 결과를 소유한다.
  * `Order`와는 별개 aggregate라서 `orderId`로만 참조하고 사실은 이벤트로 건너간다.
+ * 한 주문에 시도가 여럿 달린다. 승인이 거절되면 다음 시도가 생기고 취소·환불도 각각 별도 시도다.
  * 그 `orderId`는 raw `UUID`다. `order.OrderId`를 쓰면 `order`가 이 모듈의 이벤트를 소비할 때 순환이 된다.
  */
 class PaymentAttempt private constructor(
@@ -39,21 +40,19 @@ class PaymentAttempt private constructor(
         const val NEGATIVE_PAYMENT_AMOUNT = "NEGATIVE_PAYMENT_AMOUNT"
         const val INVALID_CHECKOUT_NO = "INVALID_CHECKOUT_NO"
 
-        /**
-         * 초기 정책은 주문당 시도 한 건이라 회차가 언제나 1이다. `(orderId, attemptNo)` unique가 그것을 강제한다.
-         * 회차를 세려면 저장된 시도를 읽어야 하므로 채번은 repository가 생기는 PR이 정한다.
-         * 취소를 별도 시도로 기록하거나 분할 결제를 다루는 PR이 이 상수를 걷어낸다.
-         *
-         * **멱등 키가 어긋나 있다.** `OrderPaymentRequested`의 KDoc은 `(orderId, checkoutNo)`를 멱등 근거로
-         * 선언하는데 여기서는 `checkoutNo`가 식별에 쓰이지 않는다. `checkoutNo`가 2 이상인 요청이 오면
-         * unique 위반으로 500이 되거나, 선조회 멱등 판정에서 조용히 건너뛰어 주문이 영원히 미결제로 남는다.
-         * 지금은 `Order.requestCheckout`이 한 번만 전이해서 `checkoutNo`가 언제나 1이라 도달하지 않는다.
-         * **멱등 키를 정하는 영속화 PR이 이 주석을 보고 닫는다.**
-         */
-        const val FIRST_ATTEMPT_NO = 1
+        const val INVALID_ATTEMPT_NO = "INVALID_ATTEMPT_NO"
 
+        /**
+         * 한 주문의 `attemptNo`회차 시도를 만든다.
+         *
+         * `attemptNo`는 명령이 아니라 **저장된 시도 이력에서 정해지는 값**이라 별도 인자로 받는다.
+         * 시도들은 서로 다른 aggregate라서 자기 안에서 회차를 셀 수 없다. 부르는 쪽이 그 주문의
+         * 마지막 회차 + 1을 넘긴다(개수 + 1이 아니다. 중간 회차가 지워지면 번호가 겹친다).
+         * 동시에 두 요청이 같은 번호를 계산하는 경합은 `(orderId, attemptNo)` unique가 마지막으로 막는다.
+         */
         fun create(
             command: CreatePaymentAttemptCommand,
+            attemptNo: Int,
             ids: IdentifierGenerator,
             now: Instant,
         ): Transition<PaymentAttempt, PaymentEvent> {
@@ -62,6 +61,10 @@ class PaymentAttempt private constructor(
             }
             if (command.checkoutNo < 1) {
                 throw DomainException(INVALID_CHECKOUT_NO, "checkout 회차는 1 이상이어야 합니다")
+            }
+            // 부르는 쪽이 정하는 값이라 여기 걸리면 클라이언트가 아니라 채번이 틀린 것이다.
+            if (attemptNo < 1) {
+                throw DomainException(INVALID_ATTEMPT_NO, "결제 시도 회차는 1 이상이어야 합니다")
             }
 
             // 0원은 provider를 부를 것이 없다. 여기서 거절하면 전액 할인·프로모션 주문이 결제 단계에서 막힌다.
@@ -73,7 +76,7 @@ class PaymentAttempt private constructor(
                 storeId = command.storeId,
                 terminalId = command.terminalId,
                 checkoutNo = command.checkoutNo,
-                attemptNo = FIRST_ATTEMPT_NO,
+                attemptNo = attemptNo,
                 amount = command.amount,
                 status = if (zero) PaymentAttemptStatus.APPROVED else PaymentAttemptStatus.REQUESTED,
                 // provider를 부르지 않았으므로 참조가 없다. 값을 지어내면 그 참조가 거짓이 된다.

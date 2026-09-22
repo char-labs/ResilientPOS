@@ -13,7 +13,7 @@
 | 식별자 | `uuid-creator` 6.1.1 (UUID v7) |
 | 구조 검증 | Spring Modulith 경계 검증, ArchUnit 1.4.2 의존성 방향 가드 |
 | 통합 테스트 | Testcontainers 2.0.5 PostgreSQL 18. `./gradlew test` 실행에 Docker가 필요하다 |
-| 테스트 | Kotlin Test/JUnit 5, Spring Boot 테스트 starter, Fixture Monkey 1.2.3; 총 152개 (컨텍스트 1, 스키마 4, 모듈 구조 2, 의존성 방향 2, Money 25, 식별자 4, Order 19, PaymentAttempt 11, 결제 상태 이름 1, Fake 결제 provider 4, 자원 상한 설정 3, Facade line 상한 1, 오류 로그 요청 정보 6, OrderCommandFacade 11, RequestCheckout 통합 9, 버전 충돌 통합 1, 문장 수 통합 3, 이벤트 발행 기록 통합 7, API advice 9, OrderController 13, checkout Controller 5, 주문 API 통합 11) |
+| 테스트 | Kotlin Test/JUnit 5, Spring Boot 테스트 starter, Fixture Monkey 1.2.3; 총 155개 (컨텍스트 1, 스키마 4, 모듈 구조 2, 의존성 방향 2, Money 25, 식별자 4, Order 19, PaymentAttempt 14, 결제 상태 이름 1, Fake 결제 provider 4, 자원 상한 설정 3, Facade line 상한 1, 오류 로그 요청 정보 6, OrderCommandFacade 11, RequestCheckout 통합 9, 버전 충돌 통합 1, 문장 수 통합 3, 이벤트 발행 기록 통합 7, API advice 9, OrderController 13, checkout Controller 5, 주문 API 통합 11) |
 | 로컬 하네스 | Python 3 표준 라이브러리 |
 
 근거: [build.gradle.kts](../../build.gradle.kts), [Gradle Wrapper](../../gradle/wrapper/gradle-wrapper.properties), [애플리케이션 설정](../../src/main/resources/application.yaml).
@@ -101,7 +101,9 @@
   `order -> payment -> order` 순환이 되어 Modulith 검증이 실패한다. 실제로 재현한 뒤 이 방향으로 정했다. `order`는 받은 값을 `OrderId`로 감싼다.
   **상태는 `REQUESTED`·`APPROVED`·`DECLINED`·`UNKNOWN` 넷이다.** 원문 세 개가 다른 이름을 써서(`CONFIRMED`·`PROCESSING`·`PENDING`) 용어집의 `PaymentApproved` 줄기로 통일했다.
   `UNKNOWN`은 실패가 아니다. 새 승인 요청으로 재시도하지 않고 조회와 reconciliation으로 수렴한다.
-  `PaymentAttempt.create`가 생성 불변식(금액 0 이상은 `NEGATIVE_PAYMENT_AMOUNT`, checkout 회차 1 이상은 `INVALID_CHECKOUT_NO`)을 검증하고 `Transition`을 돌려준다.
+  `PaymentAttempt.create`가 생성 불변식(금액 0 이상은 `NEGATIVE_PAYMENT_AMOUNT`, checkout 회차 1 이상은 `INVALID_CHECKOUT_NO`, 시도 회차 1 이상은 `INVALID_ATTEMPT_NO`)을 검증하고 `Transition`을 돌려준다.
+  **한 주문에 시도가 여럿 달린다.** 승인이 거절되면 다음 시도가 생기고 취소·환불도 각각 별도 시도다. `(orderId, attemptNo)`가 자연 키이고 회차가 다르면 같은 주문이어도 다른 행이 된다.
+  `attemptNo`는 명령이 아니라 저장된 이력에서 정해지는 값이라 `create`의 별도 인자다. 부르는 쪽이 마지막 회차 + 1을 넘긴다(개수 + 1이 아니다. 중간 회차가 지워지면 번호가 겹친다). 채번 구현은 repository가 생기는 PR이 맡는다.
   **0원 주문은 provider를 부르지 않고 `APPROVED`로 만들며 `PaymentAttemptCreated`와 `PaymentApproved`를 함께 낸다.** 시도를 기록으로 남겨야 0원 주문도 조회 경로가 같다.
   provider를 부르지 않았으므로 `providerReference`가 `null`이고 그 `null`이 "provider가 모르는 승인"이라는 사실을 그대로 나타낸다.
   **시도 회차는 언제나 1이다.** 초기 정책이 주문당 시도 한 건이고 `(orderId, attemptNo)` unique가 그것을 강제한다. 채번은 repository가 생기는 PR이 정한다.
@@ -111,9 +113,8 @@
   원문의 포트는 `suspend`지만 이 저장소에 코루틴 의존성이 없어 블로킹으로 뒀다. 구현은 `FakePaymentGateway` 하나이고 외부 연동 전략이 "항상 유지"로 정한 것이라 실제 provider가 붙어도 지우지 않는다.
   **빈으로 등록하지 않는다.** 설정이 빠진 배포에서 이것이 유일한 구현으로 남으면 모든 결제를 무조건 승인한다. 주입이 필요한 PR이 조건과 함께 등록한다.
   **아직 부르는 쪽이 없다.** Facade·영속화·`OrderPaymentRequested` 리스너는 다음 PR이 만든다.
-  **`attemptNo`가 1로 고정된 것과 멱등 키가 어긋난다.** `OrderPaymentRequested`의 KDoc은 `(orderId, checkoutNo)`를 멱등 근거로 선언하는데 `payment`는 `(orderId, attemptNo)`를 쓴다.
-  `checkoutNo`가 2 이상인 요청이 오면 unique 위반으로 500이 되거나, 선조회 멱등 판정에서 조용히 건너뛰어 주문이 영원히 미결제로 남는다. 지금은 `Order.requestCheckout`이 한 번만 전이해서
-  `checkoutNo`가 언제나 1이라 도달하지 않는다. 멱등 키를 정하는 영속화 PR이 닫는다. 알려진 빈틈이다([payment-domain-model](../spec/2026-09-22-payment-domain-model.md)).
+  **이벤트 중복 전달은 `(orderId, attemptNo)`가 막는 대상이 아니다.** 그 키는 회차 채번의 경합을 막는다. 중복 전달은 Event Publication Registry가 `(이벤트, 리스너)`마다 완료를 기록해 막는다.
+  재발행을 켜면 at-least-once가 되므로 그때는 업무 수준 멱등 근거가 따로 필요하다. 알려진 빈틈이다([payment-domain-model](../spec/2026-09-22-payment-domain-model.md)).
 - `platform` 모듈은 `IdentifierGenerator`(UUID v7)와 `Clock`(UTC) 빈을 등록하는 `PlatformConfiguration`과 엔티티 공통 컬럼
   (`created_at`·`updated_at`·`deleted_at`, Hibernate `@SoftDelete`)을 주는 `BaseEntity`를 가진다. `OrderEntity`·`OrderLineEntity`·`OrderCheckoutEntity`가 상속한다. 모듈은 9개다.
   낙관적 잠금 `@Version`은 `BaseEntity`에 없고 필요한 엔티티가 직접 선언한다. 지금은 `OrderEntity`뿐이라 `version` 컬럼은 `t_order`에만 있다. `@Version`이 없는 새 자식 행은
