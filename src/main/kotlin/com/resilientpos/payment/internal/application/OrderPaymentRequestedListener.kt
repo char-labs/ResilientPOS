@@ -15,6 +15,9 @@ import org.springframework.stereotype.Component
  * `@ApplicationModuleListener`는 비동기이고 커밋 뒤에 자기 트랜잭션에서 돈다. 여기서 실패하면
  * `event_publication`에 미완료로 남고 자동 재시도가 없다. 재전달은 Kafka를 들이는 설계가 맡는다.
  * 그래서 예외를 삼키지 않는다 — 삼키면 성공으로 기록되어 미완료 기록마저 사라진다.
+ *
+ * 아래 로그는 **커밋 전에** 찍힌다. 이 메서드 전체가 트랜잭션 안이라 메서드 안에서 커밋 뒤를 볼 수 없다.
+ * 커밋이 실패하면 로그만 남고 행은 없으므로, 무엇이 실제로 저장됐는지는 `event_publication`의 완료 여부로 본다.
  */
 @Component
 class OrderPaymentRequestedListener(
