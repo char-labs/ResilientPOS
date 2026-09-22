@@ -13,17 +13,26 @@ import java.util.UUID
 
 /**
  * `Checkout`의 JPA 매핑. 연관관계 매핑 없이 `orderId` 컬럼만 가진 독립 엔티티다.
- * checkout은 확정 뒤에 바뀌지 않으므로 `apply`가 없다. 통화는 주문의 것을 받아 복원한다.
+ * checkout은 확정 뒤에 바뀌지 않으므로 `apply`가 없고 전 필드가 `val`이다. 통화는 주문의 것을 받아 복원한다.
+ * 생성은 `from`만 한다(도메인 규칙 §5).
  */
 @Entity
 @Table(name = "t_order_checkout")
-class OrderCheckoutEntity(
-    @Id
-    var id: UUID,
-    var orderId: UUID,
-    var checkoutNo: Int,
-    var amount: BigDecimal,
+class OrderCheckoutEntity private constructor(
+    id: UUID,
+    orderId: UUID,
+    checkoutNo: Int,
+    amount: BigDecimal,
 ) : BaseEntity() {
+
+    @Id
+    val id: UUID = id
+
+    val orderId: UUID = orderId
+
+    val checkoutNo: Int = checkoutNo
+
+    val amount: BigDecimal = amount
 
     fun toDomain(currency: Currency): Checkout = Checkout(
         id = CheckoutId(id),

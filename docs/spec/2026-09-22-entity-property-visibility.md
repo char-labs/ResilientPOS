@@ -38,6 +38,15 @@
 
 어느 쪽이든 관측한 결과를 결과 절에 적는다. 2번과 3번은 밖에서 프로퍼티를 바꿀 수 없다는 목적을 똑같이 이루고, `val`이 추가로 주는 것은 엔티티 안에서의 재대입까지 막는 것뿐이다.
 
+### 범위 조정 1 (2026-09-22, `private set`이 아니라 `protected set`이다)
+위 표와 볼트 지침은 `apply`가 바꾸는 필드를 `var ... private set`으로 적었다. 실제로 쓰고 컴파일하니 Kotlin이 거절한다. `build.gradle.kts`의 `allOpen`이 `jakarta.persistence.Entity`에 걸려 있어 엔티티의 멤버가 전부 `open`이고, Kotlin은 open 프로퍼티에 `private set`을 금지한다("Private setters for open properties are prohibited", `OrderEntity` 5곳과 `OrderLineEntity` 5곳). `allOpen`은 Hibernate가 엔티티를 상속해 프록시를 만들 수 있게 하려고 둔 설정이라 걷어낼 대상이 아니다.
+
+- 결정: `apply`가 바꾸는 필드는 `var ... protected set`이다. `val`인 필드는 setter가 없어 이 제약과 무관하므로 그대로 둔다. 목적은 그대로 이룬다. `protected`는 클래스 밖에서 보이지 않고, 실제 하위 타입은 Hibernate가 실행 중에 만드는 프록시뿐이다.
+- 이 저장소에는 이미 같은 형태가 둘 있다. `BaseEntity`의 `createdAt`·`updatedAt`과 `OrderEntity`의 `@Version version`이 `protected set`이다. 5절이 `@Version`에 대해서만 적어 둔 규칙이 사실은 이 저장소의 모든 엔티티 필드에 적용되는 제약이었다.
+- 버린 안: 프로퍼티를 명시적으로 `final`로 선언해 `private set`을 되살리는 것. 컴파일은 통과하지만 `allOpen`을 둔 이유를 매핑 프로퍼티에서만 무효로 만든다. 가시성을 한 단계 좁히자고 프록시 전제를 흔들 이유가 없다.
+- 볼트 `.claude/rules/domain-modeling-kotlin.md` 5절의 해당 불릿과 예시 코드, 7절의 한 줄을 `protected set`으로 고친다. 지침이 현실과 어긋나면 고치는 쪽은 지침이라는 범위의 3번 판단을 그대로 적용한다. 수정 전 사본을 `~/Documents`에 다시 남기고 결과 절에 적는다.
+- 인수 조건 2와 8의 판정도 `protected set`으로 읽는다.
+
 ### 호출부
 지금 엔티티 밖에서 setter를 쓰는 곳이 없다. 대입은 `OrderLineEntity.apply`와 `OrderEntity.apply` 안뿐이고, 생성은 네 곳 모두 `from`을 거친다(`OrderPersistenceAdapter`, `PaymentAttemptPersistenceAdapter`, 테스트 한 곳의 `PaymentAttemptEntity.from`). 그래서 호출부가 깨지지 않는다. 동작은 바뀌지 않는 순수 가시성 축소다.
 
@@ -93,4 +102,12 @@
 적용하지 않는다. 업무 동작이 바뀌지 않는 가시성 축소다. 새 분기·계산·상태 전이가 없어 실패할 수 있는 새 동작이 없고, 규칙 위반은 테스트가 아니라 컴파일러가 잡는다. 대신 두 가지를 실행으로 확인하고 결과 절에 적는다. 하나는 범위 1번의 `val` 확인이고, 다른 하나는 인수 조건 3의 컴파일 실패 관측이다. 기존 테스트 전체가 고치지 않은 채 통과하는 것이 동작 무변화의 근거다.
 
 ## 결과
-개발 전 작성. 개발 후 실행 결과와 변경 이유를 추가한다.
+- 범위 1번(`val` 확인): 통과했다. `OrderCheckoutEntity`만 `private constructor` + 전 필드 `val`로 바꾼 상태에서 `OrderCommandFacadeIntegrationTest` 11개와 `OrderRequestCheckoutIntegrationTest` 9개가 모두 통과했다. 판정의 근거가 된 것은 `checkout을 요청한 주문을 다시 읽으면 checkouts가 그대로 복원된다`다. 이 테스트는 커밋된 주문을 새 트랜잭션에서 `repository.findById`로 다시 읽고 `checkoutNo`·`amount`·`id`를 DB 행과 대조하므로, Hibernate가 DB에서 읽은 값을 Kotlin `val`(JVM final) 인스턴스 필드에 채운다는 것을 직접 보인다. 필드 접근 전략에서 final 필드에 쓰지 못할 것이라는 가정은 틀렸다. `kotlin("plugin.jpa")`가 만드는 인자 없는 생성자가 초기화식을 실행하지 않아도 값이 채워진다. 그래서 2번 경로로 갔고 볼트 지침의 `val` 규정은 고칠 이유가 없었다.
+- 범위 조정 1(`protected set`): 표대로 나머지 세 엔티티까지 쓰고 컴파일하니 Kotlin이 `private set` 10곳(`OrderEntity` 5, `OrderLineEntity` 5)을 "Private setters for open properties are prohibited"로 거절했다. 원인은 `build.gradle.kts`의 `allOpen`이 `jakarta.persistence.Entity`에 걸려 있는 것이다. `protected set`으로 바꿔 해결했다. 사후에 보면 이 제약은 이미 저장소에 드러나 있었다. `BaseEntity`의 두 시각과 `OrderEntity`의 `@Version version`이 전부터 `protected set`이었고, 5절이 `@Version`에 한정해 적어 둔 규칙이 사실은 모든 엔티티 필드에 걸리는 제약이었다.
+- 인수 조건 1·2: 엔티티 4개의 primary constructor가 `private`이고 밖에서 보이는 생성 경로는 `from`뿐이다. `OrderEntity`는 `id`가 `val`, `apply`가 대입하는 5개가 `protected set`이다. `OrderLineEntity`는 `id`·`orderId`가 `val`, `apply`가 대입하는 5개가 `protected set`이다. `OrderCheckoutEntity`와 `PaymentAttemptEntity`는 전 필드가 `val`이다.
+- 인수 조건 3: 임시 파일 하나로 관측했다. 엔티티와 같은 패키지에 둔 코드에서도 `entity.status = OrderStatus.CHECKOUT_REQUESTED`는 "Cannot access 'status': it is protected", `OrderCheckoutEntity(...)` 직접 호출은 "Cannot access 'constructor...': it is private"로 컴파일이 실패한다. Kotlin에는 package-private이 없어서 같은 패키지라는 사실이 가시성을 열어 주지 않는다. 임시 파일은 관측 뒤 지웠고 커밋하지 않았다.
+- 인수 조건 4·5·6: `./gradlew test` 167개가 고친 테스트 없이 통과한다. 매핑은 그대로라 JPA `validate`와 `SchemaMigrationTest`가 통과하고, `OrderVersionConflictIntegrationTest`와 문장 수 테스트 두 개도 그대로다. 테스트 파일은 한 줄도 바꾸지 않았고 운영 코드도 엔티티 4개 밖에서는 바뀌지 않았다. 이것이 동작 무변화의 근거다.
+- 인수 조건 7: [도메인 모델](../wiki/domain-model.md) 8절 표의 `internal` 행을 고쳤다. 목적(엔티티를 밖에서 만들거나 바꾸지 못하게)은 사례와 같고 수단이 모듈 경계와 엔티티 가시성 둘로 갈린다는 것, `private set`을 쓸 수 없는 이유를 적었다. `internal`을 쓰지 않는 기존 근거는 그대로 뒀다.
+- 인수 조건 8: 볼트 `.claude/rules/domain-modeling-kotlin.md`의 세 자리를 `protected set`으로 고쳤다. 5절의 가시성 불릿(이유 문장 추가), 5절 예시 코드의 `OrderEntity.status`, 7절 "하지 않는 것"의 마지막 줄이다. 수정 전 사본은 `~/Documents/domain-modeling-kotlin.2026-09-22.before-protected-set.md`다. 이 PR을 시작하기 전에 남긴 사본 `~/Documents/domain-modeling-kotlin.2026-09-21.before-entity-visibility.md`는 5절 불릿과 7절 두 줄이 추가되기 전 상태이고 그대로 둔다.
+- 변경 기록: `docs/wiki/changes.md`에 남기라는 지시가 있었으나 그 파일은 [drop-changes-log](2026-09-21-drop-changes-log.md)가 삭제했다. 사본 기록을 PR spec 한 곳으로 모은 결정이라 되살리지 않고 이 spec에 남겼다.
+- multi-review: 미실행. 제출 전에 실행한다.
