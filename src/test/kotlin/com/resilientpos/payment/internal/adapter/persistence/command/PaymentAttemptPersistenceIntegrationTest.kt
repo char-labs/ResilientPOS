@@ -15,12 +15,20 @@ import java.util.Currency
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import org.springframework.beans.factory.annotation.Autowired
+import org.springframework.dao.DataIntegrityViolationException
 
 /**
- * 한 주문에 결제 시도가 여러 건 달리는지 실제 PostgreSQL에서 확인한다.
- * 복합 자연 키를 두지 않기로 한 결정이 테이블에서도 성립하는지가 이 테스트의 요지다.
+ * 한 주문에 결제 시도가 여러 건 달리는지, 그러면서도 같은 checkout의 승인이 중복되지 않는지 실제 PostgreSQL에서 확인한다.
+ *
+ * `testing-strategy.md`는 Repository 전용 테스트를 TDD 대상에서 빼지만, 이 PR은 Facade도 리스너도 없어서
+ * 스키마 결정을 확인할 다른 경로가 없다. 어댑터·리스너 PR이 Facade 통합 테스트를 넣으면 복원 검증은 그쪽으로 옮긴다.
+ *
+ * **`@Transactional`을 붙이지 않는다.** 붙이면 저장 직후의 조회가 같은 영속성 컨텍스트의 관리 엔티티를 돌려줘
+ * DB를 한 번도 읽지 않고 통과한다. 통화 왕복도 금액 scale도 검증되지 않는다.
+ * 격리는 테스트마다 다른 `orderId`를 쓰는 것으로 한다. 행은 JVM 수명 동안 남으므로 전체 개수를 세는 단언을 두지 않는다.
  */
 class PaymentAttemptPersistenceIntegrationTest(
     @Autowired private val repository: PaymentAttemptJpaRepository,
@@ -30,7 +38,7 @@ class PaymentAttemptPersistenceIntegrationTest(
     private val ids = UuidV7IdentifierGenerator()
     private val now: Instant = Instant.parse("2026-09-22T01:00:00Z")
 
-    private fun attempt(orderId: UUID, amount: String = "4500", checkoutNo: Int = 1) =
+    private fun authorization(orderId: UUID, amount: String = "4500", checkoutNo: Int = 1) =
         PaymentAttempt.create(
             CreatePaymentAttemptCommand(
                 orderId = orderId,
@@ -43,31 +51,62 @@ class PaymentAttemptPersistenceIntegrationTest(
             now,
         ).aggregate
 
+    private fun stored(
+        orderId: UUID,
+        checkoutNo: Int = 1,
+        kind: PaymentAttemptKind = PaymentAttemptKind.AUTHORIZATION,
+        status: PaymentAttemptStatus = PaymentAttemptStatus.REQUESTED,
+        amount: Money = Money.of("4500", krw),
+        providerReference: String? = null,
+    ) = PaymentAttempt.restore(
+        id = PaymentId(ids.next()),
+        orderId = orderId,
+        storeId = StoreId(UUID.randomUUID()),
+        terminalId = TerminalId(UUID.randomUUID()),
+        checkoutNo = checkoutNo,
+        kind = kind,
+        amount = amount,
+        status = status,
+        providerReference = providerReference,
+    )
+
+    private fun save(vararg attempts: PaymentAttempt) =
+        attempts.forEach { repository.save(PaymentAttemptEntity.from(it)) }
+
     @Test
-    fun `한 주문에 결제 시도가 여러 건 저장된다`() {
+    fun `거절 뒤 재시도와 취소가 같은 주문에 나란히 쌓인다`() {
+        // 1-to-many가 성립하는 실제 경로다. 진행 중인 승인이 하나뿐이면 회차가 같아도 여러 건이 들어간다.
         val orderId = UUID.randomUUID()
 
-        repository.saveAll(
-            listOf(
-                PaymentAttemptEntity.from(attempt(orderId)),
-                PaymentAttemptEntity.from(attempt(orderId)),
-                PaymentAttemptEntity.from(attempt(orderId, checkoutNo = 2)),
-            ),
+        save(
+            stored(orderId, status = PaymentAttemptStatus.DECLINED),
+            stored(orderId, status = PaymentAttemptStatus.DECLINED),
+            stored(orderId, status = PaymentAttemptStatus.APPROVED),
+            stored(orderId, kind = PaymentAttemptKind.CANCELLATION, status = PaymentAttemptStatus.APPROVED),
+            stored(orderId, checkoutNo = 2),
         )
-        repository.flush()
 
-        assertEquals(3, repository.findAllByOrderId(orderId).size)
+        assertEquals(5, repository.findAllByOrderIdOrderById(orderId).size)
+    }
+
+    @Test
+    fun `같은 checkout에 진행 중인 승인은 하나뿐이다`() {
+        // 이벤트가 두 번 전달돼도 두 번째 INSERT가 여기서 막힌다.
+        // 이 제약이 없으면 두 행의 값이 완전히 같아서 중복 청구와 정당한 재시도를 사후에 구분할 수 없다.
+        val orderId = UUID.randomUUID()
+        save(stored(orderId))
+
+        assertFailsWith<DataIntegrityViolationException> { save(stored(orderId)) }
     }
 
     @Test
     fun `저장한 시도를 도메인으로 그대로 복원한다`() {
         val orderId = UUID.randomUUID()
-        val saved = attempt(orderId, amount = "12345.0000".substringBefore("."))
+        val saved = authorization(orderId, amount = "12345")
 
-        repository.saveAll(listOf(PaymentAttemptEntity.from(saved)))
-        repository.flush()
+        save(saved)
 
-        val restored = repository.findAllByOrderId(orderId).single().toDomain()
+        val restored = repository.findAllByOrderIdOrderById(orderId).single().toDomain()
         assertEquals(saved.id, restored.id)
         assertEquals(saved.orderId, restored.orderId)
         assertEquals(saved.storeId, restored.storeId)
@@ -81,49 +120,52 @@ class PaymentAttemptPersistenceIntegrationTest(
 
     @Test
     fun `KRW가 아닌 통화와 취소 시도도 값이 그대로 오간다`() {
-        // 앞의 테스트들은 전부 KRW·AUTHORIZATION·providerReference=null이라
+        // 다른 테스트가 전부 KRW·AUTHORIZATION·providerReference=null이라
         // 매핑이 그 값들을 그대로 박아 넣어도 통과한다. 다른 값으로 한 번 더 확인한다.
         val usd = Currency.getInstance("USD")
         val orderId = UUID.randomUUID()
-        val stored = PaymentAttempt.restore(
-            id = PaymentId(ids.next()),
-            orderId = orderId,
-            storeId = StoreId(UUID.randomUUID()),
-            terminalId = TerminalId(UUID.randomUUID()),
+        val attempt = stored(
+            orderId,
             checkoutNo = 3,
             kind = PaymentAttemptKind.CANCELLATION,
-            amount = Money.of("10.50", usd),
             status = PaymentAttemptStatus.UNKNOWN,
+            amount = Money.of("10.99", usd),
             providerReference = "fake-order-1",
         )
 
-        repository.saveAll(listOf(PaymentAttemptEntity.from(stored)))
-        repository.flush()
+        save(attempt)
 
-        val restored = repository.findAllByOrderId(orderId).single().toDomain()
+        val restored = repository.findAllByOrderIdOrderById(orderId).single().toDomain()
         assertEquals(PaymentAttemptKind.CANCELLATION, restored.kind)
         assertEquals(PaymentAttemptStatus.UNKNOWN, restored.status)
         assertEquals("fake-order-1", restored.providerReference)
         assertEquals(3, restored.checkoutNo)
-        assertEquals(stored.storeId, restored.storeId)
-        assertEquals(stored.terminalId, restored.terminalId)
         // 통화가 보존되지 않으면 Money 비교가 통화 불일치로 깨진다.
-        assertEquals(Money.of("10.50", usd), restored.amount)
+        // 10.99는 컬럼 scale이 0이나 1이면 반올림되어 값이 달라진다.
+        assertEquals(Money.of("10.99", usd), restored.amount)
         assertEquals(usd, restored.amount.currency)
-        // numeric(19,4)에 넣었다 꺼내도 통화의 canonical scale로 돌아온다.
-        assertEquals(2, restored.amount.amount.scale())
     }
 
     @Test
     fun `0원 시도도 승인 상태 그대로 저장되고 복원된다`() {
         val orderId = UUID.randomUUID()
 
-        repository.saveAll(listOf(PaymentAttemptEntity.from(attempt(orderId, amount = "0"))))
-        repository.flush()
+        save(authorization(orderId, amount = "0"))
 
-        val restored = repository.findAllByOrderId(orderId).single().toDomain()
+        val restored = repository.findAllByOrderIdOrderById(orderId).single().toDomain()
         assertEquals(PaymentAttemptStatus.APPROVED, restored.status)
         assertEquals(Money.of("0", krw), restored.amount)
         assertNull(restored.providerReference)
+    }
+
+    @Test
+    fun `정수부 15자리 금액이 잘리지 않고 오간다`() {
+        // Money.MAX_INTEGER_DIGITS = 15와 numeric(19,4)의 관계를 코드로 고정한다.
+        val orderId = UUID.randomUUID()
+        val max = Money.of("9".repeat(Money.MAX_INTEGER_DIGITS), krw)
+
+        save(stored(orderId, amount = max))
+
+        assertEquals(max, repository.findAllByOrderIdOrderById(orderId).single().toDomain().amount)
     }
 }
