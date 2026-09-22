@@ -70,12 +70,18 @@
 
 ## TDD 검증 기록
 
+통합 테스트를 먼저 넣어 RED를 봤다(`Unresolved reference 'PaymentAttemptJpaRepository'`). 그다음 엔티티·리포지토리·마이그레이션을 넣었다.
+
 | 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
 |---|---|---|---|
-| 한 주문에 결제 시도가 여러 건 저장된다 | 미실행 | 미실행 | 미실행 |
-| 저장한 시도를 도메인으로 그대로 복원한다 | 미실행 | 미실행 | 미실행 |
-| 0원 시도도 승인 상태 그대로 저장되고 복원된다 | 미실행 | 미실행 | 미실행 |
-| 마이그레이션·테이블 목록이 실제와 맞는다 | 미실행 | 미실행 | 미실행 |
+| 한 주문에 결제 시도가 여러 건 저장된다 | `./gradlew compileTestKotlin` — 엔티티·리포지토리 없음 | `./gradlew test` — 통과 | `./gradlew test` — 통과 |
+| 저장한 시도를 도메인으로 그대로 복원한다 | 같은 이유 | 같은 명령 — 통과 | `./gradlew test` — 통과 |
+| 0원 시도도 승인 상태 그대로 저장되고 복원된다 | 같은 이유 | 같은 명령 — 통과 | `./gradlew test` — 통과 |
+| 마이그레이션·테이블 목록이 실제와 맞는다 | `SchemaMigrationTest` FAILED — 목록에 `006`과 `t_payment_attempt`가 없음 | 목록에 더한 뒤 통과 | `./gradlew test` — 통과 |
 
 ## 결과
-개발 전 작성. 개발 후 실행 결과와 변경 이유를 추가한다.
+`./gradlew test` 152개 통과다(도메인 PR의 149 + 신규 3). 한 주문에 결제 행 3건이 실제 PostgreSQL에 저장되고 모두 조회되는 것을 확인했다. 복합 자연 키를 두지 않기로 한 결정이 테이블에서도 성립한다.
+
+**통화 매핑을 빠뜨리면 컨텍스트가 뜨지 않는다.** `char(3)` 컬럼에 `@JdbcTypeCode(SqlTypes.CHAR)` 없이 `String`을 매핑하니 `ddl-auto: validate`가 `varchar(255)`를 기대해 `Schema validation: wrong column type encountered in column [currency]`로 실패했다. `t_order`의 선례를 따라 고쳤다. 스키마 검증이 이 종류를 잡아 준다는 것을 실제로 확인한 셈이다.
+
+`SchemaMigrationTest`가 마이그레이션 목록과 테이블 목록을 값으로 고정하고 있어서 새 테이블을 더할 때 반드시 함께 고쳐야 한다. 이 PR에서 실제로 실패를 보고 고쳤다.
