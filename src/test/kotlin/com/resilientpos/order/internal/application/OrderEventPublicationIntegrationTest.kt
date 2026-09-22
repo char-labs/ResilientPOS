@@ -83,7 +83,9 @@ class OrderEventPublicationIntegrationTest(
             where serialized_event like ? and listener_id like ?
             """.trimIndent(),
             "%${orderId.value}%",
-            "%${PaymentRequestedListener::class.java.simpleName}%",
+            // 이 테스트 전용 리스너만 센다. simpleName만으로 거르면 이름이 이것을 포함하는
+            // 다른 리스너(OrderPaymentRequestedListener)까지 걸려서 프로덕션 리스너가 생길 때마다 깨진다.
+            "%${PaymentRequestedListener::class.java.name}%",
         )
 
     private fun received(orderId: OrderId) = listener.received.filter { it.orderId == orderId }

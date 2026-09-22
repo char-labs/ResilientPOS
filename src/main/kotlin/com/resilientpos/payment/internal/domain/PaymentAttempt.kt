@@ -40,6 +40,16 @@ class PaymentAttempt private constructor(
     override fun hashCode() = id.hashCode()
 
     companion object {
+        /**
+         * 아직 결말이 나지 않은 승인 시도의 상태. 같은 checkout에 이 상태의 승인은 하나뿐이고,
+         * `ux_payment_attempt_inflight_authorization`의 술어가 같은 값을 쓴다. 한쪽만 바꾸면 방어선이 어긋난다.
+         */
+        val INFLIGHT_STATUSES = setOf(
+            PaymentAttemptStatus.REQUESTED,
+            PaymentAttemptStatus.APPROVED,
+            PaymentAttemptStatus.UNKNOWN,
+        )
+
         const val NEGATIVE_PAYMENT_AMOUNT = "NEGATIVE_PAYMENT_AMOUNT"
         const val INVALID_CHECKOUT_NO = "INVALID_CHECKOUT_NO"
 

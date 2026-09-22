@@ -1,0 +1,109 @@
+package com.resilientpos.payment.internal.application
+
+import com.resilientpos.PostgresIntegrationTest
+import com.resilientpos.foundation.Money
+import com.resilientpos.order.CreateOrderLine
+import com.resilientpos.order.OrderCommandFacade
+import com.resilientpos.order.OrderFixtures
+import com.resilientpos.order.RequestCheckoutCommand
+import com.resilientpos.payment.CreatePaymentAttemptCommand
+import com.resilientpos.payment.PaymentAttemptKind
+import com.resilientpos.payment.PaymentAttemptStatus
+import com.resilientpos.payment.PaymentManagement
+import com.resilientpos.store.StoreId
+import com.resilientpos.terminal.TerminalId
+import java.util.UUID
+import java.util.concurrent.TimeUnit
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertNotEquals
+import kotlin.test.fail
+import org.springframework.beans.factory.annotation.Autowired
+import org.springframework.jdbc.core.JdbcTemplate
+
+/**
+ * `order`가 낸 사실이 `payment`의 행이 되는 경로를 끝까지 태운다.
+ * 리스너가 비동기라 조건이 만족될 때까지 짧게 반복해서 기다린다.
+ */
+class PaymentAttemptFromOrderEventIntegrationTest(
+    @Autowired private val orderFacade: OrderCommandFacade,
+    @Autowired private val paymentManagement: PaymentManagement,
+    @Autowired private val jdbcTemplate: JdbcTemplate,
+) : PostgresIntegrationTest() {
+
+    private fun attempts(orderId: UUID) = jdbcTemplate.queryForList(
+        "select id, kind, status, amount, currency, checkout_no from t_payment_attempt where order_id = ?",
+        orderId,
+    )
+
+    private fun awaitUntil(description: String, condition: () -> Boolean) {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
+        while (!condition()) {
+            if (System.nanoTime() >= deadline) fail("10초 안에 충족되지 않았다: $description")
+            Thread.sleep(20)
+        }
+    }
+
+    private fun checkoutOrder(lines: List<CreateOrderLine>): UUID {
+        val created = orderFacade.create(OrderFixtures.createOrderCommand(lines = lines))
+        orderFacade.requestCheckout(RequestCheckoutCommand(created.orderId))
+        return created.orderId.value
+    }
+
+    @Test
+    fun `checkout을 요청하면 결제 시도가 하나 기록된다`() {
+        val orderId = checkoutOrder(listOf(CreateOrderLine("SKU-1", "아메리카노", Money.of("4500", OrderFixtures.krw), 2)))
+
+        awaitUntil("결제 시도가 기록된다") { attempts(orderId).size == 1 }
+
+        val row = attempts(orderId).single()
+        assertEquals("AUTHORIZATION", row["kind"])
+        // provider를 아직 부르지 않으므로 결말이 나지 않은 상태로 남는다.
+        assertEquals("REQUESTED", row["status"])
+        assertEquals("KRW", (row["currency"] as String).trim())
+        assertEquals(1, row["checkout_no"])
+        assertEquals(0, (row["amount"] as java.math.BigDecimal).compareTo(java.math.BigDecimal("9000")))
+    }
+
+    @Test
+    fun `0원 주문은 provider 없이 승인까지 간다`() {
+        val orderId = checkoutOrder(listOf(CreateOrderLine("SKU-FREE", "증정품", Money.of("0", OrderFixtures.krw), 1)))
+
+        awaitUntil("0원 시도가 승인으로 기록된다") {
+            attempts(orderId).singleOrNull()?.get("status") == "APPROVED"
+        }
+    }
+
+    @Test
+    fun `같은 checkout으로 다시 부르면 기존 시도를 그대로 돌려준다`() {
+        val orderId = checkoutOrder(listOf(CreateOrderLine("SKU-1", "아메리카노", Money.of("4500", OrderFixtures.krw), 1)))
+        awaitUntil("첫 시도가 기록된다") { attempts(orderId).size == 1 }
+        val first = attempts(orderId).single()["id"]
+
+        // 리스너가 같은 이벤트를 다시 받은 것과 같은 상황이다.
+        val again = paymentManagement.createAttempt(
+            CreatePaymentAttemptCommand(
+                orderId = orderId,
+                storeId = StoreId(UUID.randomUUID()),
+                terminalId = TerminalId(UUID.randomUUID()),
+                checkoutNo = 1,
+                amount = Money.of("4500", OrderFixtures.krw),
+            ),
+        )
+
+        assertEquals(1, attempts(orderId).size)
+        assertEquals(first, again.paymentId.value)
+        assertEquals(PaymentAttemptStatus.REQUESTED, again.status)
+    }
+
+    @Test
+    fun `다른 주문의 시도는 서로 섞이지 않는다`() {
+        val first = checkoutOrder(listOf(CreateOrderLine("SKU-1", "아메리카노", Money.of("4500", OrderFixtures.krw), 1)))
+        val second = checkoutOrder(listOf(CreateOrderLine("SKU-1", "아메리카노", Money.of("4500", OrderFixtures.krw), 1)))
+
+        awaitUntil("두 주문 모두 시도가 기록된다") { attempts(first).size == 1 && attempts(second).size == 1 }
+
+        assertNotEquals(attempts(first).single()["id"], attempts(second).single()["id"])
+        assertEquals(PaymentAttemptKind.AUTHORIZATION.name, attempts(second).single()["kind"])
+    }
+}

@@ -47,6 +47,7 @@
 ## 변경 경로
 - src/main/kotlin/com/resilientpos/payment/**
 - src/test/kotlin/com/resilientpos/payment/**
+- src/test/kotlin/com/resilientpos/order/internal/application/OrderEventPublicationIntegrationTest.kt
 - docs/**
 
 ## 인수 조건
@@ -73,15 +74,16 @@
 예상 9개 파일 안팎 / 약 450줄. 한도 안이다. Gateway와 결과 적용은 목표가 달라 다음 PR로 나눈다.
 
 ## TDD 검증 기록
-
-| 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
-|---|---|---|---|
-| 이벤트를 받아 시도를 하나 만든다 | 미실행 | 미실행 | 미실행 |
-| 0원 주문은 승인까지 간다 | 미실행 | 미실행 | 미실행 |
-| 같은 이벤트를 두 번 받아도 시도는 하나다 | 미실행 | 미실행 | 미실행 |
-| 경합에서 진 쪽이 행을 남기지 않는다 | 미실행 | 미실행 | 미실행 |
-| 저장에 SELECT가 따라붙지 않는다 | 미실행 | 미실행 | 미실행 |
-| checkout부터 태우면 결제 시도가 생긴다 | 미실행 | 미실행 | 미실행 |
+RED는 타입이 없어 컴파일이 먼저 실패했다. [테스트 전략](../wiki/testing-strategy.md)이 컴파일 실패를 RED로 치지 않으므로, GREEN 뒤에 **되돌려서** 각 테스트가 무엇을 지키는지 확인하고 아래에 적었다.
 
 ## 결과
-개발 전 작성. 개발 후 실행 결과와 변경 이유를 추가한다.
+`./gradlew test` 161개 통과다(직전 156 + 신규 5).
+
+- **경로가 끝까지 이어진다.** 주문을 만들고 checkout을 요청하면 `t_payment_attempt`에 행이 하나 생긴다. 금액 9000, 통화 KRW, `kind = AUTHORIZATION`, `status = REQUESTED`가 이벤트 값과 같다. 0원 주문은 같은 한 번으로 `APPROVED`까지 간다.
+- **`persist` 규약을 문장 수로 확인했다.** 저장에 JDBC 문장이 1개 나간다. 어댑터를 `jpaRepository.save`로 되돌리면 2개가 되어 테스트가 실패한다. 코드를 읽어 "persist를 쓴다"고 넘기지 않았다.
+- **중복 이벤트는 읽기가 걸러 낸다.** 같은 checkout으로 Facade를 다시 부르면 행이 늘지 않고 같은 `paymentId`가 돌아온다. 이벤트도 다시 내지 않는다 — 다시 내면 소비자가 같은 사실을 두 번 본다.
+- **기존 이벤트 테스트 4건이 깨졌는데 원인은 설계가 아니라 이름이었다.** `OrderEventPublicationIntegrationTest`가 `listener_id like '%PaymentRequestedListener%'`로 자기 리스너를 거르는데, 새 리스너 이름 `OrderPaymentRequestedListener`가 그 문자열을 포함한다. 필터를 정규화된 클래스 이름으로 좁혔다. 이 저장소에 프로덕션 리스너가 처음 생기면서 드러난 것이라 다음 리스너에서도 같은 일이 나지 않게 이유를 주석에 남겼다.
+- **리스너가 예외를 삼키지 않는다.** 삼키면 Modulith가 성공으로 기록해 미완료 기록마저 사라진다. 재전달이 Kafka 설계로 미뤄진 지금, 그 기록이 사람이 볼 수 있는 유일한 흔적이다.
+- **`payment -> order` 의존이 생겼고 아직 순환은 아니다.** 프로브로 확인했다. `order/internal/application`에 `PaymentApproved`를 받는 클래스를 임시로 두면 `Cycle detected: Slice order -> ...`로 실패하고, 빼면 통과한다. 위 "알려진 한계"에 적었다.
+
+경합 테스트는 두지 않았다. 두 트랜잭션이 읽기와 쓰기 사이에서 정확히 겹치게 만들려면 테스트가 스케줄링을 통제해야 하는데, 이 저장소에 그 장치가 없다. 대신 DB 제약이 그 창을 닫는다는 것은 [payment-attempt-persistence](2026-09-22-payment-attempt-persistence.md)가 같은 checkout에 진행 중인 승인을 두 번 넣어 확인했다.

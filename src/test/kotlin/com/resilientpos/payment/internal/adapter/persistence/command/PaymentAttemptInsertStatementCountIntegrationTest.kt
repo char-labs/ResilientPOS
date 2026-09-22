@@ -1,0 +1,74 @@
+package com.resilientpos.payment.internal.adapter.persistence.command
+
+import com.resilientpos.PostgresIntegrationTest
+import com.resilientpos.foundation.IdentifierGenerator
+import com.resilientpos.foundation.Money
+import com.resilientpos.payment.CreatePaymentAttemptCommand
+import com.resilientpos.payment.internal.domain.PaymentAttempt
+import com.resilientpos.payment.internal.domain.PaymentAttemptRepository
+import com.resilientpos.store.StoreId
+import com.resilientpos.terminal.TerminalId
+import jakarta.persistence.EntityManagerFactory
+import java.time.Clock
+import java.util.Currency
+import java.util.UUID
+import kotlin.test.AfterTest
+import kotlin.test.BeforeTest
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import org.hibernate.SessionFactory
+import org.hibernate.stat.Statistics
+import org.springframework.beans.factory.annotation.Autowired
+import org.springframework.transaction.support.TransactionTemplate
+
+/**
+ * 새 시도가 추가 SELECT 없이 INSERT 한 번으로 들어가는지 Hibernate 통계로 검사한다. Docker가 필요하다.
+ *
+ * 도메인 ID를 저장 전에 만들기 때문에 Spring Data의 `save`는 `@Version`이 없는 새 엔티티를 기존 행으로 보고
+ * `merge`한다. 그러면 SELECT가 하나 더 나간다. 어댑터가 `EntityManager.persist`를 쓴다는 것을
+ * 코드로 읽지 않고 문장 수로 확인한다.
+ */
+class PaymentAttemptInsertStatementCountIntegrationTest(
+    @Autowired private val repository: PaymentAttemptRepository,
+    @Autowired private val transaction: TransactionTemplate,
+    @Autowired private val identifierGenerator: IdentifierGenerator,
+    @Autowired private val clock: Clock,
+    @Autowired entityManagerFactory: EntityManagerFactory,
+) : PostgresIntegrationTest() {
+
+    private val krw: Currency = Currency.getInstance("KRW")
+    private val statistics: Statistics = entityManagerFactory.unwrap(SessionFactory::class.java).statistics
+    private var statisticsWereEnabled = false
+
+    @BeforeTest
+    fun enableStatistics() {
+        statisticsWereEnabled = statistics.isStatisticsEnabled
+        statistics.isStatisticsEnabled = true
+    }
+
+    @AfterTest
+    fun restoreStatistics() {
+        statistics.isStatisticsEnabled = statisticsWereEnabled
+    }
+
+    @Test
+    fun `새 시도 저장은 INSERT 한 번으로 끝난다`() {
+        val attempt = PaymentAttempt.create(
+            CreatePaymentAttemptCommand(
+                orderId = UUID.randomUUID(),
+                storeId = StoreId(UUID.randomUUID()),
+                terminalId = TerminalId(UUID.randomUUID()),
+                checkoutNo = 1,
+                amount = Money.of("4500", krw),
+            ),
+            identifierGenerator,
+            clock.instant(),
+        ).aggregate
+
+        val before = statistics.prepareStatementCount
+        transaction.execute { repository.save(attempt) }
+        val statements = statistics.prepareStatementCount - before
+
+        assertEquals(1, statements, "저장에 나간 JDBC 문장 수")
+    }
+}

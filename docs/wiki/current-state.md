@@ -13,7 +13,7 @@
 | 식별자 | `uuid-creator` 6.1.1 (UUID v7) |
 | 구조 검증 | Spring Modulith 경계 검증, ArchUnit 1.4.2 의존성 방향 가드 |
 | 통합 테스트 | Testcontainers 2.0.5 PostgreSQL 18. `./gradlew test` 실행에 Docker가 필요하다 |
-| 테스트 | Kotlin Test/JUnit 5, Spring Boot 테스트 starter, Fixture Monkey 1.2.3; 총 156개 (컨텍스트 1, 스키마 4, 모듈 구조 2, 의존성 방향 2, Money 25, 식별자 4, Order 19, PaymentAttempt 11, 결제 enum 이름 2, 결제 시도 영속화 통합 6, 결제 테이블 스키마 1, 자원 상한 설정 3, Facade line 상한 1, 오류 로그 요청 정보 6, OrderCommandFacade 11, RequestCheckout 통합 9, 버전 충돌 통합 1, 문장 수 통합 3, 이벤트 발행 기록 통합 7, API advice 9, OrderController 13, checkout Controller 5, 주문 API 통합 11) |
+| 테스트 | Kotlin Test/JUnit 5, Spring Boot 테스트 starter, Fixture Monkey 1.2.3; 총 161개 (컨텍스트 1, 스키마 4, 모듈 구조 2, 의존성 방향 2, Money 25, 식별자 4, Order 19, PaymentAttempt 11, 결제 enum 이름 2, 결제 시도 영속화 통합 6, 결제 테이블 스키마 1, 결제 문장 수 통합 1, 주문 이벤트→결제 통합 4, 자원 상한 설정 3, Facade line 상한 1, 오류 로그 요청 정보 6, OrderCommandFacade 11, RequestCheckout 통합 9, 버전 충돌 통합 1, 문장 수 통합 3, 이벤트 발행 기록 통합 7, API advice 9, OrderController 13, checkout Controller 5, 주문 API 통합 11) |
 | 로컬 하네스 | Python 3 표준 라이브러리 |
 
 근거: [build.gradle.kts](../../build.gradle.kts), [Gradle Wrapper](../../gradle/wrapper/gradle-wrapper.properties), [애플리케이션 설정](../../src/main/resources/application.yaml).
@@ -110,7 +110,12 @@
   통화를 직접 가진다(`char(3)`, `t_order`와 같은 `@JdbcTypeCode(SqlTypes.CHAR)` 매핑). `t_order`에서 읽으면 모듈 경계를 넘고, 승인 금액 검증에는 통화가 금액과 같은 행에 있어야 한다.
   `kind`와 `status`는 `EnumType.STRING`이다. ORDINAL로 두면 값을 하나 끼워 넣을 때 기존 행의 뜻이 바뀐다. 이 설정을 지키는 것은 테스트 단언이 아니라 `ddl-auto: validate`다 — ORDINAL로 바꾸면 `varchar`와 `smallint`가 어긋나 컨텍스트가 뜨지 않는다.
   `t_payment_attempt`의 행은 지우지 않는다. 지우는 명령이 생기면 그 PR이 감사·reconciliation 영향을 함께 본다. `PaymentAttemptJpaRepository`는 그래서 `JpaRepository`가 아니라 좁힌 `Repository`를 상속해 삭제 메서드를 노출하지 않는다([payment-attempt-persistence](../spec/2026-09-22-payment-attempt-persistence.md)).
-  **Facade·`PaymentAttemptRepository` 포트·`OrderPaymentRequested` 리스너와 외부 provider 경계(`PaymentGateway`, `FakePaymentGateway`)는 다음 PR이 함께 만든다.** 포트는 부르는 쪽과 같은 PR에 둬야 모양을 확인할 수 있다.
+  `PaymentManagement`(구체 클래스)가 `@Transactional`을 소유하고 `PaymentAttemptRepository` port에만 의존한다. `PaymentAttemptPersistenceAdapter`가 그 port를 구현하고 새 행을 `EntityManager.persist`로 넣는다. `@Version` 없는 엔티티를 `save`에 넘기면 `merge`가 되어 SELECT가 하나 더 나가는데, 그것을 문장 수로 확인한다.
+  `OrderPaymentRequestedListener`가 **이 저장소의 첫 프로덕션 이벤트 리스너**다. `order`의 `OrderPaymentRequested`를 받아 command로 옮기고 Facade를 부른다. 판단은 하지 않고, 예외도 삼키지 않는다 — 삼키면 Modulith가 성공으로 기록해 미완료 기록마저 사라진다.
+  **같은 이벤트가 두 번 와도 시도는 하나다.** 넣기 전에 그 checkout의 진행 중인 승인을 읽고 있으면 그것을 돌려주며 이벤트를 다시 내지 않는다. 동시 경합은 이 읽기로 닫히지 않고 partial unique가 닫는다. 진 쪽은 실패하고 미완료 발행 기록으로 남는다.
+  **미완료 이벤트를 다시 보내는 절차는 아직 없다.** 리스너 실패에 자동 재시도가 없고, 재전달은 **Kafka를 들이는 별도 설계**가 맡기로 했다. 스레드 풀(코어 8, 큐 무제한)과 종료 대기 2초도 기본값 그대로다. 외부 provider를 부르는 리스너가 생기는 PR이 정한다. 알려진 빈틈이다.
+  **`payment`가 `order`를 import한다**(리스너가 `OrderPaymentRequested`를 받으므로). `order`는 `payment`를 import하지 않아 아직 순환이 아니다. 다만 도메인 모델 §2가 `PaymentApproved`를 `order`가 소비한다고 정했으므로, **그 리스너를 만드는 PR은 먼저 순환을 풀어야 한다** — 재현해 확인했다. 알려진 빈틈이다([payment-attempt-from-order-event](../spec/2026-09-22-payment-attempt-from-order-event.md)).
+  외부 provider 경계(`PaymentGateway` 포트, `FakePaymentGateway`)와 provider 결과 적용 전이는 다음 PR이 만든다.
   **같은 checkout에 진행 중인 승인 시도는 partial unique가 하나로 묶는다**(`ux_payment_attempt_inflight_authorization`, 술어는 `kind = 'AUTHORIZATION' and status in ('REQUESTED','APPROVED','UNKNOWN') and deleted_at is null`).
   거절된 시도는 술어에서 빠져 재시도가 들어가고 취소·환불은 `kind`가 달라 술어 밖이라, 이 제약이 1-to-many를 막지 않는다.
   Event Publication Registry의 완료 기록은 리스너의 업무 커밋과 같은 트랜잭션이 아니어서(비동기·`AFTER_COMMIT`·`REQUIRES_NEW`) 그 사이에 프로세스가 죽으면 행은 있고 발행은 미완료로 남는다. 재전송이 돌면 두 번째 승인이 들어오는데 이 인덱스가 그것을 막는다.

@@ -1,5 +1,7 @@
 package com.resilientpos.payment.internal.adapter.persistence.command
 
+import com.resilientpos.payment.PaymentAttemptKind
+import com.resilientpos.payment.PaymentAttemptStatus
 import java.util.UUID
 import org.springframework.data.repository.Repository
 
@@ -17,4 +19,15 @@ interface PaymentAttemptJpaRepository : Repository<PaymentAttemptEntity, UUID> {
     fun save(entity: PaymentAttemptEntity): PaymentAttemptEntity
 
     fun findAllByOrderIdOrderById(orderId: UUID): List<PaymentAttemptEntity>
+
+    /**
+     * 조건이 `ux_payment_attempt_inflight_authorization`의 술어와 같다. 둘이 갈라지면
+     * 조회는 없다고 하는데 INSERT는 거절당하는 상태가 된다.
+     */
+    fun findFirstByOrderIdAndCheckoutNoAndKindAndStatusIn(
+        orderId: UUID,
+        checkoutNo: Int,
+        kind: PaymentAttemptKind,
+        statuses: Set<PaymentAttemptStatus>,
+    ): PaymentAttemptEntity?
 }
