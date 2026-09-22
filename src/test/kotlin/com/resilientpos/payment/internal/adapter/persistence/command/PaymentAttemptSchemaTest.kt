@@ -1,6 +1,8 @@
 package com.resilientpos.payment.internal.adapter.persistence.command
 
 import com.resilientpos.PostgresIntegrationTest
+import com.resilientpos.payment.PaymentAttemptStatus
+import com.resilientpos.payment.internal.domain.PaymentAttempt
 import javax.sql.DataSource
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -57,5 +59,27 @@ class PaymentAttemptSchemaTest(
             ),
             columns,
         )
+    }
+
+    @Test
+    fun `진행 중 상태 집합이 인덱스 술어와 같다`() {
+        // 둘이 갈라지면 조용히 어긋난다. 상수에만 상태를 더하면 조회는 기존 행을 찾아 멱등 반환하는데
+        // 인덱스는 그 행을 진행 중으로 보지 않아, 새로 만들어야 할 시도가 만들어지지 않는다.
+        val definition = dataSource.connection.use { connection ->
+            connection.prepareStatement(
+                "select pg_get_indexdef(oid) from pg_class where relname = 'ux_payment_attempt_inflight_authorization'",
+            ).executeQuery().use { rows ->
+                rows.next()
+                rows.getString(1)
+            }
+        }
+
+        PaymentAttemptStatus.entries.forEach { status ->
+            assertEquals(
+                status in PaymentAttempt.INFLIGHT_STATUSES,
+                definition.contains("'${status.name}'"),
+                "${status.name}이 상수와 인덱스 술어에서 다르게 다뤄진다: $definition",
+            )
+        }
     }
 }

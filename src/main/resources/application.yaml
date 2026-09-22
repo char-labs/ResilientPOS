@@ -47,5 +47,5 @@ spring:
       # 기본값과 같다. 결정을 설정에 적어 Modulith를 올릴 때 기본값이 바뀌어도 뒤집히지 않게 한다.
       # update: 처리한 발행 기록에 완료 표시만 하고 행을 남긴다.
       completion-mode: update
-      # 인스턴스가 여럿이면 같은 미완료 이벤트를 모두가 다시 보낸다. 재전송 절차는 첫 리스너를 넣는 PR이 정한다.
+      # 인스턴스가 여럿이면 같은 미완료 이벤트를 모두가 다시 보낸다. 재전송 절차는 Kafka를 들이는 설계가 정한다.
       republish-outstanding-events-on-restart: false

@@ -10,9 +10,10 @@ import java.util.UUID
 /**
  * `payment` 모듈이 발행하는 도메인 이벤트의 닫힌 집합.
  * provider 결과를 적용하는 전이가 생기는 PR이 `PaymentDeclined`·`PaymentUnknown`을 더한다. *
- * `orderId`는 `order.OrderId`가 아니라 raw `UUID`다. `payment`가 `OrderId`를 import하면
- * `order`가 `PaymentApproved`를 소비하는 순간 `order -> payment -> order` 순환이 되어 Modulith 검증이 실패한다.
- * 실제로 재현해 확인했다. 타입 안전성은 `payment` 경계 안에서만 잃고, `order`는 받은 값을 `OrderId`로 감싼다.
+ * `orderId`는 `order.OrderId`가 아니라 raw `UUID`다. 모듈 간선 `payment -> order`는 리스너가
+ * `OrderPaymentRequested`를 받으면서 이미 생겼으므로 이 선택이 그 간선을 막지는 않는다.
+ * **공개 계약을 `order` 타입에서 떼어 놓는 것**이 목적이다. 순환을 푸는 PR이 `OrderPaymentRequested`를
+ * 다른 곳으로 옮기더라도 `payment`의 공개 타입은 손대지 않아도 된다.
  */
 sealed interface PaymentEvent : DomainEvent
 
