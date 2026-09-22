@@ -8,7 +8,7 @@
 
 **복합 자연 키를 두지 않는다.** `id` 단독 primary key이고 `order_id`는 인덱스만 둔 참조다. `(order_id, ...)` 형태의 unique 제약은 한 주문의 시도 수를 제한하는 쪽으로 작동해서 1-to-many를 막는다. 승인 뒤 취소, 거절 뒤 재시도가 모두 같은 `order_id`에 달려야 한다.
 
-같은 이벤트가 두 번 전달돼 시도가 두 번 만들어지는 것은 이 키가 막을 일이 아니다. Event Publication Registry가 `(이벤트, 리스너)`마다 완료를 기록한다.
+같은 이벤트가 두 번 전달돼 시도가 두 번 만들어지는 것은 이 키가 막을 일이 아니다. Event Publication Registry가 `(이벤트, 리스너)`마다 완료를 기록한다. **다만 그 방어는 지금 구성에서만 성립한다.** 재기동 시 재발행이 꺼져 있고 인스턴스가 하나이기 때문이다. 재발행을 켜고 인스턴스를 늘리면 같은 이벤트가 여러 번 전달되고, 그때는 업무 수준 멱등 근거가 따로 필요하다. 리스너를 만드는 PR이 그 근거를 정하고, 필요하면 그 시점에 unique 제약을 더한다. 지금 넣지 않는 이유는 무엇을 기준으로 유일해야 하는지가 리스너 설계에 달려 있어서다.
 
 **DB FK를 두지 않는다.** `payment`와 `order`는 서로의 테이블을 읽지 않는 별개 컨텍스트다. `t_order_checkout`이 같은 이유로 FK를 두지 않은 선례가 있다.
 
@@ -54,7 +54,7 @@
 - 필요성: `payment`가 시도를 저장할 곳이 없다. 앞선 PR이 정한 1-to-many가 테이블에서 성립하는지 확인할 수단도 없다.
 - 정합성: `id` 단독 primary key다. unique 제약과 DB FK를 두지 않는 이유는 위 범위에 적었다. `order_id` 인덱스 하나를 둔다. 한 주문의 시도를 모두 읽는 것이 기본 조회다. 금액은 `numeric(19,4)`로 다른 금액 컬럼과 같고 `Money.MAX_INTEGER_DIGITS`가 그 범위를 지킨다.
 - 반영: `ddl-auto: validate`가 엔티티와 테이블을 대조하고 `SchemaMigrationTest`가 목록을 고정한다.
-- 대조 기록: 미기재. 이 저장소에 구현자 아닌 리뷰어가 없어 multi-review 에이전트가 대신 본다. 결과는 결과 절에 적는다.
+- 대조 기록: multi-review 에이전트가 2026-09-22에 대조했다. 이 저장소에 구현자 아닌 사람 리뷰어가 없어 그 역할을 대신한다. 컬럼 길이·금액 타입·통화 매핑에서 불일치가 없었고, 복합 unique 부재와 soft delete 인덱스를 남은 판단으로 짚었다. 자세한 내용은 결과 절에 적었다.
 
 ## 검증
 - `./gradlew test` — 전부 통과. Docker가 필요하다.
@@ -80,8 +80,24 @@
 | 마이그레이션·테이블 목록이 실제와 맞는다 | `SchemaMigrationTest` FAILED — 목록에 `006`과 `t_payment_attempt`가 없음 | 목록에 더한 뒤 통과 | `./gradlew test` — 통과 |
 
 ## 결과
-`./gradlew test` 152개 통과다(도메인 PR의 149 + 신규 3). 한 주문에 결제 행 3건이 실제 PostgreSQL에 저장되고 모두 조회되는 것을 확인했다. 복합 자연 키를 두지 않기로 한 결정이 테이블에서도 성립한다.
+`./gradlew test` 153개 통과다(도메인 PR의 149 + 신규 4). 한 주문에 결제 행 3건이 실제 PostgreSQL에 저장되고 모두 조회되는 것을 확인했다. 복합 자연 키를 두지 않기로 한 결정이 테이블에서도 성립한다.
 
 **통화 매핑을 빠뜨리면 컨텍스트가 뜨지 않는다.** `char(3)` 컬럼에 `@JdbcTypeCode(SqlTypes.CHAR)` 없이 `String`을 매핑하니 `ddl-auto: validate`가 `varchar(255)`를 기대해 `Schema validation: wrong column type encountered in column [currency]`로 실패했다. `t_order`의 선례를 따라 고쳤다. 스키마 검증이 이 종류를 잡아 준다는 것을 실제로 확인한 셈이다.
 
 `SchemaMigrationTest`가 마이그레이션 목록과 테이블 목록을 값으로 고정하고 있어서 새 테이블을 더할 때 반드시 함께 고쳐야 한다. 이 PR에서 실제로 실패를 보고 고쳤다.
+
+**`EnumType.STRING`을 지키는 것은 단언이 아니라 스키마 검증이다.** round-trip 테스트만으로는 못 잡는다. ORDINAL로 저장해도 복원값은 같기 때문이다. 실제로 바꿔 보니 `wrong column type encountered in column [kind] … found [varchar], but expecting [smallint]`로 컨텍스트가 뜨지 않았다. `varchar(20)` 컬럼과 `@Enumerated` 설정이 서로를 지킨다.
+
+**테스트는 무작위 `orderId`로 격리된다.** `@Transactional`도 정리 코드도 없지만 각 테스트가 자기 `orderId`로만 조회한다. 저장소의 다른 통합 테스트와 같은 방식이고 행은 Testcontainers가 JVM 종료 시 정리한다.
+
+검토: multi-review를 실행했다(Codex 실행, Claude 실행, Gemini는 CLI가 없어 미실행).
+
+**받았다 — 앞선 세 테스트가 전부 KRW·`AUTHORIZATION`·`providerReference = null`이라 매핑이 그 값들을 그대로 박아 넣어도 통과한다.** 실제로 `from()`에서 세 값을 상수로 바꿔 보니 통과했다. USD·`CANCELLATION`·`UNKNOWN`·참조 있음으로 한 번 더 오가는 테스트를 더했고, 같은 변조로 이제 빨개진다. 통화의 canonical scale이 `numeric(19,4)`를 거쳐도 보존되는지도 함께 고정했다.
+
+**받았다 — 중복 방어 주장이 실제보다 넓다.** 위 범위 절에서 조건을 붙였다.
+
+**받지 않았다 — spec이 enum을 ORDINAL로 적었다는 지적.** 사실이 아니다. spec은 처음부터 `EnumType.STRING`이라고 적었고 코드도 같다. 리뷰 프롬프트가 "ORDINAL로 두면 어떻게 되는지" 공격해 달라고 쓴 것을 spec 내용으로 읽은 듯하다.
+
+**다음 PR로 넘겼다 — soft delete 부분 인덱스.** `deleted_at is null`이 붙는 조회에서 `order_id` 단일 인덱스가 실제로 어떻게 쓰이는지는 행이 쌓여야 의미 있는 판단이 된다. 조회 경로를 만드는 PR이 실행 계획을 보고 정한다.
+
+**다음 PR로 넘겼다 — `provider_reference varchar(255)`의 근거.** 외부 연동 전략이 `paymentKey`를 저장하라고만 하고 길이를 말하지 않는다. 실제 provider를 붙이는 PR이 그 provider의 최대 길이로 다시 본다.

@@ -6,6 +6,7 @@ import com.resilientpos.foundation.UuidV7IdentifierGenerator
 import com.resilientpos.payment.CreatePaymentAttemptCommand
 import com.resilientpos.payment.PaymentAttemptKind
 import com.resilientpos.payment.PaymentAttemptStatus
+import com.resilientpos.payment.PaymentId
 import com.resilientpos.payment.internal.domain.PaymentAttempt
 import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.TerminalId
@@ -76,6 +77,41 @@ class PaymentAttemptPersistenceIntegrationTest(
         assertEquals(PaymentAttemptKind.AUTHORIZATION, restored.kind)
         assertEquals(PaymentAttemptStatus.REQUESTED, restored.status)
         assertNull(restored.providerReference)
+    }
+
+    @Test
+    fun `KRW가 아닌 통화와 취소 시도도 값이 그대로 오간다`() {
+        // 앞의 테스트들은 전부 KRW·AUTHORIZATION·providerReference=null이라
+        // 매핑이 그 값들을 그대로 박아 넣어도 통과한다. 다른 값으로 한 번 더 확인한다.
+        val usd = Currency.getInstance("USD")
+        val orderId = UUID.randomUUID()
+        val stored = PaymentAttempt.restore(
+            id = PaymentId(ids.next()),
+            orderId = orderId,
+            storeId = StoreId(UUID.randomUUID()),
+            terminalId = TerminalId(UUID.randomUUID()),
+            checkoutNo = 3,
+            kind = PaymentAttemptKind.CANCELLATION,
+            amount = Money.of("10.50", usd),
+            status = PaymentAttemptStatus.UNKNOWN,
+            providerReference = "fake-order-1",
+        )
+
+        repository.saveAll(listOf(PaymentAttemptEntity.from(stored)))
+        repository.flush()
+
+        val restored = repository.findAllByOrderId(orderId).single().toDomain()
+        assertEquals(PaymentAttemptKind.CANCELLATION, restored.kind)
+        assertEquals(PaymentAttemptStatus.UNKNOWN, restored.status)
+        assertEquals("fake-order-1", restored.providerReference)
+        assertEquals(3, restored.checkoutNo)
+        assertEquals(stored.storeId, restored.storeId)
+        assertEquals(stored.terminalId, restored.terminalId)
+        // 통화가 보존되지 않으면 Money 비교가 통화 불일치로 깨진다.
+        assertEquals(Money.of("10.50", usd), restored.amount)
+        assertEquals(usd, restored.amount.currency)
+        // numeric(19,4)에 넣었다 꺼내도 통화의 canonical scale로 돌아온다.
+        assertEquals(2, restored.amount.amount.scale())
     }
 
     @Test

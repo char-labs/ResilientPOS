@@ -13,7 +13,7 @@
 | 식별자 | `uuid-creator` 6.1.1 (UUID v7) |
 | 구조 검증 | Spring Modulith 경계 검증, ArchUnit 1.4.2 의존성 방향 가드 |
 | 통합 테스트 | Testcontainers 2.0.5 PostgreSQL 18. `./gradlew test` 실행에 Docker가 필요하다 |
-| 테스트 | Kotlin Test/JUnit 5, Spring Boot 테스트 starter, Fixture Monkey 1.2.3; 총 152개 (컨텍스트 1, 스키마 4, 모듈 구조 2, 의존성 방향 2, Money 25, 식별자 4, Order 19, PaymentAttempt 11, 결제 enum 이름 2, 결제 시도 영속화 통합 3, 자원 상한 설정 3, Facade line 상한 1, 오류 로그 요청 정보 6, OrderCommandFacade 11, RequestCheckout 통합 9, 버전 충돌 통합 1, 문장 수 통합 3, 이벤트 발행 기록 통합 7, API advice 9, OrderController 13, checkout Controller 5, 주문 API 통합 11) |
+| 테스트 | Kotlin Test/JUnit 5, Spring Boot 테스트 starter, Fixture Monkey 1.2.3; 총 153개 (컨텍스트 1, 스키마 4, 모듈 구조 2, 의존성 방향 2, Money 25, 식별자 4, Order 19, PaymentAttempt 11, 결제 enum 이름 2, 결제 시도 영속화 통합 4, 자원 상한 설정 3, Facade line 상한 1, 오류 로그 요청 정보 6, OrderCommandFacade 11, RequestCheckout 통합 9, 버전 충돌 통합 1, 문장 수 통합 3, 이벤트 발행 기록 통합 7, API advice 9, OrderController 13, checkout Controller 5, 주문 API 통합 11) |
 | 로컬 하네스 | Python 3 표준 라이브러리 |
 
 근거: [build.gradle.kts](../../build.gradle.kts), [Gradle Wrapper](../../gradle/wrapper/gradle-wrapper.properties), [애플리케이션 설정](../../src/main/resources/application.yaml).
@@ -110,7 +110,8 @@
   `V006__payment_payment_attempt.sql`이 `t_payment_attempt`를 만든다. **`id` 단독 primary key이고 `order_id`는 인덱스만 둔 참조다.**
   `(order_id, ...)` 복합 unique를 두지 않는 이유는 그런 키가 한 주문의 시도 수를 제한하는 쪽으로 작동해서 1-to-many를 막기 때문이다. DB FK도 두지 않는다 — `payment`와 `order`는 서로의 테이블을 읽지 않는다.
   통화를 직접 가진다(`char(3)`, `t_order`와 같은 `@JdbcTypeCode(SqlTypes.CHAR)` 매핑). `t_order`에서 읽으면 모듈 경계를 넘고, 승인 금액 검증에는 통화가 금액과 같은 행에 있어야 한다.
-  `kind`와 `status`는 `EnumType.STRING`이다. ORDINAL로 두면 값을 하나 끼워 넣을 때 기존 행의 뜻이 바뀐다([payment-attempt-persistence](../spec/2026-09-22-payment-attempt-persistence.md)).
+  `kind`와 `status`는 `EnumType.STRING`이다. ORDINAL로 두면 값을 하나 끼워 넣을 때 기존 행의 뜻이 바뀐다. 이 설정을 지키는 것은 테스트 단언이 아니라 `ddl-auto: validate`다 — ORDINAL로 바꾸면 `varchar`와 `smallint`가 어긋나 컨텍스트가 뜨지 않는다.
+  **한 주문에 같은 checkout의 승인 시도가 두 건 생기는 것을 막는 제약은 없다.** 지금은 재발행이 꺼져 있고 인스턴스가 하나라 도달하지 않는다. 재발행을 켜거나 인스턴스를 늘리면 업무 수준 멱등 근거가 필요하고, 리스너를 만드는 PR이 정한다. 알려진 빈틈이다([payment-attempt-persistence](../spec/2026-09-22-payment-attempt-persistence.md)).
   **Facade·`PaymentAttemptRepository` 포트·`OrderPaymentRequested` 리스너와 외부 provider 경계(`PaymentGateway`, `FakePaymentGateway`)는 다음 PR이 함께 만든다.** 포트는 부르는 쪽과 같은 PR에 둬야 모양을 확인할 수 있다.
   **이벤트 중복 전달은 `(orderId, attemptNo)`가 막는 대상이 아니다.** 그 키는 회차 채번의 경합을 막는다. 중복 전달은 Event Publication Registry가 `(이벤트, 리스너)`마다 완료를 기록해 막는다.
   재발행을 켜면 at-least-once가 되므로 그때는 업무 수준 멱등 근거가 따로 필요하다. 알려진 빈틈이다([payment-domain-model](../spec/2026-09-22-payment-domain-model.md)).
