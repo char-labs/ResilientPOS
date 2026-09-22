@@ -1,7 +1,7 @@
 package com.resilientpos.payment.internal.adapter.persistence.command
 
 import com.resilientpos.foundation.Money
-import com.resilientpos.payment.PaymentAttemptKind
+import com.resilientpos.contract.PaymentAttemptKind
 import com.resilientpos.payment.PaymentAttemptStatus
 import com.resilientpos.payment.PaymentId
 import com.resilientpos.payment.internal.domain.PaymentAttempt

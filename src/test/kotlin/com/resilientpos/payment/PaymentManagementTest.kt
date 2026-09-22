@@ -1,5 +1,7 @@
 package com.resilientpos.payment
 
+import com.resilientpos.contract.PaymentApproved
+import com.resilientpos.contract.PaymentAttemptKind
 import com.resilientpos.foundation.Money
 import com.resilientpos.foundation.UuidV7IdentifierGenerator
 import com.resilientpos.payment.internal.domain.PaymentAttempt
@@ -79,7 +81,7 @@ class PaymentManagementTest {
         assertEquals(2, publisher.published.size)
         assertTrue(publisher.published[0] is PaymentAttemptCreated)
         val approved = publisher.published[1] as PaymentApproved
-        assertEquals(result.paymentId, approved.paymentId)
+        assertEquals(result.paymentId.value, approved.paymentId)
         assertEquals(PaymentAttemptKind.AUTHORIZATION, approved.kind)
         assertEquals(null, approved.providerReference)
         assertEquals(PaymentAttemptStatus.APPROVED, result.status)
