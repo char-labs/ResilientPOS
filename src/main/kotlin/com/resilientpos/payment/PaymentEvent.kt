@@ -17,7 +17,7 @@ import java.util.UUID
 sealed interface PaymentEvent : DomainEvent
 
 /**
- * 한 주문의 `attemptNo`회차 결제 시도를 만들었다는 사실.
+ * 한 주문의 결제 시도를 만들었다는 사실. 한 주문에 여러 번 날 수 있고 `paymentId`가 그것을 가른다.
  */
 data class PaymentAttemptCreated(
     override val eventId: UUID,
@@ -27,7 +27,6 @@ data class PaymentAttemptCreated(
     val storeId: StoreId,
     val terminalId: TerminalId,
     val checkoutNo: Int,
-    val attemptNo: Int,
     val kind: PaymentAttemptKind,
     val amount: Money,
 ) : PaymentEvent
@@ -48,7 +47,6 @@ data class PaymentApproved(
     val storeId: StoreId,
     val terminalId: TerminalId,
     val checkoutNo: Int,
-    val attemptNo: Int,
     val kind: PaymentAttemptKind,
     val amount: Money,
     val providerReference: String?,

@@ -1,7 +1,7 @@
 # PR spec: payment의 PaymentAttempt aggregate
 
 ## 목적
-두 번째 업무 도메인을 `payment` 모듈에 만든다. `PaymentAttempt` aggregate가 결제 시도 생성 불변식을 소유하고, `CreatePaymentAttempt` 명령의 공개 계약과 결제 상태 어휘를 고정한다.
+두 번째 업무 도메인을 `payment` 모듈에 만든다. `PaymentAttempt` aggregate가 결제 시도 생성 불변식을 소유하고, `CreatePaymentAttempt` 명령의 공개 계약과 결제 상태 어휘를 고정한다. 한 주문에 시도가 여러 건 달리는 관계를 코드로 고정하고, 테이블은 뒤따르는 PR이 만든다.
 
 ## 범위
 소유 모듈은 `payment`다. 결제 정본 상태를 바꾸는 유일한 모듈이라고 [도메인 모델](../wiki/domain-model.md) §3이 정해 뒀다.
@@ -21,29 +21,28 @@
 
 **0원은 provider를 부르지 않고 승인으로 기록한다.** [도메인 모델](../wiki/domain-model.md) §3이 정한 규칙이다. `order`가 0원 주문도 똑같이 checkout을 확정하고 `OrderPaymentRequested`를 내므로, `payment`가 여기서 거절하면 전액 할인·프로모션 주문이 결제 단계에서 막힌다. 생성 결과가 `APPROVED`이고 이벤트를 두 개(`PaymentAttemptCreated`, `PaymentApproved`) 낸다. 시도를 기록으로 남겨야 주문·결제·영수증 조회가 0원 주문에서도 같은 경로로 보인다.
 
-**한 주문에 시도가 여럿 달린다.** 용어집이 "승인과 취소는 각각 별도 attempt"라고 정했고 외부 연동 전략도 "cancel은 별도 local attempt를 기록한다"고 적었다. 거절 뒤 재시도도 새 시도다. `(orderId, attemptNo)`가 자연 키이고, 회차가 다르면 같은 주문이어도 다른 행이 된다.
+**한 주문에 시도가 여럿 달린다.** 용어집이 "승인과 취소는 각각 별도 attempt"라고 정했고 외부 연동 전략도 "cancel은 별도 local attempt를 기록한다"고 적었다. 거절 뒤 재시도도 새 시도다.
 
-`attemptNo`는 명령이 아니라 **저장된 시도 이력에서 정해지는 값**이라 `create`의 별도 인자로 받는다. 시도들은 서로 다른 aggregate라서 자기 안에서 회차를 셀 수 없다. 부르는 쪽이 그 주문의 마지막 회차 + 1을 넘긴다. 개수 + 1이 아니다 — 중간 회차가 지워지면 번호가 겹친다. 동시에 두 요청이 같은 번호를 계산하는 경합은 `(orderId, attemptNo)` unique가 마지막으로 막는다.
+**복합 자연 키를 두지 않는다.** 식별은 `PaymentId` 하나가 하고 `orderId`는 참조일 뿐이다. `(orderId, attemptNo)` 같은 키는 한 주문의 시도 수를 제한하는 쪽으로 작동해서 1-to-many를 막는다. 회차 번호(`attemptNo`)도 두지 않는다. 순서가 필요하면 생성 시각으로 정렬한다. 용어집이 정한 `(orderId, attemptNo)`를 이 PR이 바꾼다.
 
-이벤트가 두 번 전달돼 시도가 두 번 만들어지는 것은 이 키가 막을 일이 아니다. Event Publication Registry가 `(이벤트, 리스너)`마다 완료를 기록하므로 성공한 리스너는 다시 불리지 않는다. 재발행을 켜면 at-least-once가 되므로 그때는 업무 수준 멱등 근거가 따로 필요하고, 그 PR이 정한다.
+같은 이벤트가 두 번 전달돼 시도가 두 번 만들어지는 것은 이 키가 막을 일이 아니었다. Event Publication Registry가 `(이벤트, 리스너)`마다 완료를 기록하므로 성공한 리스너는 다시 불리지 않는다. 재발행을 켜면 at-least-once가 되고, 그때는 업무 수준 멱등 근거가 따로 필요하다.
 
-**`payment`는 `order`를 import하지 않는다.** 공개 타입이 `orderId`를 `order.OrderId`가 아니라 raw `UUID`로 든다. `OrderId`를 쓰면 `order`가 `PaymentApproved`를 소비하는 순간 `order -> payment -> order` 순환이 되어 Modulith 검증이 실패한다. 타입 안전성은 `payment` 경계 안에서만 잃고 `order`는 받은 값을 `OrderId`로 감싼다.
+**무엇을 요청한 시도인지 `PaymentAttemptKind`가 말한다.** 구분자가 없으면 저장된 행이 승인인지 취소인지 알 수 없고, `PaymentApproved`를 받는 `order`가 환불 승인을 결제 승인으로 읽어 주문을 결제 완료로 넘긴다. 상태는 그대로 둔다. 두 축이 나뉘어 있어서 외부 연동 전략의 `CANCEL_PENDING`은 (`CANCELLATION`, `REQUESTED`)로 표현된다.
 
-계약: 새 `DomainException` code 세 개가 나중에 응답 본문의 `error.errorCode`로 나간다.
+계약: 새 `DomainException` code 두 개가 나중에 응답 본문의 `error.errorCode`로 나간다.
 
 | code | 의미 |
 |---|---|
 | `NEGATIVE_PAYMENT_AMOUNT` | 결제 금액이 음수다 |
 | `INVALID_CHECKOUT_NO` | checkout 회차가 1 미만이다 |
-| `INVALID_ATTEMPT_NO` | 시도 회차가 1 미만이다. 부르는 쪽이 정하는 값이라 여기 걸리면 채번이 틀린 것이다 |
 
 복구: 둘 다 요청 자체가 잘못된 경우라 재시도로 풀리지 않는다.
 
 관측성: 이 PR은 저장·외부 호출·트랜잭션이 없어 로그 속성과 재시도 경로가 생기지 않는다.
 
 ## 제외
-- Facade 자체. [도메인 모델](../wiki/domain-model.md) §4.4가 "Facade는 인터페이스를 따로 두지 않는 구체 클래스이고 구현이 둘이 될 때 인터페이스를 뽑는다"고 정했다. 구현도 호출부도 없는 상태에서는 시그니처가 맞는지 확인할 수단이 없다. `PaymentAttemptRepository` 포트와 JPA adapter, `t_payment_attempt` 마이그레이션과 함께 다음 PR이 만든다.
-- `t_payment_attempt.status`의 저장 방식. 다음 PR은 `EnumType.STRING`과 varchar를 쓴다. JPA 기본값인 ORDINAL은 값이 늘 때 기존 행의 뜻이 바뀐다.
+- JPA 엔티티와 `t_payment_attempt` 마이그레이션. **바로 뒤따르는 PR**이 만든다. 이 PR은 도메인 한 목표만 담는다.
+- Facade와 `PaymentAttemptRepository` 포트·adapter. [도메인 모델](../wiki/domain-model.md) §4.4가 "Facade는 구현이 둘이 될 때 인터페이스를 뽑는다"고 정했고, 호출부가 없으면 시그니처가 맞는지 확인할 수단이 없다.
 - `OrderPaymentRequested`를 받는 `@ApplicationModuleListener`와 그에 딸린 재시도·풀·종료 정책. 그 PR이 [현재 상태](../wiki/current-state.md)에 적힌 Event Publication Registry의 빈틈도 함께 닫는다.
 - provider 결과를 적용하는 전이(`APPROVED`·`DECLINED`·`UNKNOWN`)와 그때 나는 `PaymentDeclined`·`PaymentUnknown` 이벤트. 상태 값만 이 PR이 선언하고 전이는 결과를 받는 PR이 만든다.
 - `PaymentGateway` 포트와 `FakePaymentGateway`. **부르는 쪽과 같은 PR에 둔다.** 포트를 호출부 없이 먼저 만들면 그 모양이 맞는지 확인할 수단이 없다. Facade와 리스너를 만드는 다음 PR이 함께 가져간다.
@@ -65,7 +64,7 @@ DESIGN 계층은 없다. 정본은 [도메인 모델](../wiki/domain-model.md) �
 1. 양수 금액으로 시도를 만들면 `REQUESTED`이고 `PaymentAttemptCreated` 하나가 난다.
 2. 0원으로 시도를 만들면 `APPROVED`이고 `PaymentAttemptCreated`와 `PaymentApproved`가 순서대로 난다. provider를 부르지 않는다.
 3. 음수 금액은 `NEGATIVE_PAYMENT_AMOUNT`로, 1 미만인 `checkoutNo`는 `INVALID_CHECKOUT_NO`로 거절한다. 둘 다 `DomainErrorKind.INVALID`라서 400이다.
-4. 같은 주문의 서로 다른 `attemptNo`는 서로 다른 시도가 된다. 1 미만인 `attemptNo`는 `INVALID_ATTEMPT_NO`로 거절한다.
+4. 식별에 `orderId`가 참여하지 않는다. 한 주문에 시도를 몇 건 만들어도 서로 다른 값이 된다.
 5. `PaymentAttempt`는 `payment.internal.domain`에 있고 Spring·JPA·Jackson·adapter·application에 의존하지 않는다. `DependencyDirectionTest`의 기존 규칙이 자동으로 덮는다.
 6. `ModuleStructureTest`가 통과한다. 이 검사가 판정하는 것은 다른 모듈의 `internal` 참조와 **순환** 두 가지다.
 7. `order`가 `payment`의 공개 이벤트를 소비해도 순환이 생기지 않는다.
@@ -81,13 +80,11 @@ DESIGN 계층은 없다. 정본은 [도메인 모델](../wiki/domain-model.md) �
 - 요구사항 변화: 결제 상태 어휘 네 개와 0원 승인 규칙이 코드로 고정된다. 아직 외부로 나가는 endpoint가 없어 API 계약은 바뀌지 않는다.
 
 ## 분할 계획
-10개 파일 / 657줄이다. **600줄 경고에 걸렸고 사용자가 허용했다.**
+8개 파일 / 약 600줄이다. 경고 한도에 걸렸고 사용자가 허용했다.
 
-처음에는 `PaymentGateway` 포트와 `FakePaymentGateway`까지 담았다가 800줄 상한을 넘겨 그 셋(157줄)을 다음 PR로 옮겼다. 크기 때문만은 아니다. 이 spec이 "부르는 쪽 없이 인터페이스를 먼저 넓히지 않는다"고 적어 놓고 포트 자체를 호출부 없이 만드는 모순이 있었다. 포트를 실제로 주입하는 PR로 옮기면 모양이 그 자리에서 검증된다.
+한 번은 JPA 엔티티와 테이블까지 담았다가 800줄 상한을 넘겼다. 주석 비중이 17%로 저장소 평균과 같아 줄여서 맞출 수 있는 종류가 아니었고, 목표가 둘(도메인과 영속화)이라는 신호로 읽고 [payment-attempt-persistence](2026-09-22-payment-attempt-persistence.md)로 나눴다.
 
-남은 것은 한 가지 목표다. `PaymentAttempt`의 생성 불변식과 그것이 고정하는 어휘·계약뿐이고, 파일은 10개로 20개 한도의 절반이다.
-
-영속화와 리스너는 목표가 달라 처음부터 나눈다. [order-domain-model](2026-09-16-order-domain-model.md)이 같은 이유로 세 PR로 나뉘었다.
+`PaymentGateway` 포트도 이 PR에 두지 않는다. 호출부 없이 인터페이스를 먼저 만들면 모양이 맞는지 확인할 수단이 없어서, 실제로 주입하는 PR로 옮겼다.
 
 ## TDD 검증 기록
 
@@ -105,15 +102,15 @@ RED는 새 타입이 없어 컴파일이 먼저 실패했다(`Unresolved referen
 | 도메인 레이어 의존성 가드가 payment도 덮는다 | `PaymentAttempt`에 `@Component`를 붙이면 `DependencyDirectionTest` FAILED | 되돌린 뒤 통과 | `./gradlew test` — 통과 |
 
 ## 결과
-`./gradlew test` 153개 통과다(직전 136 + 신규 17).
+`./gradlew test` 149개 통과다(직전 136 + 신규 13).
 
 확인한 사실만 적는다.
 
-- **순환 의존.** `order/internal/application`에 `PaymentApproved`를 받는 클래스를 임시로 두면 `ModuleStructureTest`가 `Cycle detected: Slice order -> Slice payment -> Slice order`로 실패한다. 다음 PR이 바로 그 리스너를 만든다. `orderId`를 raw `UUID`로 든 뒤 같은 프로브로 통과를 확인했다.
-- **`allowedDependencies`는 쓸 수 없다.** `payment`에 `@ApplicationModule(allowedDependencies = ...)`를 선언하고 허용하지 않은 모듈에 의존하게 만들어도 검사가 통과한다. 어노테이션이 컴파일 결과에 들어간 것은 `javap`으로 확인했으므로 선언 누락이 아니다. 최상위 함수와 클래스 프로퍼티 두 형태로 시험했다. 의존 방향을 잠그는 수단이 아니라서 넣지 않았고 인수 조건 6을 `ModuleStructureTest`가 실제로 판정하는 것으로 줄였다.
-- **의존성 가드는 `payment`도 덮는다.** `PaymentAttempt`에 `@Component`를 붙이면 `DependencyDirectionTest`가 실패한다. 새 규칙이 필요 없다.
-- **테스트가 통과하면서 깨지던 변경 넷을 막았다.** `eventId`를 두 이벤트 모두 `paymentId.value`로 바꿔도, `checkoutNo`를 상수로 바꿔도, `DECLINED`를 `REJECTED`로 바꿔도, 서로 다른 시도가 같은 `PaymentId`를 받아도 전부 통과했다. `eventId`는 소비자 멱등성 기록 `(consumer, eventId)`의 키라 그 구멍의 결과가 승인 사실 유실이다. 결정적 생성기에 `seed`를 주고 위 네 가지를 고정한 뒤 같은 변조로 빨개지는 것을 확인했다.
-- **0원 승인의 `providerReference`는 `null`이다.** 값을 지어내면 참조가 거짓이 되고 provider 조회로 수렴할 때 없는 참조를 찾는다. 0원이어도 `PaymentAttemptCreated`를 먼저 내는 이유는, 승인만 내면 0원 주문의 시도가 조회에 보이지 않아 조회 경로 동일성이 깨지기 때문이다.
-- **Facade는 만들지 않았다.** §4.4가 Facade를 구체 클래스로 두고 구현이 둘일 때 인터페이스를 뽑으라고 정했다. 구현도 호출부도 없으면 시그니처가 맞는지 확인할 수단이 없다.
+- **복합 자연 키를 걷어낸 것이 이 PR의 핵심 변경이다.** `attemptNo`와 `(orderId, attemptNo)`를 유지하면 회차를 1로 고정하지 않더라도 한 주문의 시도 수를 제한하는 쪽으로 작동한다. 식별은 `PaymentId` 하나가 하고 `orderId`는 참조일 뿐이다.
+- **순환 의존.** `order`에 `PaymentApproved`를 받는 클래스를 임시로 두면 `Cycle detected: Slice order -> Slice payment -> Slice order`로 `ModuleStructureTest`가 실패한다. `orderId`를 raw `UUID`로 든 뒤 같은 프로브로 통과를 확인했다.
+- **`allowedDependencies`는 쓸 수 없다.** 선언하고 허용하지 않은 모듈에 의존하게 만들어도 검사가 통과한다. 어노테이션이 컴파일 결과에 들어간 것은 `javap`으로 확인했다. 의존 방향을 잠그는 수단이 아니라서 넣지 않았다.
+- **의존성 가드는 `payment`도 덮는다.** `PaymentAttempt`에 `@Component`를 붙이면 `DependencyDirectionTest`가 실패한다.
+- **테스트가 통과하면서 깨지던 변경 넷을 막았다.** `eventId`를 두 이벤트 모두 같은 값으로, `checkoutNo`를 상수로, `DECLINED`를 `REJECTED`로 바꿔도, 서로 다른 시도가 같은 `PaymentId`를 받아도 전부 통과했다. `eventId`는 소비자 멱등성 기록의 키라 그 구멍의 결과가 승인 사실 유실이다.
+- **0원 승인의 `providerReference`는 `null`이다.** 값을 지어내면 provider 조회로 수렴할 때 없는 참조를 찾는다. 0원이어도 `PaymentAttemptCreated`를 먼저 내야 시도가 조회에 보인다.
 
-검토: 제출 전 multi-review를 실행했다(Claude 74점, 블로킹 없음). 순환 의존, Facade 인터페이스, 테스트 구멍, 테스트 구멍을 받았다. Fake 빈 등록·포트 갈래·공백 검증 지적은 포트를 옮기면서 그 PR로 함께 넘어갔다. `allowedDependencies` 제안은 위와 같이 반증했다. `MerchantReference`·`ProviderIdempotencyKey` 값 타입과 `provider` 스코프도 포트와 같은 PR에서 정한다.
+검토: multi-review를 실행했다(Claude 74점, 블로킹 없음). 순환 의존, Facade 인터페이스, 테스트 구멍을 받았고 `allowedDependencies` 제안은 위와 같이 반증했다.

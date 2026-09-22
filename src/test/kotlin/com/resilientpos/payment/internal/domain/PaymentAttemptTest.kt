@@ -45,9 +45,8 @@ class PaymentAttemptTest {
     private fun create(
         amount: String = "4500",
         checkoutNo: Int = 1,
-        attemptNo: Int = 1,
         ids: FixedIdentifierGenerator = ids(),
-    ) = PaymentAttempt.create(command(amount, checkoutNo), attemptNo, ids, now)
+    ) = PaymentAttempt.create(command(amount, checkoutNo), ids, now)
 
     /** `seed`가 다르면 서로 다른 식별자 묶음을 준다. 같은 묶음을 두 번 쓰면 별개 시도가 같은 ID를 받는다. */
     private fun ids(seed: Int = 0) =
@@ -64,7 +63,6 @@ class PaymentAttemptTest {
         val created = transition.events.single() as PaymentAttemptCreated
         assertEquals(transition.aggregate.id, created.paymentId)
         assertEquals(orderId, created.orderId)
-        assertEquals(1, created.attemptNo)
         assertEquals(now, created.occurredAt)
     }
 
@@ -82,7 +80,6 @@ class PaymentAttemptTest {
         assertEquals(transition.aggregate.id, approved.paymentId)
         assertEquals(orderId, approved.orderId)
         assertEquals(Money.of("0", krw), approved.amount)
-        assertEquals(1, approved.attemptNo)
     }
 
     @Test
@@ -113,41 +110,6 @@ class PaymentAttemptTest {
     }
 
     @Test
-    fun `같은 주문의 서로 다른 회차는 서로 다른 시도다`() {
-        // (orderId, attemptNo)가 자연 키다. 회차가 다르면 같은 주문이어도 다른 행이 되어야
-        // 거절 후 재시도와 취소가 각각 기록될 수 있다.
-        val first = create(attemptNo = 1, ids = ids())
-        val second = create(attemptNo = 2, ids = ids(seed = 1))
-
-        assertEquals(first.aggregate.orderId, second.aggregate.orderId)
-        assertNotEquals(first.aggregate.attemptNo, second.aggregate.attemptNo)
-        assertNotEquals(first.aggregate.id, second.aggregate.id)
-    }
-
-    @Test
-    fun `한 주문에 시도가 여럿 달린다`() {
-        // 승인이 거절되면 다음 시도가 생기고 취소·환불도 각각 별도 시도다. 정본이 그렇게 정했다.
-        // 회차를 1로 못 박으면 (orderId, attemptNo) unique가 사실상 unique(orderId)가 되어 1-to-1이 된다.
-        for (attemptNo in listOf(1, 2, 17)) {
-            val transition = create(attemptNo = attemptNo, ids = ids())
-
-            assertEquals(attemptNo, transition.aggregate.attemptNo, attemptNo.toString())
-            assertEquals(attemptNo, (transition.events.single() as PaymentAttemptCreated).attemptNo)
-        }
-    }
-
-    @Test
-    fun `1 미만인 시도 회차를 거절한다`() {
-        for (attemptNo in listOf(0, -1)) {
-            assertEquals(
-                PaymentAttempt.INVALID_ATTEMPT_NO,
-                assertFailsWithDomain { create(attemptNo = attemptNo, ids = ids()) }.code,
-                attemptNo.toString(),
-            )
-        }
-    }
-
-    @Test
     fun `이벤트마다 서로 다른 eventId를 쓴다`() {
         // eventId는 소비자 멱등성 기록 (consumer, eventId)의 키다. 두 이벤트가 같은 값을 쓰면
         // 0원 주문에서 소비자가 둘 중 하나를 중복으로 보고 버려 승인 사실이 조용히 사라진다.
@@ -170,14 +132,6 @@ class PaymentAttemptTest {
         assertEquals(7, (transition.events[1] as PaymentApproved).checkoutNo)
     }
 
-    @Test
-    fun `0원 승인 이벤트도 받은 회차를 그대로 쓴다`() {
-        val transition = create(amount = "0", attemptNo = 3, ids = ids())
-
-        assertEquals(3, transition.aggregate.attemptNo)
-        assertEquals(3, (transition.events[0] as PaymentAttemptCreated).attemptNo)
-        assertEquals(3, (transition.events[1] as PaymentApproved).attemptNo)
-    }
 
     @Test
     fun `매장과 단말을 두 이벤트에 그대로 옮긴다`() {

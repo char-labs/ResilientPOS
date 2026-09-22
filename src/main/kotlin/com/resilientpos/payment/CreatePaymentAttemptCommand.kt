@@ -25,6 +25,5 @@ data class CreatePaymentAttemptCommand(
  */
 data class CreatePaymentAttemptResult(
     val paymentId: PaymentId,
-    val attemptNo: Int,
     val status: PaymentAttemptStatus,
 )
