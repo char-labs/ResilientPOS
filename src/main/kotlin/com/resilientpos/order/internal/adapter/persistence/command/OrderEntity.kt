@@ -21,8 +21,8 @@ import org.hibernate.type.SqlTypes
 
 /**
  * `Order` aggregate 루트의 JPA 매핑. `data class`가 아니고 생성은 `from`, 변경은 `apply`만 한다(도메인 규칙 §5).
- * `apply`가 대입하는 필드만 `var`에 `protected set`이고 나머지는 `val`이다.
- * `allOpen`이 `@Entity`에 걸려 있어 멤버가 open이고, Kotlin은 open 프로퍼티에 `private set`을 금지한다.
+ * 전 필드가 `var`에 `protected set`이다. `allOpen`이 `@Entity`에 걸려 있어 멤버가 open이라 Kotlin이 `private set`을 금지하고,
+ * 영속 필드를 `val`로 두면 JVM final이 되어 Jakarta Persistence 3.2 §2.2 금지와 bytecode enhancement 비호환에 걸린다.
  * line은 연관관계로 들고 있지 않다. `OrderLineEntity`가 `orderId`로 가리키고 `OrderPersistenceAdapter`가 조립한다.
  */
 @Entity
@@ -37,7 +37,8 @@ class OrderEntity private constructor(
 ) : BaseEntity() {
 
     @Id
-    val id: UUID = id
+    var id: UUID = id
+        protected set
 
     var storeId: UUID = storeId
         protected set

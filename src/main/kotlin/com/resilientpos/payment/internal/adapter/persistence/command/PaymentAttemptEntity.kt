@@ -30,8 +30,9 @@ import org.hibernate.type.SqlTypes
  * 두 enum은 `EnumType.STRING`이다. 기본값인 ORDINAL로 두면 값을 하나 끼워 넣는 순간
  * 이미 저장된 행의 뜻이 통째로 바뀐다.
  *
- * 지금은 시도를 기록만 하므로 `apply`가 없고 전 필드가 `val`이다. 생성은 `from`만 한다(도메인 규칙 §5).
- * 승인 결과를 반영하는 명령이 생기면 그 PR이 `apply`를 더하면서 바뀌는 필드만 `var`에 `protected set`으로 되돌린다.
+ * 지금은 시도를 기록만 하므로 `apply`가 없다. 바뀌지 않는다는 사실은 변경 메서드가 없다는 것으로 표현한다.
+ * 전 필드는 `var`에 `protected set`이다. `val`로 두지 않는 이유는 `OrderEntity`의 KDoc에 있다. 생성은 `from`만 한다(도메인 규칙 §5).
+ * 승인 결과를 반영하는 명령이 생기면 그 PR이 `apply`를 더한다.
  */
 @Entity
 @Table(name = "t_payment_attempt")
@@ -49,29 +50,39 @@ class PaymentAttemptEntity private constructor(
 ) : BaseEntity() {
 
     @Id
-    val id: UUID = id
+    var id: UUID = id
+        protected set
 
-    val orderId: UUID = orderId
+    var orderId: UUID = orderId
+        protected set
 
-    val storeId: UUID = storeId
+    var storeId: UUID = storeId
+        protected set
 
-    val terminalId: UUID = terminalId
+    var terminalId: UUID = terminalId
+        protected set
 
-    val checkoutNo: Int = checkoutNo
+    var checkoutNo: Int = checkoutNo
+        protected set
 
     @Enumerated(EnumType.STRING)
-    val kind: PaymentAttemptKind = kind
+    var kind: PaymentAttemptKind = kind
+        protected set
 
-    val amount: BigDecimal = amount
+    var amount: BigDecimal = amount
+        protected set
 
     @Column(columnDefinition = "char(3)")
     @JdbcTypeCode(SqlTypes.CHAR)
-    val currency: String = currency
+    var currency: String = currency
+        protected set
 
     @Enumerated(EnumType.STRING)
-    val status: PaymentAttemptStatus = status
+    var status: PaymentAttemptStatus = status
+        protected set
 
-    val providerReference: String? = providerReference
+    var providerReference: String? = providerReference
+        protected set
 
     fun toDomain(): PaymentAttempt = PaymentAttempt.restore(
         id = PaymentId(id),
