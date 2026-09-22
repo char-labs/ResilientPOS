@@ -71,7 +71,7 @@
 
 ## 검증
 - `./gradlew test` — 전부 통과. Docker가 필요하다.
-- `python3 scripts/check_pr.py --base feature/payment-domain-model --worktree` — PASS. 이 PR은 도메인 PR 위에 쌓는다.
+- `python3 scripts/check_pr.py --base origin/main --worktree` — PASS. 선행 [payment-domain-model](2026-09-22-payment-domain-model.md)이 머지된 뒤 기준이 `main`으로 바뀌었다.
 - 1-to-many와 중복 승인 차단을 실제 PostgreSQL에서 확인한다. 엔티티와 테이블 정의만 읽고 넘어가지 않는다.
 
 ## Wiki 영향
