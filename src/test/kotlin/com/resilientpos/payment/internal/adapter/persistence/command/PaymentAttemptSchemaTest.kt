@@ -1,0 +1,61 @@
+package com.resilientpos.payment.internal.adapter.persistence.command
+
+import com.resilientpos.PostgresIntegrationTest
+import javax.sql.DataSource
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import org.springframework.beans.factory.annotation.Autowired
+
+/**
+ * 컬럼 타입과 폭을 값으로 고정한다.
+ *
+ * 왕복 테스트로는 고정할 수 없다. `toDomain()`이 `Money.of`로 정규화하므로 컬럼 scale을 0으로 바꿔도
+ * KRW 정수 금액은 그대로 돌아온다. Hibernate의 `ddl-auto: validate`도 varchar 길이는 대조하지 않는다.
+ * 그래서 `numeric(19,0)`이나 `varchar(8)`로 좁히는 변경이 조용히 지나가고 운영에서야 값이 잘린다.
+ */
+class PaymentAttemptSchemaTest(
+    @Autowired private val dataSource: DataSource,
+) : PostgresIntegrationTest() {
+
+    @Test
+    fun `t_payment_attempt의 컬럼 타입과 폭을 고정한다`() {
+        val columns = dataSource.connection.use { connection ->
+            connection.prepareStatement(
+                """
+                select column_name, data_type, character_maximum_length, numeric_precision, numeric_scale
+                from information_schema.columns
+                where table_name = 't_payment_attempt'
+                order by column_name
+                """.trimIndent(),
+            ).executeQuery().use { rows ->
+                buildList {
+                    while (rows.next()) {
+                        val width = rows.getInt("character_maximum_length").takeIf { !rows.wasNull() }
+                            ?: rows.getInt("numeric_precision").takeIf { !rows.wasNull() }
+                                ?.let { precision -> precision * 100 + rows.getInt("numeric_scale") }
+                        add(Triple(rows.getString("column_name"), rows.getString("data_type"), width))
+                    }
+                }
+            }
+        }
+
+        assertEquals(
+            listOf(
+                Triple("amount", "numeric", 1904),
+                Triple("checkout_no", "integer", 3200),
+                Triple("created_at", "timestamp with time zone", null),
+                Triple("currency", "character", 3),
+                Triple("deleted_at", "timestamp with time zone", null),
+                Triple("id", "uuid", null),
+                Triple("kind", "character varying", 32),
+                Triple("order_id", "uuid", null),
+                Triple("provider_reference", "character varying", 255),
+                Triple("status", "character varying", 32),
+                Triple("store_id", "uuid", null),
+                Triple("terminal_id", "uuid", null),
+                Triple("updated_at", "timestamp with time zone", null),
+            ),
+            columns,
+        )
+    }
+}
