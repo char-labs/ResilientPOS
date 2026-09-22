@@ -2,7 +2,6 @@ package com.resilientpos.payment
 
 import com.resilientpos.foundation.DomainEvent
 import com.resilientpos.foundation.Money
-import com.resilientpos.order.OrderId
 import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.TerminalId
 import java.time.Instant
@@ -10,7 +9,10 @@ import java.util.UUID
 
 /**
  * `payment` 모듈이 발행하는 도메인 이벤트의 닫힌 집합.
- * provider 결과를 적용하는 전이가 생기는 PR이 `PaymentDeclined`·`PaymentUnknown`을 더한다.
+ * provider 결과를 적용하는 전이가 생기는 PR이 `PaymentDeclined`·`PaymentUnknown`을 더한다. *
+ * `orderId`는 `order.OrderId`가 아니라 raw `UUID`다. `payment`가 `OrderId`를 import하면
+ * `order`가 `PaymentApproved`를 소비하는 순간 `order -> payment -> order` 순환이 되어 Modulith 검증이 실패한다.
+ * 실제로 재현해 확인했다. 타입 안전성은 `payment` 경계 안에서만 잃고, `order`는 받은 값을 `OrderId`로 감싼다.
  */
 sealed interface PaymentEvent : DomainEvent
 
@@ -21,7 +23,7 @@ data class PaymentAttemptCreated(
     override val eventId: UUID,
     override val occurredAt: Instant,
     val paymentId: PaymentId,
-    val orderId: OrderId,
+    val orderId: UUID,
     val storeId: StoreId,
     val terminalId: TerminalId,
     val checkoutNo: Int,
@@ -39,7 +41,7 @@ data class PaymentApproved(
     override val eventId: UUID,
     override val occurredAt: Instant,
     val paymentId: PaymentId,
-    val orderId: OrderId,
+    val orderId: UUID,
     val storeId: StoreId,
     val terminalId: TerminalId,
     val checkoutNo: Int,

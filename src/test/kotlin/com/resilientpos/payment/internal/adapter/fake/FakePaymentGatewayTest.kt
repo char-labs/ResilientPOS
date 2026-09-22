@@ -7,6 +7,8 @@ import java.util.Currency
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertNotEquals
 
 class FakePaymentGatewayTest {
 
@@ -39,6 +41,13 @@ class FakePaymentGatewayTest {
         val first = gateway.authorize(command(reference = "order-1")) as GatewayAuthorization.Approved
         val second = gateway.authorize(command(reference = "order-2")) as GatewayAuthorization.Approved
 
-        assertEquals(false, first.providerReference == second.providerReference)
+        assertNotEquals(first.providerReference, second.providerReference)
+    }
+
+    @Test
+    fun `merchantReference가 비면 요청을 만들 수 없다`() {
+        // 비어 있으면 서로 다른 시도가 같은 provider 참조를 받아 재전송과 중복 승인을 구별할 수 없다.
+        assertFailsWith<IllegalArgumentException> { command(reference = "") }
+        assertFailsWith<IllegalArgumentException> { command(reference = "  ") }
     }
 }

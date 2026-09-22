@@ -4,7 +4,6 @@ import com.resilientpos.foundation.DomainException
 import com.resilientpos.foundation.IdentifierGenerator
 import com.resilientpos.foundation.Money
 import com.resilientpos.foundation.Transition
-import com.resilientpos.order.OrderId
 import com.resilientpos.payment.CreatePaymentAttemptCommand
 import com.resilientpos.payment.PaymentApproved
 import com.resilientpos.payment.PaymentAttemptCreated
@@ -14,14 +13,16 @@ import com.resilientpos.payment.PaymentId
 import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.TerminalId
 import java.time.Instant
+import java.util.UUID
 
 /**
  * 결제 시도 aggregate 루트. 한 주문의 한 회차 provider 요청과 그 결과를 소유한다.
  * `Order`와는 별개 aggregate라서 `orderId`로만 참조하고 사실은 이벤트로 건너간다.
+ * 그 `orderId`는 raw `UUID`다. `order.OrderId`를 쓰면 `order`가 이 모듈의 이벤트를 소비할 때 순환이 된다.
  */
 class PaymentAttempt private constructor(
     val id: PaymentId,
-    val orderId: OrderId,
+    val orderId: UUID,
     val storeId: StoreId,
     val terminalId: TerminalId,
     val checkoutNo: Int,
@@ -42,6 +43,12 @@ class PaymentAttempt private constructor(
          * 초기 정책은 주문당 시도 한 건이라 회차가 언제나 1이다. `(orderId, attemptNo)` unique가 그것을 강제한다.
          * 회차를 세려면 저장된 시도를 읽어야 하므로 채번은 repository가 생기는 PR이 정한다.
          * 취소를 별도 시도로 기록하거나 분할 결제를 다루는 PR이 이 상수를 걷어낸다.
+         *
+         * **멱등 키가 어긋나 있다.** `OrderPaymentRequested`의 KDoc은 `(orderId, checkoutNo)`를 멱등 근거로
+         * 선언하는데 여기서는 `checkoutNo`가 식별에 쓰이지 않는다. `checkoutNo`가 2 이상인 요청이 오면
+         * unique 위반으로 500이 되거나, 선조회 멱등 판정에서 조용히 건너뛰어 주문이 영원히 미결제로 남는다.
+         * 지금은 `Order.requestCheckout`이 한 번만 전이해서 `checkoutNo`가 언제나 1이라 도달하지 않는다.
+         * **멱등 키를 정하는 영속화 PR이 이 주석을 보고 닫는다.**
          */
         const val FIRST_ATTEMPT_NO = 1
 
