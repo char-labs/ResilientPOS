@@ -78,6 +78,8 @@ RED를 먼저 관측했다. `order/internal/application`에 `PaymentApproved`를
 ## 결과
 `./gradlew test` 167개 통과다(직전 165 + 신규 2).
 
+- **의존 방향 검사를 허용 목록으로 뒀다.** 처음에는 업무 모듈을 금지하는 목록이었는데 두 구멍이 있었다. `platform`처럼 프레임워크가 섞인 모듈을 막지 못했고, 하위 디렉터리를 훑지 않아 `contract/nested/`의 위반이 빠져나갔다. 허용 목록(`foundation`·`store`·`terminal`)과 재귀 탐색으로 바꾸고 둘 다 실제로 잡히는 것을 확인했다.
+- **sealed 닫힘 상실의 대가는 지금 0이다.** 이벤트를 분기하는 `when`이 코드에 하나도 없다. 다만 `OrderEvent`·`PaymentEvent`가 각각 구현체 하나만 남았다 — 모듈 안에서만 쓰는 이벤트가 더 생길 자리이고, 끝내 생기지 않으면 그때 걷어낼 값이다.
 - **순환이 풀렸다.** 임시 소비자를 둔 채 확인했고, 지운 뒤에도 회귀 테스트 둘이 방향을 지킨다. 하나는 두 이벤트가 `contract` 패키지에 있다는 것을, 다른 하나는 `contract` 소스가 업무 모듈을 import하지 않는다는 것을 본다. Modulith의 순환 검사는 **소비자가 실제로 생긴 뒤에야** 걸리므로 그 전에 방향을 지킬 검사가 따로 필요하다.
 - **`PaymentAttemptKind`도 함께 옮겼다.** `PaymentApproved`의 payload라서 남겨 두면 `contract -> payment` 간선이 생겨 순환이 되돌아온다. 소비자가 환불 승인을 결제 승인으로 읽지 않으려면 읽어야 하는 값이므로 계약의 일부가 맞다.
 - **식별자가 raw `UUID`가 됐다.** `OrderPaymentRequested.orderId`와 `PaymentApproved.paymentId`다. 계약이 업무 모듈의 타입을 들면 간선이 생긴다. 받는 쪽이 자기 타입으로 감싼다.

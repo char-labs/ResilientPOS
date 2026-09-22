@@ -3,7 +3,8 @@ package com.resilientpos
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.io.path.Path
-import kotlin.io.path.listDirectoryEntries
+import kotlin.io.path.extension
+import kotlin.io.path.walk
 import kotlin.io.path.readLines
 import com.resilientpos.contract.OrderPaymentRequested
 import com.resilientpos.contract.PaymentApproved
@@ -50,14 +51,19 @@ class ModuleStructureTest {
     }
 
     @Test
-    fun `contract는 업무 모듈을 의존하지 않는다`() {
-        // 계약이 order나 payment의 타입을 들면 그 방향으로 간선이 생겨 순환이 되돌아온다.
-        // Modulith의 순환 검사는 소비자가 실제로 생긴 뒤에야 걸리므로, 그 전에 여기서 막는다.
-        val businessModules = listOf("order", "payment", "sync", "reconciliation", "fulfillment")
+    fun `contract는 정해진 모듈만 의존한다`() {
+        // 금지 목록이 아니라 허용 목록으로 둔다. 금지 목록은 모듈이 새로 생길 때마다 구멍이 나고,
+        // `platform`처럼 프레임워크가 섞인 모듈을 빠뜨리기 쉽다.
+        // 계약이 업무 모듈의 타입을 들면 그 방향으로 간선이 생겨 순환이 되돌아온다.
+        // Modulith의 순환 검사는 소비자가 실제로 생긴 뒤에야 걸리므로 그 전에 여기서 막는다.
+        val allowed = setOf("foundation", "store", "terminal")
         val offenders = Path("src/main/kotlin/com/resilientpos/contract")
-            .listDirectoryEntries("*.kt")
-            .flatMap { file -> file.readLines().map { file.fileName.toString() to it } }
-            .filter { (_, line) -> businessModules.any { line.startsWith("import com.resilientpos.$it.") } }
+            .walk()
+            .filter { it.extension == "kt" }
+            .flatMap { file -> file.readLines().map { file.fileName.toString() to it.trim() } }
+            .filter { (_, line) -> line.startsWith("import com.resilientpos.") }
+            .filter { (_, line) -> line.removePrefix("import com.resilientpos.").substringBefore(".") !in allowed }
+            .toList()
 
         assertEquals(emptyList(), offenders)
     }
