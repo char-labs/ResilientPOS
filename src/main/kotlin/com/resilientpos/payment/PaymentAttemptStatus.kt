@@ -3,6 +3,10 @@ package com.resilientpos.payment
 /**
  * 결제 시도의 정본 상태. provider가 말하는 상태를 그대로 옮기지 않고 이 네 값으로만 표현한다.
  *
+ * 무엇을 요청했는지는 [PaymentAttemptKind]가, 그 답이 무엇이었는지는 이 값이 말한다. 두 축이라
+ * 취소 요청에 새 상태를 더할 필요가 없다. 외부 연동 전략의 `CANCEL_PENDING`은
+ * (`CANCELLATION`, [REQUESTED])이고, 취소가 승인되면 (`CANCELLATION`, [APPROVED])다.
+ *
  * 원문 세 개가 서로 다른 이름을 쓴다. 용어집이 `PaymentConfirmed`를 금기어로 두고 `PaymentApproved`로
  * 정했으므로 그 줄기를 따랐다. `CONFIRMED`·`FAILED`·`PROCESSING`은 쓰지 않는다.
  */

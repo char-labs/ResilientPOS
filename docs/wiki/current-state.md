@@ -13,7 +13,7 @@
 | 식별자 | `uuid-creator` 6.1.1 (UUID v7) |
 | 구조 검증 | Spring Modulith 경계 검증, ArchUnit 1.4.2 의존성 방향 가드 |
 | 통합 테스트 | Testcontainers 2.0.5 PostgreSQL 18. `./gradlew test` 실행에 Docker가 필요하다 |
-| 테스트 | Kotlin Test/JUnit 5, Spring Boot 테스트 starter, Fixture Monkey 1.2.3; 총 155개 (컨텍스트 1, 스키마 4, 모듈 구조 2, 의존성 방향 2, Money 25, 식별자 4, Order 19, PaymentAttempt 14, 결제 상태 이름 1, Fake 결제 provider 4, 자원 상한 설정 3, Facade line 상한 1, 오류 로그 요청 정보 6, OrderCommandFacade 11, RequestCheckout 통합 9, 버전 충돌 통합 1, 문장 수 통합 3, 이벤트 발행 기록 통합 7, API advice 9, OrderController 13, checkout Controller 5, 주문 API 통합 11) |
+| 테스트 | Kotlin Test/JUnit 5, Spring Boot 테스트 starter, Fixture Monkey 1.2.3; 총 153개 (컨텍스트 1, 스키마 4, 모듈 구조 2, 의존성 방향 2, Money 25, 식별자 4, Order 19, PaymentAttempt 15, 결제 enum 이름 2, 자원 상한 설정 3, Facade line 상한 1, 오류 로그 요청 정보 6, OrderCommandFacade 11, RequestCheckout 통합 9, 버전 충돌 통합 1, 문장 수 통합 3, 이벤트 발행 기록 통합 7, API advice 9, OrderController 13, checkout Controller 5, 주문 API 통합 11) |
 | 로컬 하네스 | Python 3 표준 라이브러리 |
 
 근거: [build.gradle.kts](../../build.gradle.kts), [Gradle Wrapper](../../gradle/wrapper/gradle-wrapper.properties), [애플리케이션 설정](../../src/main/resources/application.yaml).
@@ -107,12 +107,7 @@
   **0원 주문은 provider를 부르지 않고 `APPROVED`로 만들며 `PaymentAttemptCreated`와 `PaymentApproved`를 함께 낸다.** 시도를 기록으로 남겨야 0원 주문도 조회 경로가 같다.
   provider를 부르지 않았으므로 `providerReference`가 `null`이고 그 `null`이 "provider가 모르는 승인"이라는 사실을 그대로 나타낸다.
   **시도 회차는 언제나 1이다.** 초기 정책이 주문당 시도 한 건이고 `(orderId, attemptNo)` unique가 그것을 강제한다. 채번은 repository가 생기는 PR이 정한다.
-  외부 provider 경계는 `PaymentGateway` 포트다. `authorize` 하나만 있고 결과는 `Approved`·`Declined`·`Unknown`·`NotAttempted` 네 갈래 sealed 타입이다.
-  `Unknown`(결과를 모른다)과 `NotAttempted`(요청을 보내지 않았다)를 가른 이유는 복구 경로가 정반대이기 때문이다. circuit open·bulkhead 거절·rate limit을 `Unknown`으로 적으면
-  일어나지 않은 결제에 reconciliation case와 미확인 알람이 쌓인다. 로컬 결함(설정·인증 오류)은 결과로 담지 않고 예외로 던진다.
-  원문의 포트는 `suspend`지만 이 저장소에 코루틴 의존성이 없어 블로킹으로 뒀다. 구현은 `FakePaymentGateway` 하나이고 외부 연동 전략이 "항상 유지"로 정한 것이라 실제 provider가 붙어도 지우지 않는다.
-  **빈으로 등록하지 않는다.** 설정이 빠진 배포에서 이것이 유일한 구현으로 남으면 모든 결제를 무조건 승인한다. 주입이 필요한 PR이 조건과 함께 등록한다.
-  **아직 부르는 쪽이 없다.** Facade·영속화·`OrderPaymentRequested` 리스너는 다음 PR이 만든다.
+  **Facade·영속화·`OrderPaymentRequested` 리스너와 외부 provider 경계(`PaymentGateway` 포트, `FakePaymentGateway`)는 다음 PR이 함께 만든다.** 포트는 부르는 쪽과 같은 PR에 둬야 모양을 확인할 수 있다.
   **이벤트 중복 전달은 `(orderId, attemptNo)`가 막는 대상이 아니다.** 그 키는 회차 채번의 경합을 막는다. 중복 전달은 Event Publication Registry가 `(이벤트, 리스너)`마다 완료를 기록해 막는다.
   재발행을 켜면 at-least-once가 되므로 그때는 업무 수준 멱등 근거가 따로 필요하다. 알려진 빈틈이다([payment-domain-model](../spec/2026-09-22-payment-domain-model.md)).
 - `platform` 모듈은 `IdentifierGenerator`(UUID v7)와 `Clock`(UTC) 빈을 등록하는 `PlatformConfiguration`과 엔티티 공통 컬럼

@@ -7,6 +7,7 @@ import com.resilientpos.foundation.Transition
 import com.resilientpos.payment.CreatePaymentAttemptCommand
 import com.resilientpos.payment.PaymentApproved
 import com.resilientpos.payment.PaymentAttemptCreated
+import com.resilientpos.payment.PaymentAttemptKind
 import com.resilientpos.payment.PaymentAttemptStatus
 import com.resilientpos.payment.PaymentEvent
 import com.resilientpos.payment.PaymentId
@@ -19,6 +20,7 @@ import java.util.UUID
  * 결제 시도 aggregate 루트. 한 주문의 한 회차 provider 요청과 그 결과를 소유한다.
  * `Order`와는 별개 aggregate라서 `orderId`로만 참조하고 사실은 이벤트로 건너간다.
  * 한 주문에 시도가 여럿 달린다. 승인이 거절되면 다음 시도가 생기고 취소·환불도 각각 별도 시도다.
+ * 무엇을 요청한 시도인지는 [PaymentAttemptKind]가 말한다.
  * 그 `orderId`는 raw `UUID`다. `order.OrderId`를 쓰면 `order`가 이 모듈의 이벤트를 소비할 때 순환이 된다.
  */
 class PaymentAttempt private constructor(
@@ -28,6 +30,7 @@ class PaymentAttempt private constructor(
     val terminalId: TerminalId,
     val checkoutNo: Int,
     val attemptNo: Int,
+    val kind: PaymentAttemptKind,
     val amount: Money,
     val status: PaymentAttemptStatus,
     val providerReference: String?,
@@ -43,7 +46,9 @@ class PaymentAttempt private constructor(
         const val INVALID_ATTEMPT_NO = "INVALID_ATTEMPT_NO"
 
         /**
-         * 한 주문의 `attemptNo`회차 시도를 만든다.
+         * 한 주문의 `attemptNo`회차 **승인** 시도를 만든다.
+         * 취소 시도를 만드는 factory는 그 전이를 만드는 PR이 더한다. 되돌릴 승인이 아직 없어서
+         * 무엇을 참조해야 하는지(원 시도인지 provider 참조인지)를 지금 정할 근거가 없다.
          *
          * `attemptNo`는 명령이 아니라 **저장된 시도 이력에서 정해지는 값**이라 별도 인자로 받는다.
          * 시도들은 서로 다른 aggregate라서 자기 안에서 회차를 셀 수 없다. 부르는 쪽이 그 주문의
@@ -77,6 +82,7 @@ class PaymentAttempt private constructor(
                 terminalId = command.terminalId,
                 checkoutNo = command.checkoutNo,
                 attemptNo = attemptNo,
+                kind = PaymentAttemptKind.AUTHORIZATION,
                 amount = command.amount,
                 status = if (zero) PaymentAttemptStatus.APPROVED else PaymentAttemptStatus.REQUESTED,
                 // provider를 부르지 않았으므로 참조가 없다. 값을 지어내면 그 참조가 거짓이 된다.
@@ -92,6 +98,7 @@ class PaymentAttempt private constructor(
                 terminalId = command.terminalId,
                 checkoutNo = command.checkoutNo,
                 attemptNo = attempt.attemptNo,
+                kind = attempt.kind,
                 amount = command.amount,
             )
             if (!zero) {
@@ -108,6 +115,7 @@ class PaymentAttempt private constructor(
                 terminalId = command.terminalId,
                 checkoutNo = command.checkoutNo,
                 attemptNo = attempt.attemptNo,
+                kind = attempt.kind,
                 amount = command.amount,
                 providerReference = null,
             )

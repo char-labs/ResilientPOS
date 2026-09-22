@@ -28,11 +28,14 @@ data class PaymentAttemptCreated(
     val terminalId: TerminalId,
     val checkoutNo: Int,
     val attemptNo: Int,
+    val kind: PaymentAttemptKind,
     val amount: Money,
 ) : PaymentEvent
 
 /**
- * 결제가 승인됐다는 사실. `order`가 이 값을 checkout과 대조하고, 하나라도 다르면 reconciliation case를 연다.
+ * 시도가 승인됐다는 사실. `order`가 이 값을 checkout과 대조하고, 하나라도 다르면 reconciliation case를 연다.
+ *
+ * **`kind`를 보지 않고 결제 완료로 읽으면 안 된다.** 취소가 승인돼도 이 이벤트가 난다.
  *
  * `providerReference`는 provider를 실제로 부른 승인에만 있다. 0원 승인은 부르지 않았으므로 `null`이고,
  * 그 `null`이 "provider가 모르는 승인"이라는 사실을 그대로 나타낸다.
@@ -46,6 +49,7 @@ data class PaymentApproved(
     val terminalId: TerminalId,
     val checkoutNo: Int,
     val attemptNo: Int,
+    val kind: PaymentAttemptKind,
     val amount: Money,
     val providerReference: String?,
 ) : PaymentEvent

@@ -7,6 +7,7 @@ import com.resilientpos.foundation.Money
 import com.resilientpos.payment.CreatePaymentAttemptCommand
 import com.resilientpos.payment.PaymentApproved
 import com.resilientpos.payment.PaymentAttemptCreated
+import com.resilientpos.payment.PaymentAttemptKind
 import com.resilientpos.payment.PaymentAttemptStatus
 import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.TerminalId
@@ -201,6 +202,16 @@ class PaymentAttemptTest {
     fun `provider를 부른 적이 없으므로 어떤 경로에서도 참조가 없다`() {
         assertNull(create(ids = ids()).aggregate.providerReference)
         assertNull(create(amount = "0", ids = ids()).aggregate.providerReference)
+    }
+
+    @Test
+    fun `생성되는 시도는 승인 시도이고 그 사실이 이벤트에도 실린다`() {
+        // kind가 없으면 PaymentApproved를 받는 order가 환불 승인을 결제 승인으로 읽는다.
+        val transition = create(amount = "0", ids = ids())
+
+        assertEquals(PaymentAttemptKind.AUTHORIZATION, transition.aggregate.kind)
+        assertEquals(PaymentAttemptKind.AUTHORIZATION, (transition.events[0] as PaymentAttemptCreated).kind)
+        assertEquals(PaymentAttemptKind.AUTHORIZATION, (transition.events[1] as PaymentApproved).kind)
     }
 
     private fun assertFailsWithDomain(block: () -> Unit): DomainException =
