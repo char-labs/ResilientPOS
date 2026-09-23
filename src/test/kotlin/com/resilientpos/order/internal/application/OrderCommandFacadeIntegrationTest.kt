@@ -6,7 +6,7 @@ import com.resilientpos.foundation.DomainException
 import com.resilientpos.foundation.Money
 import com.resilientpos.foundation.UuidV7IdentifierGenerator
 import com.resilientpos.order.ClientOrderId
-import com.resilientpos.order.CreateOrderLine
+import com.resilientpos.order.OrderCommand
 import com.resilientpos.order.OrderCommandFacade
 import com.resilientpos.order.OrderCreated
 import com.resilientpos.order.OrderFixtures
@@ -131,7 +131,7 @@ class OrderCommandFacadeIntegrationTest(
         val command = OrderFixtures.createOrderCommand(
             terminalId = terminalId,
             clientOrderId = clientOrderId,
-            lines = emptyList<CreateOrderLine>(),
+            lines = emptyList<OrderCommand.Create.Line>(),
         )
 
         assertFailsWith<DomainException> { facade.create(command) }

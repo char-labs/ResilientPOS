@@ -2,8 +2,7 @@ package com.resilientpos.order.internal.adapter.web
 
 import com.resilientpos.foundation.Money
 import com.resilientpos.order.ClientOrderId
-import com.resilientpos.order.CreateOrderCommand
-import com.resilientpos.order.CreateOrderLine
+import com.resilientpos.order.OrderCommand
 import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.TerminalId
 import java.math.BigDecimal
@@ -20,7 +19,7 @@ data class CreateOrderRequest(
     val currency: Currency,
     val lines: List<CreateOrderLineRequest>,
 ) {
-    fun toCommand(): CreateOrderCommand = CreateOrderCommand(
+    fun toCommand(): OrderCommand.Create = OrderCommand.Create(
         storeId = StoreId(storeId),
         terminalId = TerminalId(terminalId),
         clientOrderId = ClientOrderId(clientOrderId),
@@ -38,6 +37,6 @@ data class CreateOrderLineRequest(
     val unitPrice: BigDecimal,
     val quantity: Int,
 ) {
-    fun toCommand(currency: Currency): CreateOrderLine =
-        CreateOrderLine(productCode, productName, Money.of(unitPrice, currency), quantity)
+    fun toCommand(currency: Currency): OrderCommand.Create.Line =
+        OrderCommand.Create.Line(productCode, productName, Money.of(unitPrice, currency), quantity)
 }

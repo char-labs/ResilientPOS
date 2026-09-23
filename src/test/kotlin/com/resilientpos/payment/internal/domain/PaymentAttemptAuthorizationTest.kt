@@ -6,8 +6,8 @@ import com.resilientpos.foundation.DomainErrorKind
 import com.resilientpos.foundation.DomainException
 import com.resilientpos.foundation.IdentifierGenerator
 import com.resilientpos.foundation.Money
-import com.resilientpos.payment.CreatePaymentAttemptCommand
 import com.resilientpos.payment.PaymentAttemptStatus
+import com.resilientpos.payment.PaymentCommand
 import com.resilientpos.payment.PaymentDeclined
 import com.resilientpos.payment.PaymentUnknown
 import com.resilientpos.store.StoreId
@@ -40,7 +40,7 @@ class PaymentAttemptAuthorizationTest {
 
     private fun requested(amount: String = "4500"): PaymentAttempt =
         PaymentAttempt.create(
-            CreatePaymentAttemptCommand(
+            PaymentCommand.CreateAttempt(
                 orderId = orderId,
                 storeId = StoreId(UUID.randomUUID()),
                 terminalId = TerminalId(UUID.randomUUID()),
