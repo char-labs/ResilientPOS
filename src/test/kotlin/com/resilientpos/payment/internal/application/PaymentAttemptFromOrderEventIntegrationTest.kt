@@ -54,19 +54,19 @@ class PaymentAttemptFromOrderEventIntegrationTest(
     fun `checkout을 요청하면 결제 시도가 하나 기록된다`() {
         val orderId = checkoutOrder(listOf(CreateOrderLine("SKU-1", "아메리카노", Money.of("4500", OrderFixtures.krw), 2)))
 
-        awaitUntil("결제 시도가 기록된다") { attempts(orderId).size == 1 }
+        // 시도가 기록된 뒤 승인 리스너가 이어서 돌므로 결말까지 기다린다. 기록된 직후를 보면 두 상태 사이에서 흔들린다.
+        // 어느 결말인지는 묻지 않는다 — 이 테스트의 주제는 order의 사실이 payment의 행이 되는 것이다.
+        awaitUntil("결제 시도가 결말까지 간다") { attempts(orderId).singleOrNull()?.get("status").let { it != null && it != "REQUESTED" } }
 
         val row = attempts(orderId).single()
         assertEquals("AUTHORIZATION", row["kind"])
-        // provider를 아직 부르지 않으므로 결말이 나지 않은 상태로 남는다.
-        assertEquals("REQUESTED", row["status"])
         assertEquals("KRW", (row["currency"] as String).trim())
         assertEquals(1, row["checkout_no"])
         assertEquals(0, (row["amount"] as java.math.BigDecimal).compareTo(java.math.BigDecimal("9000")))
     }
 
     @Test
-    fun `0원 주문은 provider 없이 승인까지 간다`() {
+    fun `0원 주문의 시도는 승인으로 기록된다`() {
         val orderId = checkoutOrder(listOf(CreateOrderLine("SKU-FREE", "증정품", Money.of("0", OrderFixtures.krw), 1)))
 
         awaitUntil("0원 시도가 승인으로 기록된다") {
@@ -77,8 +77,9 @@ class PaymentAttemptFromOrderEventIntegrationTest(
     @Test
     fun `같은 checkout으로 다시 부르면 기존 시도를 그대로 돌려준다`() {
         val orderId = checkoutOrder(listOf(CreateOrderLine("SKU-1", "아메리카노", Money.of("4500", OrderFixtures.krw), 1)))
-        awaitUntil("첫 시도가 기록된다") { attempts(orderId).size == 1 }
-        val first = attempts(orderId).single()["id"]
+        // 결말까지 기다린 뒤에 다시 부른다. 진행 중에 부르면 돌려받는 상태가 그때그때 달라진다.
+        awaitUntil("첫 시도가 결말까지 간다") { attempts(orderId).singleOrNull()?.get("status").let { it != null && it != "REQUESTED" } }
+        val first = attempts(orderId).single()
 
         // 리스너가 같은 이벤트를 다시 받은 것과 같은 상황이다.
         val again = paymentManagement.createAttempt(
@@ -92,8 +93,31 @@ class PaymentAttemptFromOrderEventIntegrationTest(
         )
 
         assertEquals(1, attempts(orderId).size)
-        assertEquals(first, again.paymentId.value)
-        assertEquals(PaymentAttemptStatus.REQUESTED, again.status)
+        assertEquals(first["id"], again.paymentId.value)
+        assertEquals(first["status"], again.status.name)
+    }
+
+    @Test
+    fun `거절된 시도가 있는 checkout에 같은 요청이 다시 와도 새 시도를 만들지 않는다`() {
+        // 4501원은 끝자리가 1이라 Fake가 거절한다.
+        val orderId = checkoutOrder(listOf(CreateOrderLine("SKU-1", "아메리카노", Money.of("4501", OrderFixtures.krw), 1)))
+        awaitUntil("시도가 거절까지 간다") { attempts(orderId).singleOrNull()?.get("status") == "DECLINED" }
+        val declined = attempts(orderId).single()["id"]
+
+        // 같은 OrderPaymentRequested가 재배달된 것과 같은 상황이다. 재결제 의도가 아니라 같은 사실이다.
+        val again = paymentManagement.createAttempt(
+            CreatePaymentAttemptCommand(
+                orderId = orderId,
+                storeId = StoreId(UUID.randomUUID()),
+                terminalId = TerminalId(UUID.randomUUID()),
+                checkoutNo = 1,
+                amount = Money.of("4501", OrderFixtures.krw),
+            ),
+        )
+
+        assertEquals(1, attempts(orderId).size)
+        assertEquals(declined, again.paymentId.value)
+        assertEquals(PaymentAttemptStatus.DECLINED, again.status)
     }
 
     @Test

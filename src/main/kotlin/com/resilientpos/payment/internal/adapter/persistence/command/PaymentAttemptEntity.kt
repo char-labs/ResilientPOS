@@ -30,9 +30,8 @@ import org.hibernate.type.SqlTypes
  * 두 enum은 `EnumType.STRING`이다. 기본값인 ORDINAL로 두면 값을 하나 끼워 넣는 순간
  * 이미 저장된 행의 뜻이 통째로 바뀐다.
  *
- * 지금은 시도를 기록만 하므로 `apply`가 없다. 바뀌지 않는다는 사실은 변경 메서드가 없다는 것으로 표현한다.
+ * 바뀌는 것은 결말뿐이다. [applyResult]만 값을 바꾸고 나머지는 시도가 만들어질 때 확정된다.
  * 전 필드는 `var`에 `protected set`이다. `val`로 두지 않는 이유는 `OrderEntity`의 KDoc에 있다. 생성은 `from`만 한다(도메인 규칙 §5).
- * 승인 결과를 반영하는 명령이 생기면 그 PR이 `apply`를 더한다.
  */
 @Entity
 @Table(name = "t_payment_attempt")
@@ -83,6 +82,15 @@ class PaymentAttemptEntity private constructor(
 
     var providerReference: String? = providerReference
         protected set
+
+    /**
+     * provider 결과를 반영한다. 바꿀 수 있는 것이 이 둘뿐이라는 사실을 시그니처로 말한다.
+     * 무엇으로 바꿀 수 있는지는 aggregate의 `applyAuthorization`이 정하고, 여기는 그 결과를 옮기기만 한다.
+     */
+    fun applyResult(status: PaymentAttemptStatus, providerReference: String?) {
+        this.status = status
+        this.providerReference = providerReference
+    }
 
     fun toDomain(): PaymentAttempt = PaymentAttempt.restore(
         id = PaymentId(id),
