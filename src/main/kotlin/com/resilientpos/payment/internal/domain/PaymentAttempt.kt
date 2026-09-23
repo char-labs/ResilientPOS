@@ -8,9 +8,9 @@ import com.resilientpos.foundation.DomainException
 import com.resilientpos.foundation.IdentifierGenerator
 import com.resilientpos.foundation.Money
 import com.resilientpos.foundation.Transition
-import com.resilientpos.payment.CreatePaymentAttemptCommand
 import com.resilientpos.payment.PaymentAttemptCreated
 import com.resilientpos.payment.PaymentAttemptStatus
+import com.resilientpos.payment.PaymentCommand
 import com.resilientpos.payment.PaymentDeclined
 import com.resilientpos.payment.PaymentId
 import com.resilientpos.payment.PaymentUnknown
@@ -151,7 +151,7 @@ class PaymentAttempt private constructor(
          * 취소·환불 시도는 이 factory가 만들지 않는다.
          */
         fun create(
-            command: CreatePaymentAttemptCommand,
+            command: PaymentCommand.CreateAttempt,
             ids: IdentifierGenerator,
             now: Instant,
         ): Transition<PaymentAttempt, DomainEvent> {

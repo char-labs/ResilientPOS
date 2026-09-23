@@ -3,9 +3,9 @@ package com.resilientpos.payment.internal.adapter.persistence.command
 import com.resilientpos.PostgresIntegrationTest
 import com.resilientpos.foundation.Money
 import com.resilientpos.foundation.UuidV7IdentifierGenerator
-import com.resilientpos.payment.CreatePaymentAttemptCommand
 import com.resilientpos.contract.PaymentAttemptKind
 import com.resilientpos.payment.PaymentAttemptStatus
+import com.resilientpos.payment.PaymentCommand
 import com.resilientpos.payment.PaymentId
 import com.resilientpos.payment.internal.domain.PaymentAttempt
 import com.resilientpos.store.StoreId
@@ -41,7 +41,7 @@ class PaymentAttemptPersistenceIntegrationTest(
 
     private fun authorization(orderId: UUID, amount: String = "4500", checkoutNo: Int = 1) =
         PaymentAttempt.create(
-            CreatePaymentAttemptCommand(
+            PaymentCommand.CreateAttempt(
                 orderId = orderId,
                 storeId = StoreId(UUID.randomUUID()),
                 terminalId = TerminalId(UUID.randomUUID()),

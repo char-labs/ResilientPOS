@@ -68,7 +68,7 @@ class PaymentManagementTest {
         override fun publishEvent(event: Any) { published += event }
     }
 
-    private fun command(amount: String) = CreatePaymentAttemptCommand(
+    private fun command(amount: String) = PaymentCommand.CreateAttempt(
         orderId = orderId,
         storeId = StoreId(UUID.randomUUID()),
         terminalId = TerminalId(UUID.randomUUID()),
@@ -142,7 +142,7 @@ class PaymentManagementTest {
         val created = management.createAttempt(command("4500"))
         publisher.published.clear()
 
-        val result = management.authorize(AuthorizePaymentCommand(created.paymentId))
+        val result = management.authorize(PaymentCommand.Authorize(created.paymentId))
 
         assertEquals(PaymentAttemptStatus.APPROVED, result.status)
         val approved = publisher.published.single() as PaymentApproved
@@ -159,7 +159,7 @@ class PaymentManagementTest {
         val created = management.createAttempt(command("4500"))
         publisher.published.clear()
 
-        val result = management.authorize(AuthorizePaymentCommand(created.paymentId))
+        val result = management.authorize(PaymentCommand.Authorize(created.paymentId))
 
         assertEquals(PaymentAttemptStatus.DECLINED, result.status)
         val declined = publisher.published.single() as PaymentDeclined
@@ -176,7 +176,7 @@ class PaymentManagementTest {
         val created = management.createAttempt(command("0"))
         publisher.published.clear()
 
-        val result = management.authorize(AuthorizePaymentCommand(created.paymentId))
+        val result = management.authorize(PaymentCommand.Authorize(created.paymentId))
 
         assertEquals(PaymentAttemptStatus.APPROVED, result.status)
         assertEquals(0, gateway.calls)
@@ -189,7 +189,7 @@ class PaymentManagementTest {
         val gateway = StubGateway(AuthorizationOutcome.Approved("PROVIDER-REF"))
         val management = management(RecordingRepository(), RecordingPublisher(), gateway)
 
-        val thrown = runCatching { management.authorize(AuthorizePaymentCommand(PaymentId(UUID.randomUUID()))) }
+        val thrown = runCatching { management.authorize(PaymentCommand.Authorize(PaymentId(UUID.randomUUID()))) }
             .exceptionOrNull()
 
         val domain = assertIs<DomainException>(thrown)

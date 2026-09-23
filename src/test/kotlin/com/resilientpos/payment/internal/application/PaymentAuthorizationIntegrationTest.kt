@@ -2,12 +2,11 @@ package com.resilientpos.payment.internal.application
 
 import com.resilientpos.PostgresIntegrationTest
 import com.resilientpos.foundation.Money
-import com.resilientpos.order.CreateOrderLine
+import com.resilientpos.order.OrderCommand
 import com.resilientpos.order.OrderCommandFacade
 import com.resilientpos.order.OrderFixtures
-import com.resilientpos.order.RequestCheckoutCommand
-import com.resilientpos.payment.AuthorizePaymentCommand
 import com.resilientpos.payment.PaymentAttemptStatus
+import com.resilientpos.payment.PaymentCommand
 import com.resilientpos.payment.PaymentId
 import com.resilientpos.payment.PaymentManagement
 import com.resilientpos.payment.internal.adapter.gateway.FakePaymentGateway
@@ -85,10 +84,10 @@ class PaymentAuthorizationIntegrationTest(
     private fun checkoutOrder(unitPrice: String): UUID {
         val created = orderFacade.create(
             OrderFixtures.createOrderCommand(
-                lines = listOf(CreateOrderLine("SKU-1", "아메리카노", Money.of(unitPrice, OrderFixtures.krw), 1)),
+                lines = listOf(OrderCommand.Create.Line("SKU-1", "아메리카노", Money.of(unitPrice, OrderFixtures.krw), 1)),
             ),
         )
-        orderFacade.requestCheckout(RequestCheckoutCommand(created.orderId))
+        orderFacade.requestCheckout(OrderCommand.RequestCheckout(created.orderId))
         return created.orderId.value
     }
 
@@ -195,7 +194,7 @@ class PaymentAuthorizationIntegrationTest(
 
         // 안에서 부르면 적용이 바깥 트랜잭션에 합류해 잠금 조회가 먼저 읽어 둔 낡은 값을 돌려받는다.
         val thrown = runCatching {
-            transactions.execute { paymentManagement.authorize(AuthorizePaymentCommand(paymentId)) }
+            transactions.execute { paymentManagement.authorize(PaymentCommand.Authorize(paymentId)) }
         }.exceptionOrNull()
 
         assertIs<IllegalTransactionStateException>(thrown)
@@ -222,7 +221,7 @@ class PaymentAuthorizationIntegrationTest(
         val paymentId = paymentId(awaitStatus(orderId, PaymentAttemptStatus.APPROVED))
 
         // 같은 사실이 다시 배달된 것과 같은 상황을 직접 만든다. 기다리기만 해서는 재배달이 일어나지 않는다.
-        val result = paymentManagement.authorize(AuthorizePaymentCommand(paymentId))
+        val result = paymentManagement.authorize(PaymentCommand.Authorize(paymentId))
 
         assertEquals(PaymentAttemptStatus.APPROVED, result.status)
         assertEquals(1, gateway.callsFor(paymentId))

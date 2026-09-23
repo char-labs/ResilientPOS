@@ -1,8 +1,8 @@
 package com.resilientpos.order.internal.adapter.web
 
+import com.resilientpos.order.OrderCommand
 import com.resilientpos.order.OrderCommandFacade
 import com.resilientpos.order.OrderId
-import com.resilientpos.order.RequestCheckoutCommand
 import java.util.UUID
 import org.springframework.http.HttpStatus
 import org.springframework.web.bind.annotation.PathVariable
@@ -27,5 +27,5 @@ class OrderController(private val facade: OrderCommandFacade) {
     /** 첫 요청과 재요청이 같은 200과 같은 본문이다. */
     @PostMapping("/{orderId}/checkout")
     fun requestCheckout(@PathVariable orderId: UUID): RequestCheckoutResponse =
-        RequestCheckoutResponse.from(facade.requestCheckout(RequestCheckoutCommand(OrderId(orderId))))
+        RequestCheckoutResponse.from(facade.requestCheckout(OrderCommand.RequestCheckout(OrderId(orderId))))
 }

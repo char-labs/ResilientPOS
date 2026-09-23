@@ -1,7 +1,7 @@
 package com.resilientpos.payment.internal.application
 
 import com.resilientpos.contract.OrderPaymentRequested
-import com.resilientpos.payment.CreatePaymentAttemptCommand
+import com.resilientpos.payment.PaymentCommand
 import com.resilientpos.payment.PaymentManagement
 import com.resilientpos.platform.logger
 import org.springframework.modulith.events.ApplicationModuleListener
@@ -27,7 +27,7 @@ class OrderPaymentRequestedListener(
     @ApplicationModuleListener(propagation = Propagation.NOT_SUPPORTED)
     fun on(event: OrderPaymentRequested) {
         val result = paymentManagement.createAttempt(
-            CreatePaymentAttemptCommand(
+            PaymentCommand.CreateAttempt(
                 orderId = event.orderId,
                 storeId = event.storeId,
                 terminalId = event.terminalId,

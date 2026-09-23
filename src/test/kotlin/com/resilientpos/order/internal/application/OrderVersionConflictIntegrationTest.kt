@@ -1,10 +1,10 @@
 package com.resilientpos.order.internal.application
 
 import com.resilientpos.PostgresIntegrationTest
+import com.resilientpos.order.OrderCommand
 import com.resilientpos.order.OrderCommandFacade
 import com.resilientpos.order.OrderFixtures
 import com.resilientpos.order.OrderStatus
-import com.resilientpos.order.RequestCheckoutCommand
 import com.resilientpos.order.internal.domain.Order
 import com.resilientpos.order.internal.domain.OrderRepository
 import java.util.concurrent.Executors
@@ -40,7 +40,7 @@ class OrderVersionConflictIntegrationTest(
             assertFailsWith<OptimisticLockingFailureException> {
                 transaction.execute {
                     val stale = assertNotNull(repository.findById(orderId))
-                    executor.submit { facade.requestCheckout(RequestCheckoutCommand(orderId)) }.get(10, TimeUnit.SECONDS)
+                    executor.submit { facade.requestCheckout(OrderCommand.RequestCheckout(orderId)) }.get(10, TimeUnit.SECONDS)
 
                     // checkout 행 없이 루트 status만 바꾼다. INSERT가 있으면 Hibernate가 INSERT를 먼저 flush해서 unique 위반이 먼저 걸린다.
                     repository.save(

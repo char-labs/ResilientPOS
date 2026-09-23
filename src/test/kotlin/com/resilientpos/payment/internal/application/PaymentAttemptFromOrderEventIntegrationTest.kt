@@ -2,13 +2,12 @@ package com.resilientpos.payment.internal.application
 
 import com.resilientpos.PostgresIntegrationTest
 import com.resilientpos.foundation.Money
-import com.resilientpos.order.CreateOrderLine
+import com.resilientpos.order.OrderCommand
 import com.resilientpos.order.OrderCommandFacade
 import com.resilientpos.order.OrderFixtures
-import com.resilientpos.order.RequestCheckoutCommand
-import com.resilientpos.payment.CreatePaymentAttemptCommand
 import com.resilientpos.contract.PaymentAttemptKind
 import com.resilientpos.payment.PaymentAttemptStatus
+import com.resilientpos.payment.PaymentCommand
 import com.resilientpos.payment.PaymentManagement
 import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.TerminalId
@@ -44,15 +43,15 @@ class PaymentAttemptFromOrderEventIntegrationTest(
         }
     }
 
-    private fun checkoutOrder(lines: List<CreateOrderLine>): UUID {
+    private fun checkoutOrder(lines: List<OrderCommand.Create.Line>): UUID {
         val created = orderFacade.create(OrderFixtures.createOrderCommand(lines = lines))
-        orderFacade.requestCheckout(RequestCheckoutCommand(created.orderId))
+        orderFacade.requestCheckout(OrderCommand.RequestCheckout(created.orderId))
         return created.orderId.value
     }
 
     @Test
     fun `checkout을 요청하면 결제 시도가 하나 기록된다`() {
-        val orderId = checkoutOrder(listOf(CreateOrderLine("SKU-1", "아메리카노", Money.of("4500", OrderFixtures.krw), 2)))
+        val orderId = checkoutOrder(listOf(OrderCommand.Create.Line("SKU-1", "아메리카노", Money.of("4500", OrderFixtures.krw), 2)))
 
         // 시도가 기록된 뒤 승인 리스너가 이어서 돌므로 결말까지 기다린다. 기록된 직후를 보면 두 상태 사이에서 흔들린다.
         // 어느 결말인지는 묻지 않는다 — 이 테스트의 주제는 order의 사실이 payment의 행이 되는 것이다.
@@ -67,7 +66,7 @@ class PaymentAttemptFromOrderEventIntegrationTest(
 
     @Test
     fun `0원 주문의 시도는 승인으로 기록된다`() {
-        val orderId = checkoutOrder(listOf(CreateOrderLine("SKU-FREE", "증정품", Money.of("0", OrderFixtures.krw), 1)))
+        val orderId = checkoutOrder(listOf(OrderCommand.Create.Line("SKU-FREE", "증정품", Money.of("0", OrderFixtures.krw), 1)))
 
         awaitUntil("0원 시도가 승인으로 기록된다") {
             attempts(orderId).singleOrNull()?.get("status") == "APPROVED"
@@ -76,14 +75,14 @@ class PaymentAttemptFromOrderEventIntegrationTest(
 
     @Test
     fun `같은 checkout으로 다시 부르면 기존 시도를 그대로 돌려준다`() {
-        val orderId = checkoutOrder(listOf(CreateOrderLine("SKU-1", "아메리카노", Money.of("4500", OrderFixtures.krw), 1)))
+        val orderId = checkoutOrder(listOf(OrderCommand.Create.Line("SKU-1", "아메리카노", Money.of("4500", OrderFixtures.krw), 1)))
         // 결말까지 기다린 뒤에 다시 부른다. 진행 중에 부르면 돌려받는 상태가 그때그때 달라진다.
         awaitUntil("첫 시도가 결말까지 간다") { attempts(orderId).singleOrNull()?.get("status").let { it != null && it != "REQUESTED" } }
         val first = attempts(orderId).single()
 
         // 리스너가 같은 이벤트를 다시 받은 것과 같은 상황이다.
         val again = paymentManagement.createAttempt(
-            CreatePaymentAttemptCommand(
+            PaymentCommand.CreateAttempt(
                 orderId = orderId,
                 storeId = StoreId(UUID.randomUUID()),
                 terminalId = TerminalId(UUID.randomUUID()),
@@ -100,13 +99,13 @@ class PaymentAttemptFromOrderEventIntegrationTest(
     @Test
     fun `거절된 시도가 있는 checkout에 같은 요청이 다시 와도 새 시도를 만들지 않는다`() {
         // 4501원은 끝자리가 1이라 Fake가 거절한다.
-        val orderId = checkoutOrder(listOf(CreateOrderLine("SKU-1", "아메리카노", Money.of("4501", OrderFixtures.krw), 1)))
+        val orderId = checkoutOrder(listOf(OrderCommand.Create.Line("SKU-1", "아메리카노", Money.of("4501", OrderFixtures.krw), 1)))
         awaitUntil("시도가 거절까지 간다") { attempts(orderId).singleOrNull()?.get("status") == "DECLINED" }
         val declined = attempts(orderId).single()["id"]
 
         // 같은 OrderPaymentRequested가 재배달된 것과 같은 상황이다. 재결제 의도가 아니라 같은 사실이다.
         val again = paymentManagement.createAttempt(
-            CreatePaymentAttemptCommand(
+            PaymentCommand.CreateAttempt(
                 orderId = orderId,
                 storeId = StoreId(UUID.randomUUID()),
                 terminalId = TerminalId(UUID.randomUUID()),
@@ -122,8 +121,8 @@ class PaymentAttemptFromOrderEventIntegrationTest(
 
     @Test
     fun `다른 주문의 시도는 서로 섞이지 않는다`() {
-        val first = checkoutOrder(listOf(CreateOrderLine("SKU-1", "아메리카노", Money.of("4500", OrderFixtures.krw), 1)))
-        val second = checkoutOrder(listOf(CreateOrderLine("SKU-1", "아메리카노", Money.of("4500", OrderFixtures.krw), 1)))
+        val first = checkoutOrder(listOf(OrderCommand.Create.Line("SKU-1", "아메리카노", Money.of("4500", OrderFixtures.krw), 1)))
+        val second = checkoutOrder(listOf(OrderCommand.Create.Line("SKU-1", "아메리카노", Money.of("4500", OrderFixtures.krw), 1)))
 
         awaitUntil("두 주문 모두 시도가 기록된다") { attempts(first).size == 1 && attempts(second).size == 1 }
 

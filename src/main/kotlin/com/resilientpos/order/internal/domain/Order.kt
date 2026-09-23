@@ -7,8 +7,7 @@ import com.resilientpos.foundation.Money
 import com.resilientpos.foundation.Transition
 import com.resilientpos.order.CheckoutId
 import com.resilientpos.order.ClientOrderId
-import com.resilientpos.order.CreateOrderCommand
-import com.resilientpos.order.CreateOrderLine
+import com.resilientpos.order.OrderCommand
 import com.resilientpos.order.OrderCreated
 import com.resilientpos.foundation.DomainEvent
 import com.resilientpos.order.OrderId
@@ -51,10 +50,10 @@ class Order private constructor(
     /**
      * 같은 `(terminalId, clientOrderId)`로 다시 온 command가 최초 요청과 같은 내용인지 검증한다.
      */
-    fun verifySamePayload(command: CreateOrderCommand) {
+    fun verifySamePayload(command: OrderCommand.Create) {
         // ponytail: 저장된 현재 상태와 비교한다. line·storeId·currency를 바꾸는 명령이 생기면 현재 상태가
         // 최초 요청과 달라지므로 그 PR에서 최초 요청 기록(payload hash)을 도입한다.
-        val storedLines = lines.map { CreateOrderLine(it.productCode, it.productName, it.unitPrice, it.quantity) }
+        val storedLines = lines.map { OrderCommand.Create.Line(it.productCode, it.productName, it.unitPrice, it.quantity) }
         val same = storeId == command.storeId &&
             currency == command.currency &&
             storedLines.groupingBy { it }.eachCount() == command.lines.groupingBy { it }.eachCount()
@@ -143,7 +142,7 @@ class Order private constructor(
             checkouts: List<Checkout>,
         ): Order = Order(id, storeId, terminalId, clientOrderId, currency, status, lines, checkouts)
 
-        fun create(command: CreateOrderCommand, ids: IdentifierGenerator, now: Instant): Transition<Order, DomainEvent> {
+        fun create(command: OrderCommand.Create, ids: IdentifierGenerator, now: Instant): Transition<Order, DomainEvent> {
             if (command.lines.isEmpty()) {
                 throw DomainException(EMPTY_ORDER, "주문에는 line이 1개 이상 필요합니다")
             }

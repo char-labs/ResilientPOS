@@ -1,7 +1,7 @@
 package com.resilientpos.payment.internal.application
 
-import com.resilientpos.payment.AuthorizePaymentCommand
 import com.resilientpos.payment.PaymentAttemptCreated
+import com.resilientpos.payment.PaymentCommand
 import com.resilientpos.payment.PaymentManagement
 import com.resilientpos.platform.logger
 import org.springframework.modulith.events.ApplicationModuleListener
@@ -29,7 +29,7 @@ class PaymentAttemptCreatedListener(
 
     @ApplicationModuleListener(propagation = Propagation.NOT_SUPPORTED)
     fun on(event: PaymentAttemptCreated) {
-        val result = paymentManagement.authorize(AuthorizePaymentCommand(event.paymentId))
+        val result = paymentManagement.authorize(PaymentCommand.Authorize(event.paymentId))
 
         // 이 메서드가 트랜잭션이 아니라 Facade가 반환했으면 이미 커밋됐다. 그래서 바로 남겨도 참이다.
         log.info {
