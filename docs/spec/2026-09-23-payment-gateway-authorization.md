@@ -18,7 +18,7 @@ tx1  시도를 읽는다 → 결말이 났으면 돌아선다
 tx2  시도를 잠그고 다시 읽는다 → 그사이 결말이 났으면 돌아선다 → 결과를 적용하고 사실을 발행한다
 ```
 
-그러려면 리스너 자신이 트랜잭션이면 안 된다. `@ApplicationModuleListener`는 `@Async`·`@TransactionalEventListener`·`@Transactional(REQUIRES_NEW)`의 합성이라 리스너가 트랜잭션을 열고 Facade가 그 안에 합류한다. **두 리스너 모두 합성을 풀어 `@Async`와 `@TransactionalEventListener`만 단다.** 발행 기록은 발행하는 쪽의 트랜잭션에서 쓰이고 완료 표시는 Modulith가 리스너 반환 뒤 자기 트랜잭션에서 하므로, 리스너가 트랜잭션이 아니어도 추적이 유지된다. 두 구조에 같은 관측 테스트를 돌려 확인했다 — 승인하면 `COMPLETED`, 리스너가 던지면 `FAILED`로 같고, provider 호출 중 트랜잭션만 활성에서 비활성으로 바뀐다. `listener_id`도 같다.
+그러려면 리스너 자신이 트랜잭션이면 안 된다. `@ApplicationModuleListener`는 `@Async`·`@TransactionalEventListener`·`@Transactional(REQUIRES_NEW)`의 합성이라 리스너가 트랜잭션을 열고 Facade가 그 안에 합류한다. **두 리스너 모두 `@ApplicationModuleListener(propagation = NOT_SUPPORTED)`로 트랜잭션을 끈다.** `propagation`이 메타 애너테이션의 `@Transactional`로 이어지는 속성이라 표준 애너테이션을 그대로 쓴다. 발행 기록은 발행하는 쪽의 트랜잭션에서 쓰이고 완료 표시는 Modulith가 리스너 반환 뒤 자기 트랜잭션에서 하므로, 리스너가 트랜잭션이 아니어도 추적이 유지된다. 같은 관측 테스트를 기본값과 이 설정에 돌려 확인했다 — 승인하면 `COMPLETED`, 리스너가 던지면 `FAILED`로 같고, provider 호출 중 트랜잭션이 활성에서 비활성으로, 쥔 커넥션이 하나 줄었다. `listener_id`도 같다.
 
 리스너가 트랜잭션이 아니면 Facade가 반환하는 순간이 곧 커밋 뒤다. 그래서 **반환 뒤에 찍는 로그가 그대로 참이 되고, 커밋 뒤로 로그를 미루던 `afterCommit` 헬퍼가 필요 없어져 지운다.** 경합에서 진 쪽은 이제 Facade 안의 커밋에서 예외를 받아 로그에 닿지 않는다.
 
@@ -147,14 +147,14 @@ AuthorizationOutcome = Approved(providerReference) | Declined(providerReference?
 | 결말이 난 시도에서 돌아서기 | Facade 단위 1개, 통합 2개(0원, 재요청) |
 | 적용 트랜잭션의 잠금 | 경합 통합 — 3회 모두 |
 | 결말 무관 조회(진행 중 조회로 되돌림) | 거절 뒤 재배달 통합 |
-| 리스너의 합성 애너테이션 분해 | 트랜잭션 없는 호출 통합 |
+| 리스너의 `propagation = NOT_SUPPORTED` | 트랜잭션 없는 호출 통합 |
 
 `없는 시도를 승인하려 하면 거절한다`는 동작이 처음부터 있어 RED가 없다. characterization이다.
 
 ## 결과
 192개 통과다(직전 167 + 신규 25).
 
-- **provider 호출이 트랜잭션 밖으로 나갔다.** 정본이 이미 정한 것이었는데 첫 구현은 리스너의 트랜잭션 안에서 불렀다. `@ApplicationModuleListener`를 풀어 쓰면 되고 발행 기록의 추적도 그대로라는 것을 두 구조에 같은 관측 테스트를 돌려 확인했다. 그 원칙을 [도메인 모델](../wiki/domain-model.md) §4.3에 리스너 규칙으로 적었다.
+- **provider 호출이 트랜잭션 밖으로 나갔다.** 정본이 이미 정한 것이었는데 첫 구현은 리스너의 트랜잭션 안에서 불렀다. `@ApplicationModuleListener`의 `propagation`을 `NOT_SUPPORTED`로 두면 되고 발행 기록의 추적도 그대로라는 것을 기본값과 같은 관측 테스트로 확인했다. 그 원칙을 [도메인 모델](../wiki/domain-model.md) §4.3에 리스너 규칙으로 적었다.
 - **밖으로 빼면서 잠금이 필수가 됐다.** 읽기와 적용 사이가 네트워크 왕복만큼 벌어지기 때문이다. 두 호출에 서로 다른 답을 주는 경합 테스트가 이것을 고정한다. 잠금이 막는 것은 DB 안의 이중 적용이고, provider 쪽 이중 호출은 provider의 멱등성이 막는다 — 테스트도 호출이 두 번이라는 사실을 함께 고정한다.
 - **거절 뒤 재배달이 새 시도를 만들던 구멍을 닫았다.** 진행 중인 시도만 찾던 조회를 결말 무관으로 바꿨다. partial unique와 `INFLIGHT_STATUSES`는 그대로 둬서 재결제는 DB가 여전히 허용한다.
 - **`afterCommit` 헬퍼가 사라졌다.** 리스너가 트랜잭션이 아니면 Facade의 반환이 곧 커밋 뒤라, 반환 뒤에 찍는 로그가 그대로 참이다.
