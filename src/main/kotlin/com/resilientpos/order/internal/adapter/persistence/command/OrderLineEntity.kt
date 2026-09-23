@@ -13,20 +13,43 @@ import java.util.UUID
 
 /**
  * `OrderLine`의 JPA 매핑. 연관관계 매핑 없이 `orderId` 컬럼만 가진 독립 엔티티다.
+ * 생성은 `from`, 변경은 `apply`만 한다(도메인 규칙 §5). 전 필드가 `var`에 `protected set`이다.
+ * `id`와 `orderId`는 `apply`가 바꾸지 않지만 `val`로 두지 않는다. 이유는 `OrderEntity`의 KDoc에 있다.
  * 주문과의 조립과 변경 반영은 `OrderPersistenceAdapter`가 한다. `lineNo`는 정렬용이다.
  */
 @Entity
 @Table(name = "t_order_line")
-class OrderLineEntity(
-    @Id
-    var id: UUID,
-    var orderId: UUID,
-    var lineNo: Int,
-    var productCode: String,
-    var productName: String,
-    var unitPrice: BigDecimal,
-    var quantity: Int,
+class OrderLineEntity private constructor(
+    id: UUID,
+    orderId: UUID,
+    lineNo: Int,
+    productCode: String,
+    productName: String,
+    unitPrice: BigDecimal,
+    quantity: Int,
 ) : BaseEntity() {
+
+    @Id
+    var id: UUID = id
+        protected set
+
+    var orderId: UUID = orderId
+        protected set
+
+    var lineNo: Int = lineNo
+        protected set
+
+    var productCode: String = productCode
+        protected set
+
+    var productName: String = productName
+        protected set
+
+    var unitPrice: BigDecimal = unitPrice
+        protected set
+
+    var quantity: Int = quantity
+        protected set
 
     fun apply(lineNo: Int, line: OrderLine) {
         this.lineNo = lineNo
