@@ -5,6 +5,7 @@ import com.resilientpos.foundation.DomainException
 import com.resilientpos.foundation.IdentifierGenerator
 import com.resilientpos.foundation.Money
 import com.resilientpos.order.OrderCommand
+import com.resilientpos.order.CheckoutId
 import com.resilientpos.order.ClientOrderId
 import com.resilientpos.order.OrderEvent
 import com.resilientpos.order.OrderStatus
@@ -71,6 +72,17 @@ class OrderMarkPaidTest {
     @Test
     fun `없는 회차의 승인이면 거절한다`() {
         assertMismatch { checkoutRequested().markPaid(2, Money.of("3500", krw), ids, now) }
+    }
+
+    @Test
+    fun `이전 회차의 승인은 금액이 같아도 거절한다`() {
+        val order = checkoutRequested()
+        val reopened = Order.restore(
+            order.id, order.storeId, order.terminalId, order.clientOrderId, order.currency, order.status, order.lines,
+            order.checkouts + Checkout(CheckoutId(UUID.randomUUID()), 2, Money.of("3500", krw)),
+        )
+
+        assertMismatch { reopened.markPaid(1, Money.of("3500", krw), ids, now) }
     }
 
     @Test

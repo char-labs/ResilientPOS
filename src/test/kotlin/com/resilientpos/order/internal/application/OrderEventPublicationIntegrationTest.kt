@@ -36,7 +36,7 @@ import org.springframework.transaction.support.TransactionTemplate
 
 /**
  * Event Publication Registry가 이 저장소의 구성(PostgreSQL, Flyway 스키마, JPA validate, Jackson)에서 동작하는지 검사한다.
- * 프로덕션 리스너가 아직 없어서 이 클래스의 컨텍스트에만 테스트용 리스너를 넣는다. Docker가 필요하다.
+ * 리스너의 성공·실패를 조종하려고 이 클래스의 컨텍스트에만 테스트용 리스너를 넣는다. Docker가 필요하다.
  */
 @Import(OrderEventPublicationIntegrationTest.ListenerConfiguration::class)
 @RecordApplicationEvents

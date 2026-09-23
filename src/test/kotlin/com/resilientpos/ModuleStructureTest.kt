@@ -75,7 +75,7 @@ class ModuleStructureTest {
     @Test
     fun `모듈 안에 머무는 결제 이벤트의 정규 이름을 고정한다`() {
         // 중첩 클래스의 JVM 이름은 $로 잇고 그 이름이 event_publication.event_type에 들어간다.
-        // AttemptCreated는 승인 리스너가 받아 지금 기록된다. Declined·Unknown은 소비자가 생기는 순간 기록된다.
+        // AttemptCreated는 PaymentAttemptCreatedListener가 받아 지금 기록된다. Declined·Unknown은 소비자가 생기는 순간 기록된다.
         assertEquals("com.resilientpos.payment.PaymentEvent\$AttemptCreated", PaymentEvent.AttemptCreated::class.java.name)
         assertEquals("com.resilientpos.payment.PaymentEvent\$Declined", PaymentEvent.Declined::class.java.name)
         assertEquals("com.resilientpos.payment.PaymentEvent\$Unknown", PaymentEvent.Unknown::class.java.name)

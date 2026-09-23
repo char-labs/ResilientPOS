@@ -43,7 +43,7 @@ class OrderRequestCheckoutIntegrationTest(
     @Autowired private val transaction: TransactionTemplate,
 ) : PostgresIntegrationTest() {
 
-    // OrderFixtures의 기본 line: 1000 x 2 + 500 x 3
+    // OrderFixtures의 기본 line: 1001 x 2 + 500 x 3
     private val fixtureTotal = Money.of("3502", OrderFixtures.krw)
 
     private fun checkoutRowCount(orderId: OrderId): Long =

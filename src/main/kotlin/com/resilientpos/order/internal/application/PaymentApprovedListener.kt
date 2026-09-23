@@ -12,7 +12,8 @@ import org.springframework.transaction.annotation.Propagation
 
 /**
  * 결제 승인을 받아 주문을 `PAID`로 전이한다. 확정값과 다르면 Facade가 던져 발행 기록이 `FAILED`로 남는다.
- * 트랜잭션을 끄는 이유는 도메인 모델 §4.3과 같다 — Facade가 반환하면 커밋 뒤라 로그가 참이다.
+ * 기본값(`REQUIRES_NEW`)이면 Facade가 리스너의 트랜잭션에 합류해 로그가 커밋 전에 찍힌다.
+ * 트랜잭션을 꺼 두면 Facade가 반환할 때 이미 커밋된 뒤라 로그가 참이다.
  */
 @Component
 class PaymentApprovedListener(

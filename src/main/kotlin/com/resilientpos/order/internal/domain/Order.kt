@@ -110,7 +110,8 @@ class Order private constructor(
         if (latest?.checkoutNo != checkoutNo || latest.amount != amount) {
             throw DomainException(
                 PAYMENT_APPROVAL_MISMATCH,
-                "결제 승인이 주문의 확정값과 다릅니다 orderId=${id.value} checkoutNo=$checkoutNo",
+                "결제 승인이 주문의 확정값과 다릅니다 orderId=${id.value} " +
+                    "approved=$checkoutNo/$amount expected=${latest?.checkoutNo}/${latest?.amount}",
                 DomainErrorKind.UNPROCESSABLE,
             )
         }
