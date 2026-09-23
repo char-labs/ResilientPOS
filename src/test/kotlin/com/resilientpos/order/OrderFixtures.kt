@@ -26,8 +26,10 @@ object OrderFixtures {
         terminalId: TerminalId = TerminalId(UUID.randomUUID()),
         clientOrderId: ClientOrderId = ClientOrderId(UUID.randomUUID()),
         currency: Currency = krw,
+        // 합계 3502원은 끝자리가 2라 FakePaymentGateway가 결과를 미확인으로 남긴다. checkout 뒤 결제 리스너가
+        // 비동기로 주문을 PAID로 바꾸지 않게 해서, checkout 직후 상태를 읽는 테스트가 경합에 걸리지 않는다.
         lines: List<OrderCommand.Create.Line> = listOf(
-            OrderCommand.Create.Line("SKU-1", "아메리카노", Money.of("1000", krw), 2),
+            OrderCommand.Create.Line("SKU-1", "아메리카노", Money.of("1001", krw), 2),
             OrderCommand.Create.Line("SKU-2", "카페라떼", Money.of("500", krw), 3),
         ),
     ): OrderCommand.Create =

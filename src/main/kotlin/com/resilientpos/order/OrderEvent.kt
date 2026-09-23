@@ -1,6 +1,7 @@
 package com.resilientpos.order
 
 import com.resilientpos.foundation.DomainEvent
+import com.resilientpos.foundation.Money
 import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.TerminalId
 import java.time.Instant
@@ -21,4 +22,15 @@ data class OrderCreated(
     val storeId: StoreId,
     val terminalId: TerminalId,
     val clientOrderId: ClientOrderId,
+) : OrderEvent
+
+/**
+ * 주문의 checkout 회차가 결제 승인과 대조되어 `PAID`가 됐다는 사실. 받을 쪽(fulfillment)이 없어 `order`에 남는다.
+ */
+data class OrderPaid(
+    override val eventId: UUID,
+    override val occurredAt: Instant,
+    val orderId: OrderId,
+    val checkoutNo: Int,
+    val amount: Money,
 ) : OrderEvent

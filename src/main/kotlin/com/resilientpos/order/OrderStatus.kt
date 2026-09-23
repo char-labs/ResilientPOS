@@ -6,4 +6,7 @@ package com.resilientpos.order
 enum class OrderStatus {
     OPEN,
     CHECKOUT_REQUESTED,
+
+    /** 요청한 checkout 회차의 결제가 승인됐다. */
+    PAID,
 }

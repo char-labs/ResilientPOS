@@ -56,4 +56,18 @@ object OrderCommand {
             val amount: Money,
         )
     }
+
+    /**
+     * 결제 승인을 주문에 반영한다. `OrderCommandFacade.markPaid`의 입력이고 `PaymentApproved`의 값을 그대로 옮긴다.
+     */
+    data class MarkPaid(
+        val orderId: OrderId,
+        val checkoutNo: Int,
+        val amount: Money,
+    ) {
+        data class Result(
+            val orderId: OrderId,
+            val status: OrderStatus,
+        )
+    }
 }

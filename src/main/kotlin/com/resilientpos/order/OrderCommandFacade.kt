@@ -56,4 +56,16 @@ class OrderCommandFacade(
         val checkout = saved.checkouts.last()
         return OrderCommand.RequestCheckout.Result(saved.id, saved.status, checkout.checkoutNo, checkout.amount)
     }
+
+    /** 결제 승인을 확정값과 대조해 `PAID`로 전이한다. 다르면 `PAYMENT_APPROVAL_MISMATCH`로 실패한다. */
+    @Transactional
+    fun markPaid(command: OrderCommand.MarkPaid): OrderCommand.MarkPaid.Result {
+        val order = repository.findByIdForUpdate(command.orderId)
+            ?: throw DomainException(Order.ORDER_NOT_FOUND, "주문을 찾을 수 없습니다", DomainErrorKind.NOT_FOUND)
+
+        val transition = order.markPaid(command.checkoutNo, command.amount, identifierGenerator, clock.instant())
+        val saved = repository.save(transition.aggregate)
+        transition.events.forEach(eventPublisher::publishEvent)
+        return OrderCommand.MarkPaid.Result(saved.id, saved.status)
+    }
 }

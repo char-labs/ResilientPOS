@@ -44,7 +44,7 @@ class OrderRequestCheckoutIntegrationTest(
 ) : PostgresIntegrationTest() {
 
     // OrderFixtures의 기본 line: 1000 x 2 + 500 x 3
-    private val fixtureTotal = Money.of("3500", OrderFixtures.krw)
+    private val fixtureTotal = Money.of("3502", OrderFixtures.krw)
 
     private fun checkoutRowCount(orderId: OrderId): Long =
         jdbcTemplate.queryForObject("select count(*) from t_order_checkout where order_id = ?", Long::class.java, orderId.value) ?: 0L
