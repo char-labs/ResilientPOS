@@ -6,8 +6,7 @@ import com.resilientpos.foundation.IdentifierGenerator
 import com.resilientpos.foundation.Money
 import com.resilientpos.order.CheckoutId
 import com.resilientpos.order.ClientOrderId
-import com.resilientpos.order.CreateOrderCommand
-import com.resilientpos.order.CreateOrderLine
+import com.resilientpos.order.OrderCommand
 import com.resilientpos.order.OrderCreated
 import com.resilientpos.contract.OrderPaymentRequested
 import com.resilientpos.order.OrderStatus
@@ -49,12 +48,12 @@ class OrderTest {
         productName: String = "아메리카노",
         unitPrice: Money = Money.of("1000", krw),
         quantity: Int = 1,
-    ) = CreateOrderLine(productCode, productName, unitPrice, quantity)
+    ) = OrderCommand.Create.Line(productCode, productName, unitPrice, quantity)
 
     private fun createOrderCommand(
         currency: Currency = krw,
-        lines: List<CreateOrderLine> = listOf(orderLine()),
-    ) = CreateOrderCommand(storeId, terminalId, clientOrderId, currency, lines)
+        lines: List<OrderCommand.Create.Line> = listOf(orderLine()),
+    ) = OrderCommand.Create(storeId, terminalId, clientOrderId, currency, lines)
 
     @Test
     fun `유효한 명령으로 OPEN 주문과 OrderCreated를 만든다`() {

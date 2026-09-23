@@ -40,14 +40,14 @@ class OrderCommandFacadeLineLimitTest {
         runCatching(block).exceptionOrNull() as? DomainException
             ?: error("DomainException이 나지 않았다")
 
-    private fun command(lineCount: Int): CreateOrderCommand {
+    private fun command(lineCount: Int): OrderCommand.Create {
         val krw = Currency.getInstance("KRW")
-        return CreateOrderCommand(
+        return OrderCommand.Create(
             storeId = StoreId(UUID.randomUUID()),
             terminalId = TerminalId(UUID.randomUUID()),
             clientOrderId = ClientOrderId(UUID.randomUUID()),
             currency = krw,
-            lines = List(lineCount) { CreateOrderLine("SKU-$it", "상품 $it", Money.of("1000", krw), 1) },
+            lines = List(lineCount) { OrderCommand.Create.Line("SKU-$it", "상품 $it", Money.of("1000", krw), 1) },
         )
     }
 }

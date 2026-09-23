@@ -23,7 +23,7 @@ class OrderCommandFacade(
 ) {
 
     @Transactional
-    fun create(command: CreateOrderCommand): CreateOrderResult {
+    fun create(command: OrderCommand.Create): OrderCommand.Create.Result {
         // 가장 싼 거절을 가장 먼저 한다. line 개수는 command만 보면 알 수 있는데 `Order.create`까지 미루면
         // 조회 문장이 먼저 나가면서 커넥션을 잡는다. Hibernate는 첫 문장에서 커넥션을 얻으므로
         // 여기서 거절하면 상한을 넘는 요청은 커넥션을 아예 건드리지 않는다.
@@ -32,13 +32,13 @@ class OrderCommandFacade(
         val existing = repository.findByClientOrderId(command.terminalId, command.clientOrderId)
         if (existing != null) {
             existing.verifySamePayload(command)
-            return CreateOrderResult(existing.id, existing.status)
+            return OrderCommand.Create.Result(existing.id, existing.status)
         }
 
         val transition = Order.create(command, identifierGenerator, clock.instant())
         val saved = repository.save(transition.aggregate)
         transition.events.forEach(eventPublisher::publishEvent)
-        return CreateOrderResult(saved.id, saved.status)
+        return OrderCommand.Create.Result(saved.id, saved.status)
     }
 
     /**
@@ -46,7 +46,7 @@ class OrderCommandFacade(
      * 이미 요청된 주문이면 도메인이 같은 주문과 빈 이벤트를 돌려주므로 같은 경로로 기존 결과를 돌려준다.
      */
     @Transactional
-    fun requestCheckout(command: RequestCheckoutCommand): RequestCheckoutResult {
+    fun requestCheckout(command: OrderCommand.RequestCheckout): OrderCommand.RequestCheckout.Result {
         val order = repository.findByIdForUpdate(command.orderId)
             ?: throw DomainException(Order.ORDER_NOT_FOUND, "주문을 찾을 수 없습니다", DomainErrorKind.NOT_FOUND)
 
@@ -54,6 +54,6 @@ class OrderCommandFacade(
         val saved = repository.save(transition.aggregate)
         transition.events.forEach(eventPublisher::publishEvent)
         val checkout = saved.checkouts.last()
-        return RequestCheckoutResult(saved.id, saved.status, checkout.checkoutNo, checkout.amount)
+        return OrderCommand.RequestCheckout.Result(saved.id, saved.status, checkout.checkoutNo, checkout.amount)
     }
 }

@@ -4,11 +4,11 @@ import com.resilientpos.foundation.DomainErrorKind
 import com.resilientpos.foundation.DomainException
 import com.resilientpos.foundation.IdentifierGenerator
 import com.resilientpos.foundation.Money
-import com.resilientpos.payment.CreatePaymentAttemptCommand
 import com.resilientpos.contract.PaymentApproved
 import com.resilientpos.payment.PaymentAttemptCreated
 import com.resilientpos.contract.PaymentAttemptKind
 import com.resilientpos.payment.PaymentAttemptStatus
+import com.resilientpos.payment.PaymentCommand
 import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.TerminalId
 import java.time.Instant
@@ -28,7 +28,7 @@ class PaymentAttemptTest {
     private val terminalId = TerminalId(UUID.randomUUID())
     private val now = Instant.parse("2026-09-22T01:00:00Z")
 
-    private fun command(amount: String = "4500", checkoutNo: Int = 1) = CreatePaymentAttemptCommand(
+    private fun command(amount: String = "4500", checkoutNo: Int = 1) = PaymentCommand.CreateAttempt(
         orderId = orderId,
         storeId = storeId,
         terminalId = terminalId,

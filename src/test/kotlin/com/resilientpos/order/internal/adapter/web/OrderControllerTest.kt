@@ -4,9 +4,7 @@ import com.resilientpos.foundation.DomainErrorKind
 import com.resilientpos.foundation.DomainException
 import com.resilientpos.foundation.Money
 import com.resilientpos.order.ClientOrderId
-import com.resilientpos.order.CreateOrderCommand
-import com.resilientpos.order.CreateOrderLine
-import com.resilientpos.order.CreateOrderResult
+import com.resilientpos.order.OrderCommand
 import com.resilientpos.order.OrderCommandFacade
 import com.resilientpos.order.OrderId
 import com.resilientpos.order.OrderStatus
@@ -47,9 +45,9 @@ class OrderControllerTest(
     private lateinit var facade: OrderCommandFacade
 
     @Test
-    fun `유효한 요청은 본문을 CreateOrderCommand로 옮기고 201과 orderId·status를 돌려준다`() {
+    fun `유효한 요청은 본문을 생성 커맨드로 옮기고 201과 orderId·status를 돌려준다`() {
         val orderId = OrderId(UUID.fromString("018f6b1a-0000-7000-8000-000000000001"))
-        given(facade.create(command())).willReturn(CreateOrderResult(orderId, OrderStatus.OPEN))
+        given(facade.create(command())).willReturn(OrderCommand.Create.Result(orderId, OrderStatus.OPEN))
 
         postOrder(requestJson()).andExpect {
             status { isCreated() }
@@ -260,8 +258,8 @@ class OrderControllerTest(
         private val krw: Currency = Currency.getInstance("KRW")
 
         private fun command(
-            lines: List<CreateOrderLine> = listOf(CreateOrderLine("SKU-1", "아메리카노", Money.of("4500", krw), 2)),
-        ) = CreateOrderCommand(
+            lines: List<OrderCommand.Create.Line> = listOf(OrderCommand.Create.Line("SKU-1", "아메리카노", Money.of("4500", krw), 2)),
+        ) = OrderCommand.Create(
             storeId = StoreId(UUID.fromString(STORE_ID)),
             terminalId = TerminalId(UUID.fromString(TERMINAL_ID)),
             clientOrderId = ClientOrderId(UUID.fromString(CLIENT_ORDER_ID)),

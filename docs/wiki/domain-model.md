@@ -25,11 +25,11 @@ Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰�
 | 값 객체 (Value Object) | 식별자가 없고 속성이 같으면 같은 것. 불변 | "두 인스턴스의 모든 속성이 같으면 같은 것인가?" 예면 값 객체 | `Money`, `OrderId`, `TerminalCode`, checkout 확정 금액. Kotlin `data class` + `of`/`from` 팩토리 |
 | 정책 (`*Policy`) | 어느 한 aggregate에 자연스럽게 속하지 않는 계산·판정을 가진 불변 값 객체. 상태가 없고 입력 → 출력만 있다 | 규칙이 두 aggregate 사이에 있거나 매장·버전별로 바뀌면 Policy | `CheckoutPolicy`(통화 scale·반올림·합계), store가 소유하는 판매 정책. DDD 표준 용어로는 도메인 서비스의 한 형태다 |
 | 도메인 서비스 (`*Service`) | 한 bounded context 안의 비즈니스 행위를 표현하는 객체 | 규칙이 어느 aggregate에도 자연스럽게 속하지 않을 때만 만든다. 책임 경계는 [README](../../README.md#engineering-principles) | `CheckoutService.request(order, policy)` |
-| 애플리케이션 서비스 (`*Facade`) | use case 하나를 대표하는 진입점 | 호출자(Controller·이벤트 리스너·스케줄러)가 누구든 같은 use case면 같은 Facade다. 책임과 금지 사항은 [README](../../README.md#engineering-principles) | `OrderCommandFacade.create(CreateOrderCommand): CreateOrderResult`, `OrderQueryFacade.find(FindOrdersQuery)` |
-| 명령 / 조회 / 결과 / 뷰 | 쓰기 의도(`*Command`)와 그 결과(`*Result`), 읽기 의도(`*Query`/`*Criteria`)와 그 투영(`*View`). 규약은 [README](../../README.md#engineering-principles) | 상태를 바꾸면 Command, 바꾸지 않으면 Query. Command는 Facade의 공개 입력이라 aggregate 안에 중첩하지 않는다 | `CreateOrderCommand → CreateOrderResult`, `FindOrdersQuery(OrderSearchCriteria) → OrderSummaryView`. 전체 카탈로그는 [청사진 §4](../references/05_Domain_Development_Blueprint.md) |
+| 애플리케이션 서비스 (`*Facade`) | use case 하나를 대표하는 진입점 | 호출자(Controller·이벤트 리스너·스케줄러)가 누구든 같은 use case면 같은 Facade다. 책임과 금지 사항은 [README](../../README.md#engineering-principles) | `OrderCommandFacade.create(OrderCommand.Create): OrderCommand.Create.Result`, `OrderQueryFacade.find(FindOrdersQuery)` |
+| 명령 / 조회 / 결과 / 뷰 | 쓰기 의도(`OrderCommand.Create`)와 그 결과(`OrderCommand.Create.Result`), 읽기 의도(`*Query`/`*Criteria`)와 그 투영(`*View`). 규약은 [README](../../README.md#engineering-principles) | 상태를 바꾸면 Command, 바꾸지 않으면 Query. 커맨드는 모듈 이름공간 `object`(`OrderCommand`) 아래 use case별 `data class`로 두고, 입력 조각(`Line`)과 결과(`Result`)는 그 커맨드 안에 둔다. Facade의 공개 입력이라 aggregate 안에 중첩하지 않는다. 중첩 타입은 따로 import하지 않고 `OrderCommand.Create.Result`처럼 이름공간부터 쓴다 | `OrderCommand.Create → OrderCommand.Create.Result`, `FindOrdersQuery(OrderSearchCriteria) → OrderSummaryView`. 전체 카탈로그는 [청사진 §4](../references/05_Domain_Development_Blueprint.md) |
 | 도메인 이벤트 (Domain Event) | 이미 일어난 한 가지 사실. 불변이고 과거형이다 | aggregate가 상태 전이의 결과로 만들고, Facade가 커밋 안에서 발행하고, Event Publication Registry가 전달한다 | `OrderPaymentRequested`, `PaymentApproved`, `PaymentUnknown`, `SyncGapDetected`, `KitchenTicketCreated`. `OrderCompleted`처럼 여러 사실을 뭉친 이름은 쓰지 않는다 |
 | 리포지토리 (Repository) | aggregate 단위로 읽고 저장하는 port | aggregate 전체를 다루면 Repository, 화면용 투영을 만들면 Query repository(§4.2) | `OrderRepository.findById(OrderId): Order?`, `save(Order)` |
-| 공개 API (module public surface) | 다른 모듈이 import할 수 있는 것. Facade·ID 값 타입·이벤트만 | `internal` 패키지 아래는 비공개. Modulith 검증이 위반을 빌드 실패로 만든다. 모듈을 건너가는 이벤트만 예외로 `contract`가 소유한다(§4.4) | `payment/PaymentManagement.kt`, `PaymentId.kt`, `PaymentAttemptCreated.kt`처럼 모듈 루트(§4.4) |
+| 공개 API (module public surface) | 다른 모듈이 import할 수 있는 것. Facade·커맨드 이름공간·ID 값 타입·이벤트만 | `internal` 패키지 아래는 비공개. Modulith 검증이 위반을 빌드 실패로 만든다. 모듈을 건너가는 이벤트만 예외로 `contract`가 소유한다(§4.4) | `payment/PaymentManagement.kt`, `PaymentId.kt`, `PaymentAttemptCreated.kt`처럼 모듈 루트(§4.4) |
 
 ## 2. Bounded context 요약
 
@@ -133,7 +133,7 @@ Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰�
 - 금액은 `NUMERIC(19,4)` + 통화 코드 컬럼, 식별자는 PostgreSQL native `uuid`다([개발 가이드 §3.1·§3.2](../references/03_Development_Guide.md)). 테이블 이름은 `t_` + 단수 명사(`t_order`, `t_payment_attempt`)다.
 
 ### 4.4 공개 타입은 모듈 루트에 둔다
-- Facade, `*Command`/`*Result`, `*Query`/`*Criteria`/`*View`, 도메인 이벤트, ID 값 타입은 모듈 기본 패키지(`com.resilientpos.order`)에 두고, 그 밖은 전부 `internal/` 아래다.
+- Facade, 커맨드 이름공간(`OrderCommand`), `*Query`/`*Criteria`/`*View`, 도메인 이벤트, ID 값 타입은 모듈 기본 패키지(`com.resilientpos.order`)에 두고, 그 밖은 전부 `internal/` 아래다.
 - **예외는 모듈을 건너가는 이벤트다.** 소유 모듈에 두면 보내는 쪽과 받는 쪽이 서로를 의존해 순환이 된다. 그런 이벤트와 그 payload는 `com.resilientpos.contract`가 소유하고, 양쪽이 그 모듈을 함께 의존한다. 소비자가 없는 이벤트는 소유 모듈에 남는다 — 경계를 넘는 것만 옮긴다([contract-module-for-cross-module-events](../spec/2026-09-22-contract-module-for-cross-module-events.md)). Facade는 인터페이스를 따로 두지 않는 구체 클래스(`class OrderCommandFacade`)다. 구현이 둘이 될 때 인터페이스를 뽑는다. [ADR-002](../references/01_ResilientPOS_PRD_Backend_Requirements.md)를 따르고 [청사진 §6.1](../references/05_Domain_Development_Blueprint.md)의 `api/` 하위 패키지는 쓰지 않는다.
 - 근거: Spring Modulith는 모듈 기본 패키지만 공개로 보므로 애너테이션 없이 지금의 `ModuleStructureTest`가 그대로 경계를 지킨다. `api/`를 쓰려면 모듈마다 `@NamedInterface`가 필요하다.
 - 다시 볼 조건: 한 모듈의 루트 파일이 20개를 넘거나 공개 surface를 `api`/`events`처럼 나눠 의존을 허용해야 할 때 `@NamedInterface`로 옮긴다. 그때도 패키지 이름만 바뀌는 파일 이동이다.
@@ -190,16 +190,16 @@ Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰�
 
 ## 5. 레이어 경계를 넘는 타입
 
-접미사만 보고 어느 레이어의 객체인지 읽혀야 한다. 표의 타입 이름은 §1과 같이 목표 모델이다.
+접미사나 바깥 이름공간(`OrderCommand.`)만 보고 어느 레이어의 객체인지 읽혀야 한다. 표의 타입 이름은 §1과 같이 목표 모델이다.
 
 | 경계 | 넘어가는 타입 | 넘어가지 않는 것 |
 |---|---|---|
 | HTTP ↔ Controller | `*Request` / `*Response` | Command, aggregate |
-| Controller·이벤트 리스너·스케줄러 ↔ Facade | `*Command`, `*Query`/`*Criteria` → `*Result`, `*View` | Request DTO, JPA 엔티티 |
-| Facade ↔ Service·aggregate | `*Command`, aggregate, Value Object, `*Policy`, `Transition`(`foundation`, §4.5) | `*Request`/`*Response`, `*View` |
+| Controller·이벤트 리스너·스케줄러 ↔ Facade | `OrderCommand.*`, `*Query`/`*Criteria` → `OrderCommand.*.Result`, `*View` | Request DTO, JPA 엔티티 |
+| Facade ↔ Service·aggregate | `OrderCommand.*`, aggregate, Value Object, `*Policy`, `Transition`(`foundation`, §4.5) | `*Request`/`*Response`, `*View` |
 | Facade ↔ Repository | aggregate, ID 값 타입 | Spring Data 타입, JPA 엔티티 |
 | Repository 구현 ↔ JPA | `*Entity` — adapter 안에서만 | — |
-| 모듈 ↔ 모듈 | 공개 Facade의 `*Command`/`*Result`와 `*Query`/`*Criteria`/`*View`, 도메인 이벤트, ID 값 타입 | `internal` 아래 전부, 테이블 |
+| 모듈 ↔ 모듈 | 공개 Facade의 커맨드 이름공간(`OrderCommand.*`와 그 `Result`)과 `*Query`/`*Criteria`/`*View`, 도메인 이벤트, ID 값 타입 | `internal` 아래 전부, 테이블 |
 
 ## 6. 도식 규약
 

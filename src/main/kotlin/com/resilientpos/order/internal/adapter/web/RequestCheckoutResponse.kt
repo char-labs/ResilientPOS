@@ -1,7 +1,7 @@
 package com.resilientpos.order.internal.adapter.web
 
+import com.resilientpos.order.OrderCommand
 import com.resilientpos.order.OrderStatus
-import com.resilientpos.order.RequestCheckoutResult
 import java.util.UUID
 
 /**
@@ -15,7 +15,7 @@ data class RequestCheckoutResponse(
     val currency: String,
 ) {
     companion object {
-        fun from(result: RequestCheckoutResult) = RequestCheckoutResponse(
+        fun from(result: OrderCommand.RequestCheckout.Result) = RequestCheckoutResponse(
             orderId = result.orderId.value,
             status = result.status,
             checkoutNo = result.checkoutNo,

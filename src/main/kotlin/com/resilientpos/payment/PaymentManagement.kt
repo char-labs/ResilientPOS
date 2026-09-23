@@ -42,19 +42,19 @@ class PaymentManagement(
      * 커밋에서 실패한다(`persist`가 flush를 미룬다).
      */
     @Transactional
-    fun createAttempt(command: CreatePaymentAttemptCommand): CreatePaymentAttemptResult {
+    fun createAttempt(command: PaymentCommand.CreateAttempt): PaymentCommand.CreateAttempt.Result {
         // ponytail: 같은 사실이 동시에 두 번 오면 둘 다 "없음"을 읽고, 앞 시도가 거절된 뒤 뒤쪽이 새 시도를 넣을 수 있다
         // (partial unique는 DECLINED를 빼고 본다). 지금은 재발행이 꺼져 동시 배달이 없다. 재발행·Kafka·sync 경로가
         // 생기면 (orderId, checkoutNo)에 pg_advisory_xact_lock을 걸어 조회부터 삽입까지 직렬화한다.
         val existing = repository.findAuthorization(command.orderId, command.checkoutNo)
         if (existing != null) {
-            return CreatePaymentAttemptResult(existing.id, existing.status)
+            return PaymentCommand.CreateAttempt.Result(existing.id, existing.status)
         }
 
         val transition = PaymentAttempt.create(command, identifierGenerator, clock.instant())
         val saved = repository.save(transition.aggregate)
         transition.events.forEach(eventPublisher::publishEvent)
-        return CreatePaymentAttemptResult(saved.id, saved.status)
+        return PaymentCommand.CreateAttempt.Result(saved.id, saved.status)
     }
 
     /**
@@ -67,10 +67,10 @@ class PaymentManagement(
      * 결말이 난 시도면 provider를 부르지 않는다(0원·재배달). 이중 청구 방어는 provider의 `PaymentId` 멱등성이다.
      */
     @Transactional(propagation = Propagation.NEVER)
-    fun authorize(command: AuthorizePaymentCommand): AuthorizePaymentResult {
+    fun authorize(command: PaymentCommand.Authorize): PaymentCommand.Authorize.Result {
         val attempt = repository.findById(command.paymentId) ?: throw attemptNotFound()
         if (attempt.status != PaymentAttemptStatus.REQUESTED) {
-            return AuthorizePaymentResult(attempt.id, attempt.status)
+            return PaymentCommand.Authorize.Result(attempt.id, attempt.status)
         }
 
         val outcome = gateway.authorize(AuthorizationRequest(attempt.id, attempt.amount))
@@ -79,17 +79,17 @@ class PaymentManagement(
     }
 
     /** 잠그고 다시 읽는다. 호출하는 동안 다른 `authorize`가 먼저 적용했으면 덮지 않고 그 결말을 돌려준다. */
-    private fun applyOutcome(paymentId: PaymentId, outcome: AuthorizationOutcome): AuthorizePaymentResult {
+    private fun applyOutcome(paymentId: PaymentId, outcome: AuthorizationOutcome): PaymentCommand.Authorize.Result {
         val current = repository.findByIdForUpdate(paymentId) ?: throw attemptNotFound()
         if (current.status != PaymentAttemptStatus.REQUESTED) {
-            return AuthorizePaymentResult(current.id, current.status)
+            return PaymentCommand.Authorize.Result(current.id, current.status)
         }
 
         val transition = current.applyAuthorization(outcome, identifierGenerator, clock.instant())
         val applied = repository.update(transition.aggregate)
         // 발행 기록이 결과와 같은 커밋에 들어가야 하므로 이 트랜잭션 안에서 발행한다(도메인 모델 §4.3).
         transition.events.forEach(eventPublisher::publishEvent)
-        return AuthorizePaymentResult(applied.id, applied.status)
+        return PaymentCommand.Authorize.Result(applied.id, applied.status)
     }
 
     private fun attemptNotFound() = DomainException(

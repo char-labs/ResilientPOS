@@ -3,11 +3,10 @@ package com.resilientpos.order.internal.adapter.web
 import com.resilientpos.foundation.DomainErrorKind
 import com.resilientpos.foundation.DomainException
 import com.resilientpos.foundation.Money
+import com.resilientpos.order.OrderCommand
 import com.resilientpos.order.OrderCommandFacade
 import com.resilientpos.order.OrderId
 import com.resilientpos.order.OrderStatus
-import com.resilientpos.order.RequestCheckoutCommand
-import com.resilientpos.order.RequestCheckoutResult
 import java.util.Currency
 import java.util.UUID
 import kotlin.test.Test
@@ -49,9 +48,9 @@ class OrderCheckoutControllerTest(
         mockMvc.perform(post("/v1/orders/{orderId}/checkout", orderId))
 
     @Test
-    fun `경로의 orderId를 RequestCheckoutCommand로 옮기고 200과 확정 금액을 돌려준다`() {
+    fun `경로의 orderId를 결제 요청 커맨드로 옮기고 200과 확정 금액을 돌려준다`() {
         given(facade.requestCheckout(COMMAND))
-            .willReturn(RequestCheckoutResult(COMMAND.orderId, OrderStatus.CHECKOUT_REQUESTED, 1, Money.of("9000", krw)))
+            .willReturn(OrderCommand.RequestCheckout.Result(COMMAND.orderId, OrderStatus.CHECKOUT_REQUESTED, 1, Money.of("9000", krw)))
 
         requestCheckout(ORDER_ID)
             .andExpect(status().isOk)
@@ -85,7 +84,7 @@ class OrderCheckoutControllerTest(
     fun `소수 자리가 있는 통화의 금액은 통화 자릿수 그대로 나간다`() {
         val usd = Currency.getInstance("USD")
         given(facade.requestCheckout(COMMAND))
-            .willReturn(RequestCheckoutResult(COMMAND.orderId, OrderStatus.CHECKOUT_REQUESTED, 1, Money.of("30.30", usd)))
+            .willReturn(OrderCommand.RequestCheckout.Result(COMMAND.orderId, OrderStatus.CHECKOUT_REQUESTED, 1, Money.of("30.30", usd)))
 
         requestCheckout(ORDER_ID)
             .andExpect(status().isOk)
@@ -141,7 +140,7 @@ class OrderCheckoutControllerTest(
 
     companion object {
         private const val ORDER_ID = "00000000-0000-0000-0000-0000000000a1"
-        private val COMMAND = RequestCheckoutCommand(OrderId(UUID.fromString(ORDER_ID)))
+        private val COMMAND = OrderCommand.RequestCheckout(OrderId(UUID.fromString(ORDER_ID)))
         private val krw: Currency = Currency.getInstance("KRW")
 
         private val PATH_PARAMETERS = pathParameters(parameterWithName("orderId").description("checkout을 요청할 주문 ID(UUID)"))

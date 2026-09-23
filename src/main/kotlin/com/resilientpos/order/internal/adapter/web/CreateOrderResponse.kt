@@ -1,6 +1,6 @@
 package com.resilientpos.order.internal.adapter.web
 
-import com.resilientpos.order.CreateOrderResult
+import com.resilientpos.order.OrderCommand
 import com.resilientpos.order.OrderStatus
 import java.util.UUID
 
@@ -12,6 +12,6 @@ data class CreateOrderResponse(
     val status: OrderStatus,
 ) {
     companion object {
-        fun from(result: CreateOrderResult) = CreateOrderResponse(result.orderId.value, result.status)
+        fun from(result: OrderCommand.Create.Result) = CreateOrderResponse(result.orderId.value, result.status)
     }
 }

@@ -3,7 +3,7 @@ package com.resilientpos.payment.internal.adapter.persistence.command
 import com.resilientpos.PostgresIntegrationTest
 import com.resilientpos.foundation.IdentifierGenerator
 import com.resilientpos.foundation.Money
-import com.resilientpos.payment.CreatePaymentAttemptCommand
+import com.resilientpos.payment.PaymentCommand
 import com.resilientpos.payment.internal.domain.PaymentAttempt
 import com.resilientpos.payment.internal.domain.PaymentAttemptRepository
 import com.resilientpos.store.StoreId
@@ -58,7 +58,7 @@ class PaymentAttemptInsertStatementCountIntegrationTest(
     @Test
     fun `새 시도 저장은 INSERT 한 번으로 끝난다`() {
         val attempt = PaymentAttempt.create(
-            CreatePaymentAttemptCommand(
+            PaymentCommand.CreateAttempt(
                 orderId = UUID.randomUUID(),
                 storeId = StoreId(UUID.randomUUID()),
                 terminalId = TerminalId(UUID.randomUUID()),

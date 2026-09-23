@@ -93,8 +93,8 @@ Controller는 MockMvc와 Spring REST Docs로 HTTP 계약을 검증하며, fixtur
   - Aggregate / Value Object / Policy: 상태 전이·불변식·금액 계산·검증 소유
   - Service: 도메인 객체 조율만 담당 (DTO 가공/규칙 중복 금지)
 - **CQRS 규약**:
-  - 쓰기: `*Command -> *Result`
-  - 읽기: `*Query`/`*Criteria -> *View`
+  - 쓰기: 모듈 이름공간 아래 use case별 커맨드와 그 안의 결과 (`OrderCommand.Create -> OrderCommand.Create.Result`)
+  - 읽기: `*Query`/`*Criteria -> *View` (쓰기와 같은 모양을 따를지는 첫 조회 PR에서 정한다)
   - 저장소: JPA는 aggregate write, Kotlin JDSL은 DTO projection read
 - **데이터 정본 원칙**:
   - 주문/결제 정합성 정본: PostgreSQL

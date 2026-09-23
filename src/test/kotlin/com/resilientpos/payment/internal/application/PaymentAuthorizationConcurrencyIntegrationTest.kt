@@ -1,8 +1,7 @@
 package com.resilientpos.payment.internal.application
 
 import com.resilientpos.PostgresIntegrationTest
-import com.resilientpos.payment.AuthorizePaymentCommand
-import com.resilientpos.payment.AuthorizePaymentResult
+import com.resilientpos.payment.PaymentCommand
 import com.resilientpos.payment.PaymentId
 import com.resilientpos.payment.PaymentManagement
 import com.resilientpos.payment.internal.domain.AuthorizationOutcome
@@ -79,8 +78,8 @@ class PaymentAuthorizationConcurrencyIntegrationTest(
         val paymentId = insertRequestedAttempt()
         val executor = Executors.newFixedThreadPool(2)
 
-        val results: List<AuthorizePaymentResult> = try {
-            List(2) { executor.submit<AuthorizePaymentResult> { paymentManagement.authorize(AuthorizePaymentCommand(paymentId)) } }
+        val results: List<PaymentCommand.Authorize.Result> = try {
+            List(2) { executor.submit<PaymentCommand.Authorize.Result> { paymentManagement.authorize(PaymentCommand.Authorize(paymentId)) } }
                 .map { it.get(15, TimeUnit.SECONDS) }
         } finally {
             executor.shutdownNow()
