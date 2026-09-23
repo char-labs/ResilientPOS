@@ -29,7 +29,7 @@ Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰�
 | 명령 / 조회 / 결과 / 뷰 | 쓰기 의도(`OrderCommand.Create`)와 그 결과(`OrderCommand.Create.Result`), 읽기 의도(`*Query`/`*Criteria`)와 그 투영(`*View`). 규약은 [README](../../README.md#engineering-principles) | 상태를 바꾸면 Command, 바꾸지 않으면 Query. 커맨드는 모듈 이름공간 `object`(`OrderCommand`) 아래 use case별 `data class`로 두고, 입력 조각(`Line`)과 결과(`Result`)는 그 커맨드 안에 둔다. Facade의 공개 입력이라 aggregate 안에 중첩하지 않는다. 중첩 타입은 따로 import하지 않고 `OrderCommand.Create.Result`처럼 이름공간부터 쓴다 | `OrderCommand.Create → OrderCommand.Create.Result`, `FindOrdersQuery(OrderSearchCriteria) → OrderSummaryView`. 전체 카탈로그는 [청사진 §4](../references/05_Domain_Development_Blueprint.md) |
 | 도메인 이벤트 (Domain Event) | 이미 일어난 한 가지 사실. 불변이고 과거형이다 | aggregate가 상태 전이의 결과로 만들고, Facade가 커밋 안에서 발행하고, Event Publication Registry가 전달한다 | `OrderPaymentRequested`, `PaymentApproved`, `PaymentUnknown`, `SyncGapDetected`, `KitchenTicketCreated`. `OrderCompleted`처럼 여러 사실을 뭉친 이름은 쓰지 않는다 |
 | 리포지토리 (Repository) | aggregate 단위로 읽고 저장하는 port | aggregate 전체를 다루면 Repository, 화면용 투영을 만들면 Query repository(§4.2) | `OrderRepository.findById(OrderId): Order?`, `save(Order)` |
-| 공개 API (module public surface) | 다른 모듈이 import할 수 있는 것. Facade·커맨드 이름공간·ID 값 타입·이벤트만 | `internal` 패키지 아래는 비공개. Modulith 검증이 위반을 빌드 실패로 만든다. 모듈을 건너가는 이벤트만 예외로 `contract`가 소유한다(§4.4) | `payment/PaymentManagement.kt`, `PaymentId.kt`, `PaymentAttemptCreated.kt`처럼 모듈 루트(§4.4) |
+| 공개 API (module public surface) | 다른 모듈이 import할 수 있는 것. Facade·커맨드 이름공간·ID 값 타입·이벤트만 | `internal` 패키지 아래는 비공개. Modulith 검증이 위반을 빌드 실패로 만든다. 모듈을 건너가는 이벤트만 예외로 `contract`가 소유한다(§4.4) | `payment/PaymentManagement.kt`, `PaymentId.kt`, `PaymentEvent.kt`처럼 모듈 루트(§4.4) |
 
 ## 2. Bounded context 요약
 
@@ -48,7 +48,7 @@ Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰�
 컨텍스트 사이의 소유 규칙:
 - `payment`만 결제 정본 상태를 바꾼다. `reconciliation`은 case와 근거를 소유하고 결론을 `PaymentManagement.resolveFromReconciliation(command)` 같은 좁은 공개 command로 요청한다.
 - `order`와 `payment`는 서로의 테이블·엔티티·repository를 읽거나 쓰지 않는다. 사실은 이벤트로 건너간다(`OrderPaymentRequested` → payment, `PaymentApproved` → order·reconciliation, `OrderPaid` → fulfillment).
-- **결제 결말 셋 중 `PaymentApproved`만 `contract`에 있다.** 그것만 경계를 넘기 때문이다. `PaymentDeclined`·`PaymentUnknown`은 받을 쪽이 아직 없어 `payment`의 sealed 계층에 남는다(§4.4). 소비자가 생기는 PR이 옮기고, 그 이동은 `event_publication`의 `event_type`을 바꾸므로 배포된 행이 있는지부터 본다.
+- **결제 결말 셋 중 `PaymentApproved`만 `contract`에 있다.** 그것만 경계를 넘기 때문이다. `PaymentEvent.Declined`·`PaymentEvent.Unknown`은 받을 쪽이 아직 없어 `payment`의 sealed 계층에 남는다(§4.4). 소비자가 생기는 PR이 옮기고, 그 이동은 `event_publication`의 `event_type`을 바꾸므로 배포된 행이 있는지부터 본다.
 - **모듈을 건너가는 이벤트는 `contract` 모듈이 소유한다.** 두 모듈이 서로의 사실을 주고받으면 타입 의존이 양방향이 되어 Modulith의 순환 검사에 걸린다. 양쪽이 함께 의존하는 곳에 그 사실을 둔다. `contract`는 bounded context가 아니다 — 업무 규칙도 상태도 없고 계약만 있다. **다른 업무 모듈의 타입을 들지 않는다**(식별자를 raw `UUID`로 든다). 들면 그 방향으로 간선이 생겨 순환이 되돌아온다. 소비자가 없는 이벤트는 소유 모듈에 남는다 — 경계를 넘는 것만 공유한다.
 - `order`는 합계가 0원인 주문도 똑같이 checkout을 확정하고 `OrderPaymentRequested`를 낸다. 전액 할인·프로모션 주문이 거절되지 않고 주문·결제·영수증 조회가 같은 경로로 보이게 하려는 것이다. `payment`는 0원 attempt를 provider 호출 없이 승인으로 기록하고 `PaymentApproved`를 내야 한다.
 - `sync`는 접수·중복·순서만 판정하고, 받아들인 명령은 소유 컨텍스트의 Command Facade로 넘긴다. `SyncOperationApplied`는 기술 감사 이벤트이며 `OrderCreated`를 대체하지 않는다.
@@ -140,7 +140,7 @@ Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰�
 
 ### 4.5 `Transition`과 `DomainEvent`는 `foundation`에 둔다
 - `data class Transition<A, E : DomainEvent>(val aggregate: A, val events: List<E>)`와 `interface DomainEvent { val eventId: UUID; val occurredAt: Instant }`를 `Money` 옆에 둔다. 둘 다 프레임워크 의존이 없어 `DependencyDirectionTest`의 `foundation` 규칙 안에 있다.
-- `eventId`는 소비자 멱등성 기록 `(consumer, eventId)`([개발 가이드 §4.2](../references/03_Development_Guide.md))의 키다. 모듈 안에만 머무는 이벤트는 `sealed interface OrderEvent : DomainEvent`처럼 닫아 `when` 누락을 컴파일러가 잡게 한다.
+- `eventId`는 소비자 멱등성 기록 `(consumer, eventId)`([개발 가이드 §4.2](../references/03_Development_Guide.md))의 키다. 모듈 안에만 머무는 이벤트는 `sealed interface OrderEvent : DomainEvent`처럼 닫아 `when` 누락을 컴파일러가 잡게 하고, 커맨드처럼 **그 안에 중첩한다**(`OrderEvent.Created`, `PaymentEvent.AttemptCreated`). 이 문서의 사실 이름 `OrderCreated`는 코드에서 `OrderEvent.Created`다. 중첩 클래스의 JVM 이름은 `$`로 이어져 `event_type`에 `com.resilientpos.order.OrderEvent$Created`로 저장된다.
 - **§4.4의 `contract` 이벤트는 닫힌 계층에 들어가지 않는다.** 선택이 아니라 언어 제약이다. Kotlin은 sealed 타입의 구현을 같은 패키지로 제한해서(`A class can only extend a sealed class or interface declared in the same package.` — 실제로 컴파일해 확인했다) 다른 패키지로 옮긴 이벤트는 `OrderEvent`·`PaymentEvent`를 구현할 수 없다. `DomainEvent`를 직접 구현하고, 그래서 한 aggregate가 두 종류를 내므로 `Transition`의 이벤트 타입 인자가 `DomainEvent`까지 넓어진다. 잃는 것은 그 이벤트들에 대한 `when` 누락 검사인데, 지금 그 닫힘을 쓰는 `when`이 코드에 하나도 없다.
 - 이것은 §2의 "업무 개념을 두지 않는다"에 어긋나지 않는다. 주문·결제를 모르는 모델링 원시 타입이며, 모듈마다 복제하면 이벤트 공통 필드를 강제할 수 없다. 처음 필요한 도메인 PR에서 추가한다.
 

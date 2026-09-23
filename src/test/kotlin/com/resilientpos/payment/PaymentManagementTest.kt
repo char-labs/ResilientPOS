@@ -95,7 +95,7 @@ class PaymentManagementTest {
 
         val result = management(RecordingRepository(), publisher).createAttempt(command("4500"))
 
-        val created = publisher.published.single() as PaymentAttemptCreated
+        val created = publisher.published.single() as PaymentEvent.AttemptCreated
         assertEquals(result.paymentId, created.paymentId)
         assertEquals(orderId, created.orderId)
         assertEquals(1, created.checkoutNo)
@@ -111,7 +111,7 @@ class PaymentManagementTest {
         val result = management(RecordingRepository(), publisher).createAttempt(command("0"))
 
         assertEquals(2, publisher.published.size)
-        assertTrue(publisher.published[0] is PaymentAttemptCreated)
+        assertTrue(publisher.published[0] is PaymentEvent.AttemptCreated)
         val approved = publisher.published[1] as PaymentApproved
         assertEquals(result.paymentId.value, approved.paymentId)
         assertEquals(PaymentAttemptKind.AUTHORIZATION, approved.kind)
@@ -162,7 +162,7 @@ class PaymentManagementTest {
         val result = management.authorize(PaymentCommand.Authorize(created.paymentId))
 
         assertEquals(PaymentAttemptStatus.DECLINED, result.status)
-        val declined = publisher.published.single() as PaymentDeclined
+        val declined = publisher.published.single() as PaymentEvent.Declined
         assertEquals(created.paymentId, declined.paymentId)
     }
 

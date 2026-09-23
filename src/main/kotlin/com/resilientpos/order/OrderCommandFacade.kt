@@ -11,8 +11,8 @@ import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 
 /**
- * 주문 생성 use case의 진입점. 인터페이스를 따로 두지 않는 구체 클래스다. `@Transactional`을 소유하고
- * 조회 → `Order.create` → 저장 → 이벤트 발행 → 결과 변환 순서로 진행한다.
+ * 주문 명령 use case(생성·checkout 요청·결제 반영)의 진입점. 인터페이스를 따로 두지 않는 구체 클래스다.
+ * `@Transactional`을 소유하고 조회 → 도메인 전이 → 저장 → 이벤트 발행 → 결과 변환 순서로 진행한다.
  */
 @Service
 class OrderCommandFacade(
@@ -55,5 +55,17 @@ class OrderCommandFacade(
         transition.events.forEach(eventPublisher::publishEvent)
         val checkout = saved.checkouts.last()
         return OrderCommand.RequestCheckout.Result(saved.id, saved.status, checkout.checkoutNo, checkout.amount)
+    }
+
+    /** 결제 승인을 확정값과 대조해 `PAID`로 전이한다. 다르면 `PAYMENT_APPROVAL_MISMATCH`로 실패한다. */
+    @Transactional
+    fun markPaid(command: OrderCommand.MarkPaid): OrderCommand.MarkPaid.Result {
+        val order = repository.findByIdForUpdate(command.orderId)
+            ?: throw DomainException(Order.ORDER_NOT_FOUND, "주문을 찾을 수 없습니다", DomainErrorKind.NOT_FOUND)
+
+        val transition = order.markPaid(command.checkoutNo, command.amount, identifierGenerator, clock.instant())
+        val saved = repository.save(transition.aggregate)
+        transition.events.forEach(eventPublisher::publishEvent)
+        return OrderCommand.MarkPaid.Result(saved.id, saved.status)
     }
 }

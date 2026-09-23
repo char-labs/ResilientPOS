@@ -4,7 +4,7 @@ import com.resilientpos.PostgresIntegrationTest
 import com.resilientpos.foundation.Money
 import com.resilientpos.order.OrderCommand
 import com.resilientpos.order.OrderCommandFacade
-import com.resilientpos.order.OrderCreated
+import com.resilientpos.order.OrderEvent
 import com.resilientpos.order.OrderFixtures
 import com.resilientpos.order.OrderId
 import com.resilientpos.contract.OrderPaymentRequested
@@ -36,7 +36,7 @@ import org.springframework.transaction.support.TransactionTemplate
 
 /**
  * Event Publication Registry가 이 저장소의 구성(PostgreSQL, Flyway 스키마, JPA validate, Jackson)에서 동작하는지 검사한다.
- * 프로덕션 리스너가 아직 없어서 이 클래스의 컨텍스트에만 테스트용 리스너를 넣는다. Docker가 필요하다.
+ * 리스너의 성공·실패를 조종하려고 이 클래스의 컨텍스트에만 테스트용 리스너를 넣는다. Docker가 필요하다.
  */
 @Import(OrderEventPublicationIntegrationTest.ListenerConfiguration::class)
 @RecordApplicationEvents
@@ -163,8 +163,8 @@ class OrderEventPublicationIntegrationTest(
 
         assertEquals(published, restored)
 
-        val created = events.stream(OrderCreated::class.java).filter { it.orderId == orderId }.findFirst().orElseThrow()
-        assertEquals(created, eventSerializer.deserialize(eventSerializer.serialize(created), OrderCreated::class.java))
+        val created = events.stream(OrderEvent.Created::class.java).filter { it.orderId == orderId }.findFirst().orElseThrow()
+        assertEquals(created, eventSerializer.deserialize(eventSerializer.serialize(created), OrderEvent.Created::class.java))
     }
 
     @Test
@@ -206,7 +206,7 @@ class OrderEventPublicationIntegrationTest(
     fun `받는 리스너가 없는 이벤트는 기록되지 않는다`(events: ApplicationEvents) {
         val orderId = facade.create(OrderFixtures.createOrderCommand()).orderId
 
-        assertEquals(1L, events.stream(OrderCreated::class.java).filter { it.orderId == orderId }.count())
+        assertEquals(1L, events.stream(OrderEvent.Created::class.java).filter { it.orderId == orderId }.count())
         assertEquals(emptyList(), publications(orderId))
     }
 }

@@ -8,8 +8,7 @@ import com.resilientpos.foundation.IdentifierGenerator
 import com.resilientpos.foundation.Money
 import com.resilientpos.payment.PaymentAttemptStatus
 import com.resilientpos.payment.PaymentCommand
-import com.resilientpos.payment.PaymentDeclined
-import com.resilientpos.payment.PaymentUnknown
+import com.resilientpos.payment.PaymentEvent
 import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.TerminalId
 import java.time.Instant
@@ -82,7 +81,7 @@ class PaymentAttemptAuthorizationTest {
 
         assertEquals(PaymentAttemptStatus.DECLINED, transition.aggregate.status)
         assertEquals("PROVIDER-REF-2", transition.aggregate.providerReference)
-        val declined = assertIs<PaymentDeclined>(transition.events.single())
+        val declined = assertIs<PaymentEvent.Declined>(transition.events.single())
         assertEquals(attempt.id, declined.paymentId)
         assertEquals("PROVIDER-REF-2", declined.providerReference)
     }
@@ -96,7 +95,7 @@ class PaymentAttemptAuthorizationTest {
         assertEquals(PaymentAttemptStatus.UNKNOWN, transition.aggregate.status)
         // provider가 무엇을 했는지 모르는 상태다. 참조를 지어내면 그 참조가 거짓이 된다.
         assertNull(transition.aggregate.providerReference)
-        val unknown = assertIs<PaymentUnknown>(transition.events.single())
+        val unknown = assertIs<PaymentEvent.Unknown>(transition.events.single())
         assertEquals(attempt.id, unknown.paymentId)
     }
 

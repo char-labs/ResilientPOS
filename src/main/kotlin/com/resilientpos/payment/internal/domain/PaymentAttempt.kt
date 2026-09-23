@@ -8,12 +8,10 @@ import com.resilientpos.foundation.DomainException
 import com.resilientpos.foundation.IdentifierGenerator
 import com.resilientpos.foundation.Money
 import com.resilientpos.foundation.Transition
-import com.resilientpos.payment.PaymentAttemptCreated
+import com.resilientpos.payment.PaymentEvent
 import com.resilientpos.payment.PaymentAttemptStatus
 import com.resilientpos.payment.PaymentCommand
-import com.resilientpos.payment.PaymentDeclined
 import com.resilientpos.payment.PaymentId
-import com.resilientpos.payment.PaymentUnknown
 import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.TerminalId
 import java.time.Instant
@@ -81,7 +79,7 @@ class PaymentAttempt private constructor(
                 )
 
             is AuthorizationOutcome.Declined -> copy(PaymentAttemptStatus.DECLINED, outcome.providerReference) to
-                PaymentDeclined(
+                PaymentEvent.Declined(
                     eventId = ids.next(),
                     occurredAt = now,
                     paymentId = id,
@@ -94,7 +92,7 @@ class PaymentAttempt private constructor(
 
             // provider가 무엇을 했는지 모른다. 참조를 지어내면 그 참조가 거짓이 된다.
             AuthorizationOutcome.Unknown -> copy(PaymentAttemptStatus.UNKNOWN, null) to
-                PaymentUnknown(
+                PaymentEvent.Unknown(
                     eventId = ids.next(),
                     occurredAt = now,
                     paymentId = id,
@@ -178,7 +176,7 @@ class PaymentAttempt private constructor(
                 providerReference = null,
             )
 
-            val created = PaymentAttemptCreated(
+            val created = PaymentEvent.AttemptCreated(
                 eventId = ids.next(),
                 occurredAt = now,
                 paymentId = paymentId,

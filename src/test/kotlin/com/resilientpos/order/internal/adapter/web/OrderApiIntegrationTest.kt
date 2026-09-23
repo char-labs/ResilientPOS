@@ -153,6 +153,12 @@ class OrderApiIntegrationTest(
         assertEquals(1L, orderRowCount(clientOrderId))
     }
 
+    /**
+     * checkout 뒤 결제 리스너가 비동기로 돌아 주문이 PAID가 될 수 있다. 합계 9002원은 끝자리가 2라
+     * FakePaymentGateway가 결과를 미확인으로 남겨, 주문이 CHECKOUT_REQUESTED에 머문다.
+     */
+    private val unsettledLines = """{ "productCode": "SKU-1", "productName": "아메리카노", "unitPrice": "4501", "quantity": 2 }"""
+
     private fun createOrder(body: String): String {
         val created = post(body).andExpect { status { isCreated() } }.andReturn().response.contentAsString
         return objectMapper.readTree(created).at("/data/orderId").asString()
@@ -160,14 +166,14 @@ class OrderApiIntegrationTest(
 
     @Test
     fun `주문을 만든 뒤 checkout을 요청하면 200과 확정 금액을 받고 재요청도 같은 본문이다`() {
-        val orderId = createOrder(requestJson(UUID.randomUUID()))
+        val orderId = createOrder(requestJson(UUID.randomUUID(), lines = unsettledLines))
 
         val first = mockMvc.post("/v1/orders/$orderId/checkout").andExpect {
             status { isOk() }
             jsonPath("$.data.orderId") { value(orderId) }
             jsonPath("$.data.status") { value("CHECKOUT_REQUESTED") }
             jsonPath("$.data.checkoutNo") { value(1) }
-            jsonPath("$.data.amount") { value("9000") }
+            jsonPath("$.data.amount") { value("9002") }
             jsonPath("$.data.currency") { value("KRW") }
         }.andReturn().response.contentAsString
         val second = mockMvc.post("/v1/orders/$orderId/checkout").andExpect { status { isOk() } }.andReturn().response.contentAsString
@@ -185,7 +191,7 @@ class OrderApiIntegrationTest(
 
     @Test
     fun `checkout을 요청한 주문의 생성 재시도는 201과 CHECKOUT_REQUESTED다`() {
-        val createBody = requestJson(UUID.randomUUID())
+        val createBody = requestJson(UUID.randomUUID(), lines = unsettledLines)
         val orderId = createOrder(createBody)
         mockMvc.post("/v1/orders/$orderId/checkout").andExpect { status { isOk() } }
 
