@@ -1,6 +1,6 @@
 package com.resilientpos.platform
 
-import org.slf4j.event.Level
+import io.github.oshai.kotlinlogging.Level
 import org.springframework.http.HttpStatus
 
 /**
