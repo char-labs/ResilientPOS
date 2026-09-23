@@ -8,7 +8,7 @@ import com.resilientpos.foundation.Transition
 import com.resilientpos.order.CheckoutId
 import com.resilientpos.order.ClientOrderId
 import com.resilientpos.order.OrderCommand
-import com.resilientpos.order.OrderCreated
+import com.resilientpos.order.OrderEvent
 import com.resilientpos.foundation.DomainEvent
 import com.resilientpos.order.OrderId
 import com.resilientpos.order.OrderLineId
@@ -95,11 +95,44 @@ class Order private constructor(
                 )
                 Transition(requested, listOf(event))
             }
-            OrderStatus.CHECKOUT_REQUESTED -> Transition(this, emptyList())
+            OrderStatus.CHECKOUT_REQUESTED, OrderStatus.PAID -> Transition(this, emptyList())
         }
+
+    /**
+     * 결제 승인을 최신 checkout 회차의 확정 금액(통화 포함)과 대조해 `PAID`로 전이한다.
+     * 다르면 전이하지 않고 거절한다 — 리스너의 실패 기록이 reconciliation이 옮길 흔적이 된다.
+     * 이미 `PAID`인 주문에 같은 승인이 다시 오면 아무것도 하지 않는다.
+     */
+    fun markPaid(checkoutNo: Int, amount: Money, ids: IdentifierGenerator, now: Instant): Transition<Order, DomainEvent> {
+        // ponytail: 같은 회차의 두 번째 승인은 payment의 partial unique가 막아 PAID 뒤의 같은 승인은 재배달뿐이다.
+        // 재결제나 회차 재오픈이 생기면 checkout에 승인 paymentId를 두고 대조한다.
+        val latest = checkouts.lastOrNull()
+        if (latest?.checkoutNo != checkoutNo || latest.amount != amount) {
+            throw DomainException(
+                PAYMENT_APPROVAL_MISMATCH,
+                "결제 승인이 주문의 확정값과 다릅니다 orderId=${id.value} " +
+                    "approved=$checkoutNo/$amount expected=${latest?.checkoutNo}/${latest?.amount}",
+                DomainErrorKind.UNPROCESSABLE,
+            )
+        }
+        if (status == OrderStatus.PAID) return Transition(this, emptyList())
+
+        val paid = Order(
+            id = id,
+            storeId = storeId,
+            terminalId = terminalId,
+            clientOrderId = clientOrderId,
+            currency = currency,
+            status = OrderStatus.PAID,
+            lines = lines,
+            checkouts = checkouts,
+        )
+        return Transition(paid, listOf(OrderEvent.Paid(ids.next(), now, id, checkoutNo, amount)))
+    }
 
     companion object {
         const val EMPTY_ORDER = "EMPTY_ORDER"
+        const val PAYMENT_APPROVAL_MISMATCH = "PAYMENT_APPROVAL_MISMATCH"
         const val TOO_MANY_ORDER_LINES = "TOO_MANY_ORDER_LINES"
 
         /**
@@ -164,7 +197,7 @@ class Order private constructor(
             )
             order.requireStorableTotal()
 
-            val event = OrderCreated(
+            val event = OrderEvent.Created(
                 eventId = ids.next(),
                 occurredAt = now,
                 orderId = orderId,

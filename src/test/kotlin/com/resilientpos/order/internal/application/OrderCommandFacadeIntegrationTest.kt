@@ -8,7 +8,7 @@ import com.resilientpos.foundation.UuidV7IdentifierGenerator
 import com.resilientpos.order.ClientOrderId
 import com.resilientpos.order.OrderCommand
 import com.resilientpos.order.OrderCommandFacade
-import com.resilientpos.order.OrderCreated
+import com.resilientpos.order.OrderEvent
 import com.resilientpos.order.OrderFixtures
 import com.resilientpos.order.OrderLineId
 import com.resilientpos.order.OrderStatus
@@ -114,13 +114,13 @@ class OrderCommandFacadeIntegrationTest(
         val first = facade.create(command)
         assertEquals(
             1L,
-            events.stream(OrderCreated::class.java).filter { it.orderId == first.orderId }.count(),
+            events.stream(OrderEvent.Created::class.java).filter { it.orderId == first.orderId }.count(),
         )
 
         facade.create(command)
         assertEquals(
             1L,
-            events.stream(OrderCreated::class.java).filter { it.orderId == first.orderId }.count(),
+            events.stream(OrderEvent.Created::class.java).filter { it.orderId == first.orderId }.count(),
         )
     }
 
@@ -220,7 +220,7 @@ class OrderCommandFacadeIntegrationTest(
         assertEquals(command.lines.map { it.quantity }, stored.lines.map { it.quantity })
         assertEquals(
             1L,
-            events.stream(OrderCreated::class.java).filter { it.orderId == first.orderId }.count(),
+            events.stream(OrderEvent.Created::class.java).filter { it.orderId == first.orderId }.count(),
         )
     }
 

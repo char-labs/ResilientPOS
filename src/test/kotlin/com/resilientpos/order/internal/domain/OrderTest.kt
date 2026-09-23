@@ -7,7 +7,7 @@ import com.resilientpos.foundation.Money
 import com.resilientpos.order.CheckoutId
 import com.resilientpos.order.ClientOrderId
 import com.resilientpos.order.OrderCommand
-import com.resilientpos.order.OrderCreated
+import com.resilientpos.order.OrderEvent
 import com.resilientpos.contract.OrderPaymentRequested
 import com.resilientpos.order.OrderStatus
 import com.resilientpos.store.StoreId
@@ -81,7 +81,7 @@ class OrderTest {
 
         assertEquals(1, transition.events.size)
         val event = transition.events.single()
-        assertTrue(event is OrderCreated)
+        assertTrue(event is OrderEvent.Created)
         assertEquals(orderId, event.orderId.value)
         assertEquals(eventId, event.eventId)
         assertEquals(now, event.occurredAt)

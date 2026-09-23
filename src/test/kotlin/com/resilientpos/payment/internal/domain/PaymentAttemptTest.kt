@@ -5,7 +5,7 @@ import com.resilientpos.foundation.DomainException
 import com.resilientpos.foundation.IdentifierGenerator
 import com.resilientpos.foundation.Money
 import com.resilientpos.contract.PaymentApproved
-import com.resilientpos.payment.PaymentAttemptCreated
+import com.resilientpos.payment.PaymentEvent
 import com.resilientpos.contract.PaymentAttemptKind
 import com.resilientpos.payment.PaymentAttemptStatus
 import com.resilientpos.payment.PaymentCommand
@@ -60,7 +60,7 @@ class PaymentAttemptTest {
         assertEquals(Money.of("4500", krw), transition.aggregate.amount)
         assertEquals(orderId, transition.aggregate.orderId)
 
-        val created = transition.events.single() as PaymentAttemptCreated
+        val created = transition.events.single() as PaymentEvent.AttemptCreated
         assertEquals(transition.aggregate.id, created.paymentId)
         assertEquals(orderId, created.orderId)
         assertEquals(now, created.occurredAt)
@@ -74,7 +74,7 @@ class PaymentAttemptTest {
 
         assertEquals(PaymentAttemptStatus.APPROVED, transition.aggregate.status)
         assertEquals(2, transition.events.size)
-        assertTrue(transition.events[0] is PaymentAttemptCreated)
+        assertTrue(transition.events[0] is PaymentEvent.AttemptCreated)
 
         val approved = transition.events[1] as PaymentApproved
         assertEquals(transition.aggregate.id.value, approved.paymentId)
@@ -128,7 +128,7 @@ class PaymentAttemptTest {
         val transition = create(amount = "0", checkoutNo = 7, ids = ids())
 
         assertEquals(7, transition.aggregate.checkoutNo)
-        assertEquals(7, (transition.events[0] as PaymentAttemptCreated).checkoutNo)
+        assertEquals(7, (transition.events[0] as PaymentEvent.AttemptCreated).checkoutNo)
         assertEquals(7, (transition.events[1] as PaymentApproved).checkoutNo)
     }
 
@@ -137,7 +137,7 @@ class PaymentAttemptTest {
     fun `매장과 단말을 두 이벤트에 그대로 옮긴다`() {
         val transition = create(amount = "0", ids = ids())
 
-        val created = transition.events[0] as PaymentAttemptCreated
+        val created = transition.events[0] as PaymentEvent.AttemptCreated
         val approved = transition.events[1] as PaymentApproved
         assertEquals(storeId, created.storeId)
         assertEquals(terminalId, created.terminalId)
@@ -164,7 +164,7 @@ class PaymentAttemptTest {
         val transition = create(amount = "0", ids = ids())
 
         assertEquals(PaymentAttemptKind.AUTHORIZATION, transition.aggregate.kind)
-        assertEquals(PaymentAttemptKind.AUTHORIZATION, (transition.events[0] as PaymentAttemptCreated).kind)
+        assertEquals(PaymentAttemptKind.AUTHORIZATION, (transition.events[0] as PaymentEvent.AttemptCreated).kind)
         assertEquals(PaymentAttemptKind.AUTHORIZATION, (transition.events[1] as PaymentApproved).kind)
     }
 

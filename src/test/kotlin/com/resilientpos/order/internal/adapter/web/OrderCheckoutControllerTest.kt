@@ -68,7 +68,7 @@ class OrderCheckoutControllerTest(
                     responseFields(
                         fieldWithPath("result").type(JsonFieldType.STRING).description("SUCCESS 또는 FAIL"),
                         fieldWithPath("data.orderId").type(JsonFieldType.STRING).description("주문 ID(UUID)"),
-                        fieldWithPath("data.status").type(JsonFieldType.STRING).description("주문의 현재 상태. 성공하면 CHECKOUT_REQUESTED"),
+                        fieldWithPath("data.status").type(JsonFieldType.STRING).description("주문의 현재 상태. 성공하면 CHECKOUT_REQUESTED이고 결제가 승인된 뒤의 재요청이면 PAID"),
                         fieldWithPath("data.checkoutNo").type(JsonFieldType.NUMBER).description("결제 시도 회차. 재요청이면 이미 확정된 회차"),
                         fieldWithPath("data.amount").type(JsonFieldType.STRING).description("이 회차에 확정한 금액. 주문 통화 기준 decimal string"),
                         fieldWithPath("data.currency").type(JsonFieldType.STRING).description("ISO 4217 통화 코드"),
