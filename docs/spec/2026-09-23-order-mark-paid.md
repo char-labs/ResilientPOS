@@ -13,7 +13,9 @@
 - `OrderPaid`는 받을 쪽(fulfillment)이 없어 `order`의 sealed 계층에 둔다.
 - 리스너는 `@ApplicationModuleListener(propagation = NOT_SUPPORTED)`다. Facade가 반환하면 커밋 뒤라 로그가 참이다.
 
-계약: `OrderStatus`에 `PAID`가 생긴다. `t_order.status`가 `varchar(32)`라 스키마는 그대로다. API 응답의 `status`에 `PAID`가 나올 수 있다. `PaymentApproved`를 받는 리스너가 생겨 이 이벤트가 처음으로 `event_publication`에 기록되고, `PaymentApprovedListener`의 패키지·클래스·메서드 이름이 `listener_id` 저장 형식이 된다.
+**모듈 안 이벤트를 커맨드처럼 sealed 인터페이스 안에 중첩한다**(#54의 커맨드 규칙과 같은 모양). `OrderCreated`·`OrderPaid` → `OrderEvent.Created`·`OrderEvent.Paid`, `PaymentAttemptCreated`·`PaymentDeclined`·`PaymentUnknown` → `PaymentEvent.AttemptCreated`·`Declined`·`Unknown`. 이 PR이 `OrderEvent`에 `Paid`를 더하므로 같은 파일을 두 PR이 고치지 않게 여기서 함께 한다. `contract`의 `OrderPaymentRequested`·`PaymentApproved`는 그대로다 — sealed 구현은 같은 패키지에만 허용되고 `contract`는 업무 모듈을 의존하지 않는다(도메인 모델 §4.5).
+
+계약: 중첩으로 `PaymentEvent$AttemptCreated`의 `event_type`이 바뀐다(리스너가 받아 기록되는 모듈 이벤트는 이것 하나다). 배포된 환경이 없어 옛 이름으로 남은 행이 없다. `OrderStatus`에 `PAID`가 생긴다. `t_order.status`가 `varchar(32)`라 스키마는 그대로다. API 응답의 `status`에 `PAID`가 나올 수 있다. `PaymentApproved`를 받는 리스너가 생겨 이 이벤트가 처음으로 `event_publication`에 기록되고, `PaymentApprovedListener`의 패키지·클래스·메서드 이름이 `listener_id` 저장 형식이 된다.
 
 복구: 불일치는 `FAILED` 발행 기록으로 남는다. 잠금 대기 초과·DB 장애도 같은 `FAILED`로 남아, 그때는 **결제는 승인됐는데 주문이 `CHECKOUT_REQUESTED`에 머문다.** 자동 재시도가 없어 사람이 봐야 드러난다. 찾는 조건은 `listener_id like '%PaymentApprovedListener%' and status = 'FAILED'`이고, 예외 메시지에 `orderId`와 `checkoutNo`가 있다.
 
@@ -31,6 +33,10 @@
 
 ## 변경 경로
 - src/main/kotlin/com/resilientpos/order/**
+- src/main/kotlin/com/resilientpos/payment/**
+- src/test/kotlin/com/resilientpos/payment/**
+- src/test/kotlin/com/resilientpos/ModuleStructureTest.kt
+- docs/wiki/domain-model.md
 - src/test/kotlin/com/resilientpos/order/**
 - docs/spec/2026-09-23-order-mark-paid.md
 
@@ -49,7 +55,7 @@
 - 요구사항 변화: 없다. 원문이 정한 흐름이 이어진다. 현재 상태 문서는 볼트에서 갱신한다.
 
 ## 분할 계획
-12개 파일 / 311줄. 한도 안이다.
+25개 파일 / 597줄. 한도 안이다.
 
 ## TDD 검증 기록
 | 동작 | RED | GREEN |

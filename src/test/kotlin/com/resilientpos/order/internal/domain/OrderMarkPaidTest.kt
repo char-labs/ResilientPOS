@@ -6,7 +6,7 @@ import com.resilientpos.foundation.IdentifierGenerator
 import com.resilientpos.foundation.Money
 import com.resilientpos.order.OrderCommand
 import com.resilientpos.order.ClientOrderId
-import com.resilientpos.order.OrderPaid
+import com.resilientpos.order.OrderEvent
 import com.resilientpos.order.OrderStatus
 import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.TerminalId
@@ -52,7 +52,7 @@ class OrderMarkPaidTest {
         val transition = order.markPaid(1, Money.of("3500", krw), ids, now)
 
         assertEquals(OrderStatus.PAID, transition.aggregate.status)
-        val paid = assertIs<OrderPaid>(transition.events.single())
+        val paid = assertIs<OrderEvent.Paid>(transition.events.single())
         assertEquals(order.id, paid.orderId)
         assertEquals(1, paid.checkoutNo)
         assertEquals(Money.of("3500", krw), paid.amount)

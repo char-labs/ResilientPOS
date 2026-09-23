@@ -8,12 +8,11 @@ import com.resilientpos.foundation.Transition
 import com.resilientpos.order.CheckoutId
 import com.resilientpos.order.ClientOrderId
 import com.resilientpos.order.OrderCommand
-import com.resilientpos.order.OrderCreated
+import com.resilientpos.order.OrderEvent
 import com.resilientpos.foundation.DomainEvent
 import com.resilientpos.order.OrderId
 import com.resilientpos.order.OrderLineId
 import com.resilientpos.contract.OrderPaymentRequested
-import com.resilientpos.order.OrderPaid
 import com.resilientpos.order.OrderStatus
 import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.TerminalId
@@ -127,7 +126,7 @@ class Order private constructor(
             lines = lines,
             checkouts = checkouts,
         )
-        return Transition(paid, listOf(OrderPaid(ids.next(), now, id, checkoutNo, amount)))
+        return Transition(paid, listOf(OrderEvent.Paid(ids.next(), now, id, checkoutNo, amount)))
     }
 
     companion object {
@@ -197,7 +196,7 @@ class Order private constructor(
             )
             order.requireStorableTotal()
 
-            val event = OrderCreated(
+            val event = OrderEvent.Created(
                 eventId = ids.next(),
                 occurredAt = now,
                 orderId = orderId,

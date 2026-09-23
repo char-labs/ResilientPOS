@@ -4,7 +4,7 @@ import com.resilientpos.PostgresIntegrationTest
 import com.resilientpos.foundation.Money
 import com.resilientpos.order.OrderCommand
 import com.resilientpos.order.OrderCommandFacade
-import com.resilientpos.order.OrderCreated
+import com.resilientpos.order.OrderEvent
 import com.resilientpos.order.OrderFixtures
 import com.resilientpos.order.OrderId
 import com.resilientpos.contract.OrderPaymentRequested
@@ -163,8 +163,8 @@ class OrderEventPublicationIntegrationTest(
 
         assertEquals(published, restored)
 
-        val created = events.stream(OrderCreated::class.java).filter { it.orderId == orderId }.findFirst().orElseThrow()
-        assertEquals(created, eventSerializer.deserialize(eventSerializer.serialize(created), OrderCreated::class.java))
+        val created = events.stream(OrderEvent.Created::class.java).filter { it.orderId == orderId }.findFirst().orElseThrow()
+        assertEquals(created, eventSerializer.deserialize(eventSerializer.serialize(created), OrderEvent.Created::class.java))
     }
 
     @Test
@@ -206,7 +206,7 @@ class OrderEventPublicationIntegrationTest(
     fun `받는 리스너가 없는 이벤트는 기록되지 않는다`(events: ApplicationEvents) {
         val orderId = facade.create(OrderFixtures.createOrderCommand()).orderId
 
-        assertEquals(1L, events.stream(OrderCreated::class.java).filter { it.orderId == orderId }.count())
+        assertEquals(1L, events.stream(OrderEvent.Created::class.java).filter { it.orderId == orderId }.count())
         assertEquals(emptyList(), publications(orderId))
     }
 }
