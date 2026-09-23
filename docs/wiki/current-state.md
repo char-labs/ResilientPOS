@@ -125,7 +125,8 @@
   재발행을 켜면 at-least-once가 되므로 그때는 업무 수준 멱등 근거가 따로 필요하다. 알려진 빈틈이다([payment-domain-model](../spec/2026-09-22-payment-domain-model.md)).
 - `platform` 모듈은 `IdentifierGenerator`(UUID v7)와 `Clock`(UTC) 빈을 등록하는 `PlatformConfiguration`과 엔티티 공통 컬럼
   (`created_at`·`updated_at`·`deleted_at`, Hibernate `@SoftDelete`)을 주는 `BaseEntity`를 가진다. `OrderEntity`·`OrderLineEntity`·`OrderCheckoutEntity`가 상속한다. 모듈은 10개다.
-  로거는 `platform`의 `logger()`로만 만든다. `companion object { private val log by logger() }`로 선언하고 메시지는 람다(`log.info { "..." }`)로 적는다.
+  `foundation`을 뺀 모듈의 운영 코드는 로거를 `platform`의 `logger()`로 만든다(`platform`이 `foundation`에 의존해서 `foundation`이 쓰면 순환이 된다). `companion object { private val log by logger() }`로 선언하고 메시지는 람다(`log.info { "..." }`)로 적는다.
+  레벨을 값으로 넘기는 `log.at(level, marker = null) { ... }`는 marker를 적는다. 생략하면 기본 인자 브리지를 거쳐 호출 위치가 라이브러리 안으로 찍힌다.
   로거 이름은 선언한 클래스의 FQCN이고 companion에서 불러도 바깥 클래스 이름이다. 클래스 본문에 두지 않는 이유는 인스턴스마다 `Lazy`가 생기기 때문이다([platform-kotlin-logging](../spec/2026-09-23-platform-kotlin-logging.md)).
   낙관적 잠금 `@Version`은 `BaseEntity`에 없고 필요한 엔티티가 직접 선언한다. 지금은 `OrderEntity`뿐이라 `version` 컬럼은 `t_order`에만 있다. `@Version`이 없는 새 자식 행은
   `OrderPersistenceAdapter`가 `EntityManager.persist`로 넣고, 어댑터의 `save`는 `@Transactional`로 Facade의 트랜잭션에 합류한다([base-entity-explicit-version](../spec/2026-09-21-base-entity-explicit-version.md)).

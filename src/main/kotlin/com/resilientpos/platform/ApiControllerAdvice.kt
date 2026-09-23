@@ -68,7 +68,8 @@ class ApiControllerAdvice : ResponseEntityExceptionHandler() {
     }
 
     private fun failBody(errorType: ErrorType, e: Exception, request: String): ApiResponse<Nothing> {
-        log.at(errorType.level) {
+        // marker를 생략하면 기본 인자 브리지(`KLogger.at$default`)를 거쳐 로그의 호출 위치가 그 브리지로 찍힌다.
+        log.at(errorType.level, marker = null) {
             message = "$request errorCode=${errorType.name} : ${e.message}"
             cause = e
         }

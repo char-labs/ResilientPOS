@@ -9,6 +9,7 @@ import kotlin.reflect.KClass
  *
  * 이름은 런타임 하위 클래스가 아니라 선언한 타입에서 정해서 `LoggerFactory.getLogger(X::class.java)`와 같다.
  * 메시지는 람다로 적는다(`log.info { "...$x" }`). 레벨이 꺼져 있으면 문자열을 만들지 않는다.
+ * 레벨을 값으로 넘길 때는 `log.at(level, marker = null) { ... }`처럼 marker를 적는다. 생략하면 호출 위치가 라이브러리 안으로 찍힌다.
  */
 inline fun <reified T : Any> T.logger(): Lazy<KLogger> = lazy { KotlinLogging.logger(loggerName(T::class)) }
 

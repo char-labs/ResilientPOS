@@ -26,11 +26,11 @@
 
 복구: 해당 없음.
 
-관측성: 로그 형식이 그대로임을 기존 `ErrorLogRequestContextTest`가 확인한다. 이 테스트는 logback appender를 `ApiControllerAdvice` FQCN 로거에 붙이므로 로거 이름이 바뀌면 실패한다.
+관측성: 로그가 그대로임을 `ErrorLogRequestContextTest`가 확인한다. 이 테스트는 logback appender를 `ApiControllerAdvice` FQCN 로거에 붙이므로 로거 이름이 바뀌면 실패한다. 레벨과 호출 위치(caller data) 단언을 더한다.
 
 ## 제외
 - 파일 최상위 `private val log = KotlinLogging.logger {}` 방식. 카카오페이 기술 블로그가 권장하는 형태지만 이번에는 lazy 위임 한 가지로 통일한다.
-- `org.slf4j.LoggerFactory` 직접 사용을 막는 ArchUnit 규칙. `logger()`가 inline이라 호출부 바이트코드에 `KotlinLogging` 참조가 남아서 생성 경로 전체를 규칙으로 막을 수 없다. 우회로 한 가지만 막는 규칙은 넣지 않는다.
+- 로거 생성 경로를 막는 ArchUnit 규칙. `LoggerFactory.getLogger` 호출은 막을 수 있지만, `KotlinLogging.logger(String)` 직접 호출은 `logger()`의 inline 전개와 바이트코드가 같아 구분되지 않는다. 경로 전체를 막지 못하는 규칙은 이번에 넣지 않는다.
 - 테스트 코드의 logback 직접 사용. `ErrorLogRequestContextTest`는 로그 출력을 가로채려고 logback `Logger`를 다루는 것이라 대상이 아니다.
 - 구조화 로그(JSON), correlation id, MDC. [현재 상태](../wiki/current-state.md)에 적힌 알려진 빈틈 그대로다.
 
@@ -44,6 +44,7 @@
 - src/main/kotlin/com/resilientpos/platform/ErrorType.kt
 - src/main/kotlin/com/resilientpos/payment/internal/application/OrderPaymentRequestedListener.kt
 - src/test/kotlin/com/resilientpos/platform/LoggingTest.kt
+- src/test/kotlin/com/resilientpos/platform/ErrorLogRequestContextTest.kt
 - docs/wiki/current-state.md
 - docs/spec/2026-09-23-platform-kotlin-logging.md
 
@@ -54,12 +55,13 @@
 4. 같은 위임 프로퍼티를 여러 번 읽어도 같은 인스턴스다.
 5. `src/main`에 `org.slf4j.LoggerFactory` 사용이 남지 않는다.
 6. 기존 테스트, 특히 `ErrorLogRequestContextTest` 6개가 그대로 통과한다.
+7. advice의 오류 로그가 경로마다 기대 레벨(ERROR·WARN)로 남고, 호출 위치가 `ApiControllerAdvice`다.
 
 ## 검증
 - `./gradlew test --tests 'com.resilientpos.platform.LoggingTest'` — 인수 조건 1~4.
 - `./gradlew test --tests 'com.resilientpos.platform.*'` — 로그 형식과 원인 첨부가 그대로다.
 - `./gradlew test` — 전체 통과. Docker가 필요하다.
-- `grep -rn 'LoggerFactory' src/main` — 결과 없음.
+- `grep -rn 'org.slf4j' src/main` — 결과 없음. `LoggerFactory`로 찾으면 `Logging.kt`의 KDoc 한 줄이 나온다.
 - `python3 scripts/check_pr.py --base fe6f889 --worktree` — PASS.
 
 ## Wiki 영향
@@ -67,7 +69,7 @@
 - 요구사항 변화: 없다. 로그 내용과 형식은 그대로이고 로거를 만드는 방법만 바뀐다.
 
 ## 분할 계획
-8개 파일 / 199줄이다. 한도 안이라 나누지 않는다.
+9개 파일 / 230줄이다. 한도 안이라 나누지 않는다.
 
 ## TDD 검증 기록
 helper는 새 동작이라 테스트를 먼저 쓴다. 호출부 이전은 동작이 바뀌지 않는 리팩터링이라 기존 `ErrorLogRequestContextTest`로 회귀를 본다.
@@ -76,6 +78,7 @@ helper는 새 동작이라 테스트를 먼저 쓴다. 호출부 이전은 동�
 |---|---|---|---|
 | companion·이름 붙인 companion·object·하위 클래스에서의 로거 이름, 같은 인스턴스 (`LoggingTest` 5개) | `./gradlew test --tests 'com.resilientpos.platform.LoggingTest'` — `logger`가 없어 컴파일 실패 | 같은 명령 — 5개 통과 | companion 분기를 지우는 변형에서 2개 실패, 되돌려 5개 통과 |
 | 오류 로그 형식과 원인 첨부 유지 (`ErrorLogRequestContextTest`) | 해당 없음 — 기존 테스트 | 호출부 이전 뒤 `./gradlew test` — 6개 통과 | 같음 |
+| 오류 로그의 호출 위치가 advice다 (`ErrorLogRequestContextTest`에 caller data 단언 추가) | `log.at(level)` 그대로 두고 `./gradlew test --tests 'com.resilientpos.platform.ErrorLogRequestContextTest'` — `at` 경로 3개 실패, 호출 위치가 `KLogger$DefaultImpls.at$default` | `marker = null`을 적은 뒤 같은 명령 — 6개 통과 | `./gradlew test` 전체 통과 |
 
 ## 결과
 `./gradlew test` 174개가 전부 통과한다. `src/main`에 `LoggerFactory` 사용이 남지 않았다. kotlin-logging 8.0.4는 slf4j-api 2.0.17을 요구하지만 Spring Boot가 관리하는 2.0.18로 올라가 해결되고 logback-classic 1.5.38 위에서 돈다.
@@ -84,6 +87,9 @@ helper는 새 동작이라 테스트를 먼저 쓴다. 호출부 이전은 동�
 - **companion 판정을 이름이 아니라 `KClass.isCompanion`으로 했다.** Sseudam 구현은 simpleName이 `Companion`인지 보는데, 이름 붙인 companion에서는 `X$Factory`로 찍힌다. `LoggingTest`의 이름 붙인 companion 케이스가 이것을 고정한다. `kotlin-reflect`는 이미 의존성에 있다.
 - **lazy는 기본 모드(동기화)로 두었다.** Sseudam은 `LazyThreadSafetyMode.NONE`을 쓴다. 싱글턴 빈의 로거는 여러 스레드가 처음 읽을 수 있어서, 스레드 안전성을 따로 따지지 않아도 되는 기본 모드를 골랐다. 잠금은 첫 초기화에만 걸리고 그 뒤로는 volatile 읽기 한 번이다.
 - **변형으로 테스트가 companion 분기를 지키는지 봤다.** 분기를 지워 선언 타입 이름을 그대로 쓰게 하면 companion 두 케이스가 실패한다.
-- **로그 내용은 그대로다.** 문구의 요청 정보·`errorCode`, 예외 원인 첨부, 로거 이름을 `ErrorLogRequestContextTest` 6개가 확인한다. 레벨은 이 테스트가 단언하지 않는다. `ErrorType`의 값을 같은 이름의 kotlin-logging 상수로 옮겼을 뿐이다. 이 테스트는 `ApiControllerAdvice` FQCN 로거에 appender를 붙이므로 이름이 달라지면 로그를 못 받아 실패한다.
+- **로그 내용은 그대로다.** 문구의 요청 정보·`errorCode`, 예외 원인 첨부, 로거 이름, 레벨, 호출 위치를 `ErrorLogRequestContextTest` 6개가 확인한다. 이 테스트는 `ApiControllerAdvice` FQCN 로거에 appender를 붙이므로 이름이 달라지면 로그를 못 받아 실패한다. 레벨과 호출 위치 단언은 multi-review 지적으로 더했다.
+- **`log.at(level)`은 호출 위치를 잃었다.** multi-review에서 Codex가 짚었고 실측으로 확인했다. marker를 생략하면 Kotlin이 기본 인자 브리지 `KLogger$DefaultImpls.at$default`를 만들고, logback은 kotlin-logging 경계 바로 다음 프레임인 이 브리지를 호출 위치로 잡는다. `log.warn { }`은 영향이 없다. `marker = null`을 적어 브리지를 거치지 않게 했다. 호출 위치는 로그를 남기는 순간의 스택에서 계산되므로 테스트 appender가 `append` 안에서 미리 읽는다.
+- **lazy는 요청한 형태라서 택했다.** companion 초기화도 JVM 클래스 초기화라 이미 늦고 스레드 안전해서, `KLogger`를 바로 돌려줘도 효과는 같다. 차이는 초기화 실패가 기동이 아니라 첫 로그에서 드러난다는 점이다. `KotlinLogging.logger(String)`과 `isCompanion`은 kotlin-reflect가 있는 한 실패하지 않는다.
 - **wiki 테스트 수를 실제 값으로 맞췄다.** 앞 PR의 `EntityVisibilityTest` 2개가 집계에서 빠져 있어 이번에 늘어난 5개와 함께 반영했다.
-- 규모: 8개 파일 / 199줄.
+- multi-review: Claude 86점, Codex 88점, Gemini 미실행(CLI 없음). 반영하지 않은 지적은 PR 본문에 적는다.
+- 규모: 9개 파일 / 230줄.
