@@ -3,7 +3,6 @@ package com.resilientpos.platform
 import com.resilientpos.foundation.DomainErrorKind
 import com.resilientpos.foundation.DomainException
 import jakarta.servlet.http.HttpServletRequest
-import org.slf4j.LoggerFactory
 import org.springframework.dao.ConcurrencyFailureException
 import org.springframework.http.HttpHeaders
 import org.springframework.http.HttpStatus
@@ -42,7 +41,7 @@ class ApiControllerAdvice : ResponseEntityExceptionHandler() {
     /** 도메인 규칙 위반은 예외의 `code`와 응답용 `message`를 그대로 내보내고 `kind`가 상태 코드를 정한다. */
     @ExceptionHandler(DomainException::class)
     fun handleDomain(e: DomainException, request: HttpServletRequest): ResponseEntity<ApiResponse<Nothing>> {
-        log.warn("{} errorCode={} : {}", request.describe(), e.code, e.message)
+        log.warn { "${request.describe()} errorCode=${e.code} : ${e.message}" }
         return ResponseEntity.status(e.kind.toHttpStatus()).body(ApiResponse.fail(ErrorResponse(e.code, e.message)))
     }
 
@@ -69,7 +68,10 @@ class ApiControllerAdvice : ResponseEntityExceptionHandler() {
     }
 
     private fun failBody(errorType: ErrorType, e: Exception, request: String): ApiResponse<Nothing> {
-        log.atLevel(errorType.level).setCause(e).log("{} errorCode={} : {}", request, errorType.name, e.message)
+        log.at(errorType.level) {
+            message = "$request errorCode=${errorType.name} : ${e.message}"
+            cause = e
+        }
         return ApiResponse.fail(ErrorResponse(errorType.name, errorType.message))
     }
 
@@ -89,6 +91,6 @@ class ApiControllerAdvice : ResponseEntityExceptionHandler() {
         (this as? ServletWebRequest)?.request?.describe() ?: "method=? uri=?"
 
     companion object {
-        private val log = LoggerFactory.getLogger(ApiControllerAdvice::class.java)
+        private val log by logger()
     }
 }

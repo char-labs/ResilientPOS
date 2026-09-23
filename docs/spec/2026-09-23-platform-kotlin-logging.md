@@ -67,15 +67,23 @@
 - 요구사항 변화: 없다. 로그 내용과 형식은 그대로이고 로거를 만드는 방법만 바뀐다.
 
 ## 분할 계획
-8개 파일 / 약 150줄로 예상한다. 한도 안이라 나누지 않는다.
+8개 파일 / 199줄이다. 한도 안이라 나누지 않는다.
 
 ## TDD 검증 기록
 helper는 새 동작이라 테스트를 먼저 쓴다. 호출부 이전은 동작이 바뀌지 않는 리팩터링이라 기존 `ErrorLogRequestContextTest`로 회귀를 본다.
 
 | 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
 |---|---|---|---|
-| companion·이름 붙인 companion·object·하위 클래스에서의 로거 이름, 같은 인스턴스 | 미실행 | 미실행 | 미실행 |
-| 오류 로그 형식과 원인 첨부 유지 (`ErrorLogRequestContextTest`) | 해당 없음 — 기존 테스트 | 미실행 | 미실행 |
+| companion·이름 붙인 companion·object·하위 클래스에서의 로거 이름, 같은 인스턴스 (`LoggingTest` 5개) | `./gradlew test --tests 'com.resilientpos.platform.LoggingTest'` — `logger`가 없어 컴파일 실패 | 같은 명령 — 5개 통과 | companion 분기를 지우는 변형에서 2개 실패, 되돌려 5개 통과 |
+| 오류 로그 형식과 원인 첨부 유지 (`ErrorLogRequestContextTest`) | 해당 없음 — 기존 테스트 | 호출부 이전 뒤 `./gradlew test` — 6개 통과 | 같음 |
 
 ## 결과
-개발 전 작성. 개발 후 실행 결과와 변경 이유를 추가한다.
+`./gradlew test` 174개가 전부 통과한다. `src/main`에 `LoggerFactory` 사용이 남지 않았다. kotlin-logging 8.0.4는 slf4j-api 2.0.17을 요구하지만 Spring Boot가 관리하는 2.0.18로 올라가 해결되고 logback-classic 1.5.38 위에서 돈다.
+
+- **레퍼런스를 대조해 형태를 정했다.** 카카오페이 기술 블로그(tech.kakaopay.com/post/efficient-logging-with-kotlin)는 람다 메시지를 권장하고 로거를 인스턴스 필드로 두지 말라고 한다. Team-SSEUDAM/Sseudam-Server의 `LoggerExtension.kt`는 같은 reified lazy helper를 companion에서 쓴다. 두 가지를 합쳐 companion에 한 번 만드는 형태로 정했다.
+- **companion 판정을 이름이 아니라 `KClass.isCompanion`으로 했다.** Sseudam 구현은 simpleName이 `Companion`인지 보는데, 이름 붙인 companion에서는 `X$Factory`로 찍힌다. `LoggingTest`의 이름 붙인 companion 케이스가 이것을 고정한다. `kotlin-reflect`는 이미 의존성에 있다.
+- **lazy는 기본 모드(동기화)로 두었다.** Sseudam은 `LazyThreadSafetyMode.NONE`을 쓴다. 싱글턴 빈의 로거는 여러 스레드가 처음 읽을 수 있어서, 스레드 안전성을 따로 따지지 않아도 되는 기본 모드를 골랐다. 잠금은 첫 초기화에만 걸리고 그 뒤로는 volatile 읽기 한 번이다.
+- **변형으로 테스트가 companion 분기를 지키는지 봤다.** 분기를 지워 선언 타입 이름을 그대로 쓰게 하면 companion 두 케이스가 실패한다.
+- **로그 내용은 그대로다.** 문구의 요청 정보·`errorCode`, 예외 원인 첨부, 로거 이름을 `ErrorLogRequestContextTest` 6개가 확인한다. 레벨은 이 테스트가 단언하지 않는다. `ErrorType`의 값을 같은 이름의 kotlin-logging 상수로 옮겼을 뿐이다. 이 테스트는 `ApiControllerAdvice` FQCN 로거에 appender를 붙이므로 이름이 달라지면 로그를 못 받아 실패한다.
+- **wiki 테스트 수를 실제 값으로 맞췄다.** 앞 PR의 `EntityVisibilityTest` 2개가 집계에서 빠져 있어 이번에 늘어난 5개와 함께 반영했다.
+- 규모: 8개 파일 / 199줄.

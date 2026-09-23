@@ -3,7 +3,7 @@ package com.resilientpos.payment.internal.application
 import com.resilientpos.contract.OrderPaymentRequested
 import com.resilientpos.payment.CreatePaymentAttemptCommand
 import com.resilientpos.payment.PaymentManagement
-import org.slf4j.LoggerFactory
+import com.resilientpos.platform.logger
 import org.springframework.modulith.events.ApplicationModuleListener
 import org.springframework.stereotype.Component
 import org.springframework.transaction.support.TransactionSynchronization
@@ -39,13 +39,10 @@ class OrderPaymentRequestedListener(
         // "기록했다"고 말하게 된다. 경합에서 진 쪽은 정상 반환한 뒤 커밋에서 unique 위반으로 롤백되는데,
         // 그때 존재하지 않는 paymentId가 기록됐다는 로그만 남는다.
         afterCommit {
-            log.info(
-                "결제 시도 기록 orderId={} checkoutNo={} paymentId={} status={}",
-                event.orderId,
-                event.checkoutNo,
-                result.paymentId.value,
-                result.status,
-            )
+            log.info {
+                "결제 시도 기록 orderId=${event.orderId} checkoutNo=${event.checkoutNo} " +
+                    "paymentId=${result.paymentId.value} status=${result.status}"
+            }
         }
     }
 
@@ -62,6 +59,6 @@ class OrderPaymentRequestedListener(
     }
 
     companion object {
-        private val log = LoggerFactory.getLogger(OrderPaymentRequestedListener::class.java)
+        private val log by logger()
     }
 }
