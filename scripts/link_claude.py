@@ -22,6 +22,8 @@ LINKS = (
     ('.claude/agents', 'agents'),
     ('.claude/rules', 'rules'),
     ('.codex/agents', 'codex/agents'),
+    # PR마다 한 줄씩 바뀌어 병렬 PR이 늘 충돌하던 문서라 저장소 밖에 둔다.
+    ('docs/wiki/current-state.md', 'wiki/current-state.md'),
 )
 VAULT_ENV = 'RESILIENTPOS_VAULT'
 DEFAULT_VAULT_PARTS = ('Documents', 'Obsidian Vault', 'ResilientPOS')
@@ -44,9 +46,9 @@ def link_one(link, target):
             return True, None
         link.unlink()
     elif link.exists():
-        return False, f'  (중단) {link} 가 이미 실제 디렉터리입니다. 옮기거나 지운 뒤 다시 실행하세요.'
+        return False, f'  (중단) {link} 가 이미 링크가 아닌 실제 경로입니다. 옮기거나 지운 뒤 다시 실행하세요.'
     link.parent.mkdir(parents=True, exist_ok=True)
-    link.symlink_to(target, target_is_directory=True)
+    link.symlink_to(target, target_is_directory=target.is_dir())
     return True, None
 
 
@@ -61,7 +63,7 @@ def main(root=None, vault=None):
     linked, errors = 0, []
     for name, source in LINKS:
         target = vault / source
-        if not target.is_dir():
+        if not target.exists():
             print(f'  (건너뜀) {target} 없음')
             continue
         ok, error = link_one(root / name, target)
