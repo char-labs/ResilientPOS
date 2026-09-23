@@ -11,9 +11,10 @@
 | DB | PostgreSQL 전용. Flyway가 스키마를 소유하고 JPA는 validate만 한다 |
 | 모듈 경계·이벤트 | Spring Modulith 2.1.1 (BOM + `starter-core`·`starter-jpa`, 테스트는 `starter-test`·`events-core`) |
 | 식별자 | `uuid-creator` 6.1.1 (UUID v7) |
+| 로깅 | `kotlin-logging-jvm` 8.0.4 (slf4j·logback 위 facade) |
 | 구조 검증 | Spring Modulith 경계 검증, ArchUnit 1.4.2 의존성 방향 가드 |
 | 통합 테스트 | Testcontainers 2.0.5 PostgreSQL 18. `./gradlew test` 실행에 Docker가 필요하다 |
-| 테스트 | Kotlin Test/JUnit 5, Spring Boot 테스트 starter, Fixture Monkey 1.2.3; 총 167개 (컨텍스트 1, 스키마 4, 모듈 구조 4, 의존성 방향 2, Money 25, 식별자 4, Order 19, PaymentAttempt 11, 결제 enum 이름 2, 결제 시도 영속화 통합 6, 결제 테이블 스키마 2, 결제 문장 수 통합 1, 주문 이벤트→결제 통합 4, 결제 Facade 3, 자원 상한 설정 3, Facade line 상한 1, 오류 로그 요청 정보 6, OrderCommandFacade 11, RequestCheckout 통합 9, 버전 충돌 통합 1, 문장 수 통합 3, 이벤트 발행 기록 통합 7, API advice 9, OrderController 13, checkout Controller 5, 주문 API 통합 11) |
+| 테스트 | Kotlin Test/JUnit 5, Spring Boot 테스트 starter, Fixture Monkey 1.2.3; 총 174개 (컨텍스트 1, 스키마 4, 모듈 구조 4, 의존성 방향 2, 엔티티 가시성 2, 로거 이름 5, Money 25, 식별자 4, Order 19, PaymentAttempt 11, 결제 enum 이름 2, 결제 시도 영속화 통합 6, 결제 테이블 스키마 2, 결제 문장 수 통합 1, 주문 이벤트→결제 통합 4, 결제 Facade 3, 자원 상한 설정 3, Facade line 상한 1, 오류 로그 요청 정보 6, OrderCommandFacade 11, RequestCheckout 통합 9, 버전 충돌 통합 1, 문장 수 통합 3, 이벤트 발행 기록 통합 7, API advice 9, OrderController 13, checkout Controller 5, 주문 API 통합 11) |
 | 로컬 하네스 | Python 3 표준 라이브러리 |
 
 근거: [build.gradle.kts](../../build.gradle.kts), [Gradle Wrapper](../../gradle/wrapper/gradle-wrapper.properties), [애플리케이션 설정](../../src/main/resources/application.yaml).
@@ -124,6 +125,9 @@
   재발행을 켜면 at-least-once가 되므로 그때는 업무 수준 멱등 근거가 따로 필요하다. 알려진 빈틈이다([payment-domain-model](../spec/2026-09-22-payment-domain-model.md)).
 - `platform` 모듈은 `IdentifierGenerator`(UUID v7)와 `Clock`(UTC) 빈을 등록하는 `PlatformConfiguration`과 엔티티 공통 컬럼
   (`created_at`·`updated_at`·`deleted_at`, Hibernate `@SoftDelete`)을 주는 `BaseEntity`를 가진다. `OrderEntity`·`OrderLineEntity`·`OrderCheckoutEntity`가 상속한다. 모듈은 10개다.
+  `foundation`을 뺀 모듈의 운영 코드는 로거를 `platform`의 `logger()`로 만든다(`platform`이 `foundation`에 의존해서 `foundation`이 쓰면 순환이 된다). `companion object { private val log by logger() }`로 선언하고 메시지는 람다(`log.info { "..." }`)로 적는다.
+  레벨을 값으로 넘기는 `log.at(level, marker = null) { ... }`는 marker를 적는다. 생략하면 기본 인자 브리지를 거쳐 호출 위치가 라이브러리 안으로 찍힌다.
+  로거 이름은 선언한 클래스의 FQCN이고 companion에서 불러도 바깥 클래스 이름이다. 클래스 본문에 두지 않는 이유는 인스턴스마다 `Lazy`가 생기기 때문이다([platform-kotlin-logging](../spec/2026-09-23-platform-kotlin-logging.md)).
   낙관적 잠금 `@Version`은 `BaseEntity`에 없고 필요한 엔티티가 직접 선언한다. 지금은 `OrderEntity`뿐이라 `version` 컬럼은 `t_order`에만 있다. `@Version`이 없는 새 자식 행은
   `OrderPersistenceAdapter`가 `EntityManager.persist`로 넣고, 어댑터의 `save`는 `@Transactional`로 Facade의 트랜잭션에 합류한다([base-entity-explicit-version](../spec/2026-09-21-base-entity-explicit-version.md)).
   `created_at`·`updated_at`은 Hibernate가 JVM에서 만드는 애플리케이션 시각이고(`SourceType.VM`) `deleted_at`만 DB `current_timestamp`다. 한 INSERT의 두 시각은 같지 않을 수 있어서
