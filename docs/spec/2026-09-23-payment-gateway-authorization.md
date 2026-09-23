@@ -92,7 +92,7 @@ AuthorizationOutcome = Approved(providerReference) | Declined(providerReference?
 - 요구사항 변화: 없다. 결제 흐름이 정본이 예고한 대로 이어진다. API도 스키마도 그대로다.
 
 ## 분할 계획
-20개 파일 / 944줄이다. 경고선을 넘었지만 실패 한도 안이고 목표가 하나라 나누지 않는다 — 포트·전이·Fake·리스너 중 어느 하나만 내면 승인 경로가 이어지지 않는다.
+22개 파일 / 982줄이다. 경고선을 넘었지만 실패 한도 안이고 목표가 하나라 나누지 않는다 — 포트·전이·Fake·리스너 중 어느 하나만 내면 승인 경로가 이어지지 않는다.
 
 ## TDD 검증 기록
 전이를 no-op으로 두고 테스트를 먼저 써서 의도한 assertion 실패를 봤다.
@@ -104,7 +104,7 @@ AuthorizationOutcome = Approved(providerReference) | Declined(providerReference?
 | checkout이 승인까지 이어진다 | `PaymentAuthorizationIntegrationTest` — 리스너 전에는 `REQUESTED`에서 멈춤 | 리스너 추가 뒤 5개 통과 | 같음 |
 
 ## 결과
-189개 통과다(직전 167 + 신규 22). 22개 파일 / 964줄이다.
+189개 통과다(직전 167 + 신규 22). 22개 파일 / 982줄이다.
 
 - **불변성 테스트만 RED에서 통과했다.** 전이를 no-op으로 두면 원본이 그대로이므로 "원본 시도는 그대로 남는다"가 저절로 맞는다. 나머지 다섯이 실패하는 것을 보고 구현했다.
 - **기존 통합 테스트 둘이 깨졌고 그게 맞았다.** `시도가 REQUESTED로 남는다`를 단언하던 테스트들이다. 이제 승인 리스너가 이어서 돌아 결말까지 간다. 단언을 느슨하게 푸는 대신 **결말을 기다린 뒤 `APPROVED`를 단언**하도록 고쳤다 — 기록 직후를 보면 두 상태 사이에서 흔들린다.
@@ -113,4 +113,4 @@ AuthorizationOutcome = Approved(providerReference) | Declined(providerReference?
 - **`afterCommit` 헬퍼를 리스너 둘이 공유한다.** 두 번째 리스너가 생기면서 같은 코드가 둘이 됐다. `payment/internal/application`의 internal 함수로 뺐다.
 - **provider 호출이 리스너의 트랜잭션 안에 있다.** `@ApplicationModuleListener`가 자기 트랜잭션을 여는 구조라 호출만 밖으로 뺄 자리가 없다. Fake는 지연이 없어 지금 드러나지 않지만 실제 provider가 붙으면 커넥션을 쥐는 시간이 된다. 빈틈으로 적었다.
 - **정본의 자기모순 하나를 고쳤다.** 종료 대기를 한 줄은 `0ms`(실측)로, 다른 줄은 `2초`로 적고 있었다. 실측값으로 맞췄다.
-- **경고선을 넘었다.** 964줄이다. 포트·전이·Fake·리스너 중 어느 하나만 내면 승인 경로가 이어지지 않아 나누지 않았다. 실패 한도 안이다.
+- **경고선을 넘었다.** 982줄이다. 포트·전이·Fake·리스너 중 어느 하나만 내면 승인 경로가 이어지지 않아 나누지 않았다. 실패 한도 안이다.
