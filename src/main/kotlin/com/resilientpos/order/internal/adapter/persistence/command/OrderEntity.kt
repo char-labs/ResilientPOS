@@ -20,23 +20,43 @@ import org.hibernate.annotations.JdbcTypeCode
 import org.hibernate.type.SqlTypes
 
 /**
- * `Order` aggregate 루트의 JPA 매핑. `data class`가 아니고 JPA가 관리하는 필드는 `var`다(도메인 규칙 §5).
+ * `Order` aggregate 루트의 JPA 매핑. `data class`가 아니고 생성은 `from`, 변경은 `apply`만 한다(도메인 규칙 §5).
+ * 전 필드가 `var`에 `protected set`이다. `allOpen`이 `@Entity`에 걸려 있어 멤버가 open이라 Kotlin이 `private set`을 금지하고,
+ * 영속 필드를 `val`로 두면 JVM final이 되어 Jakarta Persistence 3.2 §2.2 금지와 bytecode enhancement 비호환에 걸린다.
  * line은 연관관계로 들고 있지 않다. `OrderLineEntity`가 `orderId`로 가리키고 `OrderPersistenceAdapter`가 조립한다.
  */
 @Entity
 @Table(name = "t_order")
-class OrderEntity(
+class OrderEntity private constructor(
+    id: UUID,
+    storeId: UUID,
+    terminalId: UUID,
+    clientOrderId: UUID,
+    currency: String,
+    status: OrderStatus,
+) : BaseEntity() {
+
     @Id
-    var id: UUID,
-    var storeId: UUID,
-    var terminalId: UUID,
-    var clientOrderId: UUID,
+    var id: UUID = id
+        protected set
+
+    var storeId: UUID = storeId
+        protected set
+
+    var terminalId: UUID = terminalId
+        protected set
+
+    var clientOrderId: UUID = clientOrderId
+        protected set
+
     @Column(columnDefinition = "char(3)")
     @JdbcTypeCode(SqlTypes.CHAR)
-    var currency: String,
+    var currency: String = currency
+        protected set
+
     @Enumerated(EnumType.STRING)
-    var status: OrderStatus,
-) : BaseEntity() {
+    var status: OrderStatus = status
+        protected set
 
     /**
      * aggregate 루트의 낙관적 잠금. 행 잠금 없이 저장하는 경로에서 동시 수정을 막는 마지막 방어선이다.
