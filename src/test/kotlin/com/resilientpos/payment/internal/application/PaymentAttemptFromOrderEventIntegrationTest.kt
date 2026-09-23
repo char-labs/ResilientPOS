@@ -66,7 +66,7 @@ class PaymentAttemptFromOrderEventIntegrationTest(
     }
 
     @Test
-    fun `0원 주문은 provider 없이 승인까지 간다`() {
+    fun `0원 주문의 시도는 승인으로 기록된다`() {
         val orderId = checkoutOrder(listOf(CreateOrderLine("SKU-FREE", "증정품", Money.of("0", OrderFixtures.krw), 1)))
 
         awaitUntil("0원 시도가 승인으로 기록된다") {

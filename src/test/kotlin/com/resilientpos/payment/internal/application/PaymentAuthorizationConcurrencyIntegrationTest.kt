@@ -39,14 +39,12 @@ class PaymentAuthorizationConcurrencyIntegrationTest(
     /** 두 호출이 모두 도착할 때까지 붙잡아 둔다. 먼저 온 쪽은 승인, 나중 쪽은 거절을 받는다. */
     class RendezvousGateway : PaymentGateway {
         private val arrived = CountDownLatch(2)
-        private val order = AtomicInteger()
         val calls = AtomicInteger()
 
         override fun authorize(request: AuthorizationRequest): AuthorizationOutcome {
-            calls.incrementAndGet()
-            val position = order.getAndIncrement()
+            val position = calls.getAndIncrement()
             arrived.countDown()
-            arrived.await(5, TimeUnit.SECONDS)
+            check(arrived.await(5, TimeUnit.SECONDS)) { "두 호출이 provider에서 만나지 못했다" }
             return if (position == 0) {
                 AuthorizationOutcome.Approved("FIRST")
             } else {

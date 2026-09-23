@@ -29,10 +29,10 @@ class FakePaymentGateway : PaymentGateway {
     }
 
     companion object {
-        const val DECLINE_DIGIT = 1
-        const val UNKNOWN_DIGIT = 2
+        private const val DECLINE_DIGIT = 1
+        private const val UNKNOWN_DIGIT = 2
 
         /** 이 참조가 실제 provider 원장을 가리키지 않는다는 것이 이름에 드러나야 한다. */
-        const val REFERENCE_PREFIX = "FAKE-"
+        private const val REFERENCE_PREFIX = "FAKE-"
     }
 }

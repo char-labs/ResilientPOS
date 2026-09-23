@@ -22,7 +22,7 @@ import java.util.UUID
 /**
  * 결제 시도 aggregate 루트. 한 주문의 한 회차 provider 요청과 그 결과를 소유한다.
  * `Order`와는 별개 aggregate라서 `orderId`로만 참조하고 사실은 이벤트로 건너간다.
- * 한 주문에 시도가 여럿 달린다. 승인이 거절되면 다음 시도가 생기고 취소·환불도 각각 별도 시도다.
+ * 한 주문에 시도가 여럿 달릴 수 있다. 거절 뒤 재결제와 취소·환불은 각각 별도 시도다.
  * 식별은 [PaymentId] 하나가 하고 `orderId`는 참조일 뿐이라, 한 주문에 몇 건이 달리든 제약이 없다.
  * 무엇을 요청한 시도인지는 [PaymentAttemptKind]가 말한다.
  * 그 `orderId`가 raw `UUID`인 이유는 `PaymentEvent`에 있다.
@@ -125,20 +125,6 @@ class PaymentAttempt private constructor(
     override fun hashCode() = id.hashCode()
 
     companion object {
-        /**
-         * 같은 checkout에 둘 이상 있을 수 없는 승인 시도의 상태. **결말이 났는지와 같은 말이 아니다** —
-         * `APPROVED`도 든다. 승인된 checkout에 새 승인이 생기면 이중 청구이기 때문이다. `DECLINED`는 빠진다.
-         * 거절 뒤 재결제를 DB가 막지 않게 하려는 것이다.
-         *
-         * `ux_payment_attempt_inflight_authorization`의 술어가 같은 값을 쓰고 `PaymentAttemptSchemaTest`가 둘을 대조한다.
-         * 한쪽만 바꾸면 방어선이 어긋난다.
-         */
-        val INFLIGHT_STATUSES = setOf(
-            PaymentAttemptStatus.REQUESTED,
-            PaymentAttemptStatus.APPROVED,
-            PaymentAttemptStatus.UNKNOWN,
-        )
-
         const val NEGATIVE_PAYMENT_AMOUNT = "NEGATIVE_PAYMENT_AMOUNT"
         const val INVALID_CHECKOUT_NO = "INVALID_CHECKOUT_NO"
         const val PAYMENT_RESULT_ALREADY_APPLIED = "PAYMENT_RESULT_ALREADY_APPLIED"
@@ -162,8 +148,7 @@ class PaymentAttempt private constructor(
 
         /**
          * 한 주문의 **승인** 시도를 만든다.
-         * 취소 시도를 만드는 factory는 그 전이를 만드는 PR이 더한다. 되돌릴 승인이 아직 없어서
-         * 무엇을 참조해야 하는지(원 시도인지 provider 참조인지)를 지금 정할 근거가 없다.
+         * 취소·환불 시도는 이 factory가 만들지 않는다.
          */
         fun create(
             command: CreatePaymentAttemptCommand,
