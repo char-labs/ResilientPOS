@@ -3,7 +3,7 @@ package com.resilientpos.payment.internal.application
 import com.resilientpos.payment.AuthorizePaymentCommand
 import com.resilientpos.payment.PaymentAttemptCreated
 import com.resilientpos.payment.PaymentManagement
-import org.slf4j.LoggerFactory
+import com.resilientpos.platform.logger
 import org.springframework.modulith.events.ApplicationModuleListener
 import org.springframework.stereotype.Component
 import org.springframework.transaction.annotation.Propagation
@@ -35,16 +35,13 @@ class PaymentAttemptCreatedListener(
         val result = paymentManagement.authorize(AuthorizePaymentCommand(event.paymentId))
 
         // 이 메서드가 트랜잭션이 아니라 Facade가 반환했으면 이미 커밋됐다. 그래서 바로 남겨도 참이다.
-        log.info(
-            "결제 승인 결과 적용 orderId={} checkoutNo={} paymentId={} status={}",
-            event.orderId,
-            event.checkoutNo,
-            result.paymentId.value,
-            result.status,
-        )
+        log.info {
+            "결제 승인 결과 적용 orderId=${event.orderId} checkoutNo=${event.checkoutNo} " +
+                "paymentId=${result.paymentId.value} status=${result.status}"
+        }
     }
 
     companion object {
-        private val log = LoggerFactory.getLogger(PaymentAttemptCreatedListener::class.java)
+        private val log by logger()
     }
 }
