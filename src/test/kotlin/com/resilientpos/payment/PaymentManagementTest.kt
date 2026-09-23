@@ -23,10 +23,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 import org.springframework.context.ApplicationEventPublisher
-import org.springframework.transaction.PlatformTransactionManager
-import org.springframework.transaction.TransactionDefinition
-import org.springframework.transaction.TransactionStatus
-import org.springframework.transaction.support.SimpleTransactionStatus
+import org.springframework.transaction.support.TransactionOperations
 
 /**
  * Facade가 **어떤 사실을 발행하는지** 고정한다.
@@ -55,13 +52,6 @@ class PaymentManagementTest {
             saved += it
             stored[it.id] = it
         }
-    }
-
-    /** 콜백만 실행한다. 트랜잭션 경계는 통합 테스트가 본다. */
-    private object NoTransactionManager : PlatformTransactionManager {
-        override fun getTransaction(definition: TransactionDefinition?): TransactionStatus = SimpleTransactionStatus()
-        override fun commit(status: TransactionStatus) = Unit
-        override fun rollback(status: TransactionStatus) = Unit
     }
 
     /** 정해진 결말만 돌려주고 불린 횟수를 센다. */
@@ -96,7 +86,7 @@ class PaymentManagementTest {
         UuidV7IdentifierGenerator(),
         Clock.fixed(Instant.parse("2026-09-22T01:00:00Z"), ZoneOffset.UTC),
         publisher,
-        NoTransactionManager,
+        TransactionOperations.withoutTransaction(),
     )
 
     @Test

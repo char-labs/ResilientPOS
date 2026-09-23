@@ -10,13 +10,15 @@
 
 `PaymentAttemptCreated`는 지금까지 소비자가 없어 발행돼도 기록되지 않았다. 이 리스너가 첫 소비자다. **그 순간부터 이 이벤트가 `event_publication`에 기록된다.**
 
-**provider 호출은 트랜잭션 밖이다.** [도메인 모델](../wiki/domain-model.md) §4.6("provider 승인 호출은 트랜잭션 밖")과 §6("provider 호출·외부 전송은 상자 밖")이 정한 것이다. `authorize`는 트랜잭션 셋으로 나뉜다.
+**provider 호출은 트랜잭션 밖이다.** [도메인 모델](../wiki/domain-model.md) §4.6("provider 승인 호출은 트랜잭션 밖")과 §6("provider 호출·외부 전송은 상자 밖")이 정한 것이다. `authorize`에서 트랜잭션은 적용 하나뿐이다.
 
 ```
-tx1  시도를 읽는다 → 결말이 났으면 돌아선다
-     provider를 부른다 (트랜잭션 없음, DB 커넥션을 쥐지 않는다)
-tx2  시도를 잠그고 다시 읽는다 → 그사이 결말이 났으면 돌아선다 → 결과를 적용하고 사실을 발행한다
+     시도를 읽는다 → 결말이 났으면 돌아선다
+     provider를 부른다 (DB 커넥션을 쥐지 않는다)
+tx   시도를 잠그고 다시 읽는다 → 그사이 결말이 났으면 돌아선다 → 결과를 적용하고 사실을 발행한다
 ```
+
+앞의 조회는 트랜잭션으로 감싸지 않는다. 감쌌을 때와 안 감쌌을 때 provider를 부르는 순간 그 스레드에 EntityManager도 물리 커넥션도 남지 않아 같았다. 적용 트랜잭션은 Boot가 등록한 `TransactionOperations` 빈으로 연다 — 같은 클래스의 `@Transactional` 메서드는 프록시를 거치지 않아 열리지 않는다.
 
 그러려면 리스너 자신이 트랜잭션이면 안 된다. `@ApplicationModuleListener`는 `@Async`·`@TransactionalEventListener`·`@Transactional(REQUIRES_NEW)`의 합성이라 리스너가 트랜잭션을 열고 Facade가 그 안에 합류한다. **두 리스너 모두 `@ApplicationModuleListener(propagation = NOT_SUPPORTED)`로 트랜잭션을 끈다.** `propagation`이 메타 애너테이션의 `@Transactional`로 이어지는 속성이라 표준 애너테이션을 그대로 쓴다. 발행 기록은 발행하는 쪽의 트랜잭션에서 쓰이고 완료 표시는 Modulith가 리스너 반환 뒤 자기 트랜잭션에서 하므로, 리스너가 트랜잭션이 아니어도 추적이 유지된다. 같은 관측 테스트를 기본값과 이 설정에 돌려 확인했다 — 승인하면 `COMPLETED`, 리스너가 던지면 `FAILED`로 같고, provider 호출 중 트랜잭션이 활성에서 비활성으로, 쥔 커넥션이 하나 줄었다. `listener_id`도 같다.
 
@@ -24,7 +26,7 @@ tx2  시도를 잠그고 다시 읽는다 → 그사이 결말이 났으면 돌�
 
 **tx2는 행을 잠근다.** provider 호출을 밖으로 빼면 읽기와 적용 사이가 네트워크 왕복만큼 벌어진다. 그 사이에 같은 시도에 대한 다른 `authorize`가 끼어들면 둘 다 `REQUESTED`를 읽고 둘 다 적용해, 나중에 커밋한 쪽이 앞의 결과를 덮는다 — 승인이 거절로 조용히 바뀐다. `order`의 `findByIdForUpdate`와 같은 모양(`PESSIMISTIC_WRITE`, 대기 3초)으로 잠그고 다시 읽는다. 진 쪽은 앞 트랜잭션의 커밋을 기다렸다가 결말을 보고 돌아선다. 스키마를 바꾸지 않는다.
 
-**잠금이 막는 것은 DB 안의 이중 적용이다. provider 쪽 이중 호출은 막지 못한다.** 두 호출이 모두 tx1을 지나면 provider는 두 번 불린다. 그때 이중 청구를 막는 것은 같은 `PaymentId`에 같은 답을 주는 provider의 멱등성이고, 이 포트가 구현에 요구하는 계약이다. 조기 반환은 결말이 난 시도에 불필요한 호출을 하지 않게 할 뿐이다.
+**잠금이 막는 것은 DB 안의 이중 적용이다. provider 쪽 이중 호출은 막지 못한다.** 두 호출이 모두 앞의 조회를 지나면 provider는 두 번 불린다. 그때 이중 청구를 막는 것은 같은 `PaymentId`에 같은 답을 주는 provider의 멱등성이고, 이 포트가 구현에 요구하는 계약이다. 조기 반환은 결말이 난 시도에 불필요한 호출을 하지 않게 할 뿐이다.
 
 **같은 `OrderPaymentRequested`가 다시 와도 시도는 하나다 — 거절 뒤에도.** 시도를 만들 때 그 checkout의 승인 시도가 **결말과 무관하게** 이미 있으면 그것을 돌려준다. `OrderPaymentRequested`는 checkout 회차마다 한 번 나고 `(orderId, checkoutNo)`가 `t_order_checkout`의 자연 키이므로, 같은 쌍이 다시 오면 그것은 재시도가 아니라 같은 사실의 재배달이다. 진행 중인 시도만 찾으면 거절된 시도를 못 보고 새 `PaymentId`로 provider를 다시 부르는데, 멱등 키가 달라 provider도 막아 주지 못한다.
 

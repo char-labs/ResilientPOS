@@ -11,9 +11,8 @@ import com.resilientpos.payment.internal.domain.PaymentGateway
 import java.time.Clock
 import org.springframework.context.ApplicationEventPublisher
 import org.springframework.stereotype.Service
-import org.springframework.transaction.PlatformTransactionManager
 import org.springframework.transaction.annotation.Transactional
-import org.springframework.transaction.support.TransactionTemplate
+import org.springframework.transaction.support.TransactionOperations
 
 /**
  * `payment` 모듈의 유일한 진입점. 결제 정본 상태를 바꾸는 일은 전부 여기를 거친다.
@@ -26,11 +25,8 @@ class PaymentManagement(
     private val identifierGenerator: IdentifierGenerator,
     private val clock: Clock,
     private val eventPublisher: ApplicationEventPublisher,
-    transactionManager: PlatformTransactionManager,
+    private val transactions: TransactionOperations,
 ) {
-
-    /** [authorize]가 provider 호출 앞뒤로 짧은 트랜잭션 둘을 여는 데 쓴다. 호출 자체는 어느 쪽에도 들지 않는다. */
-    private val transactions = TransactionTemplate(transactionManager)
 
     /**
      * 한 checkout의 승인 시도를 만든다. 같은 요청이 다시 와도 시도를 두 번 만들지 않는다.
@@ -62,21 +58,14 @@ class PaymentManagement(
     /**
      * 기록된 시도에 provider 승인을 요청하고 결과를 적용한다.
      *
-     * **provider 호출은 트랜잭션 밖이다**(도메인 모델 §4.6·§6). 짧은 트랜잭션 둘 사이에서 부른다 —
-     * 앞에서 읽고, 부르고, 뒤에서 잠그고 다시 읽어 적용한다. 부르는 동안 DB 커넥션을 쥐지 않는다.
-     * 그래서 이 메서드에는 `@Transactional`이 없고 **부르는 쪽도 트랜잭션 밖이어야 한다.** 트랜잭션 안에서
-     * 부르면 두 단계가 바깥 트랜잭션에 합류해 호출이 다시 그 안에 들어간다.
+     * provider 호출은 트랜잭션 밖이라(도메인 모델 §4.6) 이 메서드는 `@Transactional`이 아니고, 트랜잭션 안에서 부르면
+     * 안 된다. 적용만 트랜잭션이다. 같은 클래스의 `@Transactional` 메서드는 프록시를 거치지 않아 열리지 않으므로
+     * Boot가 등록한 [TransactionOperations]로 연다.
      *
-     * **결말이 난 시도면 provider를 부르지 않는다.** 0원 시도와 재배달된 사실이 이 문에서 돌아선다.
-     * 불필요한 호출을 줄일 뿐 이중 청구 방어가 아니다. 두 호출이 동시에 앞 단계를 지나면 provider는
-     * 두 번 불리고, 그때 이중 청구를 막는 것은 같은 `PaymentId`에 같은 답을 주는 provider의 멱등성이다.
-     *
-     * **적용은 행을 잠그고 다시 읽은 뒤에 한다.** 부르는 동안 다른 `authorize`가 먼저 결말을 적었을 수 있다.
-     * 잠그지 않으면 둘 다 `REQUESTED`를 읽고 둘 다 적용해 나중 커밋이 앞 결과를 덮는다 — 승인이 거절로
-     * 조용히 바뀐다. 진 쪽은 앞 트랜잭션의 커밋을 기다렸다가 결말을 보고 돌아선다.
+     * 결말이 난 시도면 provider를 부르지 않는다(0원·재배달). 이중 청구 방어는 아니다 — 그건 provider의 `PaymentId` 멱등성이다.
      */
     fun authorize(command: AuthorizePaymentCommand): AuthorizePaymentResult {
-        val attempt = transactions.execute { repository.findById(command.paymentId) } ?: throw attemptNotFound()
+        val attempt = repository.findById(command.paymentId) ?: throw attemptNotFound()
         if (attempt.status != PaymentAttemptStatus.REQUESTED) {
             return AuthorizePaymentResult(attempt.id, attempt.status)
         }
@@ -86,6 +75,7 @@ class PaymentManagement(
         return requireNotNull(transactions.execute { applyOutcome(command.paymentId, outcome) })
     }
 
+    /** 잠그고 다시 읽는다. 호출하는 동안 다른 `authorize`가 먼저 적용했으면 덮지 않고 그 결말을 돌려준다. */
     private fun applyOutcome(paymentId: PaymentId, outcome: AuthorizationOutcome): AuthorizePaymentResult {
         val current = repository.findByIdForUpdate(paymentId) ?: throw attemptNotFound()
         if (current.status != PaymentAttemptStatus.REQUESTED) {
