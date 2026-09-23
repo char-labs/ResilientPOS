@@ -23,15 +23,15 @@ AuthorizationOutcome = Approved(providerReference) | Declined(providerReference?
 
 **결과 적용은 aggregate가 한다.** `PaymentAttempt.applyAuthorization(outcome, ids, now)`가 새 인스턴스와 이벤트를 돌려준다. `REQUESTED`가 아닌 시도에 결과를 적용하면 `PAYMENT_RESULT_ALREADY_APPLIED`로 거절한다. [도메인 모델](../wiki/domain-model.md) §2의 "provider 결과는 한 번만 적용한다"가 이 불변식이다.
 
-| 결과 | 상태 | 내는 이벤트 |
-|---|---|---|
-| Approved | `APPROVED` | `PaymentApproved` |
-| Declined | `DECLINED` | 없다 |
-| Unknown | `UNKNOWN` | `PaymentUnknown` |
+| 결과 | 상태 | 내는 이벤트 | 이벤트가 사는 곳 |
+|---|---|---|---|
+| Approved | `APPROVED` | `PaymentApproved` | `contract` |
+| Declined | `DECLINED` | `PaymentDeclined` | `payment` |
+| Unknown | `UNKNOWN` | `PaymentUnknown` | `payment` |
 
-**`PaymentUnknown`을 더한다.** [용어집](../wiki/domain-model.md) §3이 이미 정한 이름이다. `reconciliation`이 받을 사실이지만 그 모듈이 비어 있어 지금은 소비자가 없다. 그래서 `contract`가 아니라 `payment`의 sealed 계층에 둔다 — 경계를 넘는 것만 `contract`가 소유한다는 §4.4를 따른다.
+**`PaymentDeclined`와 `PaymentUnknown`을 더한다.** `PaymentEvent`의 KDoc이 "provider 결과를 적용하는 전이가 생기는 PR이 `PaymentDeclined`·`PaymentUnknown`을 더한다"로 이 자리를 예고했고, `PaymentUnknown`은 [용어집](../wiki/domain-model.md) §3이 이미 정한 이름이다.
 
-**거절에는 이벤트를 두지 않는다.** 용어집에 이름이 없고 받을 쪽도 없다. 거절 사실은 시도 행의 `status`가 말한다. 소비자가 생기는 PR이 이름과 payload를 정한다.
+**셋 중 둘은 `payment`에 남는다.** `PaymentApproved`만 `order`와 `reconciliation`이 받아 경계를 넘고, 거절과 미확인은 받을 쪽이 아직 없다. 경계를 넘는 것만 `contract`가 소유한다는 §4.4가 이 비대칭의 이유다. 소비자가 생기면 그 PR이 옮기고, 그 이동은 저장 형식을 건드리므로 그때 배포된 행이 있는지부터 본다.
 
 **Facade가 진입점이다.** `PaymentManagement.authorize(AuthorizePaymentCommand)`가 시도를 읽고, `REQUESTED`가 아니면 provider를 부르지 않고 현재 상태를 돌려준다. 0원 주문은 이미 `APPROVED`로 만들어지므로 이 조기 반환이 그 시도를 provider에서 지켜 준다.
 
@@ -55,7 +55,7 @@ AuthorizationOutcome = Approved(providerReference) | Declined(providerReference?
 - 취소·환불 시도. `PaymentAttemptKind`에 값은 있지만 되돌릴 승인이 이제야 생긴다.
 - `order`가 `PaymentApproved`를 받아 주문을 전이시키는 것. `contract`로 옮겨 길은 열어 두었고 소비자는 그 PR이 만든다.
 - `UNKNOWN`을 provider 조회로 수렴시키는 것. 조회 API가 포트에 없다. reconciliation이 생기는 PR이 정한다.
-- 거절 사유를 저장하는 것. 컬럼이 없고, 만들면 스키마 변경이 된다. 받을 쪽도 아직 없다.
+- 거절 사유를 저장하는 것. 컬럼이 없고, 만들면 스키마 변경이 된다. `PaymentDeclined`도 사유를 담지 않는다 — 받을 쪽이 없어 무엇이 필요한지 정할 근거가 없다.
 - 리스너 스레드 풀과 종료 대기. Fake는 네트워크를 타지 않아 지연이 없고, 실제 provider 없이 코어 수·큐 상한·거절 정책을 정하면 근거 없는 숫자가 박힌다. 실제 provider가 붙는 PR이 정한다.
 - 실제 PG 연동. 토스페이먼츠 같은 구현은 이 포트 뒤에 붙는다.
 - provider 호출의 타임아웃 설정. Fake에 걸 대상이 없다.
@@ -72,12 +72,12 @@ AuthorizationOutcome = Approved(providerReference) | Declined(providerReference?
 
 ## 인수 조건
 1. 승인이 나는 금액이면 시도가 `APPROVED`가 되고 provider 참조가 남는다.
-2. 거절이 나는 금액이면 시도가 `DECLINED`가 되고 이벤트가 없다.
+2. 거절이 나는 금액이면 시도가 `DECLINED`가 되고 `PaymentDeclined`가 난다.
 3. 미확인이 나는 금액이면 시도가 `UNKNOWN`이 된다.
 4. 0원 주문은 provider를 부르지 않는다.
 5. 이미 결말이 난 시도에 결과를 적용하면 `PAYMENT_RESULT_ALREADY_APPLIED`로 거절한다.
 6. 주문 생성부터 checkout, 시도 기록, 승인까지 한 흐름이 통합 테스트로 돈다.
-7. `PaymentUnknown`의 정규 이름이 고정된다.
+7. `PaymentDeclined`와 `PaymentUnknown`의 정규 이름이 고정된다.
 8. 기존 테스트가 하나도 깨지지 않는다.
 
 ## 검증
@@ -87,7 +87,7 @@ AuthorizationOutcome = Approved(providerReference) | Declined(providerReference?
 
 ## Wiki 영향
 - [현재 상태](../wiki/current-state.md) — provider 경계, 결과 적용 전이, `PaymentAttemptCreated`가 기록되기 시작한다는 사실, 남는 빈틈을 갱신한다.
-- [도메인 모델](../wiki/domain-model.md) — `PaymentUnknown`의 소속과 거절에 이벤트를 두지 않은 이유를 적는다.
+- [도메인 모델](../wiki/domain-model.md) — 결제 이벤트 셋의 소속이 갈리는 이유를 적는다.
 - 요구사항 변화: 없다. 결제 흐름이 정본이 예고한 대로 이어진다. API도 스키마도 그대로다.
 
 ## 분할 계획
