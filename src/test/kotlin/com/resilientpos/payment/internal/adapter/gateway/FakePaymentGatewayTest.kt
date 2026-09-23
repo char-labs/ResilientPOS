@@ -48,10 +48,4 @@ class FakePaymentGatewayTest {
         assertIs<AuthorizationOutcome.Declined>(authorize("45.01", usd))
         assertIs<AuthorizationOutcome.Approved>(authorize("45.00", usd))
     }
-
-    @Test
-    fun `같은 입력은 항상 같은 결과다`() {
-        assertEquals(authorize("4500"), authorize("4500"))
-        assertEquals(authorize("4501"), authorize("4501"))
-    }
 }

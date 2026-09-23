@@ -3,14 +3,17 @@ package com.resilientpos.payment
 import com.resilientpos.foundation.DomainErrorKind
 import com.resilientpos.foundation.DomainException
 import com.resilientpos.foundation.IdentifierGenerator
-import com.resilientpos.payment.internal.domain.PaymentAttempt
+import com.resilientpos.payment.internal.domain.AuthorizationOutcome
 import com.resilientpos.payment.internal.domain.AuthorizationRequest
+import com.resilientpos.payment.internal.domain.PaymentAttempt
 import com.resilientpos.payment.internal.domain.PaymentAttemptRepository
 import com.resilientpos.payment.internal.domain.PaymentGateway
 import java.time.Clock
 import org.springframework.context.ApplicationEventPublisher
 import org.springframework.stereotype.Service
+import org.springframework.transaction.PlatformTransactionManager
 import org.springframework.transaction.annotation.Transactional
+import org.springframework.transaction.support.TransactionTemplate
 
 /**
  * `payment` 모듈의 유일한 진입점. 결제 정본 상태를 바꾸는 일은 전부 여기를 거친다.
@@ -23,13 +26,20 @@ class PaymentManagement(
     private val identifierGenerator: IdentifierGenerator,
     private val clock: Clock,
     private val eventPublisher: ApplicationEventPublisher,
+    transactionManager: PlatformTransactionManager,
 ) {
 
+    /** [authorize]가 provider 호출 앞뒤로 짧은 트랜잭션 둘을 여는 데 쓴다. 호출 자체는 어느 쪽에도 들지 않는다. */
+    private val transactions = TransactionTemplate(transactionManager)
+
     /**
-     * 한 checkout의 승인 시도를 만든다. 같은 이벤트가 다시 와도 시도를 두 번 만들지 않는다.
+     * 한 checkout의 승인 시도를 만든다. 같은 요청이 다시 와도 시도를 두 번 만들지 않는다.
      *
-     * 이미 진행 중인 승인이 있으면 그것을 그대로 돌려주고 이벤트를 다시 내지 않는다. 다시 내면
-     * 소비자가 같은 사실을 두 번 보게 되고, 이 시도는 새로 일어난 일이 아니다.
+     * 그 checkout에 승인 시도가 **결말과 무관하게** 이미 있으면 그것을 돌려주고 이벤트를 다시 내지 않는다.
+     * `OrderPaymentRequested`는 checkout 회차마다 한 번 나므로 같은 `(orderId, checkoutNo)`가 다시 오면
+     * 재시도가 아니라 같은 사실의 재배달이다. 진행 중인 시도만 찾으면 거절된 시도를 못 보고 새 `PaymentId`로
+     * provider를 다시 부르는데, 멱등 키가 달라 provider도 막아 주지 못한다. 거절 뒤 재결제는 사용자가
+     * 명시적으로 요청하는 별도 명령이 할 일이다 — 사실의 재배달과 재결제 의도를 같은 입구로 받지 않는다.
      *
      * 읽은 뒤 넣기 전에 다른 트랜잭션이 끼어드는 창은 이 읽기로 닫히지 않는다. DB의 partial unique가 닫고
      * 진 쪽은 실패한다. 그 예외는 **여기서 잡을 수 있는 것이 아니다.** `persist`가 flush를 미뤄서
@@ -38,9 +48,9 @@ class PaymentManagement(
      */
     @Transactional
     fun createAttempt(command: CreatePaymentAttemptCommand): CreatePaymentAttemptResult {
-        val inflight = repository.findInflightAuthorization(command.orderId, command.checkoutNo)
-        if (inflight != null) {
-            return CreatePaymentAttemptResult(inflight.id, inflight.status)
+        val existing = repository.findAuthorization(command.orderId, command.checkoutNo)
+        if (existing != null) {
+            return CreatePaymentAttemptResult(existing.id, existing.status)
         }
 
         val transition = PaymentAttempt.create(command, identifierGenerator, clock.instant())
@@ -52,35 +62,46 @@ class PaymentManagement(
     /**
      * 기록된 시도에 provider 승인을 요청하고 결과를 적용한다.
      *
-     * **결말이 난 시도면 provider를 부르지 않고 돌아선다.** 0원 시도가 만들어지자마자 `APPROVED`인 것과
-     * 같은 사실이 다시 배달된 경우가 둘 다 이 문으로 막힌다. 이미 승인된 결제를 provider에 또 요청하면
-     * 이중 청구가 된다.
+     * **provider 호출은 트랜잭션 밖이다**(도메인 모델 §4.6·§6). 짧은 트랜잭션 둘 사이에서 부른다 —
+     * 앞에서 읽고, 부르고, 뒤에서 잠그고 다시 읽어 적용한다. 부르는 동안 DB 커넥션을 쥐지 않는다.
+     * 그래서 이 메서드에는 `@Transactional`이 없고 **부르는 쪽도 트랜잭션 밖이어야 한다.** 트랜잭션 안에서
+     * 부르면 두 단계가 바깥 트랜잭션에 합류해 호출이 다시 그 안에 들어간다.
      *
-     * **provider 호출이 이 트랜잭션 안에서 일어난다.** 호출이 끝날 때까지 DB 커넥션을 쥐고 있다는 뜻이다.
-     * `@ApplicationModuleListener`가 자기 트랜잭션을 여는 구조라 호출만 밖으로 뺄 자리가 없다.
-     * 실제 provider가 붙어 지연이 생기면 커넥션 풀과 함께 다시 본다.
+     * **결말이 난 시도면 provider를 부르지 않는다.** 0원 시도와 재배달된 사실이 이 문에서 돌아선다.
+     * 불필요한 호출을 줄일 뿐 이중 청구 방어가 아니다. 두 호출이 동시에 앞 단계를 지나면 provider는
+     * 두 번 불리고, 그때 이중 청구를 막는 것은 같은 `PaymentId`에 같은 답을 주는 provider의 멱등성이다.
      *
-     * 읽은 뒤 적용하기 전에 다른 트랜잭션이 같은 시도에 결과를 적용하는 창은 여기서 닫히지 않는다.
-     * 지금은 재발행이 꺼져 있어 같은 사실이 동시에 두 번 배달되지 않으므로 그 창이 열리지 않는다.
-     * 재발행을 켜는 PR이 업무 수준 멱등 근거를 함께 정한다.
+     * **적용은 행을 잠그고 다시 읽은 뒤에 한다.** 부르는 동안 다른 `authorize`가 먼저 결말을 적었을 수 있다.
+     * 잠그지 않으면 둘 다 `REQUESTED`를 읽고 둘 다 적용해 나중 커밋이 앞 결과를 덮는다 — 승인이 거절로
+     * 조용히 바뀐다. 진 쪽은 앞 트랜잭션의 커밋을 기다렸다가 결말을 보고 돌아선다.
      */
-    @Transactional
     fun authorize(command: AuthorizePaymentCommand): AuthorizePaymentResult {
-        val attempt = repository.findById(command.paymentId)
-            ?: throw DomainException(
-                PaymentAttempt.PAYMENT_ATTEMPT_NOT_FOUND,
-                "결제 시도를 찾을 수 없습니다",
-                DomainErrorKind.NOT_FOUND,
-            )
-
+        val attempt = transactions.execute { repository.findById(command.paymentId) } ?: throw attemptNotFound()
         if (attempt.status != PaymentAttemptStatus.REQUESTED) {
             return AuthorizePaymentResult(attempt.id, attempt.status)
         }
 
         val outcome = gateway.authorize(AuthorizationRequest(attempt.id, attempt.amount))
-        val transition = attempt.applyAuthorization(outcome, identifierGenerator, clock.instant())
+
+        return requireNotNull(transactions.execute { applyOutcome(command.paymentId, outcome) })
+    }
+
+    private fun applyOutcome(paymentId: PaymentId, outcome: AuthorizationOutcome): AuthorizePaymentResult {
+        val current = repository.findByIdForUpdate(paymentId) ?: throw attemptNotFound()
+        if (current.status != PaymentAttemptStatus.REQUESTED) {
+            return AuthorizePaymentResult(current.id, current.status)
+        }
+
+        val transition = current.applyAuthorization(outcome, identifierGenerator, clock.instant())
         val applied = repository.update(transition.aggregate)
+        // 발행 기록이 결과와 같은 커밋에 들어가야 하므로 이 트랜잭션 안에서 발행한다(도메인 모델 §4.3).
         transition.events.forEach(eventPublisher::publishEvent)
         return AuthorizePaymentResult(applied.id, applied.status)
     }
+
+    private fun attemptNotFound() = DomainException(
+        PaymentAttempt.PAYMENT_ATTEMPT_NOT_FOUND,
+        "결제 시도를 찾을 수 없습니다",
+        DomainErrorKind.NOT_FOUND,
+    )
 }

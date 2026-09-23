@@ -1,19 +1,19 @@
 package com.resilientpos.payment.internal.domain
 
+import com.resilientpos.contract.PaymentApproved
+import com.resilientpos.contract.PaymentAttemptKind
 import com.resilientpos.foundation.DomainErrorKind
+import com.resilientpos.foundation.DomainEvent
 import com.resilientpos.foundation.DomainException
 import com.resilientpos.foundation.IdentifierGenerator
 import com.resilientpos.foundation.Money
 import com.resilientpos.foundation.Transition
 import com.resilientpos.payment.CreatePaymentAttemptCommand
-import com.resilientpos.contract.PaymentApproved
 import com.resilientpos.payment.PaymentAttemptCreated
-import com.resilientpos.payment.PaymentDeclined
-import com.resilientpos.payment.PaymentUnknown
-import com.resilientpos.contract.PaymentAttemptKind
 import com.resilientpos.payment.PaymentAttemptStatus
-import com.resilientpos.foundation.DomainEvent
+import com.resilientpos.payment.PaymentDeclined
 import com.resilientpos.payment.PaymentId
+import com.resilientpos.payment.PaymentUnknown
 import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.TerminalId
 import java.time.Instant
@@ -25,7 +25,7 @@ import java.util.UUID
  * 한 주문에 시도가 여럿 달린다. 승인이 거절되면 다음 시도가 생기고 취소·환불도 각각 별도 시도다.
  * 식별은 [PaymentId] 하나가 하고 `orderId`는 참조일 뿐이라, 한 주문에 몇 건이 달리든 제약이 없다.
  * 무엇을 요청한 시도인지는 [PaymentAttemptKind]가 말한다.
- * 그 `orderId`는 raw `UUID`다. 모듈 간선은 리스너가 이미 만들었고, 이 선택의 목적은 공개 계약을 `order` 타입에서 떼어 놓는 것이다.
+ * 그 `orderId`가 raw `UUID`인 이유는 `PaymentEvent`에 있다.
  */
 class PaymentAttempt private constructor(
     val id: PaymentId,
@@ -63,50 +63,49 @@ class PaymentAttempt private constructor(
             )
         }
 
-        val applied = when (outcome) {
-            is AuthorizationOutcome.Approved -> copy(PaymentAttemptStatus.APPROVED, outcome.providerReference)
-            is AuthorizationOutcome.Declined -> copy(PaymentAttemptStatus.DECLINED, outcome.providerReference)
+        // 상태와 사실을 한 갈래에서 함께 정한다. 둘을 따로 매핑하면 결말 하나를 더할 때 컴파일러가 둘 다 강제하긴
+        // 해도 서로 어긋나게 짝짓는 것은 막지 못한다.
+        val (applied, event) = when (outcome) {
+            is AuthorizationOutcome.Approved -> copy(PaymentAttemptStatus.APPROVED, outcome.providerReference) to
+                PaymentApproved(
+                    eventId = ids.next(),
+                    occurredAt = now,
+                    paymentId = id.value,
+                    orderId = orderId,
+                    storeId = storeId,
+                    terminalId = terminalId,
+                    checkoutNo = checkoutNo,
+                    kind = kind,
+                    amount = amount,
+                    providerReference = outcome.providerReference,
+                )
+
+            is AuthorizationOutcome.Declined -> copy(PaymentAttemptStatus.DECLINED, outcome.providerReference) to
+                PaymentDeclined(
+                    eventId = ids.next(),
+                    occurredAt = now,
+                    paymentId = id,
+                    orderId = orderId,
+                    checkoutNo = checkoutNo,
+                    kind = kind,
+                    amount = amount,
+                    providerReference = outcome.providerReference,
+                )
+
             // provider가 무엇을 했는지 모른다. 참조를 지어내면 그 참조가 거짓이 된다.
-            AuthorizationOutcome.Unknown -> copy(PaymentAttemptStatus.UNKNOWN, null)
+            AuthorizationOutcome.Unknown -> copy(PaymentAttemptStatus.UNKNOWN, null) to
+                PaymentUnknown(
+                    eventId = ids.next(),
+                    occurredAt = now,
+                    paymentId = id,
+                    orderId = orderId,
+                    checkoutNo = checkoutNo,
+                    kind = kind,
+                    amount = amount,
+                )
         }
 
-        val event: DomainEvent = when (outcome) {
-            is AuthorizationOutcome.Approved -> PaymentApproved(
-                eventId = ids.next(),
-                occurredAt = now,
-                paymentId = id.value,
-                orderId = orderId,
-                storeId = storeId,
-                terminalId = terminalId,
-                checkoutNo = checkoutNo,
-                kind = kind,
-                amount = amount,
-                providerReference = outcome.providerReference,
-            )
-
-            is AuthorizationOutcome.Declined -> PaymentDeclined(
-                eventId = ids.next(),
-                occurredAt = now,
-                paymentId = id,
-                orderId = orderId,
-                checkoutNo = checkoutNo,
-                kind = kind,
-                amount = amount,
-                providerReference = outcome.providerReference,
-            )
-
-            AuthorizationOutcome.Unknown -> PaymentUnknown(
-                eventId = ids.next(),
-                occurredAt = now,
-                paymentId = id,
-                orderId = orderId,
-                checkoutNo = checkoutNo,
-                kind = kind,
-                amount = amount,
-            )
-        }
-
-        return Transition(applied, listOf(event))
+        return Transition(applied, listOf<DomainEvent>(event))
     }
 
     /** 결말만 바뀐 새 인스턴스. 나머지 값은 시도가 만들어질 때 확정됐고 바뀌지 않는다. */
@@ -127,8 +126,12 @@ class PaymentAttempt private constructor(
 
     companion object {
         /**
-         * 아직 결말이 나지 않은 승인 시도의 상태. 같은 checkout에 이 상태의 승인은 하나뿐이고,
-         * `ux_payment_attempt_inflight_authorization`의 술어가 같은 값을 쓴다. 한쪽만 바꾸면 방어선이 어긋난다.
+         * 같은 checkout에 둘 이상 있을 수 없는 승인 시도의 상태. **결말이 났는지와 같은 말이 아니다** —
+         * `APPROVED`도 든다. 승인된 checkout에 새 승인이 생기면 이중 청구이기 때문이다. `DECLINED`는 빠진다.
+         * 거절 뒤 재결제를 DB가 막지 않게 하려는 것이다.
+         *
+         * `ux_payment_attempt_inflight_authorization`의 술어가 같은 값을 쓰고 `PaymentAttemptSchemaTest`가 둘을 대조한다.
+         * 한쪽만 바꾸면 방어선이 어긋난다.
          */
         val INFLIGHT_STATUSES = setOf(
             PaymentAttemptStatus.REQUESTED,

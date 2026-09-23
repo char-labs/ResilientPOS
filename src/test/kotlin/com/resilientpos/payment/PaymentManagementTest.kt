@@ -2,6 +2,8 @@ package com.resilientpos.payment
 
 import com.resilientpos.contract.PaymentApproved
 import com.resilientpos.contract.PaymentAttemptKind
+import com.resilientpos.foundation.DomainErrorKind
+import com.resilientpos.foundation.DomainException
 import com.resilientpos.foundation.Money
 import com.resilientpos.foundation.UuidV7IdentifierGenerator
 import com.resilientpos.payment.internal.domain.PaymentAttempt
@@ -18,8 +20,13 @@ import java.util.Currency
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
 import kotlin.test.assertTrue
 import org.springframework.context.ApplicationEventPublisher
+import org.springframework.transaction.PlatformTransactionManager
+import org.springframework.transaction.TransactionDefinition
+import org.springframework.transaction.TransactionStatus
+import org.springframework.transaction.support.SimpleTransactionStatus
 
 /**
  * Facade가 **어떤 사실을 발행하는지** 고정한다.
@@ -33,12 +40,13 @@ class PaymentManagementTest {
     private val krw: Currency = Currency.getInstance("KRW")
     private val orderId: UUID = UUID.randomUUID()
 
-    private class RecordingRepository(var inflight: PaymentAttempt? = null) : PaymentAttemptRepository {
+    private class RecordingRepository(var existing: PaymentAttempt? = null) : PaymentAttemptRepository {
         val saved = mutableListOf<PaymentAttempt>()
         val updated = mutableListOf<PaymentAttempt>()
         val stored = mutableMapOf<PaymentId, PaymentAttempt>()
-        override fun findInflightAuthorization(orderId: UUID, checkoutNo: Int) = inflight
+        override fun findAuthorization(orderId: UUID, checkoutNo: Int) = existing
         override fun findById(paymentId: PaymentId) = stored[paymentId]
+        override fun findByIdForUpdate(paymentId: PaymentId) = stored[paymentId]
         override fun update(attempt: PaymentAttempt) = attempt.also {
             updated += it
             stored[it.id] = it
@@ -47,6 +55,13 @@ class PaymentManagementTest {
             saved += it
             stored[it.id] = it
         }
+    }
+
+    /** 콜백만 실행한다. 트랜잭션 경계는 통합 테스트가 본다. */
+    private object NoTransactionManager : PlatformTransactionManager {
+        override fun getTransaction(definition: TransactionDefinition?): TransactionStatus = SimpleTransactionStatus()
+        override fun commit(status: TransactionStatus) = Unit
+        override fun rollback(status: TransactionStatus) = Unit
     }
 
     /** 정해진 결말만 돌려주고 불린 횟수를 센다. */
@@ -81,6 +96,7 @@ class PaymentManagementTest {
         UuidV7IdentifierGenerator(),
         Clock.fixed(Instant.parse("2026-09-22T01:00:00Z"), ZoneOffset.UTC),
         publisher,
+        NoTransactionManager,
     )
 
     @Test
@@ -114,10 +130,10 @@ class PaymentManagementTest {
     }
 
     @Test
-    fun `이미 진행 중인 승인이 있으면 저장도 발행도 하지 않는다`() {
+    fun `그 checkout에 승인 시도가 이미 있으면 저장도 발행도 하지 않는다`() {
         // 다시 발행하면 소비자가 같은 사실을 두 번 본다. 이 시도는 새로 일어난 일이 아니다.
         val existing = PaymentAttempt.create(command("4500"), UuidV7IdentifierGenerator(), Instant.parse("2026-09-22T00:00:00Z")).aggregate
-        val repository = RecordingRepository(inflight = existing)
+        val repository = RecordingRepository(existing = existing)
         val publisher = RecordingPublisher()
 
         val result = management(repository, publisher).createAttempt(command("4500"))
@@ -176,5 +192,19 @@ class PaymentManagementTest {
         assertEquals(0, gateway.calls)
         assertTrue(publisher.published.isEmpty())
         assertTrue(repository.updated.isEmpty())
+    }
+
+    @Test
+    fun `없는 시도를 승인하려 하면 거절하고 provider를 부르지 않는다`() {
+        val gateway = StubGateway(AuthorizationOutcome.Approved("PROVIDER-REF"))
+        val management = management(RecordingRepository(), RecordingPublisher(), gateway)
+
+        val thrown = runCatching { management.authorize(AuthorizePaymentCommand(PaymentId(UUID.randomUUID()))) }
+            .exceptionOrNull()
+
+        val domain = assertIs<DomainException>(thrown)
+        assertEquals(PaymentAttempt.PAYMENT_ATTEMPT_NOT_FOUND, domain.code)
+        assertEquals(DomainErrorKind.NOT_FOUND, domain.kind)
+        assertEquals(0, gateway.calls)
     }
 }

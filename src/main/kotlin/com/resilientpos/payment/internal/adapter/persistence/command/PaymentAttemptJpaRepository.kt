@@ -1,8 +1,11 @@
 package com.resilientpos.payment.internal.adapter.persistence.command
 
 import com.resilientpos.contract.PaymentAttemptKind
-import com.resilientpos.payment.PaymentAttemptStatus
+import jakarta.persistence.LockModeType
+import jakarta.persistence.QueryHint
 import java.util.UUID
+import org.springframework.data.jpa.repository.Lock
+import org.springframework.data.jpa.repository.QueryHints
 import org.springframework.data.repository.Repository
 
 /**
@@ -23,16 +26,24 @@ interface PaymentAttemptJpaRepository : Repository<PaymentAttemptEntity, UUID> {
     fun findAllByOrderIdOrderById(orderId: UUID): List<PaymentAttemptEntity>
 
     /**
-     * 조건이 `ux_payment_attempt_inflight_authorization`의 술어와 같다. 둘이 갈라지면
-     * 조회는 없다고 하는데 INSERT는 거절당하는 상태가 된다.
+     * 그 checkout의 승인 시도 중 가장 먼저 만든 것. 결말로 거르지 않는다 — 거절된 시도도 찾아야
+     * 같은 사실이 다시 왔을 때 새 시도를 만들지 않는다.
      *
-     * 술어의 `deleted_at is null`은 여기 적지 않아도 `BaseEntity`의 `@SoftDelete`가 붙여 준다.
-     * 실제로 나가는 SQL이 `... and status in (?,?,?) and deleted_at is null`인 것을 확인했다.
+     * `deleted_at is null`은 여기 적지 않아도 `BaseEntity`의 `@SoftDelete`가 붙여 준다.
      */
-    fun findFirstByOrderIdAndCheckoutNoAndKindAndStatusIn(
+    fun findFirstByOrderIdAndCheckoutNoAndKindOrderById(
         orderId: UUID,
         checkoutNo: Int,
         kind: PaymentAttemptKind,
-        statuses: Set<PaymentAttemptStatus>,
     ): PaymentAttemptEntity?
+
+    /**
+     * PostgreSQL에서는 `select ... for no key update`다. 같은 시도에 결과를 적용하는 트랜잭션이 직렬화된다.
+     * 대기는 3초로 제한한다. `OrderJpaRepository.findWithLockById`와 같은 이유다 — 무기한 대기는 커넥션을 쥔 채 쌓여 풀을 말린다.
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @QueryHints(QueryHint(name = "jakarta.persistence.lock.timeout", value = PAYMENT_ATTEMPT_LOCK_TIMEOUT_MILLIS))
+    fun findWithLockById(id: UUID): PaymentAttemptEntity?
 }
+
+private const val PAYMENT_ATTEMPT_LOCK_TIMEOUT_MILLIS = "3000"

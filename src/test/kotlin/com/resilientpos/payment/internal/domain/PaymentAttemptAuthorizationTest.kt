@@ -126,15 +126,16 @@ class PaymentAttemptAuthorizationTest {
     }
 
     @Test
-    fun `이벤트마다 다른 eventId를 쓴다`() {
-        val transition = requested().applyAuthorization(
-            AuthorizationOutcome.Approved("PROVIDER-REF-5"),
-            ids(1),
-            now,
-        )
+    fun `결과 사실은 생성기에서 새 eventId를 받고 적용 시각을 쓴다`() {
+        val attempt = requested()
+        val generator = ids(1)
 
-        assertTrue(transition.events.isNotEmpty())
-        assertEquals(transition.events.size, transition.events.map { it.eventId }.distinct().size)
-        assertEquals(now, transition.events.single().occurredAt)
+        val event = attempt.applyAuthorization(AuthorizationOutcome.Approved("PROVIDER-REF-5"), generator, now)
+            .events.single()
+
+        // 시도의 식별자를 eventId로 되쓰면 소비자 멱등 기록 (consumer, eventId)에서 서로 다른 사실이 하나로 접힌다.
+        assertEquals(UUID.fromString("00000000-0000-0000-0000-000000010000"), event.eventId)
+        assertTrue(event.eventId != attempt.id.value)
+        assertEquals(now, event.occurredAt)
     }
 }

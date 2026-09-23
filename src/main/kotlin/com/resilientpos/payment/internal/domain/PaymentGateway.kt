@@ -19,6 +19,7 @@ interface PaymentGateway {
      *
      * 예외를 던지지 않고 [AuthorizationOutcome.Unknown]을 돌려주는 것이 이 포트의 계약이다.
      * 전송이 끊기거나 시간이 다한 것은 "거절"이 아니라 "결과를 모른다"이기 때문이다.
+     * 어기고 던지면 시도가 `REQUESTED`로 남아 "아직 부르지 않았다"와 구분되지 않는다 — 돈이 움직였을 수도 있는데.
      */
     fun authorize(request: AuthorizationRequest): AuthorizationOutcome
 }

@@ -9,10 +9,10 @@ import java.time.Instant
 import java.util.UUID
 
 /**
- * `payment` 모듈이 발행하는 도메인 이벤트의 닫힌 집합.
- * provider 결과를 적용하는 전이가 생기는 PR이 `PaymentDeclined`·`PaymentUnknown`을 더한다. *
- * `orderId`는 `order.OrderId`가 아니라 raw `UUID`다. 모듈 간선 `payment -> order`는 리스너가
- * `OrderPaymentRequested`를 받으면서 이미 생겼으므로 이 선택이 그 간선을 막지는 않는다.
+ * `payment` 모듈 안에 머무는 도메인 이벤트의 닫힌 집합. 모듈을 건너가는 `PaymentApproved`는 `contract`에 있다.
+ *
+ * `orderId`는 `order.OrderId`가 아니라 raw `UUID`다. 이 모듈의 공개 타입 전부에 같은 이유가 적용되고 여기에만 적는다.
+ * 모듈 간선 `payment -> order`는 리스너가 `OrderPaymentRequested`를 받으면서 이미 생겼으므로 이 선택이 그 간선을 막지는 않는다.
  * **공개 계약을 `order` 타입에서 떼어 놓는 것**이 목적이다. 순환을 푸는 PR이 `OrderPaymentRequested`를
  * 다른 곳으로 옮기더라도 `payment`의 공개 타입은 손대지 않아도 된다.
  */

@@ -75,8 +75,8 @@ class ModuleStructureTest {
 
     @Test
     fun `모듈 안에 머무는 결제 이벤트의 정규 이름을 고정한다`() {
-        // 소비자가 없어도 발행되는 순간 event_type에 이 이름이 들어간다. 받을 쪽이 생겨 contract로 옮기면
-        // 그 이동이 저장 형식을 바꾼다는 사실을 이 단언이 드러낸다.
+        // 지금은 받는 쪽이 없어 event_publication에 기록되지 않는다. 소비자가 생기는 순간 이 이름이
+        // event_type에 들어가고, 그때 contract로 옮기면 그 이동이 저장 형식을 바꾼다. 이 단언이 그것을 드러낸다.
         assertEquals("com.resilientpos.payment.PaymentDeclined", PaymentDeclined::class.java.name)
         assertEquals("com.resilientpos.payment.PaymentUnknown", PaymentUnknown::class.java.name)
     }

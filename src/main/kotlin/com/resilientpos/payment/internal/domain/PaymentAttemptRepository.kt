@@ -9,13 +9,21 @@ import java.util.UUID
 interface PaymentAttemptRepository {
 
     /**
-     * 그 checkout에 아직 결말이 나지 않은 승인 시도를 읽는다. 같은 이벤트가 다시 와도 시도를 두 번 만들지 않기 위한 조회다.
-     * 동시에 들어온 요청까지 막지는 못한다. 그 창은 DB의 partial unique가 닫는다.
+     * 그 checkout의 승인 시도를 **결말과 무관하게** 읽는다. 여럿이면 가장 먼저 만든 것이다.
+     * 같은 사실이 다시 와도 시도를 두 번 만들지 않기 위한 조회다.
+     * 동시에 들어온 요청까지 막지는 못한다. 진행 중인 시도끼리의 그 창은 DB의 partial unique가 닫는다.
      */
-    fun findInflightAuthorization(orderId: UUID, checkoutNo: Int): PaymentAttempt?
+    fun findAuthorization(orderId: UUID, checkoutNo: Int): PaymentAttempt?
 
-    /** 시도 하나를 식별자로 읽는다. provider 결과를 적용하기 전에 현재 결말을 확인하려고 쓴다. */
+    /** 시도 하나를 식별자로 읽는다. 잠그지 않는다. */
     fun findById(paymentId: PaymentId): PaymentAttempt?
+
+    /**
+     * 시도 행을 잠그고 읽는다. 결과를 적용하는 전이가 같은 시도에서 겹치지 않게 한다. 트랜잭션 안에서만 부른다.
+     * 그 트랜잭션에서 이 시도의 첫 접촉이어야 한다 — 먼저 읽어 둔 것이 있으면 영속성 컨텍스트가 그 낡은 값을 돌려준다.
+     * 대기는 3초로 제한하고 넘으면 `PessimisticLockingFailureException` 계열 예외다.
+     */
+    fun findByIdForUpdate(paymentId: PaymentId): PaymentAttempt?
 
     /**
      * 결말이 바뀐 시도를 반영한다. 트랜잭션 안에서만 부른다.
