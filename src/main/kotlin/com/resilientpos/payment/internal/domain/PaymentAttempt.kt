@@ -1,5 +1,6 @@
 package com.resilientpos.payment.internal.domain
 
+import com.resilientpos.foundation.DomainErrorKind
 import com.resilientpos.foundation.DomainException
 import com.resilientpos.foundation.IdentifierGenerator
 import com.resilientpos.foundation.Money
@@ -7,6 +8,8 @@ import com.resilientpos.foundation.Transition
 import com.resilientpos.payment.CreatePaymentAttemptCommand
 import com.resilientpos.contract.PaymentApproved
 import com.resilientpos.payment.PaymentAttemptCreated
+import com.resilientpos.payment.PaymentDeclined
+import com.resilientpos.payment.PaymentUnknown
 import com.resilientpos.contract.PaymentAttemptKind
 import com.resilientpos.payment.PaymentAttemptStatus
 import com.resilientpos.foundation.DomainEvent
@@ -36,6 +39,89 @@ class PaymentAttempt private constructor(
     val providerReference: String?,
 ) {
 
+    /**
+     * provider가 말한 결말을 이 시도에 적용한다. 상태를 바꾼 새 인스턴스와 그 사실을 돌려준다.
+     *
+     * [PaymentAttemptStatus.REQUESTED]가 아니면 거절한다. "provider 결과는 한 번만 적용한다"가
+     * 이 aggregate의 불변식이고([도메인 모델] §2), 두 번째 결과를 덮어쓰면 승인을 거절로 바꾸는
+     * 일이 조용히 일어난다. 0원 시도는 만들어질 때 이미 승인이라 이 문으로 막힌다.
+     *
+     * 같은 사실이 두 번 배달돼도 여기까지 오지 않는 것이 정상 경로다 —
+     * `PaymentManagement`가 결말이 난 시도면 provider를 부르지 않고 돌아선다.
+     * 그 조기 반환을 건너뛴 호출만 이 예외를 본다.
+     */
+    fun applyAuthorization(
+        outcome: AuthorizationOutcome,
+        ids: IdentifierGenerator,
+        now: Instant,
+    ): Transition<PaymentAttempt, DomainEvent> {
+        if (status != PaymentAttemptStatus.REQUESTED) {
+            throw DomainException(
+                PAYMENT_RESULT_ALREADY_APPLIED,
+                "이미 결말이 난 결제 시도입니다",
+                DomainErrorKind.CONFLICT,
+            )
+        }
+
+        val applied = when (outcome) {
+            is AuthorizationOutcome.Approved -> copy(PaymentAttemptStatus.APPROVED, outcome.providerReference)
+            is AuthorizationOutcome.Declined -> copy(PaymentAttemptStatus.DECLINED, outcome.providerReference)
+            // provider가 무엇을 했는지 모른다. 참조를 지어내면 그 참조가 거짓이 된다.
+            AuthorizationOutcome.Unknown -> copy(PaymentAttemptStatus.UNKNOWN, null)
+        }
+
+        val event: DomainEvent = when (outcome) {
+            is AuthorizationOutcome.Approved -> PaymentApproved(
+                eventId = ids.next(),
+                occurredAt = now,
+                paymentId = id.value,
+                orderId = orderId,
+                storeId = storeId,
+                terminalId = terminalId,
+                checkoutNo = checkoutNo,
+                kind = kind,
+                amount = amount,
+                providerReference = outcome.providerReference,
+            )
+
+            is AuthorizationOutcome.Declined -> PaymentDeclined(
+                eventId = ids.next(),
+                occurredAt = now,
+                paymentId = id,
+                orderId = orderId,
+                checkoutNo = checkoutNo,
+                kind = kind,
+                amount = amount,
+                providerReference = outcome.providerReference,
+            )
+
+            AuthorizationOutcome.Unknown -> PaymentUnknown(
+                eventId = ids.next(),
+                occurredAt = now,
+                paymentId = id,
+                orderId = orderId,
+                checkoutNo = checkoutNo,
+                kind = kind,
+                amount = amount,
+            )
+        }
+
+        return Transition(applied, listOf(event))
+    }
+
+    /** 결말만 바뀐 새 인스턴스. 나머지 값은 시도가 만들어질 때 확정됐고 바뀌지 않는다. */
+    private fun copy(status: PaymentAttemptStatus, providerReference: String?) = PaymentAttempt(
+        id = id,
+        orderId = orderId,
+        storeId = storeId,
+        terminalId = terminalId,
+        checkoutNo = checkoutNo,
+        kind = kind,
+        amount = amount,
+        status = status,
+        providerReference = providerReference,
+    )
+
     override fun equals(other: Any?) = other is PaymentAttempt && other.id == id
     override fun hashCode() = id.hashCode()
 
@@ -52,6 +138,8 @@ class PaymentAttempt private constructor(
 
         const val NEGATIVE_PAYMENT_AMOUNT = "NEGATIVE_PAYMENT_AMOUNT"
         const val INVALID_CHECKOUT_NO = "INVALID_CHECKOUT_NO"
+        const val PAYMENT_RESULT_ALREADY_APPLIED = "PAYMENT_RESULT_ALREADY_APPLIED"
+        const val PAYMENT_ATTEMPT_NOT_FOUND = "PAYMENT_ATTEMPT_NOT_FOUND"
 
         /**
          * 이미 저장된 시도를 그대로 재구성한다. 생성 불변식은 최초 `create` 때 검증됐으므로 다시 묻지 않는다.

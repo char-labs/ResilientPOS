@@ -48,6 +48,7 @@ Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰�
 컨텍스트 사이의 소유 규칙:
 - `payment`만 결제 정본 상태를 바꾼다. `reconciliation`은 case와 근거를 소유하고 결론을 `PaymentManagement.resolveFromReconciliation(command)` 같은 좁은 공개 command로 요청한다.
 - `order`와 `payment`는 서로의 테이블·엔티티·repository를 읽거나 쓰지 않는다. 사실은 이벤트로 건너간다(`OrderPaymentRequested` → payment, `PaymentApproved` → order·reconciliation, `OrderPaid` → fulfillment).
+- **결제 결말 셋 중 `PaymentApproved`만 `contract`에 있다.** 그것만 경계를 넘기 때문이다. `PaymentDeclined`·`PaymentUnknown`은 받을 쪽이 아직 없어 `payment`의 sealed 계층에 남는다(§4.4). 소비자가 생기는 PR이 옮기고, 그 이동은 `event_publication`의 `event_type`을 바꾸므로 배포된 행이 있는지부터 본다.
 - **모듈을 건너가는 이벤트는 `contract` 모듈이 소유한다.** 두 모듈이 서로의 사실을 주고받으면 타입 의존이 양방향이 되어 Modulith의 순환 검사에 걸린다. 양쪽이 함께 의존하는 곳에 그 사실을 둔다. `contract`는 bounded context가 아니다 — 업무 규칙도 상태도 없고 계약만 있다. **다른 업무 모듈의 타입을 들지 않는다**(식별자를 raw `UUID`로 든다). 들면 그 방향으로 간선이 생겨 순환이 되돌아온다. 소비자가 없는 이벤트는 소유 모듈에 남는다 — 경계를 넘는 것만 공유한다.
 - `order`는 합계가 0원인 주문도 똑같이 checkout을 확정하고 `OrderPaymentRequested`를 낸다. 전액 할인·프로모션 주문이 거절되지 않고 주문·결제·영수증 조회가 같은 경로로 보이게 하려는 것이다. `payment`는 0원 attempt를 provider 호출 없이 승인으로 기록하고 `PaymentApproved`를 내야 한다.
 - `sync`는 접수·중복·순서만 판정하고, 받아들인 명령은 소유 컨텍스트의 Command Facade로 넘긴다. `SyncOperationApplied`는 기술 감사 이벤트이며 `OrderCreated`를 대체하지 않는다.

@@ -1,5 +1,6 @@
 package com.resilientpos.payment.internal.domain
 
+import com.resilientpos.payment.PaymentId
 import java.util.UUID
 
 /**
@@ -12,6 +13,15 @@ interface PaymentAttemptRepository {
      * 동시에 들어온 요청까지 막지는 못한다. 그 창은 DB의 partial unique가 닫는다.
      */
     fun findInflightAuthorization(orderId: UUID, checkoutNo: Int): PaymentAttempt?
+
+    /** 시도 하나를 식별자로 읽는다. provider 결과를 적용하기 전에 현재 결말을 확인하려고 쓴다. */
+    fun findById(paymentId: PaymentId): PaymentAttempt?
+
+    /**
+     * 결말이 바뀐 시도를 반영한다. 트랜잭션 안에서만 부른다.
+     * 이미 저장된 행만 다루므로 새 행을 만들지 않는다.
+     */
+    fun update(attempt: PaymentAttempt): PaymentAttempt
 
     /**
      * 새 시도를 넣는다. 트랜잭션 안에서만 부른다.

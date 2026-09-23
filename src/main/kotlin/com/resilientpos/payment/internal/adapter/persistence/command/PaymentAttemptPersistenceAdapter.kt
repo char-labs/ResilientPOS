@@ -1,6 +1,7 @@
 package com.resilientpos.payment.internal.adapter.persistence.command
 
 import com.resilientpos.contract.PaymentAttemptKind
+import com.resilientpos.payment.PaymentId
 import com.resilientpos.payment.internal.domain.PaymentAttempt
 import com.resilientpos.payment.internal.domain.PaymentAttemptRepository
 import jakarta.persistence.EntityManager
@@ -26,6 +27,20 @@ class PaymentAttemptPersistenceAdapter(
             kind = PaymentAttemptKind.AUTHORIZATION,
             statuses = PaymentAttempt.INFLIGHT_STATUSES,
         )?.toDomain()
+
+    override fun findById(paymentId: PaymentId): PaymentAttempt? =
+        jpaRepository.findById(paymentId.value)?.toDomain()
+
+    /**
+     * 영속성 컨텍스트가 관리하는 행을 찾아 결말만 옮긴다. UPDATE는 dirty checking이 커밋에서 낸다.
+     * 같은 트랜잭션에서 `findById`로 이미 읽었으면 그 인스턴스가 그대로 돌아오므로 SELECT가 더 나가지 않는다.
+     */
+    override fun update(attempt: PaymentAttempt): PaymentAttempt {
+        val entity = jpaRepository.findById(attempt.id.value)
+            ?: error("갱신하려는 결제 시도가 없다: ${attempt.id.value}")
+        entity.applyResult(attempt.status, attempt.providerReference)
+        return attempt
+    }
 
     override fun save(attempt: PaymentAttempt): PaymentAttempt {
         entityManager.persist(PaymentAttemptEntity.from(attempt))

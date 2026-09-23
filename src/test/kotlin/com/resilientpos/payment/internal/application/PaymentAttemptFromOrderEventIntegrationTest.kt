@@ -54,12 +54,14 @@ class PaymentAttemptFromOrderEventIntegrationTest(
     fun `checkout을 요청하면 결제 시도가 하나 기록된다`() {
         val orderId = checkoutOrder(listOf(CreateOrderLine("SKU-1", "아메리카노", Money.of("4500", OrderFixtures.krw), 2)))
 
-        awaitUntil("결제 시도가 기록된다") { attempts(orderId).size == 1 }
+        // 시도가 기록된 뒤 승인 리스너가 이어서 돌므로 결말까지 기다린다. 기록된 직후를 보면
+        // REQUESTED와 APPROVED 사이에서 흔들린다. 9000원은 끝자리가 0이라 Fake가 승인한다.
+        awaitUntil("결제 시도가 승인까지 간다") {
+            attempts(orderId).singleOrNull()?.get("status") == "APPROVED"
+        }
 
         val row = attempts(orderId).single()
         assertEquals("AUTHORIZATION", row["kind"])
-        // provider를 아직 부르지 않으므로 결말이 나지 않은 상태로 남는다.
-        assertEquals("REQUESTED", row["status"])
         assertEquals("KRW", (row["currency"] as String).trim())
         assertEquals(1, row["checkout_no"])
         assertEquals(0, (row["amount"] as java.math.BigDecimal).compareTo(java.math.BigDecimal("9000")))
@@ -77,7 +79,10 @@ class PaymentAttemptFromOrderEventIntegrationTest(
     @Test
     fun `같은 checkout으로 다시 부르면 기존 시도를 그대로 돌려준다`() {
         val orderId = checkoutOrder(listOf(CreateOrderLine("SKU-1", "아메리카노", Money.of("4500", OrderFixtures.krw), 1)))
-        awaitUntil("첫 시도가 기록된다") { attempts(orderId).size == 1 }
+        // 결말까지 기다린 뒤에 다시 부른다. 진행 중에 부르면 돌려받는 상태가 그때그때 달라진다.
+        awaitUntil("첫 시도가 승인까지 간다") {
+            attempts(orderId).singleOrNull()?.get("status") == "APPROVED"
+        }
         val first = attempts(orderId).single()["id"]
 
         // 리스너가 같은 이벤트를 다시 받은 것과 같은 상황이다.
@@ -93,7 +98,8 @@ class PaymentAttemptFromOrderEventIntegrationTest(
 
         assertEquals(1, attempts(orderId).size)
         assertEquals(first, again.paymentId.value)
-        assertEquals(PaymentAttemptStatus.REQUESTED, again.status)
+        // 승인된 시도도 "진행 중"에 든다. 그래서 중복 이벤트가 새 시도를 만들지 않는다.
+        assertEquals(PaymentAttemptStatus.APPROVED, again.status)
     }
 
     @Test

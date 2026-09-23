@@ -28,3 +28,19 @@ data class CreatePaymentAttemptResult(
     val paymentId: PaymentId,
     val status: PaymentAttemptStatus,
 )
+
+/**
+ * 이미 기록된 시도에 provider 승인을 요청하고 그 결과를 적용한다.
+ * 시도를 만드는 것과 provider를 부르는 것이 각각 자기 트랜잭션이라 명령이 둘이다.
+ */
+data class AuthorizePaymentCommand(
+    val paymentId: PaymentId,
+)
+
+/**
+ * 승인 요청 결과. 이미 결말이 난 시도였으면 provider를 부르지 않고 그 결말을 그대로 돌려준다.
+ */
+data class AuthorizePaymentResult(
+    val paymentId: PaymentId,
+    val status: PaymentAttemptStatus,
+)

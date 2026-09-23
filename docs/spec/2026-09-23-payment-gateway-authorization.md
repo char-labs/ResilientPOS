@@ -66,6 +66,7 @@ AuthorizationOutcome = Approved(providerReference) | Declined(providerReference?
 ## 변경 경로
 - src/main/kotlin/com/resilientpos/payment/**
 - src/test/kotlin/com/resilientpos/payment/**
+- src/test/kotlin/com/resilientpos/ModuleStructureTest.kt
 - docs/wiki/current-state.md
 - docs/wiki/domain-model.md
 - docs/spec/2026-09-23-payment-gateway-authorization.md
@@ -91,7 +92,25 @@ AuthorizationOutcome = Approved(providerReference) | Declined(providerReference?
 - 요구사항 변화: 없다. 결제 흐름이 정본이 예고한 대로 이어진다. API도 스키마도 그대로다.
 
 ## 분할 계획
-예상 12개 파일 / 600줄 안팎. 한도 안이다.
+20개 파일 / 944줄이다. 경고선을 넘었지만 실패 한도 안이고 목표가 하나라 나누지 않는다 — 포트·전이·Fake·리스너 중 어느 하나만 내면 승인 경로가 이어지지 않는다.
+
+## TDD 검증 기록
+전이를 no-op으로 두고 테스트를 먼저 써서 의도한 assertion 실패를 봤다.
+
+| 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
+|---|---|---|---|
+| 세 결말이 상태와 사실이 된다 | `PaymentAttemptAuthorizationTest` — 전이가 `Transition(this, emptyList())`라 6개 중 5개 실패 | 전이 구현 뒤 6개 통과 | `./gradlew test` 통과 |
+| Fake가 금액으로 결말을 가른다 | `FakePaymentGatewayTest` — 구현 전 컴파일 실패 | 구현 뒤 5개 통과 | 같음 |
+| checkout이 승인까지 이어진다 | `PaymentAuthorizationIntegrationTest` — 리스너 전에는 `REQUESTED`에서 멈춤 | 리스너 추가 뒤 5개 통과 | 같음 |
 
 ## 결과
-구현 전이다. 관측한 RED와 최종 테스트 결과를 여기에 적는다.
+189개 통과다(직전 167 + 신규 22). 22개 파일 / 964줄이다.
+
+- **불변성 테스트만 RED에서 통과했다.** 전이를 no-op으로 두면 원본이 그대로이므로 "원본 시도는 그대로 남는다"가 저절로 맞는다. 나머지 다섯이 실패하는 것을 보고 구현했다.
+- **기존 통합 테스트 둘이 깨졌고 그게 맞았다.** `시도가 REQUESTED로 남는다`를 단언하던 테스트들이다. 이제 승인 리스너가 이어서 돌아 결말까지 간다. 단언을 느슨하게 푸는 대신 **결말을 기다린 뒤 `APPROVED`를 단언**하도록 고쳤다 — 기록 직후를 보면 두 상태 사이에서 흔들린다.
+- **`승인된 시도도 "진행 중"에 든다`가 드러났다.** 중복 이벤트로 다시 부르면 돌려받는 상태가 `REQUESTED`에서 `APPROVED`로 바뀐다. `INFLIGHT_STATUSES`에 `APPROVED`가 들어 있어서이고, 그래서 승인된 뒤에도 새 시도가 생기지 않는다.
+- **0원이 provider를 부르지 않는 것은 상태로 확인할 수 없다.** 부르든 안 부르든 `APPROVED`다. 통합 테스트가 포트를 감싸 호출 횟수를 세고, 0원에서 0회인 것과 일반 승인에서 1회인 것을 본다.
+- **`afterCommit` 헬퍼를 리스너 둘이 공유한다.** 두 번째 리스너가 생기면서 같은 코드가 둘이 됐다. `payment/internal/application`의 internal 함수로 뺐다.
+- **provider 호출이 리스너의 트랜잭션 안에 있다.** `@ApplicationModuleListener`가 자기 트랜잭션을 여는 구조라 호출만 밖으로 뺄 자리가 없다. Fake는 지연이 없어 지금 드러나지 않지만 실제 provider가 붙으면 커넥션을 쥐는 시간이 된다. 빈틈으로 적었다.
+- **정본의 자기모순 하나를 고쳤다.** 종료 대기를 한 줄은 `0ms`(실측)로, 다른 줄은 `2초`로 적고 있었다. 실측값으로 맞췄다.
+- **경고선을 넘었다.** 964줄이다. 포트·전이·Fake·리스너 중 어느 하나만 내면 승인 경로가 이어지지 않아 나누지 않았다. 실패 한도 안이다.

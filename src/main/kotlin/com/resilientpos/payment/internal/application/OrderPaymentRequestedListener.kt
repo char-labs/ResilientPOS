@@ -6,8 +6,6 @@ import com.resilientpos.payment.PaymentManagement
 import com.resilientpos.platform.logger
 import org.springframework.modulith.events.ApplicationModuleListener
 import org.springframework.stereotype.Component
-import org.springframework.transaction.support.TransactionSynchronization
-import org.springframework.transaction.support.TransactionSynchronizationManager
 
 /**
  * `order`가 결제를 요청한 사실을 받아 시도를 기록한다. 이 저장소의 첫 프로덕션 리스너다.
@@ -35,27 +33,13 @@ class OrderPaymentRequestedListener(
             ),
         )
 
-        // 커밋 뒤에 남긴다. 이 메서드 전체가 트랜잭션 안이라 여기서 바로 찍으면 아직 커밋되지 않은 것을
-        // "기록했다"고 말하게 된다. 경합에서 진 쪽은 정상 반환한 뒤 커밋에서 unique 위반으로 롤백되는데,
-        // 그때 존재하지 않는 paymentId가 기록됐다는 로그만 남는다.
+        // 경합에서 진 쪽은 정상 반환한 뒤 커밋에서 unique 위반으로 롤백된다. 그래서 커밋 뒤에 남긴다.
         afterCommit {
             log.info {
                 "결제 시도 기록 orderId=${event.orderId} checkoutNo=${event.checkoutNo} " +
                     "paymentId=${result.paymentId.value} status=${result.status}"
             }
         }
-    }
-
-    private fun afterCommit(action: () -> Unit) {
-        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
-            action()
-            return
-        }
-        TransactionSynchronizationManager.registerSynchronization(
-            object : TransactionSynchronization {
-                override fun afterCommit() = action()
-            },
-        )
     }
 
     companion object {

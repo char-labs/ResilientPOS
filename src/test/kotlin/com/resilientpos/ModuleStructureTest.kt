@@ -2,6 +2,8 @@ package com.resilientpos
 
 import com.resilientpos.contract.OrderPaymentRequested
 import com.resilientpos.contract.PaymentApproved
+import com.resilientpos.payment.PaymentDeclined
+import com.resilientpos.payment.PaymentUnknown
 import com.tngtech.archunit.core.importer.ClassFileImporter
 import com.tngtech.archunit.core.importer.ImportOption
 import com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses
@@ -69,5 +71,13 @@ class ModuleStructureTest {
         // 이 이름은 event_publication.event_type과 listener_id에 그대로 들어가는 저장 형식이다.
         assertEquals("com.resilientpos.contract.OrderPaymentRequested", OrderPaymentRequested::class.java.name)
         assertEquals("com.resilientpos.contract.PaymentApproved", PaymentApproved::class.java.name)
+    }
+
+    @Test
+    fun `모듈 안에 머무는 결제 이벤트의 정규 이름을 고정한다`() {
+        // 소비자가 없어도 발행되는 순간 event_type에 이 이름이 들어간다. 받을 쪽이 생겨 contract로 옮기면
+        // 그 이동이 저장 형식을 바꾼다는 사실을 이 단언이 드러낸다.
+        assertEquals("com.resilientpos.payment.PaymentDeclined", PaymentDeclined::class.java.name)
+        assertEquals("com.resilientpos.payment.PaymentUnknown", PaymentUnknown::class.java.name)
     }
 }

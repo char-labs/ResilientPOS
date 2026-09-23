@@ -18,6 +18,8 @@ interface PaymentAttemptJpaRepository : Repository<PaymentAttemptEntity, UUID> {
 
     fun save(entity: PaymentAttemptEntity): PaymentAttemptEntity
 
+    fun findById(id: UUID): PaymentAttemptEntity?
+
     fun findAllByOrderIdOrderById(orderId: UUID): List<PaymentAttemptEntity>
 
     /**

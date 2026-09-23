@@ -14,7 +14,7 @@
 | 로깅 | `kotlin-logging-jvm` 8.0.4 (slf4j·logback 위 facade) |
 | 구조 검증 | Spring Modulith 경계 검증, ArchUnit 1.4.2 의존성 방향 가드 |
 | 통합 테스트 | Testcontainers 2.0.5 PostgreSQL 18. `./gradlew test` 실행에 Docker가 필요하다 |
-| 테스트 | Kotlin Test/JUnit 5, Spring Boot 테스트 starter, Fixture Monkey 1.2.3; 총 174개 (컨텍스트 1, 스키마 4, 모듈 구조 4, 의존성 방향 2, 엔티티 가시성 2, 로거 이름 5, Money 25, 식별자 4, Order 19, PaymentAttempt 11, 결제 enum 이름 2, 결제 시도 영속화 통합 6, 결제 테이블 스키마 2, 결제 문장 수 통합 1, 주문 이벤트→결제 통합 4, 결제 Facade 3, 자원 상한 설정 3, Facade line 상한 1, 오류 로그 요청 정보 6, OrderCommandFacade 11, RequestCheckout 통합 9, 버전 충돌 통합 1, 문장 수 통합 3, 이벤트 발행 기록 통합 7, API advice 9, OrderController 13, checkout Controller 5, 주문 API 통합 11) |
+| 테스트 | Kotlin Test/JUnit 5, Spring Boot 테스트 starter, Fixture Monkey 1.2.3; 총 194개 (컨텍스트 1, 스키마 4, 모듈 구조 5, 의존성 방향 2, 엔티티 가시성 2, 로거 이름 5, Money 25, 식별자 4, Order 19, PaymentAttempt 11, 결제 승인 전이 6, Fake 게이트웨이 5, 결제 enum 이름 2, 결제 시도 영속화 통합 6, 결제 테이블 스키마 2, 결제 문장 수 통합 1, 주문 이벤트→결제 통합 4, 결제 승인 통합 5, 결제 Facade 6, 자원 상한 설정 3, Facade line 상한 1, 오류 로그 요청 정보 6, OrderCommandFacade 11, RequestCheckout 통합 9, 버전 충돌 통합 1, 문장 수 통합 3, 이벤트 발행 기록 통합 7, API advice 9, OrderController 13, checkout Controller 5, 주문 API 통합 11) |
 | 로컬 하네스 | Python 3 표준 라이브러리 |
 
 근거: [build.gradle.kts](../../build.gradle.kts), [Gradle Wrapper](../../gradle/wrapper/gradle-wrapper.properties), [애플리케이션 설정](../../src/main/resources/application.yaml).
@@ -46,8 +46,8 @@
   빌드되어 현재 Boot 버전과 세대가 맞는다. `starter-insight`는 아직 없다.
 - Event Publication Registry(`starter-jpa`)를 도입했다. 트랜잭션 안에서 발행한 이벤트는 그 이벤트를 받는 트랜잭션 이벤트 리스너마다 `event_publication`에 한 행씩, 업무 상태와 같은 커밋으로 기록된다.
   리스너가 성공하면 `completion_date`와 `status=COMPLETED`가 찍히고(완료 처리 UPDATE, 행은 남는다) 실패하면 `status=FAILED`인 미완료 기록으로 남는다. 업무 트랜잭션이 롤백되면 기록도 리스너 호출도 없다.
-  **받는 리스너가 없는 이벤트는 기록되지 않는다.** 지금 기록되는 것은 `OrderPaymentRequested` 하나뿐이다(`OrderPaymentRequestedListener`가 받는다). `payment`가 내는 `PaymentAttemptCreated`·`PaymentApproved`는 받는 쪽이 없어서 발행돼도 기록도 전달도 되지 않고 사라진다. 소비자 PR 이전에 만들어진 승인 사실은 전달되지 않으며, 그 주문들의 재처리는 소비자 PR이 정한다.
-  Modulith의 자동 구성이 `@EnableAsync`를 켜므로 `@ApplicationModuleListener`는 Spring Boot의 기본 task executor에서 비동기로 실행된다. 업무 요청의 응답은 리스너를 기다리지 않는다. 그 실행기는 코어 8, 최대·큐 무제한이다. 동시에 도는 리스너는 8개가 상한이고 밀린 작업은 메모리에 쌓인다. **종료할 때 진행 중인 리스너를 기다리지 않는다**(`awaitTerminationMillis = 0`, `waitForTasksToCompleteOnShutdown = false`를 실측). 종료 중이던 리스너의 트랜잭션은 롤백되고 발행 기록은 미완료로 남는다. 풀·큐·거절 정책은 provider를 호출하는 리스너를 넣는 `payment` PR이 정한다.
+  **받는 리스너가 없는 이벤트는 기록되지 않는다.** 지금 기록되는 것은 `OrderPaymentRequested`와 `PaymentAttemptCreated` 둘이다(각각 `OrderPaymentRequestedListener`·`PaymentAttemptCreatedListener`가 받는다). `payment`가 내는 `PaymentApproved`·`PaymentDeclined`·`PaymentUnknown`은 받는 쪽이 없어서 발행돼도 기록도 전달도 되지 않고 사라진다. 소비자 PR 이전에 만들어진 승인 사실은 전달되지 않으며, 그 주문들의 재처리는 소비자 PR이 정한다.
+  Modulith의 자동 구성이 `@EnableAsync`를 켜므로 `@ApplicationModuleListener`는 Spring Boot의 기본 task executor에서 비동기로 실행된다. 업무 요청의 응답은 리스너를 기다리지 않는다. 그 실행기는 코어 8, 최대·큐 무제한이다. 동시에 도는 리스너는 8개가 상한이고 밀린 작업은 메모리에 쌓인다. **종료할 때 진행 중인 리스너를 기다리지 않는다**(`awaitTerminationMillis = 0`, `waitForTasksToCompleteOnShutdown = false`를 실측). 종료 중이던 리스너의 트랜잭션은 롤백되고 발행 기록은 미완료로 남는다. 풀·큐·거절 정책은 아직 기본값이다. provider를 호출하는 리스너가 생겼지만 그 구현이 지연 없는 `FakePaymentGateway`라 값을 정할 근거가 없다 — 실제 provider가 붙는 PR이 정한다.
   완료 처리 방식(`completion-mode: update`)과 재기동 시 재발행 끔은 기본값과 같지만 `application.yaml`에 적어 두었다.
   이벤트는 JSON으로 저장된다. value class ID는 UUID 문자열, `Money`는 `{"amount":3500,"currency":"KRW"}` 모양이고 `30.00`처럼 끝자리가 0인 금액도 자릿수를 잃지 않고 복원된다.
   **미완료 이벤트를 다시 보내는 절차가 없다.** 재기동 시 재발행은 꺼져 있고(인스턴스가 여럿이면 중복 재발행된다) 재전송 주기도 없다. 완료 행을 지우는 정리 작업도 없다. **재전달은 Kafka를 들이는 설계가 맡기로 했다.** 미완료 기록을 세거나 알리는 장치도 아직 없어서, 사람이 `event_publication`을 직접 보기 전에는 드러나지 않는다. 알려진 빈틈이다([event-publication-registry](../spec/2026-09-21-event-publication-registry.md)).
@@ -113,12 +113,18 @@
   `PaymentManagement`(구체 클래스)가 `@Transactional`을 소유하고 `PaymentAttemptRepository` port에만 의존한다. `PaymentAttemptPersistenceAdapter`가 그 port를 구현하고 새 행을 `EntityManager.persist`로 넣는다. `@Version` 없는 엔티티를 `save`에 넘기면 `merge`가 되어 SELECT가 하나 더 나가는데, 그것을 문장 수로 확인한다.
   `OrderPaymentRequestedListener`가 **이 저장소의 첫 프로덕션 이벤트 리스너**다. `order`의 `OrderPaymentRequested`를 받아 command로 옮기고 Facade를 부른다. 판단은 하지 않고, 예외도 삼키지 않는다 — 삼키면 Modulith가 성공으로 기록해 미완료 기록마저 사라진다.
   **같은 이벤트가 두 번 와도 시도는 하나다.** 넣기 전에 그 checkout의 진행 중인 승인을 읽고 있으면 그것을 돌려주며 이벤트를 다시 내지 않는다. 동시 경합은 이 읽기로 닫히지 않고 partial unique가 닫는다. 진 쪽은 실패하고 미완료 발행 기록으로 남는다.
-  **미완료 이벤트를 다시 보내는 절차는 아직 없다.** 리스너 실패에 자동 재시도가 없고, 재전달은 **Kafka를 들이는 별도 설계**가 맡기로 했다. 스레드 풀(코어 8, 큐 무제한)과 종료 대기 2초도 기본값 그대로다. 외부 provider를 부르는 리스너가 생기는 PR이 정한다. 알려진 빈틈이다.
+  **미완료 이벤트를 다시 보내는 절차는 아직 없다.** 리스너 실패에 자동 재시도가 없고, 재전달은 **Kafka를 들이는 별도 설계**가 맡기로 했다. 스레드 풀(코어 8, 큐 무제한)과 종료 대기(0ms, 기다리지 않는다)도 기본값 그대로다. `FakePaymentGateway`는 네트워크를 타지 않아 지연이 없고, 실제 provider 없이 코어 수·큐 상한·거절 정책을 정하면 근거 없는 숫자가 박힌다. 실제 provider가 붙는 PR이 정한다. 그 전까지는 **종료 중이던 승인 호출이 버려지면 시도가 `REQUESTED`로 남는다.** 알려진 빈틈이다.
   **모듈을 건너가는 이벤트는 `contract` 모듈에 있다.** `OrderPaymentRequested`·`PaymentApproved`와 그 payload인 `PaymentAttemptKind`다. `order`와 `payment`가 그것을 함께 의존하므로 양쪽이 같은 방향으로만 의존한다.
   `contract`는 bounded context가 아니고 업무 모듈의 타입을 들지 않는다 — 식별자를 raw `UUID`로 든다. `ModuleStructureTest`가 그 방향을 ArchUnit으로 검사한다.
   **Modulith의 순환 검사는 소비자가 실제로 생긴 뒤에야 걸리므로** 그 전에 방향을 지킬 검사가 따로 필요하다. 옮긴 이벤트는 소유 모듈의 sealed 계층에 남을 수 없다 — Kotlin이 sealed 구현을 같은 패키지로 제한한다.
-  소비자가 없는 `OrderCreated`·`PaymentAttemptCreated`는 소유 모듈에 남는다([contract-module-for-cross-module-events](../spec/2026-09-22-contract-module-for-cross-module-events.md)).
-  외부 provider 경계(`PaymentGateway` 포트, `FakePaymentGateway`)와 provider 결과 적용 전이는 다음 PR이 만든다.
+  모듈 밖에 소비자가 없는 `OrderCreated`·`PaymentAttemptCreated`·`PaymentDeclined`·`PaymentUnknown`은 소유 모듈에 남는다. `PaymentAttemptCreated`는 같은 모듈 안에 소비자가 생겼지만 경계를 넘지 않아 그대로다([contract-module-for-cross-module-events](../spec/2026-09-22-contract-module-for-cross-module-events.md)).
+  **provider 경계는 `PaymentGateway` 포트다.** `authorize(AuthorizationRequest): AuthorizationOutcome` 하나뿐이고, 결말이 `Approved`·`Declined`·`Unknown` 셋이라 `PaymentAttemptStatus`의 결말 셋과 일대일이다. provider가 쓰는 상태 이름은 어댑터 안에서 접힌다. **포트는 예외를 던지지 않고 `Unknown`을 돌려준다** — 전송이 끊긴 것은 거절이 아니라 미확인이다.
+  idempotency 키는 `PaymentId`이고 별도 컬럼을 두지 않는다. 한 시도가 provider 요청 1회라 시도의 식별자가 곧 그 요청의 식별자다.
+  `FakePaymentGateway`가 지금의 유일한 구현이다. 금액의 최소 단위 끝자리가 1이면 거절, 2면 미확인, 나머지는 승인이다. 설정도 스텁 교체도 없이 통합 테스트가 세 경로를 밟게 하려는 것이고, 같은 입력이 항상 같은 결과다. 승인 참조는 `FAKE-` 접두어를 달아 실제 원장을 가리키지 않는다는 것을 이름으로 말한다.
+  `PaymentAttemptCreatedListener`가 그 시도를 받아 `PaymentManagement.authorize(AuthorizePaymentCommand)`를 부른다. **시도 기록과 provider 호출을 한 리스너에 몰지 않은 이유는 복구 단서다** — 나누면 호출이 실패했을 때 발행 기록이 미완료로 남아 재전달이 생기는 날 그것이 단서가 되고, 몰면 커밋된 `REQUESTED` 행만 남는다.
+  `PaymentAttempt.applyAuthorization`이 결말을 적용한다. `REQUESTED`가 아니면 `PAYMENT_RESULT_ALREADY_APPLIED`로 거절한다. **결말이 난 시도에는 provider를 부르지 않는다** — Facade가 먼저 돌아서므로 0원 시도도 재배달된 사실도 provider에 닿지 않는다. 0원이 `APPROVED`인 것은 상태로 구분되지 않아 호출 횟수로 확인한다.
+  **provider 호출이 리스너의 트랜잭션 안에서 일어난다.** 호출이 끝날 때까지 DB 커넥션을 쥔다. `@ApplicationModuleListener`가 자기 트랜잭션을 여는 구조라 호출만 밖으로 뺄 자리가 없다. Fake는 지연이 없어 지금은 드러나지 않고, 실제 provider가 붙을 때 커넥션 풀과 함께 본다. 알려진 빈틈이다.
+  거절 사유는 저장하지 않는다. 컬럼이 없고 받을 쪽도 없다. `UNKNOWN`을 provider 조회로 수렴시키는 경로도 아직 없다 — 포트에 조회가 없고 `reconciliation`이 비어 있다([payment-gateway-authorization](../spec/2026-09-23-payment-gateway-authorization.md)).
   **같은 checkout에 진행 중인 승인 시도는 partial unique가 하나로 묶는다**(`ux_payment_attempt_inflight_authorization`, 술어는 `kind = 'AUTHORIZATION' and status in ('REQUESTED','APPROVED','UNKNOWN') and deleted_at is null`).
   거절된 시도는 술어에서 빠져 재시도가 들어가고 취소·환불은 `kind`가 달라 술어 밖이라, 이 제약이 1-to-many를 막지 않는다.
   Event Publication Registry의 완료 기록은 리스너의 업무 커밋과 같은 트랜잭션이 아니어서(비동기·`AFTER_COMMIT`·`REQUIRES_NEW`) 그 사이에 프로세스가 죽으면 행은 있고 발행은 미완료로 남는다. 재전송이 돌면 두 번째 승인이 들어오는데 이 인덱스가 그것을 막는다.
