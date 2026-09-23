@@ -1,16 +1,19 @@
 package com.resilientpos.payment.internal.domain
 
+import com.resilientpos.contract.PaymentApproved
+import com.resilientpos.contract.PaymentAttemptKind
+import com.resilientpos.foundation.DomainErrorKind
+import com.resilientpos.foundation.DomainEvent
 import com.resilientpos.foundation.DomainException
 import com.resilientpos.foundation.IdentifierGenerator
 import com.resilientpos.foundation.Money
 import com.resilientpos.foundation.Transition
 import com.resilientpos.payment.CreatePaymentAttemptCommand
-import com.resilientpos.contract.PaymentApproved
 import com.resilientpos.payment.PaymentAttemptCreated
-import com.resilientpos.contract.PaymentAttemptKind
 import com.resilientpos.payment.PaymentAttemptStatus
-import com.resilientpos.foundation.DomainEvent
+import com.resilientpos.payment.PaymentDeclined
 import com.resilientpos.payment.PaymentId
+import com.resilientpos.payment.PaymentUnknown
 import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.TerminalId
 import java.time.Instant
@@ -19,10 +22,10 @@ import java.util.UUID
 /**
  * 결제 시도 aggregate 루트. 한 주문의 한 회차 provider 요청과 그 결과를 소유한다.
  * `Order`와는 별개 aggregate라서 `orderId`로만 참조하고 사실은 이벤트로 건너간다.
- * 한 주문에 시도가 여럿 달린다. 승인이 거절되면 다음 시도가 생기고 취소·환불도 각각 별도 시도다.
+ * 한 주문에 시도가 여럿 달릴 수 있다. 거절 뒤 재결제와 취소·환불은 각각 별도 시도다.
  * 식별은 [PaymentId] 하나가 하고 `orderId`는 참조일 뿐이라, 한 주문에 몇 건이 달리든 제약이 없다.
  * 무엇을 요청한 시도인지는 [PaymentAttemptKind]가 말한다.
- * 그 `orderId`는 raw `UUID`다. 모듈 간선은 리스너가 이미 만들었고, 이 선택의 목적은 공개 계약을 `order` 타입에서 떼어 놓는 것이다.
+ * 그 `orderId`가 raw `UUID`인 이유는 `PaymentEvent`에 있다.
  */
 class PaymentAttempt private constructor(
     val id: PaymentId,
@@ -36,22 +39,96 @@ class PaymentAttempt private constructor(
     val providerReference: String?,
 ) {
 
+    /**
+     * provider가 말한 결말을 이 시도에 적용한다. 상태를 바꾼 새 인스턴스와 그 사실을 돌려준다.
+     *
+     * [PaymentAttemptStatus.REQUESTED]가 아니면 거절한다. "provider 결과는 한 번만 적용한다"가
+     * 이 aggregate의 불변식이고([도메인 모델] §2), 두 번째 결과를 덮어쓰면 승인을 거절로 바꾸는
+     * 일이 조용히 일어난다. 0원 시도는 만들어질 때 이미 승인이라 이 문으로 막힌다.
+     *
+     * 같은 사실이 두 번 배달돼도 여기까지 오지 않는 것이 정상 경로다 —
+     * `PaymentManagement`가 결말이 난 시도면 provider를 부르지 않고 돌아선다.
+     * 그 조기 반환을 건너뛴 호출만 이 예외를 본다.
+     */
+    fun applyAuthorization(
+        outcome: AuthorizationOutcome,
+        ids: IdentifierGenerator,
+        now: Instant,
+    ): Transition<PaymentAttempt, DomainEvent> {
+        if (status != PaymentAttemptStatus.REQUESTED) {
+            throw DomainException(
+                PAYMENT_RESULT_ALREADY_APPLIED,
+                "이미 결말이 난 결제 시도입니다",
+                DomainErrorKind.CONFLICT,
+            )
+        }
+
+        // 상태와 사실을 한 갈래에서 함께 정한다. 둘을 따로 매핑하면 결말 하나를 더할 때 컴파일러가 둘 다 강제하긴
+        // 해도 서로 어긋나게 짝짓는 것은 막지 못한다.
+        val (applied, event) = when (outcome) {
+            is AuthorizationOutcome.Approved -> copy(PaymentAttemptStatus.APPROVED, outcome.providerReference) to
+                PaymentApproved(
+                    eventId = ids.next(),
+                    occurredAt = now,
+                    paymentId = id.value,
+                    orderId = orderId,
+                    storeId = storeId,
+                    terminalId = terminalId,
+                    checkoutNo = checkoutNo,
+                    kind = kind,
+                    amount = amount,
+                    providerReference = outcome.providerReference,
+                )
+
+            is AuthorizationOutcome.Declined -> copy(PaymentAttemptStatus.DECLINED, outcome.providerReference) to
+                PaymentDeclined(
+                    eventId = ids.next(),
+                    occurredAt = now,
+                    paymentId = id,
+                    orderId = orderId,
+                    checkoutNo = checkoutNo,
+                    kind = kind,
+                    amount = amount,
+                    providerReference = outcome.providerReference,
+                )
+
+            // provider가 무엇을 했는지 모른다. 참조를 지어내면 그 참조가 거짓이 된다.
+            AuthorizationOutcome.Unknown -> copy(PaymentAttemptStatus.UNKNOWN, null) to
+                PaymentUnknown(
+                    eventId = ids.next(),
+                    occurredAt = now,
+                    paymentId = id,
+                    orderId = orderId,
+                    checkoutNo = checkoutNo,
+                    kind = kind,
+                    amount = amount,
+                )
+        }
+
+        return Transition(applied, listOf<DomainEvent>(event))
+    }
+
+    /** 결말만 바뀐 새 인스턴스. 나머지 값은 시도가 만들어질 때 확정됐고 바뀌지 않는다. */
+    private fun copy(status: PaymentAttemptStatus, providerReference: String?) = PaymentAttempt(
+        id = id,
+        orderId = orderId,
+        storeId = storeId,
+        terminalId = terminalId,
+        checkoutNo = checkoutNo,
+        kind = kind,
+        amount = amount,
+        status = status,
+        providerReference = providerReference,
+    )
+
     override fun equals(other: Any?) = other is PaymentAttempt && other.id == id
     override fun hashCode() = id.hashCode()
 
     companion object {
-        /**
-         * 아직 결말이 나지 않은 승인 시도의 상태. 같은 checkout에 이 상태의 승인은 하나뿐이고,
-         * `ux_payment_attempt_inflight_authorization`의 술어가 같은 값을 쓴다. 한쪽만 바꾸면 방어선이 어긋난다.
-         */
-        val INFLIGHT_STATUSES = setOf(
-            PaymentAttemptStatus.REQUESTED,
-            PaymentAttemptStatus.APPROVED,
-            PaymentAttemptStatus.UNKNOWN,
-        )
-
         const val NEGATIVE_PAYMENT_AMOUNT = "NEGATIVE_PAYMENT_AMOUNT"
         const val INVALID_CHECKOUT_NO = "INVALID_CHECKOUT_NO"
+        const val PAYMENT_RESULT_ALREADY_APPLIED = "PAYMENT_RESULT_ALREADY_APPLIED"
+        const val PAYMENT_ATTEMPT_NOT_FOUND = "PAYMENT_ATTEMPT_NOT_FOUND"
 
         /**
          * 이미 저장된 시도를 그대로 재구성한다. 생성 불변식은 최초 `create` 때 검증됐으므로 다시 묻지 않는다.
@@ -71,8 +148,7 @@ class PaymentAttempt private constructor(
 
         /**
          * 한 주문의 **승인** 시도를 만든다.
-         * 취소 시도를 만드는 factory는 그 전이를 만드는 PR이 더한다. 되돌릴 승인이 아직 없어서
-         * 무엇을 참조해야 하는지(원 시도인지 provider 참조인지)를 지금 정할 근거가 없다.
+         * 취소·환불 시도는 이 factory가 만들지 않는다.
          */
         fun create(
             command: CreatePaymentAttemptCommand,

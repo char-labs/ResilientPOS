@@ -62,9 +62,8 @@ class PaymentAttemptSchemaTest(
     }
 
     @Test
-    fun `진행 중 상태 집합이 인덱스 술어와 같다`() {
-        // 둘이 갈라지면 조용히 어긋난다. 상수에만 상태를 더하면 조회는 기존 행을 찾아 멱등 반환하는데
-        // 인덱스는 그 행을 진행 중으로 보지 않아, 새로 만들어야 할 시도가 만들어지지 않는다.
+    fun `같은 checkout에 하나뿐인 승인 상태는 REQUESTED·APPROVED·UNKNOWN이다`() {
+        // APPROVED가 빠지면 승인된 checkout에 새 승인이 들어간다(이중 청구). DECLINED가 들어가면 재결제가 막힌다.
         val definition = dataSource.connection.use { connection ->
             connection.prepareStatement(
                 "select pg_get_indexdef(oid) from pg_class where relname = 'ux_payment_attempt_inflight_authorization'",
@@ -76,9 +75,9 @@ class PaymentAttemptSchemaTest(
 
         PaymentAttemptStatus.entries.forEach { status ->
             assertEquals(
-                status in PaymentAttempt.INFLIGHT_STATUSES,
+                status in setOf(PaymentAttemptStatus.REQUESTED, PaymentAttemptStatus.APPROVED, PaymentAttemptStatus.UNKNOWN),
                 definition.contains("'${status.name}'"),
-                "${status.name}이 상수와 인덱스 술어에서 다르게 다뤄진다: $definition",
+                "${status.name}이 인덱스 술어에서 기대와 다르게 다뤄진다: $definition",
             )
         }
     }

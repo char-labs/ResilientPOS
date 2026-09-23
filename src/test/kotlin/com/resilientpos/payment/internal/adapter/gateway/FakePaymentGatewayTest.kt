@@ -1,0 +1,51 @@
+package com.resilientpos.payment.internal.adapter.gateway
+
+import com.resilientpos.foundation.Money
+import com.resilientpos.payment.PaymentId
+import com.resilientpos.payment.internal.domain.AuthorizationOutcome
+import com.resilientpos.payment.internal.domain.AuthorizationRequest
+import java.util.Currency
+import java.util.UUID
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertIs
+
+/**
+ * 통합 테스트가 이 규칙으로 경로를 고르므로, 규칙이 바뀌면 그 테스트들이 조용히 다른 경로를 밟는다.
+ */
+class FakePaymentGatewayTest {
+
+    private val gateway = FakePaymentGateway()
+    private val krw: Currency = Currency.getInstance("KRW")
+    private val usd: Currency = Currency.getInstance("USD")
+    private val paymentId = PaymentId(UUID.fromString("00000000-0000-0000-0000-00000000beef"))
+
+    private fun authorize(amount: String, currency: Currency = krw) =
+        gateway.authorize(AuthorizationRequest(paymentId, Money.of(amount, currency)))
+
+    @Test
+    fun `끝자리가 1이면 거절한다`() {
+        val outcome = assertIs<AuthorizationOutcome.Declined>(authorize("4501"))
+
+        assertEquals("FAKE-${paymentId.value}", outcome.providerReference)
+    }
+
+    @Test
+    fun `끝자리가 2이면 결과를 모른다`() {
+        assertIs<AuthorizationOutcome.Unknown>(authorize("4502"))
+    }
+
+    @Test
+    fun `그 밖의 끝자리는 승인한다`() {
+        val outcome = assertIs<AuthorizationOutcome.Approved>(authorize("4500"))
+
+        assertEquals("FAKE-${paymentId.value}", outcome.providerReference)
+    }
+
+    @Test
+    fun `소수 통화도 최소 단위의 끝자리로 가른다`() {
+        // USD 45.01은 최소 단위 4501이라 KRW 4501과 같은 경로다. 소수점 자리가 아니라 최소 단위를 본다.
+        assertIs<AuthorizationOutcome.Declined>(authorize("45.01", usd))
+        assertIs<AuthorizationOutcome.Approved>(authorize("45.00", usd))
+    }
+}

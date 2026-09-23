@@ -6,24 +6,25 @@ import com.resilientpos.payment.PaymentManagement
 import com.resilientpos.platform.logger
 import org.springframework.modulith.events.ApplicationModuleListener
 import org.springframework.stereotype.Component
-import org.springframework.transaction.support.TransactionSynchronization
-import org.springframework.transaction.support.TransactionSynchronizationManager
+import org.springframework.transaction.annotation.Propagation
 
 /**
  * `order`가 결제를 요청한 사실을 받아 시도를 기록한다. 이 저장소의 첫 프로덕션 리스너다.
  *
  * 옮기는 일만 하고 판단하지 않는다. 멱등 판정과 트랜잭션은 [PaymentManagement]가 소유한다.
  *
- * `@ApplicationModuleListener`는 비동기이고 커밋 뒤에 자기 트랜잭션에서 돈다. 여기서 실패하면
- * `event_publication`에 미완료로 남고 자동 재시도가 없다. 재전달은 Kafka를 들이는 설계가 맡는다.
- * 그래서 예외를 삼키지 않는다 — 삼키면 성공으로 기록되어 미완료 기록마저 사라진다.
+ * 비동기이고 커밋 뒤에 돈다. 트랜잭션을 끄는 이유는 [PaymentAttemptCreatedListener]와 같다 —
+ * 이 메서드가 트랜잭션이 아니어야 Facade가 자기 트랜잭션을 열고 닫아, 반환하는 순간이 곧 커밋 뒤가 된다.
+ *
+ * 여기서 실패하면 `event_publication`에 미완료로 남고 자동 재시도가 없다. 재전달은 Kafka를 들이는 설계가
+ * 맡는다. 그래서 예외를 삼키지 않는다 — 삼키면 성공으로 기록되어 미완료 기록마저 사라진다.
  */
 @Component
 class OrderPaymentRequestedListener(
     private val paymentManagement: PaymentManagement,
 ) {
 
-    @ApplicationModuleListener
+    @ApplicationModuleListener(propagation = Propagation.NOT_SUPPORTED)
     fun on(event: OrderPaymentRequested) {
         val result = paymentManagement.createAttempt(
             CreatePaymentAttemptCommand(
@@ -35,27 +36,11 @@ class OrderPaymentRequestedListener(
             ),
         )
 
-        // 커밋 뒤에 남긴다. 이 메서드 전체가 트랜잭션 안이라 여기서 바로 찍으면 아직 커밋되지 않은 것을
-        // "기록했다"고 말하게 된다. 경합에서 진 쪽은 정상 반환한 뒤 커밋에서 unique 위반으로 롤백되는데,
-        // 그때 존재하지 않는 paymentId가 기록됐다는 로그만 남는다.
-        afterCommit {
-            log.info {
-                "결제 시도 기록 orderId=${event.orderId} checkoutNo=${event.checkoutNo} " +
-                    "paymentId=${result.paymentId.value} status=${result.status}"
-            }
+        // Facade가 반환했으면 이미 커밋됐다. 경합에서 진 쪽은 그 커밋에서 unique 위반을 받아 여기 닿지 않는다.
+        log.info {
+            "결제 시도 기록 orderId=${event.orderId} checkoutNo=${event.checkoutNo} " +
+                "paymentId=${result.paymentId.value} status=${result.status}"
         }
-    }
-
-    private fun afterCommit(action: () -> Unit) {
-        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
-            action()
-            return
-        }
-        TransactionSynchronizationManager.registerSynchronization(
-            object : TransactionSynchronization {
-                override fun afterCommit() = action()
-            },
-        )
     }
 
     companion object {
