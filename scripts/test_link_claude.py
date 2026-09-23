@@ -23,8 +23,12 @@ class LinkClaudeTest(unittest.TestCase):
         self.vault = Path(self.tmp.name) / 'vault'
         self.root.mkdir()
         for link, source in LINKS:
-            (self.vault / source).mkdir(parents=True)
-            (self.vault / source / 'placeholder.md').write_text('x\n')
+            if source.endswith('.md'):
+                (self.vault / source).parent.mkdir(parents=True, exist_ok=True)
+                (self.vault / source).write_text('x\n')
+            else:
+                (self.vault / source).mkdir(parents=True)
+                (self.vault / source / 'placeholder.md').write_text('x\n')
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -37,7 +41,7 @@ class LinkClaudeTest(unittest.TestCase):
             path = self.root / link
             self.assertTrue(path.is_symlink(), link)
             self.assertEqual(path.resolve(), (self.vault / source).resolve())
-            self.assertTrue((path / 'placeholder.md').exists(), link)
+            self.assertTrue((path if source.endswith('.md') else path / 'placeholder.md').exists(), link)
 
     def test_links_cover_claude_and_codex(self):
         names = {link for link, _ in LINKS}
