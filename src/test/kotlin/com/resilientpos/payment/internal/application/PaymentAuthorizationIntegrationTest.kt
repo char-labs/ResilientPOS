@@ -14,12 +14,15 @@ import com.resilientpos.payment.internal.adapter.gateway.FakePaymentGateway
 import com.resilientpos.payment.internal.domain.AuthorizationOutcome
 import com.resilientpos.payment.internal.domain.AuthorizationRequest
 import com.resilientpos.payment.internal.domain.PaymentGateway
+import jakarta.persistence.EntityManagerFactory
+import java.math.BigInteger
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -28,7 +31,10 @@ import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.TestConfiguration
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Primary
+import javax.sql.DataSource
 import org.springframework.jdbc.core.JdbcTemplate
+import org.springframework.transaction.IllegalTransactionStateException
+import org.springframework.transaction.support.TransactionOperations
 import org.springframework.transaction.support.TransactionSynchronizationManager
 
 /**
@@ -43,30 +49,37 @@ class PaymentAuthorizationIntegrationTest(
     @Autowired private val paymentManagement: PaymentManagement,
     @Autowired private val jdbcTemplate: JdbcTemplate,
     @Autowired private val gateway: ProbingGateway,
+    @Autowired private val transactions: TransactionOperations,
 ) : PostgresIntegrationTest() {
 
-    /** [FakePaymentGateway]에 위임하면서 시도별 호출 횟수와 호출 순간의 트랜잭션 여부를 적는다. */
-    class ProbingGateway : PaymentGateway {
+    /**
+     * [FakePaymentGateway]에 위임하면서 시도별 호출 횟수와, 호출 순간 이 스레드에 DB 자원(EntityManager·커넥션)이
+     * 묶여 있었는지를 적는다. 트랜잭션 여부만 보면 빈 트랜잭션 스코프에 묶인 EntityManager를 놓친다.
+     * 끝자리 3이면 어댑터가 포트 계약을 어기고 던진 경우를 흉내 낸다.
+     */
+    class ProbingGateway(private val emf: EntityManagerFactory, private val dataSource: DataSource) : PaymentGateway {
         private val delegate = FakePaymentGateway()
         private val calls = ConcurrentHashMap<PaymentId, AtomicInteger>()
-        private val transactionActive = ConcurrentHashMap<PaymentId, Boolean>()
+        private val resourceBound = ConcurrentHashMap<PaymentId, Boolean>()
 
         override fun authorize(request: AuthorizationRequest): AuthorizationOutcome {
             calls.computeIfAbsent(request.paymentId) { AtomicInteger() }.incrementAndGet()
-            transactionActive[request.paymentId] = TransactionSynchronizationManager.isActualTransactionActive()
+            resourceBound[request.paymentId] =
+                TransactionSynchronizationManager.hasResource(emf) || TransactionSynchronizationManager.hasResource(dataSource)
+            if (request.amount.amount.unscaledValue().mod(BigInteger.TEN).toInt() == 3) error("어댑터가 던졌다")
             return delegate.authorize(request)
         }
 
         fun callsFor(paymentId: PaymentId) = calls[paymentId]?.get() ?: 0
 
-        fun transactionActiveDuringCall(paymentId: PaymentId) = transactionActive[paymentId]
+        fun resourceBoundDuringCall(paymentId: PaymentId) = resourceBound[paymentId]
     }
 
     @TestConfiguration
     class ProbingGatewayConfiguration {
         @Bean
         @Primary
-        fun probingGateway() = ProbingGateway()
+        fun probingGateway(emf: EntityManagerFactory, dataSource: DataSource) = ProbingGateway(emf, dataSource)
     }
 
     private fun checkoutOrder(unitPrice: String): UUID {
@@ -123,7 +136,7 @@ class PaymentAuthorizationIntegrationTest(
         val row = awaitStatus(orderId, PaymentAttemptStatus.APPROVED)
 
         val reference = assertNotNull(row["provider_reference"]) as String
-        assertTrue(reference.startsWith(FakePaymentGateway.REFERENCE_PREFIX))
+        assertTrue(reference.startsWith("FAKE-"))
     }
 
     @Test
@@ -158,13 +171,49 @@ class PaymentAuthorizationIntegrationTest(
     }
 
     @Test
-    fun `provider를 부르는 동안 트랜잭션이 없다`() {
+    fun `provider를 부르는 동안 DB 자원을 쥐지 않는다`() {
         val orderId = checkoutOrder("4500")
 
         val row = awaitStatus(orderId, PaymentAttemptStatus.APPROVED)
 
-        // 트랜잭션 안에서 부르면 provider가 답할 때까지 DB 커넥션을 쥔다(도메인 모델 §4.6·§6).
-        assertEquals(false, gateway.transactionActiveDuringCall(paymentId(row)))
+        // 쥐고 있으면 provider가 답할 때까지 커넥션이 묶인다(도메인 모델 §4.6·§6).
+        assertEquals(false, gateway.resourceBoundDuringCall(paymentId(row)))
+    }
+
+    @Test
+    fun `트랜잭션 안에서 승인을 요청하면 provider를 부르기 전에 거절한다`() {
+        // 이벤트로 만들면 승인 리스너가 먼저 처리해 버린다. REQUESTED로 남은 시도를 직접 넣는다.
+        val paymentId = PaymentId(UUID.randomUUID())
+        jdbcTemplate.update(
+            """
+            insert into t_payment_attempt (id, order_id, store_id, terminal_id, checkout_no, kind, amount, currency,
+                status, provider_reference, created_at, updated_at)
+            values (?, ?, ?, ?, 1, 'AUTHORIZATION', 4500, 'KRW', 'REQUESTED', null, now(), now())
+            """.trimIndent(),
+            paymentId.value, UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(),
+        )
+
+        // 안에서 부르면 적용이 바깥 트랜잭션에 합류해 잠금 조회가 먼저 읽어 둔 낡은 값을 돌려받는다.
+        val thrown = runCatching {
+            transactions.execute { paymentManagement.authorize(AuthorizePaymentCommand(paymentId)) }
+        }.exceptionOrNull()
+
+        assertIs<IllegalTransactionStateException>(thrown)
+        assertEquals(0, gateway.callsFor(paymentId))
+        assertEquals(
+            PaymentAttemptStatus.REQUESTED.name,
+            jdbcTemplate.queryForObject("select status from t_payment_attempt where id = ?", String::class.java, paymentId.value),
+        )
+    }
+
+    @Test
+    fun `어댑터가 던지면 시도는 REQUESTED로 남고 발행 기록은 실패로 남는다`() {
+        val orderId = checkoutOrder("4503")
+
+        val listener = awaitAuthorizationListenerFinished(orderId)
+
+        assertEquals("FAILED", listener)
+        assertEquals(PaymentAttemptStatus.REQUESTED.name, attempt(orderId)?.get("status"))
     }
 
     @Test

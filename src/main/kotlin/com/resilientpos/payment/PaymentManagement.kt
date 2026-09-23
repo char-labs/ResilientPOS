@@ -11,6 +11,7 @@ import com.resilientpos.payment.internal.domain.PaymentGateway
 import java.time.Clock
 import org.springframework.context.ApplicationEventPublisher
 import org.springframework.stereotype.Service
+import org.springframework.transaction.annotation.Propagation
 import org.springframework.transaction.annotation.Transactional
 import org.springframework.transaction.support.TransactionOperations
 
@@ -58,12 +59,13 @@ class PaymentManagement(
     /**
      * 기록된 시도에 provider 승인을 요청하고 결과를 적용한다.
      *
-     * provider 호출은 트랜잭션 밖이라(도메인 모델 §4.6) 이 메서드는 `@Transactional`이 아니고, 트랜잭션 안에서 부르면
-     * 안 된다. 적용만 트랜잭션이다. 같은 클래스의 `@Transactional` 메서드는 프록시를 거치지 않아 열리지 않으므로
-     * Boot가 등록한 [TransactionOperations]로 연다.
+     * provider 호출은 트랜잭션 밖이다(도메인 모델 §4.6). 트랜잭션 안에서 부르면 적용이 거기 합류해 잠금 조회가
+     * 먼저 읽어 둔 낡은 값을 돌려받으므로 `NEVER`로 거절한다. 적용 트랜잭션은 [TransactionOperations]로 연다 —
+     * 같은 클래스의 `@Transactional` 메서드는 프록시를 거치지 않아 열리지 않는다.
      *
-     * 결말이 난 시도면 provider를 부르지 않는다(0원·재배달). 이중 청구 방어는 아니다 — 그건 provider의 `PaymentId` 멱등성이다.
+     * 결말이 난 시도면 provider를 부르지 않는다(0원·재배달). 이중 청구 방어는 provider의 `PaymentId` 멱등성이다.
      */
+    @Transactional(propagation = Propagation.NEVER)
     fun authorize(command: AuthorizePaymentCommand): AuthorizePaymentResult {
         val attempt = repository.findById(command.paymentId) ?: throw attemptNotFound()
         if (attempt.status != PaymentAttemptStatus.REQUESTED) {
