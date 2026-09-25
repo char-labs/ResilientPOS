@@ -12,6 +12,8 @@
 
 **공통 태그.** `management.metrics.tags.application`에 `${spring.application.name}`을 준다. 여러 서비스가 한 Prometheus에 모일 때 대시보드가 서비스를 가르는 기준이다.
 
+**지연 histogram.** `management.metrics.distribution.percentiles-histogram.http.server.requests`를 켠다. 기본값은 `_count`·`_sum`·`_max`뿐이라 시스템 설계가 요구하는 p95를 Prometheus에서 계산할 수 없다.
+
 **구조화 로그.** Spring Boot 내장 `logging.structured.format.console`을 쓴다. 기본값은 지금처럼 평문이고, 배포 환경에서 `LOGGING_STRUCTURED_FORMAT_CONSOLE=ecs`를 주면 JSON이 된다. yaml에는 값을 적지 않고 주석으로 사용법만 남긴다. 로컬 개발과 테스트 출력은 읽기 쉽게 둔다. ECS를 고른 이유는 Loki가 어떤 JSON이든 읽고, ECS가 필드 이름이 표준화되어 있어서다.
 
 계약: HTTP API와 응답 형식은 바뀌지 않는다. `/actuator/prometheus`가 새로 생긴다.
@@ -28,7 +30,8 @@
 - metric 접근 제한(인증, management 포트 분리). 배포 형태가 정해질 때 ingress나 포트로 정한다.
 
 ## 관련 문서
-없음
+- [시스템 설계 7절](../references/02_System_Design.md#7-nfr-and-observability): 이 PR이 첫 단계를 맡는 관측성 파이프라인이다.
+- [관측성](../wiki/observability.md): 이 PR이 새로 만드는 wiki 페이지다.
 
 ## 변경 경로
 - build.gradle.kts
@@ -41,7 +44,7 @@
 
 ## 인수 조건
 1. `GET /actuator/prometheus`가 200과 Prometheus text 형식을 돌려준다.
-2. 응답에 요청 metric(`http_server_requests_seconds`)이 `application="ResilientPOS"` 태그와 함께 있다.
+2. 응답에 요청 metric(`http_server_requests_seconds`)이 `application="ResilientPOS"` 태그와 함께 있고, 지연 histogram bucket(`_bucket`)도 있다.
 3. `health`와 `prometheus` 외의 Actuator 엔드포인트(예: `/actuator/env`)는 404다.
 4. 환경 변수 없이 실행하면 로그가 평문이고, `LOGGING_STRUCTURED_FORMAT_CONSOLE=ecs`를 주면 한 줄이 JSON 객체 하나다.
 5. 기존 테스트가 모두 통과한다.
@@ -68,10 +71,15 @@
 | 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
 |---|---|---|---|
 | 인수 1~2, `prometheus 엔드포인트가 application 태그가 붙은 요청 metric을 돌려준다` | `./gradlew test --tests 'com.resilientpos.platform.ObservabilityConfigurationTest'`. 의존성·설정 전에 실패: 200을 기대했는데 404였다 | 같은 명령. registry와 exposure·태그 설정 뒤 통과 | `./gradlew test`. 219개 중 실패 0 |
+| 인수 1 content-type·인수 2 histogram(범위 조정), `prometheus 엔드포인트가 application 태그와 지연 histogram이 붙은 요청 metric을 돌려준다` | 같은 명령. histogram 설정 전에 실패: `http_server_requests_seconds_bucket이 없다`. content-type 단언은 RED 없이 통과했다(characterization) | 같은 명령. `percentiles-histogram.http.server.requests` 설정 뒤 통과 | `./gradlew test`. 219개 중 실패 0 |
 | 인수 3, `health와 prometheus 외의 Actuator 엔드포인트는 열지 않는다` | RED 없음. Boot 기본 노출이 `health`뿐이라 처음부터 통과했다. `include`를 넓히는 회귀를 막는 characterization이다 | 같은 명령. 통과 | 같은 명령. 통과 |
 
+## 범위 조정
+- multi-review(Claude만 결과를 냄, Codex는 결과 없이 종료, Gemini는 CLI 없음)의 지적을 반영했다. 지연 histogram을 더했고(인수 2), 인수 1의 Prometheus text 형식을 content-type으로 단언한다. yaml 주석의 scrape 주체, wiki의 Loki label 권고, 이 절의 관련 문서를 바로잡았다.
+- 후속으로 넘긴 지적: `management.endpoints.access.default: none`으로 두는 두 번째 방어선, `/actuator` 목록 전체를 보는 노출 회귀 테스트, ingress 차단 전제의 wiki 명시, ECS `service.environment`, README의 오래된 서술(H2, Modulith).
+
 ## 결과
-- 인수 1~3: `ObservabilityConfigurationTest` 2개 통과. Spring Boot 테스트는 metric export를 기본으로 끄므로 `@AutoConfigureMetrics`(Boot 4에서는 `spring-boot-micrometer-metrics-test`)로 켰다. 이 어노테이션 때문에 이 테스트 클래스는 Spring 컨텍스트를 하나 더 만든다.
+- 인수 1~3: `ObservabilityConfigurationTest` 2개 통과. 범위 조정 뒤에는 content-type과 histogram bucket도 단언한다. Spring Boot 테스트는 metric export를 기본으로 끄므로 `@AutoConfigureMetrics`(Boot 4에서는 `spring-boot-micrometer-metrics-test`)로 켰다. 이 어노테이션 때문에 이 테스트 클래스는 Spring 컨텍스트를 하나 더 만든다.
 - 인수 4: 환경 변수 없이 실행하면 `2026-09-25T19:16:45.626+09:00  INFO ... HikariPool-1 - Starting...` 같은 평문이고, `LOGGING_STRUCTURED_FORMAT_CONSOLE=ecs`를 주면 `{"@timestamp":...,"log":{"level":"INFO","logger":...},"service":{"name":"ResilientPOS"},"message":...}` 한 줄이 나오는 것을 같은 테스트 실행 출력에서 확인했다.
 - 인수 5: `./gradlew test` 219개 중 실패 0(main의 #55 위로 rebase한 뒤).
 - `python3 scripts/check_pr.py --base origin/main --worktree`: PASS.
