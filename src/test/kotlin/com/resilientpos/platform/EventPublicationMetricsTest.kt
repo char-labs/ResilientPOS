@@ -62,7 +62,7 @@ class EventPublicationMetricsTest(
 
     private fun uniqueListener(prefix: String) = prefix + UUID.randomUUID().toString().replace("-", "")
 
-    private fun insert(listener: String, status: String, age: Duration, resubmittedAge: Duration? = null): UUID {
+    private fun insert(listener: String, status: String?, age: Duration, resubmittedAge: Duration? = null): UUID {
         val id = UUID.randomUUID()
         val now = Instant.now()
         jdbcTemplate.update(
@@ -95,16 +95,21 @@ class EventPublicationMetricsTest(
     fun `리스너별로 실패한 기록과 기준 시간이 지난 미완료 기록을 센다`() {
         val a = uniqueListener("ProbeA")
         val b = uniqueListener("ProbeB")
+        val c = uniqueListener("ProbeC")
         insert(a, "FAILED", Duration.ofSeconds(1))
         insert(a, "PUBLISHED", Duration.ofMinutes(6))
         insert(b, "PROCESSING", Duration.ofMinutes(6))
         insert(a, "PUBLISHED", Duration.ofMinutes(1))
         insert(a, "COMPLETED", Duration.ofMinutes(6))
+        // Modulith의 실패 조회처럼 status가 비어 있는 미완료 행은 실패다. 모르는 상태값은 세지 않는다.
+        insert(c, null, Duration.ofSeconds(1))
+        insert(c, "UNKNOWN_STATUS", Duration.ofMinutes(6))
 
         metrics.refresh()
 
         assertEquals(mapOf("failed" to 1.0, "stale" to 1.0), gauges(a))
         assertEquals(mapOf("stale" to 1.0), gauges(b))
+        assertEquals(mapOf("failed" to 1.0), gauges(c))
     }
 
     /** 오래된 이벤트를 방금 다시 보냈다면 아직 처리 중일 수 있다. 발행 시각이 아니라 마지막 재전송 시각부터 잰다. */
@@ -156,7 +161,7 @@ class EventPublicationMetricsTest(
     }
 
     @Test
-    fun `listener 태그는 listener_id의 클래스 단순 이름이다`() {
+    fun `module과 listener 태그는 listener_id에서 뽑는다`() {
         assertEquals(
             "OrderPaidListener",
             EventPublicationMetrics.listenerName(
@@ -170,6 +175,7 @@ class EventPublicationMetricsTest(
             ),
         )
         assertEquals("unknown", EventPublicationMetrics.moduleName("com.example.internal.Probe.on(com.resilientpos.order.X)"))
+        assertEquals("unknown", EventPublicationMetrics.moduleName("com.resilientpos.Probe.on(com.resilientpos.order.X)"))
         assertEquals(
             "Inner",
             EventPublicationMetrics.listenerName("com.example.Outer\$Inner.on(com.example.Outer\$Event)"),
@@ -203,7 +209,7 @@ class EventPublicationMetricsTest(
      * 낡은 개수가 남으면 `max`로 모은 알림이 이미 조치된 기록을 붙잡는다.
      */
     @Test
-    fun `조회가 실패하면 개수를 내리고 마지막 갱신 시각을 멈춘다`() {
+    fun `조회가 실패하면 개수를 내리고 마지막 갱신 시각을 멈췄다가 성공하면 되돌린다`() {
         val flaky = FlakyDataSource(dataSource)
         val clock = MutableClock(Instant.now())
         val own = SimpleMeterRegistry()
@@ -222,6 +228,12 @@ class EventPublicationMetricsTest(
 
         assertTrue(own.find("event.publication.incomplete").tag("listener", a).gauges().isEmpty(), "개수가 남아 있다")
         assertEquals(before.epochSecond.toDouble(), refreshed.value())
+
+        // 다음 조회가 성공하면 실패 중에 더해진 행까지 세고 갱신 시각도 돌아온다.
+        flaky.failing = false
+        subject.refresh()
+        assertEquals(2.0, own.get("event.publication.incomplete").tag("listener", a).gauge().value())
+        assertEquals(clock.instant().epochSecond.toDouble(), refreshed.value())
     }
 
     @Test
@@ -237,6 +249,8 @@ class EventPublicationMetricsTest(
     @Test
     fun `갱신이 1분 주기로 스케줄된다`() {
         val tasks = scheduledTasks.flatMap { it.scheduledTasks }.map { it.task }
+        // 기본 컨텍스트에서는 Moments도 스케줄된다. Moments를 끈 컨텍스트의 테스트가 기대는 전제다.
+        assertTrue(tasks.any { "Moments" in it.toString() }, "Moments가 스케줄되지 않았다: $tasks")
         assertTrue(
             tasks.any {
                 it is FixedDelayTask && it.intervalDuration == Duration.ofMinutes(1) &&

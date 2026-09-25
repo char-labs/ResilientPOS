@@ -10,7 +10,6 @@ import java.time.Duration
 import java.util.concurrent.atomic.AtomicLong
 import javax.sql.DataSource
 import org.springframework.beans.factory.annotation.Value
-import org.springframework.dao.DataAccessException
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.scheduling.annotation.Scheduled
 import org.springframework.stereotype.Component
@@ -18,7 +17,8 @@ import org.springframework.stereotype.Component
 /**
  * 커밋 뒤 리스너가 끝내지 못한 발행 기록을 `event.publication.incomplete{status, module, listener}`로 센다. 조회만 하고 상태는 바꾸지 않는다.
  *
- * `failed`는 리스너가 던진 기록, `stale`은 완료도 실패도 아닌 채 [staleAfter]가 지난 기록(종료·프로세스 사망으로 끊긴 것)이다.
+ * `failed`는 리스너가 던진 기록(`status`가 비어 있는 미완료 행도 Modulith처럼 실패로 본다), `stale`은 `PUBLISHED`·`PROCESSING`·`RESUBMITTED`인 채
+ * [staleAfter]가 지난 기록(종료·프로세스 사망으로 끊긴 것)이다.
  * 재전송된 기록은 마지막 재전송 시각부터 잰다.
  * 모든 인스턴스가 같은 DB를 세므로 알림은 `max`로 모은다.
  * 조회가 실패한 인스턴스는 개수를 내리고 `event.publication.incomplete.refreshed`(마지막 성공 시각, epoch 초)를 멈춘다.
@@ -68,17 +68,23 @@ class EventPublicationMetrics(
                 """
                 select status, listener_id, count(*) as n from event_publication
                 where completion_date is null
-                  and (status = 'FAILED' or coalesce(last_resubmission_date, publication_date) < ?)
+                  and (
+                    status = 'FAILED' or status is null
+                    or (status in ('PUBLISHED', 'PROCESSING', 'RESUBMITTED')
+                        and coalesce(last_resubmission_date, publication_date) < ?)
+                  )
                 group by status, listener_id
                 """.trimIndent(),
                 { rs, _ ->
-                    val status = if (rs.getString("status") == "FAILED") "failed" else "stale"
+                    // Modulith의 실패 조회(FailedEventPublications)도 status가 비어 있는 미완료 행을 실패로 본다.
+                    val status = if (rs.getString("status") in setOf(null, "FAILED")) "failed" else "stale"
                     val listenerId = rs.getString("listener_id")
                     Triple(status, moduleName(listenerId), listenerName(listenerId)) to rs.getLong("n")
                 },
                 Timestamp.from(clock.instant().minus(staleAfter)),
             )
-        } catch (e: DataAccessException) {
+        } catch (e: RuntimeException) {
+            // DataAccessException만 잡으면 행 매핑에서 난 예외가 새어 낡은 개수가 남는다.
             log.warn(e) { "발행 기록을 세지 못해 개수를 내리고 이번 갱신을 건너뛴다" }
             snapshot = emptyMap()
             gauge.register(emptyList(), false)
@@ -105,11 +111,13 @@ class EventPublicationMetrics(
 
         /**
          * `com.resilientpos.모듈....`에서 모듈. 모듈마다 같은 이름의 리스너가 생길 수 있다(`PaymentApproved`를 order와 reconciliation이 받는다).
-         * 이 저장소 밖의 리스너나 id를 직접 준 리스너는 `unknown`이다.
+         * 이 저장소 밖의 리스너, 기본 패키지 바로 아래 클래스, id를 직접 준 리스너는 `unknown`이다.
          */
-        fun moduleName(listenerId: String): String =
-            listenerId.substringBefore('(').takeIf { it.startsWith(BASE_PACKAGE) }
-                ?.removePrefix(BASE_PACKAGE)?.substringBefore('.') ?: "unknown"
+        fun moduleName(listenerId: String): String {
+            // 메서드와 클래스를 떼고 남은 패키지에서 찾는다. 기본 패키지 바로 아래 클래스는 모듈이 없다.
+            val pkg = listenerId.substringBefore('(').substringBeforeLast('.').substringBeforeLast('.')
+            return if (pkg.startsWith(BASE_PACKAGE)) pkg.removePrefix(BASE_PACKAGE).substringBefore('.') else "unknown"
+        }
 
         /** `패키지.클래스.메서드(이벤트타입)`에서 클래스 단순 이름. 중첩 클래스는 `바깥$안`으로 저장되어 안쪽 이름만 쓴다. */
         fun listenerName(listenerId: String): String =
