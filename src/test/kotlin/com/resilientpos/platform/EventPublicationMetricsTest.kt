@@ -169,6 +169,7 @@ class EventPublicationMetricsTest(
                 "com.resilientpos.fulfillment.internal.application.OrderPaidListener.on(com.resilientpos.contract.OrderPaid)",
             ),
         )
+        assertEquals("unknown", EventPublicationMetrics.moduleName("com.example.internal.Probe.on(com.resilientpos.order.X)"))
         assertEquals(
             "Inner",
             EventPublicationMetrics.listenerName("com.example.Outer\$Inner.on(com.example.Outer\$Event)"),
@@ -189,11 +190,20 @@ class EventPublicationMetricsTest(
         metrics.refresh()
 
         assertEquals(mapOf("failed" to 1.0), gauges("FailingProbeListener"))
+        // 테스트 리스너는 com.resilientpos.platform 아래라 실제 Modulith 행의 모듈 값까지 고정된다.
+        assertEquals(
+            listOf("platform"),
+            registry.find("event.publication.incomplete").tag("listener", "FailingProbeListener").gauges()
+                .map { it.id.getTag("module") },
+        )
     }
 
-    /** 스프링 빈이 아닌 인스턴스로 실패를 만든다. 조회가 실패하면 이전 값을 두고 신선도 gauge를 멈춘다. */
+    /**
+     * 스프링 빈이 아닌 인스턴스로 실패를 만든다. 조회가 실패한 인스턴스는 개수를 내리고 신선도 gauge를 멈춘다.
+     * 낡은 개수가 남으면 `max`로 모은 알림이 이미 조치된 기록을 붙잡는다.
+     */
     @Test
-    fun `조회가 실패하면 이전 값과 마지막 갱신 시각이 그대로다`() {
+    fun `조회가 실패하면 개수를 내리고 마지막 갱신 시각을 멈춘다`() {
         val flaky = FlakyDataSource(dataSource)
         val clock = MutableClock(Instant.now())
         val own = SimpleMeterRegistry()
@@ -210,14 +220,16 @@ class EventPublicationMetricsTest(
         clock.now = before.plus(Duration.ofMinutes(1))
         subject.refresh()
 
-        assertEquals(1.0, own.get("event.publication.incomplete").tag("listener", a).gauge().value())
+        assertTrue(own.find("event.publication.incomplete").tag("listener", a).gauges().isEmpty(), "개수가 남아 있다")
         assertEquals(before.epochSecond.toDouble(), refreshed.value())
     }
 
     @Test
     fun `기준 시간이 0 이하면 기동을 막는다`() {
-        assertFailsWith<IllegalArgumentException> {
-            EventPublicationMetrics(dataSource, Clock.systemUTC(), SimpleMeterRegistry(), Duration.ZERO)
+        for (staleAfter in listOf(Duration.ZERO, Duration.ofMinutes(-1))) {
+            assertFailsWith<IllegalArgumentException>("$staleAfter") {
+                EventPublicationMetrics(dataSource, Clock.systemUTC(), SimpleMeterRegistry(), staleAfter)
+            }
         }
     }
 

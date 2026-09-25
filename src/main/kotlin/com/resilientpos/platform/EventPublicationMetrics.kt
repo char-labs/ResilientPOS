@@ -21,8 +21,8 @@ import org.springframework.stereotype.Component
  * `failed`는 리스너가 던진 기록, `stale`은 완료도 실패도 아닌 채 [staleAfter]가 지난 기록(종료·프로세스 사망으로 끊긴 것)이다.
  * 재전송된 기록은 마지막 재전송 시각부터 잰다.
  * 모든 인스턴스가 같은 DB를 세므로 알림은 `max`로 모은다.
- * 조회가 실패하면 이전 값이 남으므로 `event.publication.incomplete.refreshed`(마지막 성공 시각, epoch 초)로 신선도를 본다.
- * 신선도는 인스턴스별로(또는 `min`으로) 본다. 신선도가 깨진 인스턴스의 값은 믿지 않는다.
+ * 조회가 실패한 인스턴스는 개수를 내리고 `event.publication.incomplete.refreshed`(마지막 성공 시각, epoch 초)를 멈춘다.
+ * 낡은 개수가 `max`에 섞여 조치된 알림을 붙잡지 않게 하려는 것이다. 신선도는 인스턴스별로(또는 `min`으로) 본다.
  */
 @Component
 class EventPublicationMetrics(
@@ -51,6 +51,7 @@ class EventPublicationMetrics(
         Gauge.builder("event.publication.incomplete.refreshed", lastRefreshed) { it.get().toDouble() }
             .description("event.publication.incomplete를 마지막으로 갱신한 시각(epoch 초)")
             .baseUnit("seconds")
+            .strongReference(true)
             .register(registry)
     }
 
@@ -78,7 +79,9 @@ class EventPublicationMetrics(
                 Timestamp.from(clock.instant().minus(staleAfter)),
             )
         } catch (e: DataAccessException) {
-            log.warn(e) { "발행 기록을 세지 못해 이번 갱신을 건너뛴다" }
+            log.warn(e) { "발행 기록을 세지 못해 개수를 내리고 이번 갱신을 건너뛴다" }
+            snapshot = emptyMap()
+            gauge.register(emptyList(), false)
             return
         }
         snapshot = counts.groupBy({ it.first }, { it.second }).mapValues { (_, ns) -> ns.sum() }
@@ -98,8 +101,15 @@ class EventPublicationMetrics(
     companion object {
         private val log by logger()
 
-        /** `com.resilientpos.모듈....`에서 모듈. 모듈마다 같은 이름의 리스너가 생길 수 있다(`PaymentApproved`를 order와 reconciliation이 받는다). */
-        fun moduleName(listenerId: String): String = listenerId.split('.').getOrElse(2) { "" }
+        private const val BASE_PACKAGE = "com.resilientpos."
+
+        /**
+         * `com.resilientpos.모듈....`에서 모듈. 모듈마다 같은 이름의 리스너가 생길 수 있다(`PaymentApproved`를 order와 reconciliation이 받는다).
+         * 이 저장소 밖의 리스너나 id를 직접 준 리스너는 `unknown`이다.
+         */
+        fun moduleName(listenerId: String): String =
+            listenerId.substringBefore('(').takeIf { it.startsWith(BASE_PACKAGE) }
+                ?.removePrefix(BASE_PACKAGE)?.substringBefore('.') ?: "unknown"
 
         /** `패키지.클래스.메서드(이벤트타입)`에서 클래스 단순 이름. 중첩 클래스는 `바깥$안`으로 저장되어 안쪽 이름만 쓴다. */
         fun listenerName(listenerId: String): String =
