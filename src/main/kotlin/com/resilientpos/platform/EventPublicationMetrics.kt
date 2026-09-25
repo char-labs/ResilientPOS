@@ -4,14 +4,17 @@ import io.micrometer.core.instrument.Gauge
 import io.micrometer.core.instrument.MeterRegistry
 import io.micrometer.core.instrument.MultiGauge
 import io.micrometer.core.instrument.Tags
+import jakarta.annotation.PostConstruct
+import jakarta.annotation.PreDestroy
 import java.sql.Timestamp
 import java.time.Clock
 import java.time.Duration
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 import javax.sql.DataSource
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.jdbc.core.JdbcTemplate
-import org.springframework.scheduling.annotation.Scheduled
 import org.springframework.stereotype.Component
 
 /**
@@ -23,6 +26,9 @@ import org.springframework.stereotype.Component
  * 모든 인스턴스가 같은 DB를 세므로 알림은 `max`로 모은다.
  * 조회가 실패한 인스턴스는 개수를 내리고 `event.publication.incomplete.refreshed`(마지막 성공 시각, epoch 초)를 멈춘다.
  * 낡은 개수가 `max`에 섞여 조치된 알림을 붙잡지 않게 하려는 것이다. 신선도는 인스턴스별로(또는 `min`으로) 본다.
+ *
+ * 갱신은 Spring의 공용 스케줄러가 아니라 전용 스레드 하나에서 돈다. 공용 스케줄러는 스레드가 하나라 느린 조회가
+ * Modulith Moments의 시간 이벤트 발행까지 붙잡는다. `@EnableScheduling`이나 Moments 설정과도 무관하게 돈다.
  */
 @Component
 class EventPublicationMetrics(
@@ -33,7 +39,10 @@ class EventPublicationMetrics(
 ) {
     // 공유 JdbcTemplate을 건드리지 않고 이 조회에만 상한을 둔다. JPA 쿼리 상한(10초)과 같은 값이다.
     // 트랜잭션 밖이라 트랜잭션 상한이 걸리지 않고, 없으면 스케줄러 스레드 하나가 소켓 상한(30초)까지 묶인다.
+    // 커넥션 대기는 Hikari connection-timeout(3초)이 따로 막는다.
     private val jdbcTemplate = JdbcTemplate(dataSource).apply { queryTimeout = 10 }
+
+    private val scheduler = Executors.newSingleThreadScheduledExecutor { Thread(it, THREAD_NAME).apply { isDaemon = true } }
 
     private val gauge = MultiGauge.builder("event.publication.incomplete")
         .description("완료되지 않은 이벤트 발행 기록 수")
@@ -55,12 +64,25 @@ class EventPublicationMetrics(
             .register(registry)
     }
 
+    @PostConstruct
+    fun start() {
+        // refresh()가 RuntimeException을 삼키지만 Error가 새면 ScheduledExecutorService는 이후 실행을 조용히 멈춘다.
+        scheduler.scheduleWithFixedDelay(
+            { runCatching { refresh() }.onFailure { log.error(it) { "발행 기록 metric 갱신이 멈출 뻔했다" } } },
+            0, INTERVAL.toSeconds(), TimeUnit.SECONDS,
+        )
+    }
+
+    @PreDestroy
+    fun stop() {
+        scheduler.shutdownNow()
+    }
+
     /**
      * 리스너 목록이 데이터에서 나오므로 주기마다 다시 등록한다. 사라진 조합의 시계열은 없어진다.
      * 조회와 등록을 한 단위로 묶는다. 두 갱신이 겹치면 먼저 조회한 쪽이 나중에 등록해 새 값을 덮을 수 있다.
      */
     @Synchronized
-    @Scheduled(fixedDelayString = "PT1M")
     fun refresh() {
         val counts = try {
             // completion_date is null 조건이 미완료 인덱스를 타서 완료 행이 쌓여도 비용이 늘지 않는다.
@@ -77,7 +99,8 @@ class EventPublicationMetrics(
                 """.trimIndent(),
                 { rs, _ ->
                     // Modulith의 실패 조회(FailedEventPublications)도 status가 비어 있는 미완료 행을 실패로 본다.
-                    val status = if (rs.getString("status") in setOf(null, "FAILED")) "failed" else "stale"
+                    val raw = rs.getString("status")
+                    val status = if (raw == null || raw == "FAILED") "failed" else "stale"
                     val listenerId = rs.getString("listener_id")
                     Triple(status, moduleName(listenerId), listenerName(listenerId)) to rs.getLong("n")
                 },
@@ -106,6 +129,9 @@ class EventPublicationMetrics(
 
     companion object {
         private val log by logger()
+
+        const val THREAD_NAME = "event-publication-metrics"
+        val INTERVAL: Duration = Duration.ofMinutes(1)
 
         private const val BASE_PACKAGE = "com.resilientpos."
 

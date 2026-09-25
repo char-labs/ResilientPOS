@@ -27,7 +27,6 @@ import org.springframework.context.ApplicationEventPublisher
 import org.springframework.context.annotation.Import
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.modulith.events.ApplicationModuleListener
-import org.springframework.scheduling.config.FixedDelayTask
 import org.springframework.scheduling.config.ScheduledTaskHolder
 import org.springframework.transaction.support.TransactionOperations
 
@@ -245,18 +244,14 @@ class EventPublicationMetricsTest(
         }
     }
 
-    /** 다른 테스트는 `refresh()`를 직접 부른다. 1분 주기 갱신이 실제로 등록됐는지는 여기서 본다. task 이름은 `클래스.메서드`다. */
+    /** 공용 스케줄러는 스레드가 하나라 느린 조회가 Moments까지 붙잡는다. 갱신은 거기 올리지 않고 전용 스레드에서 돈다. */
     @Test
-    fun `갱신이 1분 주기로 스케줄된다`() {
-        val tasks = scheduledTasks.flatMap { it.scheduledTasks }.map { it.task }
-        // 기본 컨텍스트에서는 Moments도 스케줄된다. Moments를 끈 컨텍스트의 테스트가 기대는 전제다.
-        assertTrue(tasks.any { "Moments" in it.toString() }, "Moments가 스케줄되지 않았다: $tasks")
+    fun `갱신은 공용 스케줄러가 아니라 전용 스레드에서 돈다`() {
+        val tasks = scheduledTasks.flatMap { it.scheduledTasks }.map { it.task.toString() }
+        assertTrue(tasks.none { EventPublicationMetrics::class.java.name in it }, "공용 스케줄러에 올라가 있다: $tasks")
         assertTrue(
-            tasks.any {
-                it is FixedDelayTask && it.intervalDuration == Duration.ofMinutes(1) &&
-                    it.toString() == "${EventPublicationMetrics::class.java.name}.refresh"
-            },
-            "스케줄된 작업: $tasks",
+            Thread.getAllStackTraces().keys.any { it.name == EventPublicationMetrics.THREAD_NAME && it.isAlive },
+            "전용 갱신 스레드가 없다",
         )
     }
 
