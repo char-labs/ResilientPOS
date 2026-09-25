@@ -1,11 +1,13 @@
 package com.resilientpos.platform
 
+import io.micrometer.core.instrument.Gauge
 import io.micrometer.core.instrument.MeterRegistry
 import io.micrometer.core.instrument.MultiGauge
 import io.micrometer.core.instrument.Tags
 import java.sql.Timestamp
 import java.time.Clock
 import java.time.Duration
+import java.util.concurrent.atomic.AtomicLong
 import javax.sql.DataSource
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.dao.DataAccessException
@@ -19,6 +21,7 @@ import org.springframework.stereotype.Component
  * `failed`는 리스너가 던진 기록, `stale`은 완료도 실패도 아닌 채 [staleAfter]가 지난 기록(종료·프로세스 사망으로 끊긴 것)이다.
  * 재전송된 기록은 마지막 재전송 시각부터 잰다.
  * 모든 인스턴스가 같은 DB를 세므로 알림은 `max`로 모은다.
+ * 조회가 실패하면 이전 값이 남으므로 `event.publication.incomplete.refreshed`(마지막 성공 시각, epoch 초)로 신선도를 본다.
  */
 @Component
 class EventPublicationMetrics(
@@ -34,6 +37,18 @@ class EventPublicationMetrics(
     private val gauge = MultiGauge.builder("event.publication.incomplete")
         .description("완료되지 않은 이벤트 발행 기록 수")
         .register(registry)
+
+    /** row는 이 맵을 읽는다. 값만 바뀐 조합은 다시 등록하지 않아 scrape 사이에 시계열이 빠지지 않는다. */
+    @Volatile
+    private var snapshot: Map<Pair<String, String>, Long> = emptyMap()
+
+    private val lastRefreshed = AtomicLong(0)
+
+    init {
+        Gauge.builder("event.publication.incomplete.refreshed", lastRefreshed) { it.get().toDouble() }
+            .description("event.publication.incomplete를 마지막으로 갱신한 시각(epoch 초)")
+            .register(registry)
+    }
 
     /**
      * 리스너 목록이 데이터에서 나오므로 주기마다 다시 등록한다. 사라진 조합의 시계열은 없어진다.
@@ -61,10 +76,17 @@ class EventPublicationMetrics(
             log.warn(e) { "발행 기록을 세지 못해 이번 갱신을 건너뛴다" }
             return
         }
-        val rows = counts.groupBy({ it.first }, { it.second }).map { (key, ns) ->
-            MultiGauge.Row.of(Tags.of("status", key.first, "listener", key.second), ns.sum())
-        }
-        gauge.register(rows, true)
+        snapshot = counts.groupBy({ it.first }, { it.second }).mapValues { (_, ns) -> ns.sum() }
+        // overwrite=false: 이미 있는 조합은 그대로 두고 새 조합만 등록한다. 목록에 없는 조합은 지운다.
+        gauge.register(
+            snapshot.keys.map { key ->
+                MultiGauge.Row.of(Tags.of("status", key.first, "listener", key.second), this) {
+                    it.snapshot[key]?.toDouble() ?: 0.0
+                }
+            },
+            false,
+        )
+        lastRefreshed.set(clock.instant().epochSecond)
     }
 
     companion object {

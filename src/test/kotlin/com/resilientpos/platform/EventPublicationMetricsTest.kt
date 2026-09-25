@@ -9,6 +9,7 @@ import java.util.UUID
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.AfterTest
+import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -19,6 +20,7 @@ import org.springframework.context.ApplicationEventPublisher
 import org.springframework.context.annotation.Import
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.modulith.events.ApplicationModuleListener
+import org.springframework.scheduling.config.ScheduledTaskHolder
 import org.springframework.transaction.support.TransactionOperations
 
 /**
@@ -34,12 +36,18 @@ class EventPublicationMetricsTest(
     @Autowired private val registry: MeterRegistry,
     @Autowired private val transactions: TransactionOperations,
     @Autowired private val eventPublisher: ApplicationEventPublisher,
+    @Autowired private val scheduledTasks: List<ScheduledTaskHolder>,
 ) : PostgresIntegrationTest() {
 
     /**
      * 이 클래스가 남긴 행을 지운다. 가짜 이벤트 타입의 미완료 행이 남으면 종료 때 Modulith가 복원하다 실패하고,
      * 실패 리스너의 `FAILED` 행은 같은 DB를 쓰는 다른 테스트에 오염된 기록으로 남는다.
      */
+    @BeforeTest
+    fun resetProbe() {
+        probeThread.set(null)
+    }
+
     @AfterTest
     fun cleanUp() {
         jdbcTemplate.update(
@@ -127,6 +135,24 @@ class EventPublicationMetricsTest(
         assertEquals(emptyMap(), gauges(deleted))
     }
 
+    /** 값만 바뀐 조합은 같은 gauge가 새 값을 읽는다. 지웠다 다시 등록하면 그 틈의 scrape에서 시계열이 빠진다. */
+    @Test
+    fun `값만 바뀐 조합은 같은 gauge가 새 값을 읽고 갱신 시각이 남는다`() {
+        val a = uniqueListener("ProbeGrow")
+        insert(a, "FAILED", Duration.ofMinutes(10))
+        metrics.refresh()
+        val before = registry.find("event.publication.incomplete").tag("listener", a).gauge()!!
+
+        insert(a, "FAILED", Duration.ofMinutes(10))
+        metrics.refresh()
+
+        val after = registry.find("event.publication.incomplete").tag("listener", a).gauge()!!
+        assertTrue(before === after, "같은 조합은 다시 등록하지 않는다")
+        assertEquals(2.0, after.value())
+        val refreshed = registry.get("event.publication.incomplete.refreshed").gauge().value()
+        assertTrue(Instant.now().epochSecond - refreshed < 60, "마지막 갱신 시각: $refreshed")
+    }
+
     @Test
     fun `listener 태그는 listener_id의 클래스 단순 이름이다`() {
         assertEquals(
@@ -155,6 +181,13 @@ class EventPublicationMetricsTest(
         metrics.refresh()
 
         assertEquals(mapOf("failed" to 1.0), gauges("FailingProbeListener"))
+    }
+
+    /** 다른 테스트는 `refresh()`를 직접 부른다. 1분 주기 갱신이 실제로 등록됐는지는 여기서 본다. */
+    @Test
+    fun `갱신이 스케줄에 등록된다`() {
+        val tasks = scheduledTasks.flatMap { it.scheduledTasks }.map { it.task.toString() }
+        assertTrue("${EventPublicationMetrics::class.java.name}.refresh" in tasks, "등록된 스케줄: $tasks")
     }
 
     /** 스케줄링을 켜면 TaskScheduler가 생긴다. 그래도 커밋 뒤 리스너는 Boot의 task executor에서 돌아야 한다. */
