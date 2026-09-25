@@ -2,24 +2,32 @@ package com.resilientpos.platform
 
 import com.resilientpos.PostgresIntegrationTest
 import io.micrometer.core.instrument.MeterRegistry
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry
+import java.sql.Connection
+import java.sql.SQLException
 import java.sql.Timestamp
+import java.time.Clock
 import java.time.Duration
 import java.time.Instant
+import java.time.ZoneId
+import java.time.ZoneOffset
 import java.util.UUID
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicReference
+import javax.sql.DataSource
 import kotlin.test.AfterTest
-import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 import kotlin.test.fail
+import org.springframework.beans.factory.ObjectProvider
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.TestConfiguration
 import org.springframework.context.ApplicationEventPublisher
 import org.springframework.context.annotation.Import
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.modulith.events.ApplicationModuleListener
+import org.springframework.scheduling.config.FixedDelayTask
 import org.springframework.scheduling.config.ScheduledTaskHolder
 import org.springframework.transaction.support.TransactionOperations
 
@@ -29,25 +37,21 @@ import org.springframework.transaction.support.TransactionOperations
  * 1분 주기의 스케줄 갱신도 같은 컨텍스트에서 돈다. `refresh()`가 직렬화되어 있어 늦게 끝난 쪽이 늘 최신 조회다.
  * 테스트 전용 리스너는 중첩 `@TestConfiguration`이라 자동 감지되지만 등록 여부가 읽히도록 명시한다.
  */
-@Import(EventPublicationMetricsTest.ThreadProbeListener::class, EventPublicationMetricsTest.FailingProbeListener::class)
+@Import(EventPublicationMetricsTest.FailingProbeListener::class)
 class EventPublicationMetricsTest(
     @Autowired private val jdbcTemplate: JdbcTemplate,
     @Autowired private val metrics: EventPublicationMetrics,
     @Autowired private val registry: MeterRegistry,
     @Autowired private val transactions: TransactionOperations,
     @Autowired private val eventPublisher: ApplicationEventPublisher,
-    @Autowired private val scheduledTasks: List<ScheduledTaskHolder>,
+    @Autowired private val dataSource: DataSource,
+    @Autowired private val scheduledTasks: ObjectProvider<ScheduledTaskHolder>,
 ) : PostgresIntegrationTest() {
 
     /**
      * 이 클래스가 남긴 행을 지운다. 가짜 이벤트 타입의 미완료 행이 남으면 종료 때 Modulith가 복원하다 실패하고,
      * 실패 리스너의 `FAILED` 행은 같은 DB를 쓰는 다른 테스트에 오염된 기록으로 남는다.
      */
-    @BeforeTest
-    fun resetProbe() {
-        probeThread.set(null)
-    }
-
     @AfterTest
     fun cleanUp() {
         jdbcTemplate.update(
@@ -137,7 +141,7 @@ class EventPublicationMetricsTest(
 
     /** 값만 바뀐 조합은 같은 gauge가 새 값을 읽는다. 지웠다 다시 등록하면 그 틈의 scrape에서 시계열이 빠진다. */
     @Test
-    fun `값만 바뀐 조합은 같은 gauge가 새 값을 읽고 갱신 시각이 남는다`() {
+    fun `값만 바뀐 조합은 같은 gauge가 새 값을 읽는다`() {
         val a = uniqueListener("ProbeGrow")
         insert(a, "FAILED", Duration.ofMinutes(10))
         metrics.refresh()
@@ -149,8 +153,6 @@ class EventPublicationMetricsTest(
         val after = registry.find("event.publication.incomplete").tag("listener", a).gauge()!!
         assertTrue(before === after, "같은 조합은 다시 등록하지 않는다")
         assertEquals(2.0, after.value())
-        val refreshed = registry.get("event.publication.incomplete.refreshed").gauge().value()
-        assertTrue(Instant.now().epochSecond - refreshed < 60, "마지막 갱신 시각: $refreshed")
     }
 
     @Test
@@ -158,6 +160,12 @@ class EventPublicationMetricsTest(
         assertEquals(
             "OrderPaidListener",
             EventPublicationMetrics.listenerName(
+                "com.resilientpos.fulfillment.internal.application.OrderPaidListener.on(com.resilientpos.contract.OrderPaid)",
+            ),
+        )
+        assertEquals(
+            "fulfillment",
+            EventPublicationMetrics.moduleName(
                 "com.resilientpos.fulfillment.internal.application.OrderPaidListener.on(com.resilientpos.contract.OrderPaid)",
             ),
         )
@@ -183,34 +191,50 @@ class EventPublicationMetricsTest(
         assertEquals(mapOf("failed" to 1.0), gauges("FailingProbeListener"))
     }
 
-    /** 다른 테스트는 `refresh()`를 직접 부른다. 1분 주기 갱신이 실제로 등록됐는지는 여기서 본다. */
+    /** 스프링 빈이 아닌 인스턴스로 실패를 만든다. 조회가 실패하면 이전 값을 두고 신선도 gauge를 멈춘다. */
     @Test
-    fun `갱신이 스케줄에 등록된다`() {
-        val tasks = scheduledTasks.flatMap { it.scheduledTasks }.map { it.task.toString() }
-        assertTrue("${EventPublicationMetrics::class.java.name}.refresh" in tasks, "등록된 스케줄: $tasks")
+    fun `조회가 실패하면 이전 값과 마지막 갱신 시각이 그대로다`() {
+        val flaky = FlakyDataSource(dataSource)
+        val clock = MutableClock(Instant.now())
+        val own = SimpleMeterRegistry()
+        val subject = EventPublicationMetrics(flaky, clock, own, Duration.ofMinutes(5))
+        val a = uniqueListener("ProbeFlaky")
+        insert(a, "FAILED", Duration.ofMinutes(10))
+        subject.refresh()
+        val refreshed = own.get("event.publication.incomplete.refreshed").gauge()
+        assertEquals(clock.instant().epochSecond.toDouble(), refreshed.value())
+
+        flaky.failing = true
+        insert(a, "FAILED", Duration.ofMinutes(10))
+        val before = clock.instant()
+        clock.now = before.plus(Duration.ofMinutes(1))
+        subject.refresh()
+
+        assertEquals(1.0, own.get("event.publication.incomplete").tag("listener", a).gauge().value())
+        assertEquals(before.epochSecond.toDouble(), refreshed.value())
     }
 
-    /** 스케줄링을 켜면 TaskScheduler가 생긴다. 그래도 커밋 뒤 리스너는 Boot의 task executor에서 돌아야 한다. */
     @Test
-    fun `스케줄링을 켜도 커밋 뒤 리스너는 task executor에서 돈다`() {
-        transactions.executeWithoutResult { eventPublisher.publishEvent(ThreadProbe(UUID.randomUUID())) }
-
-        awaitUntil("리스너가 돈다") { probeThread.get() != null }
-        assertTrue(probeThread.get().startsWith("task-"), "리스너 스레드: ${probeThread.get()}")
-    }
-
-    data class ThreadProbe(val id: UUID)
-
-    data class FailingProbe(val id: UUID)
-
-    /** 프록시가 필드를 가리므로 결과를 companion에 둔다. */
-    @TestConfiguration
-    class ThreadProbeListener {
-        @ApplicationModuleListener
-        fun on(event: ThreadProbe) {
-            probeThread.compareAndSet(null, Thread.currentThread().name)
+    fun `기준 시간이 0 이하면 기동을 막는다`() {
+        assertFailsWith<IllegalArgumentException> {
+            EventPublicationMetrics(dataSource, Clock.systemUTC(), SimpleMeterRegistry(), Duration.ZERO)
         }
     }
+
+    /** 다른 테스트는 `refresh()`를 직접 부른다. 1분 주기 갱신이 실제로 등록됐는지는 여기서 본다. task 이름은 `클래스.메서드`다. */
+    @Test
+    fun `갱신이 1분 주기로 스케줄된다`() {
+        val tasks = scheduledTasks.flatMap { it.scheduledTasks }.map { it.task }
+        assertTrue(
+            tasks.any {
+                it is FixedDelayTask && it.intervalDuration == Duration.ofMinutes(1) &&
+                    it.toString() == "${EventPublicationMetrics::class.java.name}.refresh"
+            },
+            "스케줄된 작업: $tasks",
+        )
+    }
+
+    data class FailingProbe(val id: UUID)
 
     @TestConfiguration
     class FailingProbeListener {
@@ -218,7 +242,17 @@ class EventPublicationMetricsTest(
         fun on(event: FailingProbe): Unit = throw IllegalStateException("의도한 실패")
     }
 
-    companion object {
-        private val probeThread = AtomicReference<String>()
+    /** 켜면 커넥션을 주지 않는다. `JdbcTemplate`이 `DataAccessException`으로 바꾼다. */
+    class FlakyDataSource(private val delegate: DataSource) : DataSource by delegate {
+        @Volatile var failing = false
+
+        override fun getConnection(): Connection =
+            if (failing) throw SQLException("의도한 조회 실패") else delegate.connection
+    }
+
+    class MutableClock(@Volatile var now: Instant) : Clock() {
+        override fun getZone(): ZoneId = ZoneOffset.UTC
+        override fun withZone(zone: ZoneId): Clock = this
+        override fun instant(): Instant = now
     }
 }

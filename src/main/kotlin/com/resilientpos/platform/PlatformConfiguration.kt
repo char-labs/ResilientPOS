@@ -10,7 +10,8 @@ import org.springframework.scheduling.annotation.EnableScheduling
 /**
  * `foundation`은 프레임워크를 모르므로 Spring 빈 등록은 여기서 한다.
  * Facade는 시각을 `Clock`으로 받아 테스트에서 고정할 수 있다.
- * 스케줄링은 발행 기록 metric의 주기 갱신([EventPublicationMetrics])이 쓴다.
+ * 스케줄링은 발행 기록 metric의 주기 갱신([EventPublicationMetrics])이 쓴다. Modulith Moments의 자동 구성도 켜지만
+ * `spring.modulith.moments.enabled=false`로 Moments를 끄면 함께 꺼지므로 여기서 명시한다.
  */
 @Configuration
 @EnableScheduling
