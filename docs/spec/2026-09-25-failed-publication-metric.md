@@ -1,0 +1,81 @@
+# PR spec: 실패하거나 끊긴 이벤트 발행 기록을 metric으로 센다
+
+## 목적
+커밋 뒤 리스너(`payment`의 `OrderPaymentRequestedListener`·`PaymentAttemptCreatedListener`, `order`의 `PaymentApprovedListener`, `fulfillment`의 `OrderPaidListener`)가 실패하면 `event_publication`에 `FAILED`로, 종료나 프로세스 사망으로 끊기면 `PUBLISHED`·`PROCESSING`으로 남는다. 그것을 세거나 알리는 장치가 없어서 사람이 DB를 직접 보기 전에는 드러나지 않는다. 특히 **결제는 승인됐는데 주문이 `CHECKOUT_REQUESTED`에 머무는** 경우가 이렇게 숨는다.
+
+기대 결과: 리스너별로 실패한 기록과 끊긴 기록의 수가 Micrometer gauge로 나가서, 수집기가 붙으면 `> 0` 알림 하나로 잡힌다. 재전송은 하지 않는다.
+
+## 범위
+소유 모듈은 `platform`이다. 업무 모듈의 코드는 바꾸지 않는다.
+
+**gauge `event.publication.incomplete`** (Prometheus 이름 `event_publication_incomplete`). 태그는 둘이다.
+- `status`: `failed`는 리스너가 던져 `FAILED`인 기록이다. `stale`은 `FAILED`도 완료도 아닌데(`PUBLISHED`·`PROCESSING`·`RESUBMITTED`) 발행된 지 기준 시간이 지난 기록이다. 막 발행돼 처리 중인 기록은 세지 않는다.
+- `listener`: `listener_id`(`패키지.클래스.메서드(이벤트타입)`)에서 뽑은 클래스 단순 이름이다. 지금 4개라 카디널리티가 낮다. `orderId` 같은 식별자는 태그로 쓰지 않는다.
+
+**세는 방법.** `event_publication`을 `completion_date is null` 조건으로 한 번 조회해 `(status, listener)`별로 센다. 미완료 행만 읽으므로 기존 `completion_date` 인덱스를 쓰고, 완료 행이 쌓여도 비용이 늘지 않는다. Modulith의 `EventPublicationRepository.countByStatus`는 `events-core`가 runtime 범위라 main에서 컴파일되지 않고, 조건도 맞지 않아 쓰지 않는다. 조회만 하며 상태를 바꾸지 않는다.
+
+**갱신.** 리스너 목록이 데이터에서 나오므로 `MultiGauge`를 1분마다 `@Scheduled`로 다시 등록한다(overwrite). 기록이 사라진 조합의 시계열은 없어진다. `PlatformConfiguration`에 `@EnableScheduling`을 더한다. Boot가 `TaskScheduler`를 등록하게 되므로 **커밋 뒤 리스너가 계속 Boot의 task executor(`task-N` 스레드)에서 도는지** 인수 조건으로 확인한다.
+
+**기준 시간.** 5분이다. 리스너는 짧은 DB 쓰기이고 트랜잭션 상한이 30초, provider는 지연 없는 Fake다. 여기에 큐 대기의 여유를 둔다. `@Value`의 기본값으로 두고 `application.yaml`에는 적지 않는다. 실제 provider가 붙으면 환경 변수로 바꾼다. 시각은 주입된 `Clock`으로 계산한다.
+
+**여러 인스턴스.** 모든 인스턴스가 같은 DB를 세므로 같은 값을 낸다. 알림은 `sum`이 아니라 `max`로 모은다. 이 점을 wiki에 적는다.
+
+**병렬 브랜치와의 충돌 회피.** 아직 push되지 않은 `feature/prometheus-structured-logging`이 `build.gradle.kts`(`micrometer-registry-prometheus`), `application.yaml`의 끝(`management:` 블록), 새 `docs/wiki/observability.md`, `docs/wiki/README.md`, `README.md`를 바꾼다. 이 PR은 그 파일들을 건드리지 않는다. gauge는 actuator가 이미 끌어오는 `micrometer-core`만 쓴다. 테스트는 `/actuator/prometheus`가 아니라 `MeterRegistry` 빈을 직접 본다. 그 PR이 머지되면 공통 태그 `application`이 이 gauge에도 붙고 `/actuator/prometheus`로 나간다.
+
+계약: 새 metric 하나가 생긴다. HTTP API, 이벤트, 스키마는 바뀌지 않는다. `listener` 태그 값이 리스너 클래스 이름이라 리스너 이름을 바꾸면 알림 규칙도 함께 바꾼다(리스너 이름은 이미 저장 형식이다, 도메인 모델 §4.3).
+
+복구: 해당 없음. 감지만 한다. 조회가 실패하면 그 주기의 갱신을 건너뛰고 WARN 로그를 남긴다. 이전 값이 그대로 남는다.
+
+관측성: 이 PR의 산출물이 곧 관측성이다. 알림을 받은 뒤 어느 주문인지는 `serialized_event`에서 찾는다. 찾는 조건은 기존 spec들의 것(`listener_id like '%PaymentApprovedListener%' and status = 'FAILED'` 등)을 그대로 쓴다.
+
+## 제외
+- 재전송·재발행(`FailedEventPublications.resubmit`)과 그 운영 진입점. Kafka를 들이는 설계가 맡는다. 진입점을 열면 인증과 다중 인스턴스 중복 전송을 함께 정해야 한다.
+- Modulith staleness 모니터(`spring.modulith.events.staleness.*`). 오래된 미완료를 `FAILED`로 바꾸는 장치라 감지가 아니라 상태 변경이다.
+- 헬스 인디케이터. 업무 실패 한 건으로 인스턴스가 `DOWN`이 되면 안 된다.
+- 알림 규칙, 대시보드, 수집기 설정. 수집기를 붙이는 쪽이 정한다.
+- `/actuator/prometheus` 노출과 공통 태그. `feature/prometheus-structured-logging`이 한다.
+- `docs/wiki/observability.md`에 이 metric을 적는 일. 그 파일을 만드는 PR이 머지된 뒤 후속으로 한 줄 더한다.
+- 완료 행 정리(보존 정책).
+
+## 관련 문서
+없음
+
+## 변경 경로
+- src/main/kotlin/com/resilientpos/platform/EventPublicationMetrics.kt
+- src/main/kotlin/com/resilientpos/platform/PlatformConfiguration.kt
+- src/test/kotlin/com/resilientpos/platform/EventPublicationMetricsTest.kt
+- docs/wiki/domain-model.md
+- docs/spec/2026-09-25-failed-publication-metric.md
+
+## 인수 조건
+1. `event_publication`에 리스너 A의 `FAILED` 기록, 리스너 A의 6분 전 `PUBLISHED` 기록, 리스너 B의 6분 전 `PROCESSING` 기록, 리스너 A의 1분 전 `PUBLISHED` 기록, 리스너 A의 `COMPLETED` 기록이 있을 때 갱신하면 gauge가 `(failed, A)=1`, `(stale, A)=1`, `(stale, B)=1`이고 다른 조합은 없다.
+2. `FAILED` 기록은 발행 시각과 무관하게 `failed`로 센다.
+3. 기록이 완료되거나 사라진 뒤 갱신하면 그 조합의 시계열이 없어진다.
+4. `listener` 태그 값은 `listener_id`의 클래스 단순 이름이다(예: `...internal.application.OrderPaidListener.on(com.resilientpos.contract.OrderPaid)`는 `OrderPaidListener`).
+5. `@EnableScheduling`을 켠 뒤에도 커밋 뒤 리스너는 `task-` 스레드에서 실행된다(기존 리스너 통합 테스트와 스레드 이름으로 확인).
+6. 기존 테스트가 모두 통과한다.
+
+## 검증
+- 인수 1~4: `./gradlew test --tests 'com.resilientpos.platform.EventPublicationMetricsTest'`. Docker가 필요하다. 행은 테스트가 SQL로 직접 넣고, 갱신은 스케줄을 기다리지 않고 메서드를 직접 부른다.
+- 인수 5: 같은 테스트 클래스에서 기존 흐름 하나를 태워 리스너 스레드 이름을 본다. 방법이 무거우면 결과 절에 실측으로 대신 적는다.
+- 인수 6: `./gradlew test`.
+- `python3 scripts/check_pr.py --base origin/main --worktree`, 제출 전 `--worktree` 없이 한 번 더.
+
+## Wiki 영향
+- [도메인 모델](../wiki/domain-model.md) §4.3에 한 줄: 실패·끊긴 발행 기록은 `event_publication_incomplete{status, listener}`로 센다, 여러 인스턴스는 `max`로 모은다, 리스너 이름을 바꾸면 알림 규칙도 바꾼다.
+- 볼트의 현재 상태 문서(저장소 밖)에서 "미완료 기록을 세거나 알리는 장치도 아직 없다"를 고친다. 재전송이 없다는 빈틈은 그대로 둔다.
+- 요구사항 변화: 없다. 시스템 설계 7절의 관측성 요구 중 실패 이벤트 감지의 첫 단계다.
+
+## 분할 계획
+main 코드 60줄 안팎, 테스트 100줄 안팎, 문서 10줄 안팎이다. 분할하지 않는다.
+
+## TDD 검증 기록
+업무 동작이 아니라 인프라 metric이다. 그래도 세는 규칙(인수 1~4)은 분기가 있어서 통합 테스트를 먼저 쓰고 RED를 관측한다.
+
+| 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
+|---|---|---|---|
+| 인수 1~4 | 미실행 | 미실행 | 미실행 |
+| 인수 5 | 미실행 | 미실행 | 미실행 |
+
+## 결과
+개발 전 작성.
