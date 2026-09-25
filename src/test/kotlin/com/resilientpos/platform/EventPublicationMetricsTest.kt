@@ -283,7 +283,7 @@ class EventPublicationMetricsTest(
 
     /**
      * 드라이버가 인터럽트에 반응하지 않아 `stop()`이 기다리다 넘어간 경우다. 그 옛 갱신이 멈춘 뒤에 끝나도
-     * 결과를 적용하지 않는다. 다음 시작 뒤에 끝나는 경우도 같은 세대 확인으로 버린다.
+     * 결과를 적용하지 않는다. 확인과 적용은 `stop()`과 같은 락 안이라 그 사이에 멈춤이 끼어들 수 없다.
      */
     @Test
     fun `제때 멈추지 않은 옛 갱신의 결과는 버린다`() {
@@ -296,7 +296,7 @@ class EventPublicationMetricsTest(
         insert(a, "FAILED", Duration.ofMinutes(10))
         try {
             subject.start()
-            blocking.entered.await()
+            assertTrue(blocking.entered.await(10, TimeUnit.SECONDS), "첫 갱신이 커넥션을 요청하지 않았다")
 
             subject.stop()
             blocking.release()

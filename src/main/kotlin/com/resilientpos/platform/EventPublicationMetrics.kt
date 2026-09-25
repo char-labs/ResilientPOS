@@ -30,7 +30,7 @@ import org.springframework.stereotype.Component
  * 갱신은 Spring의 공용 스케줄러가 아니라 전용 스레드 하나에서 돈다. 공용 스케줄러는 스레드가 하나라 느린 조회가
  * Modulith Moments의 시간 이벤트 발행까지 붙잡는다. `@EnableScheduling`이나 Moments 설정과도 무관하게 돈다.
  * 시작과 종료는 [SmartLifecycle]이 맡는다. 모든 싱글턴(Flyway 마이그레이션 포함)이 준비된 뒤 시작하고,
- * 빈을 파괴하기 전에 멈춘다. 멈춘 뒤나 다음 시작 뒤에 끝난 옛 갱신의 결과와 오류는 세대 번호로 버린다.
+ * 빈을 파괴하기 전에 멈춘다. 멈춘 뒤에 끝난 갱신의 결과와 오류는 버린다.
  */
 @Component
 class EventPublicationMetrics(
@@ -44,22 +44,24 @@ class EventPublicationMetrics(
     // 커넥션 대기는 Hikari connection-timeout(3초)이 따로 막는다.
     private val jdbcTemplate = JdbcTemplate(dataSource).apply { queryTimeout = 10 }
 
+    /**
+     * `scheduler`·`stopped`의 변경과 결과 적용을 묶는 락이다. 적용 구간에는 I/O가 없어 `stop()`이 오래 막히지 않는다.
+     * `stop()`은 `refresh()`의 모니터를 잡지 않는다. 잡으면 드라이버에 막힌 조회가 종료를 붙잡는다.
+     */
+    private val state = Any()
+
     @Volatile
     private var scheduler: ScheduledExecutorService? = null
 
-    /** 멈춘 뒤 모니터를 기다리던 갱신이 들어와도 조회하지 않게 한다. 모니터 진입은 인터럽트로 깨지 않는다. */
+    /** 멈춘 뒤 모니터를 기다리던 갱신이 들어와도 조회하지 않고, 멈추기 전에 시작한 조회의 결과도 적용하지 않는다. */
     @Volatile
     private var stopped = false
 
     /**
-     * `start()`와 `stop()`마다 오른다. 주기 작업은 자기 세대를 들고 돌아, 제때 멈추지 않은 옛 작업이
-     * 멈춘 뒤나 다음 시작 뒤에 끝나도 결과와 오류를 버린다.
+     * 조회 중이던 갱신이 끝나기를 기다리는 시간이다. 멈춘 뒤의 결과와 오류는 어차피 버리므로 길 필요가 없다.
+     * Spring의 phase 종료 상한(프레임워크 10초, Boot 30초)보다 짧다. 테스트가 줄일 수 있다.
      */
-    @Volatile
-    private var generation = 0L
-
-    /** 테스트가 줄일 수 있다. 쿼리 상한(10초)보다 조금 길게 둔다. */
-    internal var stopTimeout: Duration = Duration.ofSeconds(11)
+    internal var stopTimeout: Duration = Duration.ofSeconds(3)
 
     private val gauge = MultiGauge.builder("event.publication.incomplete")
         .description("완료되지 않은 이벤트 발행 기록 수")
@@ -82,28 +84,29 @@ class EventPublicationMetrics(
     }
 
     override fun start() {
-        if (scheduler != null) return
-        stopped = false
-        val gen = ++generation
-        scheduler = Executors.newSingleThreadScheduledExecutor { Thread(it, THREAD_NAME).apply { isDaemon = true } }.apply {
-            // refresh()가 RuntimeException을 삼키지만 Error가 새면 ScheduledExecutorService는 이후 실행을 조용히 멈춘다.
-            scheduleWithFixedDelay(
-                { runCatching { refresh(gen) }.onFailure { log.error(it) { "발행 기록 metric 갱신이 실패했다" } } },
-                0, INTERVAL.toSeconds(), TimeUnit.SECONDS,
-            )
+        val executor = synchronized(state) {
+            if (scheduler != null) return
+            stopped = false
+            Executors.newSingleThreadScheduledExecutor { Thread(it, THREAD_NAME).apply { isDaemon = true } }
+                .also { scheduler = it }
         }
+        // refresh()가 RuntimeException을 삼키지만 Error가 새면 ScheduledExecutorService는 이후 실행을 조용히 멈춘다.
+        executor.scheduleWithFixedDelay(
+            { runCatching { refresh() }.onFailure { log.error(it) { "발행 기록 metric 갱신이 실패했다" } } },
+            0, INTERVAL.toSeconds(), TimeUnit.SECONDS,
+        )
     }
 
     override fun stop() {
-        stopped = true
-        generation++
-        scheduler?.run {
-            shutdownNow()
-            // 조회 중이면 쿼리 상한(10초) 안에 끝난다. 커넥션 대기는 인터럽트로 바로 끝난다.
-            // 드라이버가 끊지 못해 넘기면 기다리지 않고 넘어간다. 그 작업의 결과는 세대가 달라 버려진다.
-            if (!awaitTermination(stopTimeout.toMillis(), TimeUnit.MILLISECONDS)) log.warn { "발행 기록 metric 갱신이 제때 멈추지 않았다" }
+        val executor = synchronized(state) {
+            stopped = true
+            scheduler.also { scheduler = null }
+        } ?: return
+        executor.shutdownNow()
+        // 커넥션 대기는 인터럽트로 바로 끝난다. 드라이버가 조회를 끊지 못해 넘기면 기다리지 않고 넘어간다.
+        if (!executor.awaitTermination(stopTimeout.toMillis(), TimeUnit.MILLISECONDS)) {
+            log.warn { "발행 기록 metric 갱신이 제때 멈추지 않았다. 결과는 버린다" }
         }
-        scheduler = null
     }
 
     override fun isRunning(): Boolean = scheduler != null
@@ -111,12 +114,13 @@ class EventPublicationMetrics(
     /** 기본값이지만 뜻을 적어 둔다. 가장 늦게 시작하고 가장 먼저 멈춘다(웹 서버의 graceful shutdown보다 먼저). */
     override fun getPhase(): Int = SmartLifecycle.DEFAULT_PHASE
 
-    /** 지금 세대로 한 번 센다. 멈춘 뒤에는 아무것도 하지 않는다. */
-    fun refresh() = refresh(generation)
-
+    /**
+     * 한 번 센다. 멈춘 뒤에는 아무것도 하지 않는다. 모니터가 갱신을 한 줄로 세우므로 다시 시작한 뒤의 첫 갱신은
+     * 옛 갱신이 끝난 뒤에 적용된다. 옛 결과가 새 결과를 덮지 않는다.
+     */
     @Synchronized
-    private fun refresh(expected: Long) {
-        if (isStale(expected)) return
+    fun refresh() {
+        if (stopped) return
         val counts = try {
             // completion_date is null 조건이 미완료 인덱스를 타서 완료 행이 쌓여도 비용이 늘지 않는다.
             jdbcTemplate.query(
@@ -140,15 +144,23 @@ class EventPublicationMetrics(
                 Timestamp.from(clock.instant().minus(staleAfter)),
             )
         } catch (e: RuntimeException) {
-            // 멈춘 뒤 끊긴 조회(인터럽트, 닫힌 풀)는 오류가 아니다. 개수도 건드리지 않는다.
-            if (isStale(expected)) return
-            // DataAccessException만 잡으면 행 매핑에서 난 예외가 새어 낡은 개수가 남는다.
-            log.warn(e) { "발행 기록을 세지 못해 개수를 내리고 이번 갱신을 건너뛴다" }
-            snapshot = emptyMap()
-            gauge.register(emptyList(), false)
+            synchronized(state) {
+                // 멈춘 뒤 끊긴 조회(인터럽트, 닫힌 풀)는 오류가 아니다. 개수도 건드리지 않는다.
+                if (stopped) return
+                // DataAccessException만 잡으면 행 매핑에서 난 예외가 새어 낡은 개수가 남는다.
+                log.warn(e) { "발행 기록을 세지 못해 개수를 내리고 이번 갱신을 건너뛴다" }
+                snapshot = emptyMap()
+                gauge.register(emptyList(), false)
+            }
             return
         }
-        if (isStale(expected)) return
+        synchronized(state) {
+            if (stopped) return
+            apply(counts)
+        }
+    }
+
+    private fun apply(counts: List<Pair<Triple<String, String, String>, Long>>) {
         snapshot = counts.groupBy({ it.first }, { it.second }).mapValues { (_, ns) -> ns.sum() }
         // overwrite=false: 이미 있는 조합은 그대로 두고 새 조합만 등록한다. 목록에 없는 조합은 지운다.
         // 스냅샷을 먼저 바꾸므로 그 사이의 scrape에서 사라질 조합은 한 번 0으로, 새 조합은 한 번 빠질 수 있다. `> 0` 알림에는 해가 없다.
@@ -162,8 +174,6 @@ class EventPublicationMetrics(
         )
         lastRefreshed.set(clock.instant().epochSecond)
     }
-
-    private fun isStale(expected: Long) = stopped || expected != generation
 
     companion object {
         private val log by logger()
