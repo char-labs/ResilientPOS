@@ -1,5 +1,6 @@
 package com.resilientpos
 
+import com.resilientpos.contract.OrderPaid
 import com.resilientpos.contract.OrderPaymentRequested
 import com.resilientpos.contract.PaymentApproved
 import com.resilientpos.payment.PaymentEvent
@@ -70,6 +71,7 @@ class ModuleStructureTest {
         // 이 이름은 event_publication.event_type과 listener_id에 그대로 들어가는 저장 형식이다.
         assertEquals("com.resilientpos.contract.OrderPaymentRequested", OrderPaymentRequested::class.java.name)
         assertEquals("com.resilientpos.contract.PaymentApproved", PaymentApproved::class.java.name)
+        assertEquals("com.resilientpos.contract.OrderPaid", OrderPaid::class.java.name)
     }
 
     @Test
