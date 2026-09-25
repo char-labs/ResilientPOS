@@ -17,11 +17,11 @@
 
 **갱신.** 리스너 목록이 데이터에서 나오므로 `MultiGauge`의 row 목록을 1분마다 다시 등록한다. row는 값을 고정하지 않고 스냅샷 맵을 읽는 함수로 두고 overwrite를 끈다(`register(rows, false)`). 이미 있는 조합은 지웠다 다시 등록되지 않아 scrape 사이에 시계열이 빠지지 않고, 목록에 없는 조합만 지워진다. overwrite를 켜면 매 주기 지웠다 다시 등록하는 틈에 scrape가 들어와 시계열이 한 번 빠지고, `for:`를 건 알림은 그때 pending이 초기화된다. 갱신은 `@Synchronized`로 직렬화한다. 두 갱신(주기 갱신과 테스트의 직접 호출)이 겹치면 먼저 조회한 쪽이 나중에 등록해 새 값을 덮을 수 있어서다.
 
-**스케줄링.** 갱신은 Spring의 공용 스케줄러(`@Scheduled`)가 아니라 이 컴포넌트가 가진 전용 스레드 하나(`ScheduledExecutorService`, 스레드 이름 `event-publication-metrics`)에서 1분 간격으로 돈다. 공용 스케줄러는 main에서 이미 켜져 있고(Modulith Moments의 자동 구성 `MomentsAutoConfiguration`이 `@EnableScheduling`을 단다) 스레드가 하나라, 거기 올리면 느린 조회가 매시간·자정의 `HourHasPassed`·`DayHasPassed` 발행까지 붙잡는다. 또 `spring.modulith.moments.enabled=false`로 Moments를 끄면 공용 스케줄러도 함께 꺼진다. 전용 스레드는 둘 다와 무관하다(인수 8·12). 그래서 이 PR은 `@EnableScheduling`을 더하지 않고 커밋 뒤 리스너의 실행기에도 영향을 주지 않는다. 스레드는 컨텍스트(인스턴스)마다 하나이고, 테스트에서는 캐시된 컨텍스트 수만큼 뜬다. `refresh()`는 `RuntimeException`을 삼키지만 `Error`가 새면 `ScheduledExecutorService`가 이후 실행을 멈추므로 주기 작업은 한 번 더 감싼다.
+**스케줄링.** 갱신은 Spring의 공용 스케줄러(`@Scheduled`)가 아니라 이 컴포넌트가 가진 전용 스레드 하나(`ScheduledExecutorService`, 스레드 이름 `event-publication-metrics`)에서 1분 간격으로 돈다. 공용 스케줄러는 main에서 이미 켜져 있고(Modulith Moments의 자동 구성 `MomentsAutoConfiguration`이 `@EnableScheduling`을 단다) 스레드가 하나라, 거기 올리면 느린 조회가 매시간·자정의 `HourHasPassed`·`DayHasPassed` 발행까지 붙잡는다. 또 `spring.modulith.moments.enabled=false`로 Moments를 끄면 공용 스케줄러도 함께 꺼진다. 전용 스레드는 둘 다와 무관하다(인수 8·12). 그래서 이 PR은 `@EnableScheduling`을 더하지 않고 커밋 뒤 리스너의 실행기에도 영향을 주지 않는다. 스레드는 컨텍스트(인스턴스)마다 하나이고, 테스트에서는 캐시된 컨텍스트 수만큼 뜬다. `refresh()`는 `RuntimeException`을 삼키지만 `Error`가 새면 `ScheduledExecutorService`가 이후 실행을 멈추므로 주기 작업은 한 번 더 감싼다. 그래서 `Error`(`OutOfMemoryError` 포함)도 로그를 남기고 주기를 유지한다. 주기가 조용히 멈추는 쪽보다 낫다고 봤다.
 
-**시작과 종료.** `SmartLifecycle`(기본 phase: 가장 늦게 시작하고 가장 먼저 멈춘다)이 맡는다. 모든 싱글턴(Flyway 마이그레이션 포함)이 준비된 뒤 첫 갱신이 돈다. 컨텍스트가 닫힐 때는 빈을 파괴하기 전에 멈춤 표시를 세우고 스레드를 끊은 뒤 3초까지 끝나기를 기다린다. 커넥션 대기는 인터럽트로 바로 끝나므로 기다리는 것은 쿼리 중일 때뿐이다. 3초를 넘기면 기다리지 않고 넘어가며, 그 옛 조회는 닫히는 풀에 닿을 수 있지만 결과와 오류는 버린다. 대기가 짧은 이유는 버리는 결과를 위해 종료를 늦출 까닭이 없어서다. `stop()`은 동기 호출이라 lifecycle processor가 끊지 않고, 3초는 phase 종료 상한(프레임워크 기본 10초, Boot `spring.lifecycle.timeout-per-shutdown-phase` 기본 30초)보다 짧다. 이 멈춤은 가장 먼저 도는 phase라 웹 서버의 graceful shutdown보다 먼저 최대 3초를 쓴다. 배포의 종료 유예 시간(예: Kubernetes `terminationGracePeriodSeconds`)은 graceful shutdown 시간에 이 값을 더해 잡는다.
+**시작과 종료.** `SmartLifecycle`(기본 phase: 가장 늦게 시작하고 가장 먼저 멈춘다)이 맡는다. 모든 싱글턴(Flyway 마이그레이션 포함)이 준비된 뒤 첫 갱신이 돈다. 컨텍스트가 닫힐 때는 빈을 파괴하기 전에 멈춤 표시를 세우고 스레드를 끊은 뒤 3초까지 끝나기를 기다린다. 커넥션 대기는 인터럽트로 바로 끝나므로 기다리는 것은 쿼리 중일 때뿐이다. 3초를 넘기면 기다리지 않고 넘어가며, 그 옛 조회는 닫히는 풀에 닿을 수 있지만 멈춰 있는 동안 끝나면 결과와 오류는 버린다. 대기가 짧은 이유는 버리는 결과를 위해 종료를 늦출 까닭이 없어서다. `stop()`은 동기 호출이라 lifecycle processor가 끊지 않지만, 그래도 3초는 phase 종료 상한(프레임워크 기본 10초, Boot `spring.lifecycle.timeout-per-shutdown-phase` 기본 30초)보다 짧다. 이 멈춤은 가장 먼저 도는 phase라 웹 서버의 graceful shutdown보다 먼저 최대 3초를 쓴다. 배포의 종료 유예 시간(예: Kubernetes `terminationGracePeriodSeconds`)은 graceful shutdown 시간에 이 값을 더해 잡는다.
 
-**동시성.** 락은 둘이다. `refresh()`의 모니터(`@Synchronized`)는 갱신을 한 줄로 세운다. 그래서 다시 시작한 뒤의 첫 갱신은 옛 갱신이 끝난 뒤에 적용되고, 옛 결과가 새 결과를 덮지 않는다. 짧은 상태 락은 `start()`·`stop()`의 상태 변경(`scheduler`, 멈춤 표시)과 결과 적용(개수, 신선도, 실패 때 개수 내리기)을 묶는다. 그래서 멈춤 확인과 적용 사이에 `stop()`이 끼어들 수 없다. 적용 구간에는 I/O가 없어 `stop()`이 오래 막히지 않는다. `stop()`은 `refresh()`의 모니터를 잡지 않는다. 잡으면 드라이버에 막힌 조회가 종료를 붙잡는다. 드라이버가 끝내 돌아오지 않으면 다시 시작한 뒤의 새 갱신은 모니터 뒤에서 기다리고 신선도가 멈춰 알림이 난다(재시작은 테스트나 devtools에서만 일어난다).
+**동시성.** 락은 둘이다. `refresh()`의 모니터(`@Synchronized`)는 갱신을 한 줄로 세운다. 그래서 다시 시작한 뒤의 첫 갱신은 옛 갱신이 끝난 뒤에 적용되고, 옛 결과가 새 결과를 덮지 않는다. 다만 멈춘 뒤 다시 시작하기 전에 옛 갱신이 끝나지 못했다면, 다시 시작한 뒤 옛 결과(또는 옛 오류의 WARN과 개수 내리기)가 한 번 적용되고 모니터 뒤에서 기다리던 새 갱신이 곧 덮는다. 재시작은 테스트나 devtools에서만 일어나서 받아들인다. 짧은 상태 락은 `start()`의 생성·예약·대입, `stop()`의 상태 변경(`scheduler`, 멈춤 표시), 결과 적용(개수, 신선도, 실패 때 개수 내리기)을 묶는다. 그래서 멈춤 확인과 적용 사이에 `stop()`이 끼어들 수 없고, `start()`와 `stop()`이 겹쳐도 멈춘 executor에 예약하지 않는다. 락 안에서는 조회도 로그도 하지 않아 `stop()`이 오래 막히지 않는다. `stop()`은 `refresh()`의 모니터를 잡지 않는다. 잡으면 드라이버에 막힌 조회가 종료를 붙잡는다. 드라이버가 끝내 돌아오지 않으면 다시 시작한 뒤의 새 갱신은 모니터 뒤에서 기다리고 신선도가 멈춰 알림이 난다(재시작은 테스트나 devtools에서만 일어난다).
 
 **신선도 gauge `event.publication.incomplete.refreshed`** (Prometheus 이름 `event_publication_incomplete_refreshed_seconds`). 마지막으로 갱신에 성공한 시각(epoch 초)이다. 초기값이 0이라 첫 조회부터 실패해도 드러난다. 조회가 실패하면 그 인스턴스는 개수 시계열을 모두 내리고 이 값을 멈춘다. 낡은 개수를 남기면 `max`에 섞여 이미 조치된 알림을 붙잡아 두기 때문이다. 그래서 개수는 모든 인스턴스가 같으니 `max`로 모으고, 신선도는 인스턴스별로(또는 `min`으로) 보고 이 값이 오래되면(예: 3분) 따로 울린다. `max`로 모으면 건강한 인스턴스가 조회가 막힌 인스턴스를 가린다. 모든 인스턴스의 조회가 막히면 개수가 사라져 `failed` 알림이 resolved로 바뀌고, 신선도 알림은 `for:`가 지난 뒤에야 울린다. 그 사이 몇 분은 "해결됨"만 보인다. 규칙을 정하는 쪽은 `keep_firing_for`로 신선도 알림이 울릴 때까지 `failed` 알림을 유지할 수 있다. 기동 직후 첫 갱신 전의 scrape는 0을 읽으므로 신선도 알림에는 `for:`(예: 3분)를 둔다.
 
@@ -73,14 +73,14 @@
 11. `/actuator/prometheus`에 `event_publication_incomplete_refreshed_seconds`가 `application="ResilientPOS"` 태그와 함께 나온다.
 12. `spring.modulith.moments.enabled=false`로 Moments를 꺼도(3차에 확인한 대로 공용 스케줄러도 함께 꺼진다), 아무도 `refresh()`를 부르지 않는 컨텍스트에서 첫 갱신이 스스로 돌아 신선도가 채워진다.
 13. 멈춘(`stop()`) 뒤의 `refresh()`는 조회하지 않고, 다시 `start()`하면 다시 센다.
-14. 드라이버가 인터럽트에 반응하지 않아 `stop()`이 기다리다 넘어간 옛 갱신이 멈춘 뒤에 끝나도 결과(개수, 신선도)를 적용하지 않는다. 멈춤 확인과 적용은 `stop()`과 같은 상태 락 안이다.
+14. 드라이버가 인터럽트에 반응하지 않아 `stop()`이 기다리다 넘어간 옛 갱신이 멈춰 있는 동안 끝나면 결과(개수, 신선도)를 적용하지 않는다. 멈춤 확인과 적용은 `stop()`과 같은 상태 락 안이다.
 15. 기존 테스트가 모두 통과한다.
 
 ## 검증
 - 인수 1~10: `./gradlew test --tests 'com.resilientpos.platform.EventPublicationMetricsTest'`. Docker가 필요하다. 행은 테스트가 SQL로 직접 넣고, 갱신은 스케줄을 기다리지 않고 메서드를 직접 부른다. 인수 6은 던지는 테스트 전용 리스너를 중첩 `@TestConfiguration`으로 두고 `@Import`로 명시한다. 인수 9·10은 빈이 아닌 인스턴스를 직접 만든다.
 - 인수 11: `./gradlew test --tests 'com.resilientpos.platform.ObservabilityConfigurationTest'`.
 - 인수 12: `./gradlew test --tests 'com.resilientpos.platform.EventPublicationMetricsSchedulingTest'`. Moments를 끈 컨텍스트를 하나 더 띄운다. 1분 간격 자체는 상수(`INTERVAL`)라 따로 검증하지 않는다.
-- 인수 13·14: 인수 1~10과 같은 명령. 빈이 아닌 인스턴스를 `start()`·`stop()`한다. 인수 14는 첫 커넥션 요청을 인터럽트에도 풀리지 않게 붙잡는 `DataSource`와 짧은 종료 대기로 옛 작업을 만든다. 다시 시작한 뒤 옛 작업이 끝나는 경우의 순서는 `refresh()`의 모니터가 정하므로 따로 만들지 않는다. 확인과 적용 사이에 `stop()`이 끼어드는 경우는 같은 락이라 생길 수 없어 테스트하지 않는다. 예외 처리의 멈춤 확인은 멈춘 뒤의 로그 소음만 막는 것이라 테스트하지 않는다.
+- 인수 13·14: 인수 1~10과 같은 명령. 빈이 아닌 인스턴스를 `start()`·`stop()`한다. 인수 14는 첫 커넥션 요청을 인터럽트에도 풀리지 않게 붙잡는 `DataSource`와 짧은 종료 대기로 옛 작업을 만든다. 다시 시작한 뒤 옛 작업이 끝나는 경우의 순서는 `refresh()`의 모니터가 정하므로 따로 만들지 않는다. 확인과 적용 사이에 `stop()`이 끼어드는 경우는 같은 락이라 생길 수 없어 테스트하지 않는다. 예외 처리의 멈춤 확인은 멈춘 뒤의 로그 소음만 막는 것이라 테스트하지 않는다. `start()`와 `stop()`의 병렬 호출은 테스트하지 않는다. 10차에서 50번 겹쳐 부르는 테스트를 써 봤지만 예약을 락 밖으로 되돌린 코드에서도 통과해 결함을 잡지 못했다. 원자성은 생성·예약·대입이 한 락 블록이라는 구조로 보장하고, Spring은 lifecycle 메서드를 한 스레드에서 부른다.
 - 인수 15: `./gradlew test`.
 - `python3 scripts/check_pr.py --base origin/main --worktree`, 제출 전 `--worktree` 없이 한 번 더.
 
@@ -91,7 +91,7 @@
 - 요구사항 변화: 없다. 시스템 설계 7절의 관측성 요구 중 실패 이벤트 감지의 첫 단계다.
 
 ## 분할 계획
-`git diff --numstat origin/main` 기준 main 코드 약 200줄, 테스트 약 390줄, 문서 약 260줄(spec이 대부분), 7개 파일, 합계 약 850줄이다. 경고 한도(900줄)에 가깝다. 더 늘면 리뷰 이력 절을 줄이거나 테스트 장치를 나누는 쪽을 먼저 본다. [개발 규칙](../wiki/development-workflow.md)의 경고 한도(900줄) 안이라 나누지 않는다.
+`git diff --numstat origin/main` 기준 main 코드 약 200줄, 테스트 약 390줄, 문서 약 270줄(spec이 대부분), 7개 파일, 합계 약 860줄이다. 더 늘면 리뷰 이력 절을 줄이거나 테스트 장치를 나누는 쪽을 먼저 본다. [개발 규칙](../wiki/development-workflow.md)의 경고 한도(900줄) 안이라 나누지 않는다.
 
 ## TDD 검증 기록
 업무 동작이 아니라 인프라 metric이다. 그래도 세는 규칙에 분기가 있어서 통합 테스트를 먼저 쓰고 RED를 관측한다. 리뷰 반영으로 뒤에 더한 테스트는 구현을 잠시 틀리게 바꿔 RED를 관측하고 되돌렸다(커밋하지 않았다).
@@ -237,7 +237,7 @@ Claude 92점, Codex 87점(CLI 직접 실행), Gemini 미실행. 둘 다 Critical
 - 테스트의 `start()`를 try/finally로 감쌈(Claude), spec 끝 공백(Claude·Codex): 고쳤다.
 
 반영하지 않은 것과 이유:
-- 다시 시작한 뒤 옛 작업이 늦게 끝나는 경로의 별도 테스트(Codex): 멈춘 뒤 끝나는 경로(인수 14)와 같은 세대 확인이다. 모니터 순서를 만들기 위한 테스트 장치가 더 커져 받아들이지 않는다.
+- 다시 시작한 뒤 옛 작업이 늦게 끝나는 경로의 별도 테스트(Codex): 멈춘 뒤 끝나는 경로(인수 14)와 같은 세대 확인이다(9차에서 세대 번호를 뺌. 지금은 모니터가 순서를 정한다). 모니터 순서를 만들기 위한 테스트 장치가 더 커져 받아들이지 않는다.
 - 도메인 모델 §4.3에 기동·종료 순서 한 구(Claude 참고): 운영자 문서에는 "전용 스레드에서 1분마다"로 충분하고 순서는 spec에 있다.
 
 ### multi-review 9차 (2026-09-25, 커밋 f2e9ddd 기준)
@@ -254,3 +254,11 @@ Claude 93점, Codex 84점(CLI 직접 실행), Gemini 미실행. 둘 다 Critical
 - 확인 직후 `stop()`을 끼워 넣는 결정적 테스트(Codex): 같은 락 안이라 그 순서가 생길 수 없다. 만들려면 코드에 테스트 전용 멈춤 지점을 넣어야 해서 받아들이지 않는다.
 - 컨텍스트를 닫을 때 `DataSource`가 metric 스레드보다 늦게 닫히는지 보는 통합 테스트(Codex): phase 순서는 Spring의 계약이고, 순서가 어긋나도 멈춘 뒤의 결과와 오류는 버린다.
 - 예외 처리의 멈춤 확인 테스트(Claude): 로그 소음만 막는 확인이라 테스트하지 않는다고 검증 절에 적었다.
+
+### multi-review 10차 (2026-09-25, 커밋 8fb0594 기준)
+Claude 94점, Codex 88점(CLI 직접 실행), Gemini 미실행. 둘 다 Critical은 없었고 락 순서에 교착이 없음을 확인했다. 반영한 것:
+- `start()`의 예약이 상태 락 밖(Codex, Important. Claude도 짚음): 생성·예약·대입을 한 락 블록으로 옮겼다. 병렬 호출 테스트는 결함을 잡지 못해 넣지 않았다(검증 절).
+- 재시작 경로에서 "버린다"는 과장(Claude, Important): 옛 결과가 한 번 적용되고 곧 덮이는 창을 KDoc 두 곳, 인수 14, 동시성 문단에 정확히 적고 받아들였다.
+- 락 안의 로그(Claude): 로그를 락 밖으로 뺐다. 주석도 "조회도 로그도 하지 않는다"로 고쳤다.
+- `Error` 처리의 뜻(Codex 참고): 로그를 남기고 주기를 유지한다고 적었다.
+- phase 상한 주석(Claude 참고), 인수 14 테스트의 의도 주석(Claude 참고), 8차 이력 표시(Claude 참고), 분할 계획 문장 중복(Claude 참고): 고쳤다.

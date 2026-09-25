@@ -30,7 +30,8 @@ import org.springframework.stereotype.Component
  * 갱신은 Spring의 공용 스케줄러가 아니라 전용 스레드 하나에서 돈다. 공용 스케줄러는 스레드가 하나라 느린 조회가
  * Modulith Moments의 시간 이벤트 발행까지 붙잡는다. `@EnableScheduling`이나 Moments 설정과도 무관하게 돈다.
  * 시작과 종료는 [SmartLifecycle]이 맡는다. 모든 싱글턴(Flyway 마이그레이션 포함)이 준비된 뒤 시작하고,
- * 빈을 파괴하기 전에 멈춘다. 멈춘 뒤에 끝난 갱신의 결과와 오류는 버린다.
+ * 빈을 파괴하기 전에 멈춘다. 멈춰 있는 동안 끝난 옛 갱신의 결과와 오류는 버린다. 다시 시작한 뒤에 끝나면 한 번
+ * 적용되지만 모니터 뒤에서 기다리던 새 갱신이 곧 덮는다(재시작은 테스트나 devtools에서만 일어난다).
  */
 @Component
 class EventPublicationMetrics(
@@ -45,7 +46,8 @@ class EventPublicationMetrics(
     private val jdbcTemplate = JdbcTemplate(dataSource).apply { queryTimeout = 10 }
 
     /**
-     * `scheduler`·`stopped`의 변경과 결과 적용을 묶는 락이다. 적용 구간에는 I/O가 없어 `stop()`이 오래 막히지 않는다.
+     * `scheduler`·`stopped`의 변경, 작업 예약, 결과 적용을 묶는 락이다. 안에서 I/O(조회, 로그)를 하지 않아
+     * `stop()`이 오래 막히지 않는다.
      * `stop()`은 `refresh()`의 모니터를 잡지 않는다. 잡으면 드라이버에 막힌 조회가 종료를 붙잡는다.
      */
     private val state = Any()
@@ -53,13 +55,14 @@ class EventPublicationMetrics(
     @Volatile
     private var scheduler: ScheduledExecutorService? = null
 
-    /** 멈춘 뒤 모니터를 기다리던 갱신이 들어와도 조회하지 않고, 멈추기 전에 시작한 조회의 결과도 적용하지 않는다. */
+    /** 멈춰 있는 동안에는 모니터를 기다리던 갱신이 들어와도 조회하지 않고, 멈추기 전에 시작한 조회의 결과도 적용하지 않는다. */
     @Volatile
     private var stopped = false
 
     /**
      * 조회 중이던 갱신이 끝나기를 기다리는 시간이다. 멈춘 뒤의 결과와 오류는 어차피 버리므로 길 필요가 없다.
-     * Spring의 phase 종료 상한(프레임워크 10초, Boot 30초)보다 짧다. 테스트가 줄일 수 있다.
+     * `stop()`은 동기라 Spring의 phase 종료 상한(프레임워크 10초, Boot 30초)에 끊기지 않지만 그래도 그보다 짧게 둔다.
+     * 테스트가 줄일 수 있다.
      */
     internal var stopTimeout: Duration = Duration.ofSeconds(3)
 
@@ -84,17 +87,19 @@ class EventPublicationMetrics(
     }
 
     override fun start() {
-        val executor = synchronized(state) {
+        // 생성, 예약, 대입을 한 락 안에서 끝낸다. 그 사이에 stop()이 끼어 멈춘 executor에 예약하는 일이 없다.
+        synchronized(state) {
             if (scheduler != null) return
             stopped = false
-            Executors.newSingleThreadScheduledExecutor { Thread(it, THREAD_NAME).apply { isDaemon = true } }
-                .also { scheduler = it }
+            scheduler = Executors.newSingleThreadScheduledExecutor { Thread(it, THREAD_NAME).apply { isDaemon = true } }.apply {
+                // refresh()가 RuntimeException을 삼키지만 Error가 새면 ScheduledExecutorService는 이후 실행을 조용히 멈춘다.
+                // 그래서 Error도 로그를 남기고 주기를 유지한다.
+                scheduleWithFixedDelay(
+                    { runCatching { refresh() }.onFailure { log.error(it) { "발행 기록 metric 갱신이 실패했다" } } },
+                    0, INTERVAL.toSeconds(), TimeUnit.SECONDS,
+                )
+            }
         }
-        // refresh()가 RuntimeException을 삼키지만 Error가 새면 ScheduledExecutorService는 이후 실행을 조용히 멈춘다.
-        executor.scheduleWithFixedDelay(
-            { runCatching { refresh() }.onFailure { log.error(it) { "발행 기록 metric 갱신이 실패했다" } } },
-            0, INTERVAL.toSeconds(), TimeUnit.SECONDS,
-        )
     }
 
     override fun stop() {
@@ -147,11 +152,11 @@ class EventPublicationMetrics(
             synchronized(state) {
                 // 멈춘 뒤 끊긴 조회(인터럽트, 닫힌 풀)는 오류가 아니다. 개수도 건드리지 않는다.
                 if (stopped) return
-                // DataAccessException만 잡으면 행 매핑에서 난 예외가 새어 낡은 개수가 남는다.
-                log.warn(e) { "발행 기록을 세지 못해 개수를 내리고 이번 갱신을 건너뛴다" }
                 snapshot = emptyMap()
                 gauge.register(emptyList(), false)
             }
+            // DataAccessException만 잡으면 행 매핑에서 난 예외가 새어 낡은 개수가 남는다. 로그는 락 밖에서 쓴다.
+            log.warn(e) { "발행 기록을 세지 못해 개수를 내리고 이번 갱신을 건너뛴다" }
             return
         }
         synchronized(state) {
