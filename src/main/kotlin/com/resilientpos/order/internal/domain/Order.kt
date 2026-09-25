@@ -12,6 +12,7 @@ import com.resilientpos.order.OrderEvent
 import com.resilientpos.foundation.DomainEvent
 import com.resilientpos.order.OrderId
 import com.resilientpos.order.OrderLineId
+import com.resilientpos.contract.OrderPaid
 import com.resilientpos.contract.OrderPaymentRequested
 import com.resilientpos.order.OrderStatus
 import com.resilientpos.store.StoreId
@@ -127,7 +128,7 @@ class Order private constructor(
             lines = lines,
             checkouts = checkouts,
         )
-        return Transition(paid, listOf(OrderEvent.Paid(ids.next(), now, id, checkoutNo, amount)))
+        return Transition(paid, listOf(OrderPaid(ids.next(), now, id.value, storeId, terminalId, checkoutNo, amount)))
     }
 
     companion object {

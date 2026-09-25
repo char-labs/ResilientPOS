@@ -21,13 +21,13 @@ Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰�
 | 유비쿼터스 언어 (Ubiquitous Language) | 기획·개발·문서·코드·스키마가 같은 뜻으로 쓰는 단어 집합 | 한 단어가 두 뜻이면 둘 중 하나를 바꾼다 | §3 용어집. `terminal`(단말)을 코드·테이블·spec이 모두 쓰고 `pos`는 쓰지 않는다 |
 | 바운디드 컨텍스트 (Bounded Context) | 한 모델과 그 용어가 유효한 명시적 경계. 경계 밖과는 공개 계약(Facade·이벤트)으로만 통한다 | 같은 단어가 다른 뜻이거나 데이터 소유자가 다르면 경계가 다르다 | Spring Modulith application module 7개 `com.resilientpos.{store,terminal,order,payment,sync,reconciliation,fulfillment}`. `ModuleStructureTest`가 경계를 검사한다. Gradle 모듈이 아니다 |
 | 애그리거트 (Aggregate) / 루트 | 한 트랜잭션에서 함께 일관성을 지켜야 하는 객체 묶음. 루트 하나만 외부에 노출되고 루트가 불변식을 소유한다 | "이 둘이 한 트랜잭션에서 반드시 함께 맞아야 하는가?" 예면 같은 aggregate, 아니면 별도 aggregate이고 ID로만 참조한다 | `Order`(루트) + `OrderLine` + checkout 금액. `OrderLine`을 밖에서 바꾸지 않고 `order.changeLine(...)`으로 바꾼다. `Order`와 `PaymentAttempt`는 별개 aggregate라 `orderId`로 참조하고 이벤트로 연결한다 |
-| 엔티티 (Entity) | 식별자로 구별되고 생명주기가 있는 객체 | 속성이 모두 같아도 식별자가 다르면 다른 것 | `Order`, `PaymentAttempt`, `TerminalSyncState`, `ReconciliationCase`, `KitchenTicket`. 식별자는 UUID v7을 애플리케이션이 저장 전에 만든다 |
+| 엔티티 (Entity) | 식별자로 구별되고 생명주기가 있는 객체 | 속성이 모두 같아도 식별자가 다르면 다른 것 | `Order`, `PaymentAttempt`, `TerminalSyncState`, `ReconciliationCase`, `Fulfillment`. 식별자는 UUID v7을 애플리케이션이 저장 전에 만든다 |
 | 값 객체 (Value Object) | 식별자가 없고 속성이 같으면 같은 것. 불변 | "두 인스턴스의 모든 속성이 같으면 같은 것인가?" 예면 값 객체 | `Money`, `OrderId`, `TerminalCode`, checkout 확정 금액. Kotlin `data class` + `of`/`from` 팩토리 |
 | 정책 (`*Policy`) | 어느 한 aggregate에 자연스럽게 속하지 않는 계산·판정을 가진 불변 값 객체. 상태가 없고 입력 → 출력만 있다 | 규칙이 두 aggregate 사이에 있거나 매장·버전별로 바뀌면 Policy | `CheckoutPolicy`(통화 scale·반올림·합계), store가 소유하는 판매 정책. DDD 표준 용어로는 도메인 서비스의 한 형태다 |
 | 도메인 서비스 (`*Service`) | 한 bounded context 안의 비즈니스 행위를 표현하는 객체 | 규칙이 어느 aggregate에도 자연스럽게 속하지 않을 때만 만든다. 책임 경계는 [README](../../README.md#engineering-principles) | `CheckoutService.request(order, policy)` |
 | 애플리케이션 서비스 (`*Facade`) | use case 하나를 대표하는 진입점 | 호출자(Controller·이벤트 리스너·스케줄러)가 누구든 같은 use case면 같은 Facade다. 책임과 금지 사항은 [README](../../README.md#engineering-principles) | `OrderCommandFacade.create(OrderCommand.Create): OrderCommand.Create.Result`, `OrderQueryFacade.find(FindOrdersQuery)` |
 | 명령 / 조회 / 결과 / 뷰 | 쓰기 의도(`OrderCommand.Create`)와 그 결과(`OrderCommand.Create.Result`), 읽기 의도(`*Query`/`*Criteria`)와 그 투영(`*View`). 규약은 [README](../../README.md#engineering-principles) | 상태를 바꾸면 Command, 바꾸지 않으면 Query. 커맨드는 모듈 이름공간 `object`(`OrderCommand`) 아래 use case별 `data class`로 두고, 입력 조각(`Line`)과 결과(`Result`)는 그 커맨드 안에 둔다. Facade의 공개 입력이라 aggregate 안에 중첩하지 않는다. 중첩 타입은 따로 import하지 않고 `OrderCommand.Create.Result`처럼 이름공간부터 쓴다 | `OrderCommand.Create → OrderCommand.Create.Result`, `FindOrdersQuery(OrderSearchCriteria) → OrderSummaryView`. 전체 카탈로그는 [청사진 §4](../references/05_Domain_Development_Blueprint.md) |
-| 도메인 이벤트 (Domain Event) | 이미 일어난 한 가지 사실. 불변이고 과거형이다 | aggregate가 상태 전이의 결과로 만들고, Facade가 커밋 안에서 발행하고, Event Publication Registry가 전달한다 | `OrderPaymentRequested`, `PaymentApproved`, `PaymentUnknown`, `SyncGapDetected`, `KitchenTicketCreated`. `OrderCompleted`처럼 여러 사실을 뭉친 이름은 쓰지 않는다 |
+| 도메인 이벤트 (Domain Event) | 이미 일어난 한 가지 사실. 불변이고 과거형이다 | aggregate가 상태 전이의 결과로 만들고, Facade가 커밋 안에서 발행하고, Event Publication Registry가 전달한다 | `OrderPaymentRequested`, `PaymentApproved`, `PaymentUnknown`, `SyncGapDetected`, `FulfillmentCreated`. `OrderCompleted`처럼 여러 사실을 뭉친 이름은 쓰지 않는다 |
 | 리포지토리 (Repository) | aggregate 단위로 읽고 저장하는 port | aggregate 전체를 다루면 Repository, 화면용 투영을 만들면 Query repository(§4.2) | `OrderRepository.findById(OrderId): Order?`, `save(Order)` |
 | 공개 API (module public surface) | 다른 모듈이 import할 수 있는 것. Facade·커맨드 이름공간·ID 값 타입·이벤트만 | `internal` 패키지 아래는 비공개. Modulith 검증이 위반을 빌드 실패로 만든다. 모듈을 건너가는 이벤트만 예외로 `contract`가 소유한다(§4.4) | `payment/PaymentManagement.kt`, `PaymentId.kt`, `PaymentEvent.kt`처럼 모듈 루트(§4.4) |
 
@@ -43,7 +43,7 @@ Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰�
 | `payment` | `PaymentAttempt` | provider 참조, provider idempotency, 승인·취소 시도, 결제 정본 상태 | 같은 checkout에 진행 중인 승인 시도는 하나. `UNKNOWN`은 실패가 아니다. provider 결과는 한 번만 적용한다 | `PaymentManagement` |
 | `sync` | `TerminalSyncState` | 단말 watermark, operation 접수·중복 제거, gap·conflict | `lastAckedSequence`는 단조 증가. gap을 건너뛰어 전진하지 않는다 | `SyncManagement` |
 | `reconciliation` | `ReconciliationCase` | 불일치 case의 근거, 규칙 버전, 승인·조치 감사 기록 | 근거·규칙·감사 없이 해결하지 않는다. 결제 상태를 직접 고치지 않는다 | `ReconciliationManagement` |
-| `fulfillment` | `KitchenTicket`, `ReceiptDelivery` | 주문 이후 주방 ticket과 영수증 전달 | 원본 주문당 natural key로 한 번만 생성. 재시도 side effect는 멱등 | 소비 이벤트만 |
+| `fulfillment` | `Fulfillment`, `ReceiptDelivery` | 주문 이후의 이행과 영수증 전달 | 원본 주문당 natural key로 한 번만 생성. 재시도 side effect는 멱등 | 소비 이벤트만 |
 
 컨텍스트 사이의 소유 규칙:
 - `payment`만 결제 정본 상태를 바꾼다. `reconciliation`은 case와 근거를 소유하고 결론을 `PaymentManagement.resolveFromReconciliation(command)` 같은 좁은 공개 command로 요청한다.
@@ -65,7 +65,7 @@ Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰�
 | `TerminalSyncState` | operation 접수 기록(`t_sync_operation`) | watermark 전진과 접수 기록이 함께 커밋돼야 gap을 건너뛰지 않는다 |
 | `ReconciliationCase` | evidence, 조치·승인 감사 기록 | "근거·감사 없이 해결하지 않는다"는 불변식이 자식과 루트를 묶는다 |
 | `Store` | policy 버전 | 정책을 바꿀 때 새 버전 행이 함께 커밋되지 않으면 이미 발행된 checkout이 가리키는 버전이 없어진다 |
-| `KitchenTicket`, `ReceiptDelivery` | 없음(단독 루트) | natural key 한 건이면 충분하다 |
+| `Fulfillment`, `ReceiptDelivery` | 없음(단독 루트) | natural key 한 건이면 충분하다 |
 
 자식 엔티티는 루트를 통해서만 만들고 바꾼다. 다른 aggregate의 사실(예: 결제 승인)이 필요하면 자식으로 끌어오지 않고 이벤트로 받는다. 한 컨텍스트에 루트가 여럿일 수 있다(`fulfillment`). 루트 하나가 곧 컨텍스트는 아니다.
 
@@ -85,9 +85,9 @@ Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰�
 | `attempt` (payment) | 한 주문에 대한 provider 요청 1회. 식별은 `PaymentId`이고 회차 번호는 두지 않는다. 승인과 취소는 각각 별도 attempt다 | `payment`, `transaction` | 한 요청의 결과(승인·거절·`UNKNOWN`)를 한 회차에 담아야 한다. transaction은 DB 용어와 충돌한다 |
 | `UNKNOWN` | provider 결과를 아직 확인하지 못한 결제 상태. 실패가 아니다 | `FAILED`, `TIMEOUT` | timeout은 전송 관찰의 실패이고 결제 결과의 실패가 아니다. `UNKNOWN`에서 새 승인 요청을 재시도하지 않고 provider 조회 → reconciliation으로 수렴한다 |
 | `gap` / `duplicate` / `conflict` | sync 판정 결과. 순번 누락 / 이미 접수한 operation의 재전송 / 같은 키에 다른 내용 | 일반 `error`, HTTP 500 | 세 가지는 각각 다른 복구 경로를 가진 업무 결과다. 항목 단위 결과로 돌려주고 부분 성공을 200 하나로 숨기지 않는다 |
-| `case` (reconciliation) | 불일치 한 건의 근거·규칙 버전·조치·감사 기록 | `issue`, `ticket` | ticket은 fulfillment의 `KitchenTicket`과 충돌한다 |
+| `case` (reconciliation) | 불일치 한 건의 근거·규칙 버전·조치·감사 기록 | `issue`, `ticket` | ticket은 KDS·프린터의 표시 매체(화면 카드, 종이 주문표)를 가리키는 업계 용어다 |
 | `evidence` | POS·서버·provider 각각이 말하는 사실의 기록 | `proof`, `log` | 세 출처를 나란히 비교하는 것이 reconciliation의 본질이다 |
-| `kitchen ticket` | 결제된 주문에서 만든 주방 표시 작업 단위. 주문당 natural key로 1건 | `order ticket` | 주문 자체와 구분한다. 재시도해도 한 번만 만들어진다 |
+| `fulfillment` (aggregate) | 결제된 주문 하나를 이행하는 단위. 주문당 natural key로 1건 | `kitchen ticket`, `ticket`, `fulfillment order` | 업종(카페의 바, 식당의 주방, 소매 픽업)을 가리지 않는다. 원문 청사진의 `KitchenTicket`이 이것이다. kitchen은 F&B 업종을, ticket은 KDS·프린터의 표시 매체를 전제해서 쓰지 않는다. 이름은 [Square Orders API](https://developer.squareup.com/docs/orders-api/fulfillments)의 `Fulfillment`(주문당 이행 단위, 이행 방식 `type`)를 따랐다. Shopify·Salesforce의 `FulfillmentOrder`는 위치별 품목 묶음이라 한 주문에 여럿이고 `Order`와 헷갈린다. 업종에 따른 구분은 이름이 아니라 이행 방식 `type`이 맡는다. 재시도해도 한 번만 만들어진다 |
 | `receipt` (fulfillment) | 고객 영수증 전달(`ReceiptDelivery`) | — | sync 쪽에서는 이 단어를 쓰지 않는다(위 `operation` 참고) |
 | `store policy` | 통화·반올림·판매 규칙. 버전이 있다 | `settings`, `config` | 정책은 업무 규칙이고 버전으로 과거 주문에 적용된 값을 추적한다 |
 | `aggregate version` | 한 aggregate의 상태 순서(`@Version`) | — | 동시 수정 충돌 감지용이다. terminal sequence와 다르다 |
@@ -185,6 +185,7 @@ Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰�
 - `t_order_checkout`은 통화 컬럼을 두지 않았다(질문 1, `t_order.currency`에서 읽는다). `amount`는 지금은 line 합계와 같아도 확정 시점에만 알 수 있는 값이라 둔다(질문 3·4). 읽고 판단한 뒤 쓰는 `RequestCheckout`의 경합은 주문 행 잠금(`PESSIMISTIC_WRITE`, PostgreSQL에서는 `for no key update`, 대기 3초 제한)이 막고, unique `(order_id, checkout_no)`와 `@Version`이 그 뒤의 방어선이다(질문 6). Hibernate가 INSERT를 UPDATE보다 먼저 flush해서 잠금이 없으면 `@Version`보다 unique 제약이 먼저 걸린다([order-request-checkout-persistence](../spec/2026-09-21-order-request-checkout-persistence.md)).
 - `t_order_line.version`과 `t_order_checkout.version`은 질문 2·4에서 걸려 없앴다. 업무 코드가 읽지 않았고, 행 단위 version은 서로 다른 line을 고치는 두 트랜잭션을 막지 못해 aggregate의 방어선이 아니었다. 대신 같은 line 행을 동시에 고치는 경우의 충돌 감지는 포기했다. 지금 기존 주문의 line을 고치는 명령이 없다는 것이 그 전제이고, 명령을 넣는 PR이 루트 잠금이나 루트 version 증가를 함께 정한다. 방어선은 루트(`t_order`의 행 잠금과 `@Version`)와 unique `(order_id, checkout_no)`다. 배포된 환경이 없던 시점이라 질문 8의 순서를 밟지 않고 코드 제거와 컬럼 삭제를 한 PR로 했다([base-entity-explicit-version](../spec/2026-09-21-base-entity-explicit-version.md)).
 - `t_order`의 unique `(terminal_id, client_order_id)`는 질문 4·6의 답이다. Redis로 중복 요청을 먼저 걸러내더라도 이 제약은 남는다. 멱등 키는 삭제 뒤에도 재사용하면 안 되므로 partial unique로 바꾸지 않는다. 주문을 soft delete하는 명령이 생기면 `findByClientOrderId`가 삭제된 주문도 찾게 해야 한다. 지금은 주문을 삭제하는 코드가 없다.
+- `t_fulfillment`의 unique는 청사진의 `(orderId, ticketType)`이 아니라 `(order_id)`다. 이행 방식이 하나뿐이고 `type`을 읽는 코드가 없어 질문 2에서 걸렸다. 방식이 늘면 지금의 유일한 종류를 뜻하는 상수 기본값 컬럼을 더하고 unique를 바꾼다(질문 3). "주문당 한 번"의 마지막 방어선이라 soft delete된 행에도 걸리는 전체 unique로 둔다(질문 4). 상태·매장·품목 snapshot도 읽는 명령·조회가 생길 때 더한다([fulfillment-kitchen-ticket](../spec/2026-09-24-fulfillment.md)).
 
 기술 근거(2026-09-20 확인, PostgreSQL 18·Flyway 12.4.0·Hibernate 7.4.5): [ALTER TABLE](https://www.postgresql.org/docs/18/sql-altertable.html), [CREATE INDEX](https://www.postgresql.org/docs/18/sql-createindex.html), [Explicit Locking](https://www.postgresql.org/docs/18/explicit-locking.html), [Transaction Isolation](https://www.postgresql.org/docs/18/transaction-iso.html), [Flyway 트랜잭션 처리](https://documentation.red-gate.com/fd/migration-transaction-handling-273973399.html), [Flyway PostgreSQL 락](https://documentation.red-gate.com/fd/postgresql-database-277579325.html). Hibernate `validate`가 매핑된 컬럼만 검사한다는 점은 사용자 가이드에 없어서 `AbstractSchemaValidator` 소스로 확인했다.
 
