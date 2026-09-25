@@ -33,6 +33,7 @@ dependencies {
     implementation("com.github.f4b6a3:uuid-creator:6.1.1")
     implementation("io.github.oshai:kotlin-logging-jvm:8.0.4")
     implementation("org.springframework.boot:spring-boot-flyway")
+    runtimeOnly("io.micrometer:micrometer-registry-prometheus")
     runtimeOnly("org.flywaydb:flyway-database-postgresql")
     runtimeOnly("org.postgresql:postgresql")
     testImplementation("org.springframework.boot:spring-boot-starter-actuator-test")

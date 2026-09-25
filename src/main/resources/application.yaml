@@ -49,3 +49,22 @@ spring:
       completion-mode: update
       # 인스턴스가 여럿이면 같은 미완료 이벤트를 모두가 다시 보낸다. 재전송 절차는 Kafka를 들이는 설계가 정한다.
       republish-outstanding-events-on-restart: false
+
+management:
+  endpoints:
+    web:
+      exposure:
+        # health(프로브)와 prometheus(Prometheus나 Alloy가 scrape해서 Mimir로 보내는 대상)만 연다.
+        # 인증이 없으므로 외부 차단은 배포에서 한다.
+        include: health,prometheus
+  metrics:
+    tags:
+      # 여러 서비스가 한 저장소에 모일 때 대시보드가 서비스를 가르는 기준이다.
+      application: ${spring.application.name}
+    distribution:
+      percentiles-histogram:
+        # 기본값은 _count·_sum·_max뿐이라 p95를 계산할 수 없다. bucket을 내보내 histogram_quantile로 구한다.
+        http.server.requests: true
+
+# 구조화 로그는 여기 적지 않는다. 배포 환경에서 LOGGING_STRUCTURED_FORMAT_CONSOLE=ecs를 주면
+# stdout이 한 줄에 JSON 객체 하나가 되어 Loki(Alloy)가 필드로 읽는다. 기본값은 사람이 읽는 평문이다.
