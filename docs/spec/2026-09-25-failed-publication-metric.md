@@ -74,8 +74,12 @@ main 코드 60줄 안팎, 테스트 100줄 안팎, 문서 10줄 안팎이다. �
 
 | 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
 |---|---|---|---|
-| 인수 1~4 | 미실행 | 미실행 | 미실행 |
-| 인수 5 | 미실행 | 미실행 | 미실행 |
+| 인수 1~4: `리스너별로 실패한 기록과 기준 시간이 지난 미완료 기록을 센다`, `기록이 사라지면 그 조합의 시계열도 없어진다`, `listener 태그는 listener_id의 클래스 단순 이름이다` | `./gradlew test --tests 'com.resilientpos.platform.EventPublicationMetricsTest'`. 빈 동작의 stub에 대해 3개 실패: 기대값 `{failed=1.0, stale=1.0}`인데 실제 값이 비어 있었고, 이름은 기대값 `OrderPaidListener`인데 빈 문자열이었다 | 같은 명령. 4개 통과 | `./gradlew test`. 221개 중 실패 0 |
+| 인수 5: `스케줄링을 켜도 커밋 뒤 리스너는 task executor에서 돈다` | RED 없음. `@EnableScheduling` 전 기준선으로 먼저 통과시킨 characterization이다 | `@EnableScheduling` 뒤 같은 명령. 통과(스레드 이름 `task-` 접두어) | `./gradlew test`. 221개 중 실패 0 |
 
 ## 결과
-개발 전 작성.
+- 인수 1~6을 충족했다. `./gradlew test`는 221개(기존 217, 신규 4) 중 실패 0이다.
+- 구현: `platform.EventPublicationMetrics`(MultiGauge와 1분 `@Scheduled` 갱신), `PlatformConfiguration`의 `@EnableScheduling`, 통합 테스트다. 새 의존성과 설정 파일 변경은 없다.
+- 개발 중 확인한 것: 테스트가 가짜 이벤트 타입으로 넣은 미완료 행이 남으면 컨텍스트 종료 때 Modulith가 그 행을 복원하려다 `Unable to locate named class`로 경고를 낸다. 같은 DB를 쓰는 다른 컨텍스트에도 번지므로 테스트마다 그 행을 지운다.
+- `feature/prometheus-structured-logging`과 겹치는 파일은 없다(`git merge-tree`로 확인한 결과는 아래).
+- `tdd-driver`에 위임하지 않고 주 에이전트가 직접 수행했다. 업무 동작이 아니라 `platform` 인프라다.
