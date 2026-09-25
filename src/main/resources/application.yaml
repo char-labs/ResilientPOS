@@ -54,7 +54,8 @@ management:
   endpoints:
     web:
       exposure:
-        # Prometheus나 Alloy가 scrape해서 Mimir로 보내는 엔드포인트만 연다. 인증이 없으므로 외부 차단은 배포에서 한다.
+        # health(프로브)와 prometheus(Prometheus나 Alloy가 scrape해서 Mimir로 보내는 대상)만 연다.
+        # 인증이 없으므로 외부 차단은 배포에서 한다.
         include: health,prometheus
   metrics:
     tags:

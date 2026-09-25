@@ -35,6 +35,7 @@ class ObservabilityConfigurationTest(
         val requestMetric = body.lines().firstOrNull { it.startsWith("http_server_requests_seconds_count") }
         assertNotNull(requestMetric, "http_server_requests_seconds_count가 없다. metric export 설정을 확인한다")
         assertContains(requestMetric, """application="ResilientPOS"""")
+        assertContains(body, "# TYPE http_server_requests_seconds histogram")
         // p95 같은 분위수는 bucket이 있어야 Prometheus의 histogram_quantile로 계산할 수 있다.
         assertNotNull(
             body.lines().firstOrNull { it.startsWith("http_server_requests_seconds_bucket") },
