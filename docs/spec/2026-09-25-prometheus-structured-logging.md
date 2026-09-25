@@ -67,7 +67,11 @@
 
 | 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
 |---|---|---|---|
-| 인수 1~3, `ObservabilityConfigurationTest` | 미실행 | 미실행 | 미실행 |
+| 인수 1~2, `prometheus 엔드포인트가 application 태그가 붙은 요청 metric을 돌려준다` | `./gradlew test --tests 'com.resilientpos.platform.ObservabilityConfigurationTest'`. 의존성·설정 전에 실패: 200을 기대했는데 404였다 | 같은 명령. registry와 exposure·태그 설정 뒤 통과 | `./gradlew test`. 219개 중 실패 0 |
+| 인수 3, `health와 prometheus 외의 Actuator 엔드포인트는 열지 않는다` | RED 없음. Boot 기본 노출이 `health`뿐이라 처음부터 통과했다. `include`를 넓히는 회귀를 막는 characterization이다 | 같은 명령. 통과 | 같은 명령. 통과 |
 
 ## 결과
-개발 전 작성. 개발 후 실행 결과와 변경 이유를 추가한다.
+- 인수 1~3: `ObservabilityConfigurationTest` 2개 통과. Spring Boot 테스트는 metric export를 기본으로 끄므로 `@AutoConfigureMetrics`(Boot 4에서는 `spring-boot-micrometer-metrics-test`)로 켰다. 이 어노테이션 때문에 이 테스트 클래스는 Spring 컨텍스트를 하나 더 만든다.
+- 인수 4: 환경 변수 없이 실행하면 `2026-09-25T19:16:45.626+09:00  INFO ... HikariPool-1 - Starting...` 같은 평문이고, `LOGGING_STRUCTURED_FORMAT_CONSOLE=ecs`를 주면 `{"@timestamp":...,"log":{"level":"INFO","logger":...},"service":{"name":"ResilientPOS"},"message":...}` 한 줄이 나오는 것을 같은 테스트 실행 출력에서 확인했다.
+- 인수 5: `./gradlew test` 219개 중 실패 0(main의 #55 위로 rebase한 뒤).
+- `python3 scripts/check_pr.py --base origin/main --worktree`: PASS.

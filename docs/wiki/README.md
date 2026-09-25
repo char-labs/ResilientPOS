@@ -9,6 +9,7 @@
 - 애플리케이션/빌드 수정: [현재 상태](current-state.md). 필요한 도메인 원문만 [원문 목록](../references/README.md)에서 찾는다.
 - 이전 결정 추적: `docs/spec/`에서 날짜와 slug로 관련 spec을 찾아 읽는다.
 - 비즈니스·도메인·Controller 개발: [TDD 테스트 전략](testing-strategy.md)과 [공통 스킬](../../.claude/skills/resilientpos-tdd/SKILL.md).
+- metric·로그 노출과 LGTM 연결 전제: [관측성](observability.md).
 - 도메인 용어·bounded context·유비쿼터스 언어 용어집: [도메인 모델](domain-model.md). 업무 spec을 쓰거나 새 타입·테이블·이벤트 이름을 만들 때 먼저 읽는다.
 - 새 기능·변경 요청의 설계 합의: [grill 스킬](../../.claude/skills/resilientpos-grill/SKILL.md). 합의 뒤 장기 스펙은 [spec-write 스킬](../../.claude/skills/resilientpos-spec-write/SKILL.md).
 - 설계 → 리뷰 → 구현 → 머지 파이프라인: [develop 스킬](../../.claude/skills/resilientpos-develop/SKILL.md). 여러 작업의 분해·위임·머지: [orchestrator 스킬](../../.claude/skills/resilientpos-orchestrator/SKILL.md).

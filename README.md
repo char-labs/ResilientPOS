@@ -12,7 +12,7 @@ ResilientPOS는 네트워크 단절과 부분 실패 속에서도 주문·결제
 | 프레임워크 | Spring Boot 4.1.1 |
 | 웹 / 데이터 접근 | Spring MVC, Spring Data JPA, Jackson Kotlin |
 | 데이터베이스 드라이버 | PostgreSQL, H2 |
-| 운영 상태 확인 | Spring Boot Actuator |
+| 운영 상태 확인 | Spring Boot Actuator, Micrometer Prometheus registry |
 | 테스트 | Kotlin Test, JUnit 5, Spring Boot Test |
 | 빌드 | Gradle Wrapper 9.7.1, Kotlin DSL |
 | 개발 하네스 | Python 3 표준 라이브러리 기반 로컬 PR 검사 |

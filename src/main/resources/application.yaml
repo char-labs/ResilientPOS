@@ -49,3 +49,17 @@ spring:
       completion-mode: update
       # 인스턴스가 여럿이면 같은 미완료 이벤트를 모두가 다시 보낸다. 재전송 절차는 Kafka를 들이는 설계가 정한다.
       republish-outstanding-events-on-restart: false
+
+management:
+  endpoints:
+    web:
+      exposure:
+        # LGTM의 Prometheus(Mimir)가 scrape하는 엔드포인트만 연다. 인증이 없으므로 외부 차단은 배포에서 한다.
+        include: health,prometheus
+  metrics:
+    tags:
+      # 여러 서비스가 한 저장소에 모일 때 대시보드가 서비스를 가르는 기준이다.
+      application: ${spring.application.name}
+
+# 구조화 로그는 여기 적지 않는다. 배포 환경에서 LOGGING_STRUCTURED_FORMAT_CONSOLE=ecs를 주면
+# stdout이 한 줄에 JSON 객체 하나가 되어 Loki(Alloy)가 필드로 읽는다. 기본값은 사람이 읽는 평문이다.
