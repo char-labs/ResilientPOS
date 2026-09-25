@@ -12,6 +12,7 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.ZoneOffset
 import java.util.UUID
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import javax.sql.DataSource
 import kotlin.test.AfterTest
@@ -254,22 +255,60 @@ class EventPublicationMetricsTest(
         assertTrue(tasks.none { EventPublicationMetrics::class.java.name in it }, "공용 스케줄러에 올라가 있다: $tasks")
     }
 
-    /** 종료 뒤에는 모니터를 기다리던 갱신이 들어와도 조회하지 않는다. 닫히는 DataSource에 닿지 않게 하려는 것이다. */
+    /** 종료 뒤에는 모니터를 기다리던 갱신이 들어와도 조회하지 않는다. 다시 시작하면 다시 센다. */
     @Test
-    fun `멈춘 뒤의 갱신은 조회하지 않는다`() {
+    fun `멈춘 뒤의 갱신은 조회하지 않고 다시 시작하면 센다`() {
         val own = SimpleMeterRegistry()
         val subject = EventPublicationMetrics(dataSource, Clock.systemUTC(), own, Duration.ofMinutes(5))
         val refreshed = own.get("event.publication.incomplete.refreshed").gauge()
-        subject.start()
-        awaitUntil("첫 갱신이 돈다") { refreshed.value() > 0.0 }
-
-        subject.stop()
-        assertTrue(!subject.isRunning, "멈추지 않았다")
         val a = uniqueListener("ProbeStopped")
-        insert(a, "FAILED", Duration.ofMinutes(10))
-        subject.refresh()
+        try {
+            subject.start()
+            awaitUntil("첫 갱신이 돈다") { refreshed.value() > 0.0 }
 
-        assertTrue(own.find("event.publication.incomplete").tag("listener", a).gauges().isEmpty(), "멈춘 뒤에 조회했다")
+            subject.stop()
+            assertTrue(!subject.isRunning, "멈추지 않았다")
+            insert(a, "FAILED", Duration.ofMinutes(10))
+            subject.refresh()
+            assertTrue(own.find("event.publication.incomplete").tag("listener", a).gauges().isEmpty(), "멈춘 뒤에 조회했다")
+
+            subject.start()
+            awaitUntil("다시 시작한 뒤 센다") {
+                own.find("event.publication.incomplete").tag("listener", a).gauge()?.value() == 1.0
+            }
+        } finally {
+            subject.stop()
+        }
+    }
+
+    /**
+     * 드라이버가 인터럽트에 반응하지 않아 `stop()`이 기다리다 넘어간 경우다. 그 옛 갱신이 멈춘 뒤에 끝나도
+     * 결과를 적용하지 않는다. 다음 시작 뒤에 끝나는 경우도 같은 세대 확인으로 버린다.
+     */
+    @Test
+    fun `제때 멈추지 않은 옛 갱신의 결과는 버린다`() {
+        val blocking = BlockingDataSource(dataSource)
+        val own = SimpleMeterRegistry()
+        val subject = EventPublicationMetrics(blocking, Clock.systemUTC(), own, Duration.ofMinutes(5))
+        subject.stopTimeout = Duration.ofMillis(100)
+        val refreshed = own.get("event.publication.incomplete.refreshed").gauge()
+        val a = uniqueListener("ProbeLate")
+        insert(a, "FAILED", Duration.ofMinutes(10))
+        try {
+            subject.start()
+            blocking.entered.await()
+
+            subject.stop()
+            blocking.release()
+            // refresh()는 같은 모니터를 쓰므로 옛 갱신이 끝난 뒤에야 돌아온다. 멈춘 상태라 스스로는 아무것도 하지 않는다.
+            subject.refresh()
+
+            assertTrue(own.find("event.publication.incomplete").tag("listener", a).gauges().isEmpty(), "옛 갱신의 결과가 적용됐다")
+            assertEquals(0.0, refreshed.value())
+        } finally {
+            blocking.release()
+            subject.stop()
+        }
     }
 
     data class FailingProbe(val id: UUID)
@@ -286,6 +325,26 @@ class EventPublicationMetricsTest(
 
         override fun getConnection(): Connection =
             if (failing) throw SQLException("의도한 조회 실패") else delegate.connection
+    }
+
+    /** 첫 커넥션 요청을 인터럽트에도 풀리지 않게 붙잡는다. 인터럽트에 반응하지 않는 드라이버를 흉내 낸다. */
+    class BlockingDataSource(private val delegate: DataSource) : DataSource by delegate {
+        val entered = CountDownLatch(1)
+        private val gate = CountDownLatch(1)
+
+        fun release() = gate.countDown()
+
+        override fun getConnection(): Connection {
+            entered.countDown()
+            while (true) {
+                try {
+                    gate.await()
+                    return delegate.connection
+                } catch (_: InterruptedException) {
+                    // 인터럽트를 무시하고 계속 기다린다.
+                }
+            }
+        }
     }
 
     class MutableClock(@Volatile var now: Instant) : Clock() {
