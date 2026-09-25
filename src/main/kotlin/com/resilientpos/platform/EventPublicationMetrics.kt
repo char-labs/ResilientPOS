@@ -6,6 +6,7 @@ import io.micrometer.core.instrument.Tags
 import java.sql.Timestamp
 import java.time.Clock
 import java.time.Duration
+import javax.sql.DataSource
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.dao.DataAccessException
 import org.springframework.jdbc.core.JdbcTemplate
@@ -16,20 +17,29 @@ import org.springframework.stereotype.Component
  * 커밋 뒤 리스너가 끝내지 못한 발행 기록을 `event.publication.incomplete{status, listener}`로 센다. 조회만 하고 상태는 바꾸지 않는다.
  *
  * `failed`는 리스너가 던진 기록, `stale`은 완료도 실패도 아닌 채 [staleAfter]가 지난 기록(종료·프로세스 사망으로 끊긴 것)이다.
+ * 재전송된 기록은 마지막 재전송 시각부터 잰다.
  * 모든 인스턴스가 같은 DB를 세므로 알림은 `max`로 모은다.
  */
 @Component
 class EventPublicationMetrics(
-    private val jdbcTemplate: JdbcTemplate,
+    dataSource: DataSource,
     private val clock: Clock,
     registry: MeterRegistry,
     @Value("\${resilientpos.event-publication.stale-after:PT5M}") private val staleAfter: Duration,
 ) {
+    // 공유 JdbcTemplate을 건드리지 않고 이 조회에만 상한을 둔다. JPA 쿼리 상한(10초)과 같은 값이다.
+    // 트랜잭션 밖이라 트랜잭션 상한이 걸리지 않고, 없으면 스케줄러 스레드 하나가 소켓 상한(30초)까지 묶인다.
+    private val jdbcTemplate = JdbcTemplate(dataSource).apply { queryTimeout = 10 }
+
     private val gauge = MultiGauge.builder("event.publication.incomplete")
         .description("완료되지 않은 이벤트 발행 기록 수")
         .register(registry)
 
-    /** 리스너 목록이 데이터에서 나오므로 주기마다 다시 등록한다. 사라진 조합의 시계열은 없어진다. */
+    /**
+     * 리스너 목록이 데이터에서 나오므로 주기마다 다시 등록한다. 사라진 조합의 시계열은 없어진다.
+     * 조회와 등록을 한 단위로 묶는다. 두 갱신이 겹치면 먼저 조회한 쪽이 나중에 등록해 새 값을 덮을 수 있다.
+     */
+    @Synchronized
     @Scheduled(fixedDelayString = "PT1M")
     fun refresh() {
         val counts = try {
@@ -37,7 +47,8 @@ class EventPublicationMetrics(
             jdbcTemplate.query(
                 """
                 select status, listener_id, count(*) as n from event_publication
-                where completion_date is null and (status = 'FAILED' or publication_date < ?)
+                where completion_date is null
+                  and (status = 'FAILED' or coalesce(last_resubmission_date, publication_date) < ?)
                 group by status, listener_id
                 """.trimIndent(),
                 { rs, _ ->
@@ -59,8 +70,8 @@ class EventPublicationMetrics(
     companion object {
         private val log by logger()
 
-        /** `패키지.클래스.메서드(이벤트타입)`에서 클래스 단순 이름. */
+        /** `패키지.클래스.메서드(이벤트타입)`에서 클래스 단순 이름. 중첩 클래스는 `바깥$안`으로 저장되어 안쪽 이름만 쓴다. */
         fun listenerName(listenerId: String): String =
-            listenerId.substringBefore('(').substringBeforeLast('.').substringAfterLast('.')
+            listenerId.substringBefore('(').substringBeforeLast('.').substringAfterLast('.').substringAfterLast('$')
     }
 }
