@@ -4,16 +4,16 @@ import io.micrometer.core.instrument.Gauge
 import io.micrometer.core.instrument.MeterRegistry
 import io.micrometer.core.instrument.MultiGauge
 import io.micrometer.core.instrument.Tags
-import jakarta.annotation.PostConstruct
-import jakarta.annotation.PreDestroy
 import java.sql.Timestamp
 import java.time.Clock
 import java.time.Duration
 import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 import javax.sql.DataSource
 import org.springframework.beans.factory.annotation.Value
+import org.springframework.context.SmartLifecycle
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.stereotype.Component
 
@@ -29,6 +29,8 @@ import org.springframework.stereotype.Component
  *
  * 갱신은 Spring의 공용 스케줄러가 아니라 전용 스레드 하나에서 돈다. 공용 스케줄러는 스레드가 하나라 느린 조회가
  * Modulith Moments의 시간 이벤트 발행까지 붙잡는다. `@EnableScheduling`이나 Moments 설정과도 무관하게 돈다.
+ * 시작과 종료는 [SmartLifecycle]이 맡는다. 모든 싱글턴(Flyway 마이그레이션 포함)이 준비된 뒤 시작하고,
+ * 빈을 파괴하기 전에 멈춰 닫히는 `DataSource`에 조회가 닿지 않게 한다.
  */
 @Component
 class EventPublicationMetrics(
@@ -36,13 +38,17 @@ class EventPublicationMetrics(
     private val clock: Clock,
     registry: MeterRegistry,
     @Value("\${resilientpos.event-publication.stale-after:PT5M}") private val staleAfter: Duration,
-) {
+) : SmartLifecycle {
     // 공유 JdbcTemplate을 건드리지 않고 이 조회에만 상한을 둔다. JPA 쿼리 상한(10초)과 같은 값이다.
     // 트랜잭션 밖이라 트랜잭션 상한이 걸리지 않고, 없으면 스케줄러 스레드 하나가 소켓 상한(30초)까지 묶인다.
     // 커넥션 대기는 Hikari connection-timeout(3초)이 따로 막는다.
     private val jdbcTemplate = JdbcTemplate(dataSource).apply { queryTimeout = 10 }
 
-    private val scheduler = Executors.newSingleThreadScheduledExecutor { Thread(it, THREAD_NAME).apply { isDaemon = true } }
+    private var scheduler: ScheduledExecutorService? = null
+
+    /** 멈춘 뒤 모니터를 기다리던 갱신이 들어와도 조회하지 않게 한다. 모니터 진입은 인터럽트로 깨지 않는다. */
+    @Volatile
+    private var stopped = false
 
     private val gauge = MultiGauge.builder("event.publication.incomplete")
         .description("완료되지 않은 이벤트 발행 기록 수")
@@ -64,26 +70,32 @@ class EventPublicationMetrics(
             .register(registry)
     }
 
-    @PostConstruct
-    fun start() {
-        // refresh()가 RuntimeException을 삼키지만 Error가 새면 ScheduledExecutorService는 이후 실행을 조용히 멈춘다.
-        scheduler.scheduleWithFixedDelay(
-            { runCatching { refresh() }.onFailure { log.error(it) { "발행 기록 metric 갱신이 멈출 뻔했다" } } },
-            0, INTERVAL.toSeconds(), TimeUnit.SECONDS,
-        )
+    override fun start() {
+        stopped = false
+        scheduler = Executors.newSingleThreadScheduledExecutor { Thread(it, THREAD_NAME).apply { isDaemon = true } }.apply {
+            // refresh()가 RuntimeException을 삼키지만 Error가 새면 ScheduledExecutorService는 이후 실행을 조용히 멈춘다.
+            scheduleWithFixedDelay(
+                { runCatching { refresh() }.onFailure { log.error(it) { "발행 기록 metric 갱신이 실패했다" } } },
+                0, INTERVAL.toSeconds(), TimeUnit.SECONDS,
+            )
+        }
     }
 
-    @PreDestroy
-    fun stop() {
-        scheduler.shutdownNow()
+    override fun stop() {
+        stopped = true
+        scheduler?.run {
+            shutdownNow()
+            // 조회 중이면 쿼리 상한(10초)과 커넥션 대기(3초) 안에 끝난다.
+            if (!awaitTermination(STOP_TIMEOUT.toSeconds(), TimeUnit.SECONDS)) log.warn { "발행 기록 metric 갱신이 제때 멈추지 않았다" }
+        }
+        scheduler = null
     }
 
-    /**
-     * 리스너 목록이 데이터에서 나오므로 주기마다 다시 등록한다. 사라진 조합의 시계열은 없어진다.
-     * 조회와 등록을 한 단위로 묶는다. 두 갱신이 겹치면 먼저 조회한 쪽이 나중에 등록해 새 값을 덮을 수 있다.
-     */
+    override fun isRunning(): Boolean = scheduler != null
+
     @Synchronized
     fun refresh() {
+        if (stopped) return
         val counts = try {
             // completion_date is null 조건이 미완료 인덱스를 타서 완료 행이 쌓여도 비용이 늘지 않는다.
             jdbcTemplate.query(
@@ -132,6 +144,7 @@ class EventPublicationMetrics(
 
         const val THREAD_NAME = "event-publication-metrics"
         val INTERVAL: Duration = Duration.ofMinutes(1)
+        private val STOP_TIMEOUT: Duration = Duration.ofSeconds(15)
 
         private const val BASE_PACKAGE = "com.resilientpos."
 

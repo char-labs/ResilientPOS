@@ -244,15 +244,32 @@ class EventPublicationMetricsTest(
         }
     }
 
-    /** 공용 스케줄러는 스레드가 하나라 느린 조회가 Moments까지 붙잡는다. 갱신은 거기 올리지 않고 전용 스레드에서 돈다. */
+    /**
+     * 공용 스케줄러는 스레드가 하나라 느린 조회가 Moments까지 붙잡는다. 갱신은 거기 올리지 않는다.
+     * 전용 스레드가 스스로 도는지는 Moments를 끈 컨텍스트의 테스트가 본다(스레드 이름은 컨텍스트마다 같아 여기서 가릴 수 없다).
+     */
     @Test
-    fun `갱신은 공용 스케줄러가 아니라 전용 스레드에서 돈다`() {
+    fun `갱신은 공용 스케줄러에 올라가지 않는다`() {
         val tasks = scheduledTasks.flatMap { it.scheduledTasks }.map { it.task.toString() }
         assertTrue(tasks.none { EventPublicationMetrics::class.java.name in it }, "공용 스케줄러에 올라가 있다: $tasks")
-        assertTrue(
-            Thread.getAllStackTraces().keys.any { it.name == EventPublicationMetrics.THREAD_NAME && it.isAlive },
-            "전용 갱신 스레드가 없다",
-        )
+    }
+
+    /** 종료 뒤에는 모니터를 기다리던 갱신이 들어와도 조회하지 않는다. 닫히는 DataSource에 닿지 않게 하려는 것이다. */
+    @Test
+    fun `멈춘 뒤의 갱신은 조회하지 않는다`() {
+        val own = SimpleMeterRegistry()
+        val subject = EventPublicationMetrics(dataSource, Clock.systemUTC(), own, Duration.ofMinutes(5))
+        val refreshed = own.get("event.publication.incomplete.refreshed").gauge()
+        subject.start()
+        awaitUntil("첫 갱신이 돈다") { refreshed.value() > 0.0 }
+
+        subject.stop()
+        assertTrue(!subject.isRunning, "멈추지 않았다")
+        val a = uniqueListener("ProbeStopped")
+        insert(a, "FAILED", Duration.ofMinutes(10))
+        subject.refresh()
+
+        assertTrue(own.find("event.publication.incomplete").tag("listener", a).gauges().isEmpty(), "멈춘 뒤에 조회했다")
     }
 
     data class FailingProbe(val id: UUID)
