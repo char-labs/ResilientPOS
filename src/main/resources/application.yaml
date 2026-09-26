@@ -50,13 +50,38 @@ spring:
   transaction:
     # 트랜잭션 하나가 도는 시간(초). 쿼리 여러 개로 나뉘어 각각은 상한 안이어도 전체가 길어질 수 있다.
     default-timeout: 30
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    listener:
+      # 재시도 대기는 consumer 스레드를 재운다. 스레드 하나가 파티션 여럿을 맡으면 한 주문의 실패가 그 파티션들을 모두 멈추므로
+      # 파티션마다 스레드 하나를 둔다. pod가 여럿이면 남는 스레드는 파티션 없이 쉰다.
+      concurrency: ${resilientpos.kafka.partitions}
+    consumer:
+      # 기본값 latest면 consumer가 파티션을 받기 전에 들어온 메시지를 건너뛴다. 처음 뜬 group도 처음부터 읽는다.
+      auto-offset-reset: earliest
   modulith:
     events:
       # 기본값과 같다. 결정을 설정에 적어 Modulith를 올릴 때 기본값이 바뀌어도 뒤집히지 않게 한다.
       # update: 처리한 발행 기록에 완료 표시만 하고 행을 남긴다.
       completion-mode: update
-      # 인스턴스가 여럿이면 같은 미완료 이벤트를 모두가 다시 보낸다. 재전송 절차는 Kafka를 들이는 설계가 정한다.
+      # 인스턴스가 여럿이면 같은 미완료 이벤트를 모두가 다시 보낸다. 브로커로 보내지 못한 기록의 재전송은
+      # 한 인스턴스만 도는 주기 작업이 맡는다(kafka-event-redelivery spec의 PR ③).
       republish-outstanding-events-on-restart: false
+
+resilientpos:
+  kafka:
+    # 이름은 저장 형식이다. 이벤트 클래스의 TOPIC 상수와 같아야 한다(KafkaConfiguration).
+    topics: order.payment-requested,payment.attempt-created,payment.approved,order.paid
+    # 처리량 근거가 아직 없다. 늘리면 KafkaAdmin이 기동하면서 파티션을 늘려 순서가 깨질 수 있으므로
+    # 환경마다 바꾸지 말고 consumer를 비운 뒤 이 값을 고치는 PR로 바꾼다(KafkaConfiguration).
+    partitions: 3
+    # 운영 브로커가 생기는 배포가 정한다. 환경 변수 RESILIENTPOS_KAFKA_REPLICAS로 바꾼다.
+    replicas: 1
+    retry:
+      # 실제 provider가 없어 측정 근거가 없는 값이다. 경합은 1초에서 2배씩 5회, 합계 약 31초 동안 그 파티션이 멈춘다.
+      # DB에 닿지 못하는 실패는 횟수 제한 없이 30초 간격까지 늘려 기다린다.
+      initial-interval: PT1S
+      max-retries: 5
 
 management:
   health:

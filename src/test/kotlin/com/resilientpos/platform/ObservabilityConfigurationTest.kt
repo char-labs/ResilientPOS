@@ -48,6 +48,21 @@ class ObservabilityConfigurationTest(
     }
 
     @Test
+    fun `prometheus 엔드포인트가 Kafka consumer metric과 토픽별 DLT 개수를 돌려준다`() {
+        val body = mockMvc.get("/actuator/prometheus").andReturn().response.contentAsString
+
+        val consumerMetric = body.lines().firstOrNull { it.startsWith("kafka_consumer_") && !it.startsWith("#") }
+        assertNotNull(consumerMetric, "Kafka consumer metric이 없다")
+        assertContains(consumerMetric, """application="ResilientPOS"""")
+        // DLT로 간 적이 없어도 0으로 나가야 increase()가 첫 증가를 잡는다. 알림 규칙이 쓰는 이름과 태그를 고정한다.
+        listOf("order.payment-requested", "payment.attempt-created", "payment.approved", "order.paid").forEach { topic ->
+            val deadLetter = body.lines().firstOrNull { it.startsWith("event_kafka_dead_letter_total{") && it.contains("""topic="$topic"""") }
+            assertNotNull(deadLetter, "$topic 의 event_kafka_dead_letter_total이 없다")
+            assertContains(deadLetter, """application="ResilientPOS"""")
+        }
+    }
+
+    @Test
     fun `health와 prometheus 외의 Actuator 엔드포인트는 열지 않는다`() {
         mockMvc.get("/actuator/env").andExpect { status { isNotFound() } }
     }

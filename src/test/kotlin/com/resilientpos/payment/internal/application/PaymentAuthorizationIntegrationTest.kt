@@ -1,12 +1,15 @@
 package com.resilientpos.payment.internal.application
 
+import com.resilientpos.KafkaTestSupport
 import com.resilientpos.PostgresIntegrationTest
+import com.resilientpos.PostgresIntegrationTest.Companion.awaitUntil
 import com.resilientpos.foundation.Money
 import com.resilientpos.order.OrderCommand
 import com.resilientpos.order.OrderCommandFacade
 import com.resilientpos.order.OrderFixtures
 import com.resilientpos.payment.PaymentAttemptStatus
 import com.resilientpos.payment.PaymentCommand
+import com.resilientpos.payment.PaymentEvent
 import com.resilientpos.payment.PaymentId
 import com.resilientpos.payment.PaymentManagement
 import com.resilientpos.payment.internal.adapter.gateway.FakePaymentGateway
@@ -17,7 +20,6 @@ import jakarta.persistence.EntityManagerFactory
 import java.math.BigInteger
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -25,7 +27,6 @@ import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
-import kotlin.test.fail
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.TestConfiguration
 import org.springframework.context.annotation.Bean
@@ -98,34 +99,20 @@ class PaymentAuthorizationIntegrationTest(
 
     private fun paymentId(row: Map<String, Any?>) = PaymentId(row["id"] as UUID)
 
-    private fun awaitUntil(description: String, condition: () -> Boolean) {
-        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
-        while (!condition()) {
-            if (System.nanoTime() >= deadline) fail("10초 안에 충족되지 않았다: $description")
-            Thread.sleep(20)
-        }
-    }
-
     private fun awaitStatus(orderId: UUID, expected: PaymentAttemptStatus): Map<String, Any?> {
         awaitUntil("시도가 $expected 가 된다. 현재: ${attempt(orderId)}") { attempt(orderId)?.get("status") == expected.name }
         return requireNotNull(attempt(orderId))
     }
 
     /**
-     * 승인 리스너가 이 주문의 시도를 **끝까지 처리했는지**를 발행 기록으로 기다린다. 성공이든 실패든 끝난 것이다.
+     * 승인 consumer가 이 주문의 시도를 **끝까지 처리했는지** 기다리고 DLT로 갔는지 돌려준다.
      * 상태만 보면 0원처럼 처음부터 결말이 난 시도에서 "리스너가 막았다"와 "아직 안 돌았다"가 구분되지 않는다.
+     * 발행 기록이 먼저 완료돼야 메시지가 토픽에 있으므로 그 뒤에 consumer group의 offset을 본다.
      */
-    private fun awaitAuthorizationListenerFinished(orderId: UUID): String {
-        val query = """
-            select status from event_publication
-            where listener_id like '%PaymentAttemptCreatedListener%' and serialized_event like ?
-        """.trimIndent()
-        var status: String? = null
-        awaitUntil("승인 리스너가 끝난다") {
-            status = jdbcTemplate.queryForList(query, String::class.java, "%$orderId%").singleOrNull()
-            status == "COMPLETED" || status == "FAILED"
-        }
-        return requireNotNull(status)
+    private fun awaitAuthorizationConsumed(orderId: UUID): Boolean {
+        awaitUntil("승인 요청이 브로커로 간다") { KafkaTestSupport.records(PaymentEvent.AttemptCreated.TOPIC, orderId).isNotEmpty() }
+        KafkaTestSupport.awaitConsumed("payment.attempt-created", PaymentEvent.AttemptCreated.TOPIC)
+        return KafkaTestSupport.records(PaymentEvent.AttemptCreated.TOPIC + ".DLT", orderId).isNotEmpty()
     }
 
     @Test
@@ -161,9 +148,9 @@ class PaymentAuthorizationIntegrationTest(
         val orderId = checkoutOrder("0")
 
         // 리스너가 실제로 돌아 끝난 뒤에 센다. 시도는 만들어질 때부터 APPROVED라 상태로는 기다릴 수 없다.
-        val listener = awaitAuthorizationListenerFinished(orderId)
+        val deadLettered = awaitAuthorizationConsumed(orderId)
 
-        assertEquals("COMPLETED", listener)
+        assertEquals(false, deadLettered)
         val row = requireNotNull(attempt(orderId))
         assertEquals(PaymentAttemptStatus.APPROVED.name, row["status"])
         assertEquals(0, gateway.callsFor(paymentId(row)))
@@ -206,13 +193,16 @@ class PaymentAuthorizationIntegrationTest(
     }
 
     @Test
-    fun `어댑터가 던지면 시도는 REQUESTED로 남고 발행 기록은 실패로 남는다`() {
+    fun `어댑터가 모르는 예외를 던지면 재시도 없이 시도는 REQUESTED인 채 DLT로 간다`() {
         val orderId = checkoutOrder("4503")
 
-        val listener = awaitAuthorizationListenerFinished(orderId)
+        val deadLettered = awaitAuthorizationConsumed(orderId)
 
-        assertEquals("FAILED", listener)
-        assertEquals(PaymentAttemptStatus.REQUESTED.name, attempt(orderId)?.get("status"))
+        assertEquals(true, deadLettered)
+        val row = requireNotNull(attempt(orderId))
+        assertEquals(PaymentAttemptStatus.REQUESTED.name, row["status"])
+        // 재시도 허용 목록 밖이라 provider를 다시 부르지 않는다. 다시 부르면 멱등 키 없는 provider에서 이중 승인 위험이다.
+        assertEquals(1, gateway.callsFor(paymentId(row)))
     }
 
     @Test

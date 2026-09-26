@@ -1,6 +1,8 @@
 package com.resilientpos.fulfillment.internal.application
 
+import com.resilientpos.KafkaTestSupport
 import com.resilientpos.PostgresIntegrationTest
+import com.resilientpos.PostgresIntegrationTest.Companion.awaitUntil
 import com.resilientpos.contract.OrderPaid
 import com.resilientpos.foundation.Money
 import com.resilientpos.store.StoreId
@@ -8,11 +10,9 @@ import com.resilientpos.terminal.TerminalId
 import java.time.Instant
 import java.util.Currency
 import java.util.UUID
-import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
-import kotlin.test.fail
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.context.ApplicationEventPublisher
 import org.springframework.jdbc.core.JdbcTemplate
@@ -44,19 +44,11 @@ class OrderPaidListenerIntegrationTest(
 
     private fun publish(event: OrderPaid) = transactions.executeWithoutResult { eventPublisher.publishEvent(event) }
 
-    /** 이 리스너가 받은 그 주문의 발행 기록. listener_id는 저장 형식이라 전체 정규 이름으로 거른다. */
+    /** 그 주문의 발행 기록. 리스너가 Kafka consumer라 기록은 브로커로 보내는 externalizer의 것이다. listener_id는 저장 형식이라 전체 이름으로 거른다. */
     private fun publications(orderId: UUID) = jdbcTemplate.queryForList(
         "select event_type, listener_id, serialized_event, status from event_publication where listener_id = ? and serialized_event like ?",
         LISTENER_ID, "%$orderId%",
     )
-
-    private fun awaitUntil(description: String, condition: () -> Boolean) {
-        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
-        while (!condition()) {
-            if (System.nanoTime() >= deadline) fail("10초 안에 충족되지 않았다: $description")
-            Thread.sleep(20)
-        }
-    }
 
     @Test
     fun `OrderPaid를 받으면 그 주문의 Fulfillment가 하나 생긴다`() {
@@ -67,13 +59,13 @@ class OrderPaidListenerIntegrationTest(
         awaitUntil("fulfillment가 생긴다") { fulfillments(orderId).size == 1 }
     }
 
-    /** 실패한 기록을 resubmit하려면 저장된 이벤트가 복원돼야 한다. 멱등 복구의 전제다. */
+    /** 브로커로 보내지 못한 기록을 resubmit하려면 저장된 이벤트가 복원돼야 한다. */
     @Test
     fun `저장된 OrderPaid를 복원하면 발행한 값과 같다`() {
         val event = orderPaid(UUID.randomUUID())
         publish(event)
 
-        awaitUntil("리스너가 끝난다") { publications(event.orderId).singleOrNull()?.get("status") == "COMPLETED" }
+        awaitUntil("브로커로 보낸다") { publications(event.orderId).singleOrNull()?.get("status") == "COMPLETED" }
         val publication = publications(event.orderId).single()
 
         assertEquals("com.resilientpos.contract.OrderPaid", publication["event_type"])
@@ -81,21 +73,23 @@ class OrderPaidListenerIntegrationTest(
         assertEquals(event, eventSerializer.deserialize(serialized, OrderPaid::class.java))
     }
 
-    /** 재배달은 실제 DB에서 기존 fulfillment를 찾아 돌려준다. unique 위반으로 FAILED가 된 것과 구분하려고 두 기록이 모두 끝났는지 본다. */
+    /** 재배달은 실제 DB에서 기존 fulfillment를 찾아 돌려준다. unique 위반으로 실패한 것과 구분하려고 끝까지 소비됐고 DLT가 비었는지 본다. */
     @Test
-    fun `같은 주문의 OrderPaid가 다시 와도 fulfillment는 하나이고 두 기록이 모두 완료된다`() {
+    fun `같은 주문의 OrderPaid가 다시 와도 fulfillment는 하나이고 DLT로 가지 않는다`() {
         val orderId = UUID.randomUUID()
 
         publish(orderPaid(orderId))
         awaitUntil("첫 fulfillment가 생긴다") { fulfillments(orderId).size == 1 }
         publish(orderPaid(orderId))
 
-        awaitUntil("두 기록이 모두 완료된다") { publications(orderId).count { it["status"] == "COMPLETED" } == 2 }
+        awaitUntil("두 기록이 모두 브로커로 간다") { publications(orderId).count { it["status"] == "COMPLETED" } == 2 }
+        KafkaTestSupport.awaitConsumed("fulfillment.order-paid", OrderPaid.TOPIC)
         assertEquals(1, fulfillments(orderId).size)
+        assertEquals(emptyList(), KafkaTestSupport.records(OrderPaid.TOPIC + ".DLT", orderId))
     }
 
     companion object {
         private const val LISTENER_ID =
-            "com.resilientpos.fulfillment.internal.application.OrderPaidListener.on(com.resilientpos.contract.OrderPaid)"
+            "org.springframework.modulith.events.support.EventExternalizerModuleListener.externalize(java.lang.Object)"
     }
 }
