@@ -97,3 +97,10 @@ compose 80줄 안팎, Alloy 설정 40줄 안팎, Dockerfile 15줄 안팎, 문서
 - JDK/JRE 이미지는 `latest`가 아니라 `eclipse-temurin:25-jdk`·`25-jre`다. Gradle toolchain이 25를 요구하므로 메이저는 맞추고 패치만 따라가는 떠다니는 태그로 뒀다.
 - compose 프로젝트 이름을 `resilientpos`로 고정했다. Alloy가 프로젝트·서비스 label로 앱 컨테이너를 고르는데, 이름을 고정하지 않으면 디렉터리 이름(worktree마다 다름)이 프로젝트 이름이 된다.
 - `python3 scripts/check_pr.py --base origin/main --worktree`: PASS(일반 10개/253줄).
+- 범위 조정 뒤 재검증(`docker/`로 옮긴 경로, `make up`·`make down`은 `-f docker/docker-compose.yaml`을 쓴다):
+  - `docker/Dockerfile.dockerignore` 적용: build 스테이지 이미지의 `/src`에 `docs`·`.git`이 없고, 만들어 둔 `docker/.env`도 없었다. 그래서 `.env` 패턴을 `**/.env`로 바꿨다.
+  - 세 profile을 모두 띄우자 Grafana `/api/health`가 `"database": "ok"`(13.2.2)를 돌려줬다.
+  - API: `POST /v1/orders`가 201과 `OPEN` 주문을 돌려줬고, 같은 `clientOrderId`로 다시 보내자 같은 `orderId`가 왔다. `POST /v1/orders/{orderId}/checkout`은 200, `CHECKOUT_REQUESTED`, `amount` 9000을 돌려줬다.
+  - DB(psql): 마이그레이션 7개가 성공했다. `t_order`가 `PAID`로 전이됐고 `t_payment_attempt`·`t_fulfillment`에 한 행씩 생겼다. `event_publication` 4행이 모두 `COMPLETED`였다.
+  - Grafana: Prometheus에서 `/v1/orders` 201 2건과 checkout 200 1건이 조회됐다. Loki label은 `level`·`service_name`뿐이었다.
+  - `make down` 뒤 컨테이너 0개, `docker/.env`는 git이 추적하지 않았다. `./gradlew test --rerun-tasks` 232개 중 실패 0.
