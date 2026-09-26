@@ -53,4 +53,4 @@ interface PaymentAttemptJpaRepository : Repository<PaymentAttemptEntity, UUID> {
     fun findWithLockById(id: UUID): PaymentAttemptEntity?
 }
 
-private const val PAYMENT_ATTEMPT_LOCK_TIMEOUT_MILLIS = "3000"
+internal const val PAYMENT_ATTEMPT_LOCK_TIMEOUT_MILLIS = "3000"

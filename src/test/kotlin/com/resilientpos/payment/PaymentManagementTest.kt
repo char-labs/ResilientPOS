@@ -41,7 +41,7 @@ class PaymentManagementTest {
         val saved = mutableListOf<PaymentAttempt>()
         val updated = mutableListOf<PaymentAttempt>()
         val stored = mutableMapOf<PaymentId, PaymentAttempt>()
-        override fun findAuthorization(orderId: UUID, checkoutNo: Int) = existing
+        override fun findAuthorizationForUpdate(orderId: UUID, checkoutNo: Int) = existing
         override fun findLatestAuthorization(orderId: UUID, checkoutNo: Int) = stored.values.lastOrNull {
             it.orderId == orderId && it.checkoutNo == checkoutNo && it.kind == PaymentAttemptKind.AUTHORIZATION
         }

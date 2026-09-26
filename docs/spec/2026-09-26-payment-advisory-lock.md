@@ -10,7 +10,7 @@
 ## 범위
 소유 모듈은 `payment`다.
 
-**업무 트랜잭션 안에서 조회 전에 `pg_advisory_xact_lock`을 건다.** `createAttempt`가 `findAuthorization`보다 먼저 port의 새 메서드 `PaymentAttemptRepository.lockCheckout(orderId, checkoutNo)`를 부른다. 잠금은 트랜잭션 수준이라 커밋·롤백과 함께 풀린다. 뒤쪽은 앞쪽의 커밋 뒤에 조회하므로 앞 시도를 보고 그것을 돌려준다.
+**업무 트랜잭션 안에서 조회 전에 `pg_advisory_xact_lock`을 건다.** 기존 조회 `findAuthorization`을 checkout을 잠그고 읽는 `findAuthorizationForUpdate`로 바꾼다. 호출처는 `createAttempt` 하나뿐이고, 잠금과 조회를 한 port 메서드로 묶어야 잠그지 않고 읽는 오용이 생기지 않는다. 행이 아니라 checkout을 잠그므로 시도가 아직 없어도 잠긴다. 잠금은 트랜잭션 수준이라 커밋·롤백과 함께 풀린다. 뒤쪽은 앞쪽의 커밋 뒤에 조회하므로 앞 시도를 보고 그것을 돌려준다.
 
 **Redis·Redisson을 쓰지 않는다.** [AGENTS.md](../../AGENTS.md)가 정합성을 Redis로 대신하지 않는다고 정했고, 잠금이 업무 커밋과 함께 풀려야 한다. 분산 잠금은 커밋과 해제 사이에 창이 생기고 TTL 만료에서 다시 열린다. 정본 DB 안의 잠금이면 둘 다 없다.
 
@@ -20,11 +20,11 @@
 - 충돌: 서로 다른 주문의 `orderId` 해시와 `checkoutNo`가 모두 같으면 같은 잠금을 쓴다. 결과는 정합성 오류가 아니라 불필요한 대기다(한쪽이 다른 쪽의 짧은 트랜잭션이 끝날 때까지 기다린다). UUID v7의 하위 62비트가 무작위라 해시가 고르게 퍼지고, 동시에 잠금을 쥔 checkout이 k개일 때 새 요청이 그중 하나와 부딪칠 확률은 대략 k / 2^32다. 초당 수백 건이어도 무시할 수 있다.
 - 이 저장소에 다른 advisory lock 사용자는 없다. 두 int 키 공간을 쓰는 사용자가 생기면 첫 키가 겹칠 수 있으므로 그 PR이 네임스페이스를 정한다.
 
-**잠금 대기는 3초로 제한한다.** 잠금 직전에 `set_config('lock_timeout', '3000', true)`(트랜잭션 한정)를 건다. `findByIdForUpdate`의 3초와 같은 이유다(무기한 대기는 커넥션을 쥔 채 쌓여 풀을 말린다). 같은 트랜잭션의 이후 삽입에도 적용되지만 그 삽입이 기다릴 상대는 이제 재결제 경로뿐이고 같은 한도가 맞다. 넘기면 `PessimisticLockingFailureException` 계열로 실패하고 아무것도 남지 않는다.
+**잠금 대기는 3초로 제한한다.** `findByIdForUpdate`의 3초와 같은 이유다(무기한 대기는 커넥션을 쥔 채 쌓여 풀을 말린다). Hibernate가 그 힌트를 PostgreSQL에 거는 방식(`LockTimeoutHandler`)과 같게, 기존 `lock_timeout`을 읽고 트랜잭션 한정으로 바꾼 뒤 잠금을 얻으면 되돌린다. 되돌리지 않으면 호출자 트랜잭션의 이후 잠금까지 3초로 묶인다(§4.6 sync intake는 한 트랜잭션이다). 넘기면 `PessimisticLockingFailureException` 계열로 실패하고 아무것도 남지 않는다.
 
 **재결제(`retryAuthorization`)는 이 잠금을 걸지 않는다.** 재결제는 이미 있는 거절 시도를 전제로 하므로, 겹친 `createAttempt`는 그 시도를 보고 새 시도를 만들지 않는다. 재결제끼리는 대상 행 잠금이 직렬화한다.
 
-partial unique는 마지막 방어선으로 남는다. 코드의 `ponytail:` 표식을 지우고 `createAttempt`·`findAuthorization`·리스너의 설명을 잠금 기준으로 고친다.
+partial unique는 마지막 방어선으로 남는다. 코드의 `ponytail:` 표식을 지우고 `createAttempt`·리스너의 설명을 잠금 기준으로 고친다.
 
 계약: 스키마, 이벤트, `listener_id`, 오류 code는 바뀌지 않는다. `PaymentAttemptRepository`에 메서드가 하나 는다(모듈 내부 port).
 
@@ -49,7 +49,8 @@ partial unique는 마지막 방어선으로 남는다. 코드의 `ponytail:` 표
 
 ## 인수 조건
 1. 같은 `(orderId, checkoutNo)`의 `createAttempt`가 겹치고 앞쪽 시도가 거절까지 가도 승인 시도는 하나이고, 뒤쪽은 앞쪽과 같은 `paymentId`를 돌려받는다.
-2. 기존 테스트가 깨지지 않는다.
+2. 잠금 대기 한도(3초)는 잠금을 얻은 뒤 호출자 트랜잭션의 원래 값으로 돌아간다.
+3. 기존 테스트가 깨지지 않는다.
 
 ## 검증
 - 경합 재현 통합 테스트: 한 트랜잭션(B)이 `createAttempt`를 마치고 커밋하지 않은 채로, 다른 스레드(A)가 같은 checkout으로 `createAttempt`를 부른다. 금액 끝자리가 1이라 `FakePaymentGateway`가 거절한다. 잠금이 없으면 A가 커밋되고 거절된 뒤 B가 커밋되어 시도가 둘이 된다(RED). 잠금이 있으면 A가 advisory lock에서 기다리고(`pg_locks`로 관측) B 커밋 뒤 B의 시도를 돌려받는다. 테스트는 A의 완료 또는 대기를 확인한 뒤 B를 커밋하므로 순서가 결정적이다.
@@ -67,7 +68,14 @@ partial unique는 마지막 방어선으로 남는다. 코드의 `ponytail:` 표
 ## TDD 검증 기록
 | 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
 |---|---|---|---|
-| 겹친 생성이 거절까지 가도 시도는 하나다 (인수 조건 1) `PaymentAttemptCreationConcurrencyIntegrationTest` | 미실행 | 미실행 | 미실행 |
+| 잠금 대기 한도는 잠금 뒤 원래 값으로 돌아간다 (인수 조건 3) 같은 클래스 | 리뷰에서 찾은 결함. 한도를 되돌리지 않던 첫 구현으로 같은 명령 — `expected: 0 but was: 3s` | 기존 값을 읽고 되돌리도록 고친 뒤 통과 | `./gradlew test` — 243개 통과 |
+| 겹친 생성이 거절까지 가도 시도는 하나다 (인수 조건 1) `PaymentAttemptCreationConcurrencyIntegrationTest` | 잠금 없는 main 코드로 `./gradlew test --tests '*PaymentAttemptCreationConcurrencyIntegrationTest'` — `승인 시도가 둘 생겼다: [REQUESTED, DECLINED]`, expected 1 but was 2. A가 커밋·거절된 뒤 B의 삽입이 partial unique를 통과했다 | 잠금 구현 뒤 같은 명령 통과. A가 advisory lock에서 기다리는 것을 `pg_locks`로 관측한 뒤 B를 커밋했고 A가 B의 `paymentId`를 돌려받았다 | `./gradlew test` — 243개 통과 |
 
 ## 결과
-개발 전 작성.
+`./gradlew test` 243개 통과다(신규 2). `python3 scripts/check_pr.py --base origin/main --worktree` PASS.
+
+- `PaymentManagement.createAttempt`는 `findAuthorizationForUpdate` 한 번만 부른다. 어댑터는 기존 `lock_timeout`을 읽고, 3초로 바꾸고, `pg_advisory_xact_lock(orderId.hashCode(), checkoutNo)`를 건 뒤 되돌리고 나서 조회한다. 반환형이 void라 `select 1 from pg_advisory_xact_lock(...)`으로 행 하나를 받는다. 3초 상수는 `findWithLockById`와 같은 `PAYMENT_ATTEMPT_LOCK_TIMEOUT_MILLIS`를 쓴다(파일 `private`에서 `internal`로 넓혔다).
+- 리뷰 반영: 첫 구현은 별도 port 메서드 `lockCheckout`으로 잠그고 한도를 되돌리지 않았다. 한도가 호출자 트랜잭션에 새는 결함을 테스트로 재현해 고쳤고, 잠금과 조회를 한 메서드로 합쳐 port 메서드 수를 그대로 두었다.
+- `ponytail:` 표식을 지우고 `createAttempt`·리스너의 설명을 잠금 기준으로 고쳤다.
+- 경합 테스트는 A의 완료 또는 잠금 대기를 관측한 뒤 B를 커밋해 순서가 결정적이다. 잠금이 있으면 A는 커밋할 수 없으므로 대기 쪽으로만 진행한다.
+- [도메인 모델](../wiki/domain-model.md) §4.3에 잠금 문장을 더했다.
