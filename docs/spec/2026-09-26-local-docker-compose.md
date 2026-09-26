@@ -8,9 +8,9 @@
 ## 범위
 운영 코드와 테스트는 바뀌지 않는다. 저장소 루트의 인프라 파일과 문서만 더한다.
 
-**서비스와 profile.** 루트 `compose.yaml` 하나에 둔다.
+**서비스와 profile.** Docker 관련 파일은 모두 `docker/` 아래에 두어 애플리케이션 파일과 경계를 나눈다. compose는 `docker/docker-compose.yaml` 하나이고 명령은 `docker compose -f docker/docker-compose.yaml ...`이다.
 - 기본(profile 없음): `postgres`. `postgres:18-alpine`으로 메이저를 고정한다. 테스트(Testcontainers)와 같은 메이저이고, `latest`로 두면 다음 메이저가 나오는 날 named volume에 남은 데이터 디렉터리를 읽지 못해 기동하지 않는다. 5432를 호스트에 연다. 데이터는 named volume에 둔다. healthcheck는 `pg_isready`다.
-- `app` profile: `app`. 루트 `Dockerfile`로 빌드한다. `postgres`가 healthy가 된 뒤 뜨고 `POSTGRES_URL`은 compose 네트워크의 `postgres`를 가리킨다. `LOGGING_STRUCTURED_FORMAT_CONSOLE=ecs`를 줘서 stdout이 ECS JSON이 된다. 8080을 호스트에 연다.
+- `app` profile: `app`. `docker/Dockerfile`로 빌드한다. 빌드 컨텍스트는 `gradlew`와 `src`가 필요하므로 저장소 루트다. `postgres`가 healthy가 된 뒤 뜨고 `POSTGRES_URL`은 compose 네트워크의 `postgres`를 가리킨다. `LOGGING_STRUCTURED_FORMAT_CONSOLE=ecs`를 줘서 stdout이 ECS JSON이 된다. 8080을 호스트에 연다.
 - `obs` profile: `alloy`와 `lgtm`(`grafana/otel-lgtm`). Grafana는 3000을 호스트에 연다.
 - Kafka·Redis는 넣지 않는다. 빌드 의존성에 없어 앱이 붙지 않으므로 검증할 방법이 없다. 의존성을 더하는 기능 PR이 compose 서비스도 함께 더한다.
 
@@ -19,9 +19,9 @@
 - 로그: Alloy가 docker socket을 읽기 전용으로 마운트해 `app` 컨테이너의 stdout만 읽고, ECS 필드 `service.name`·`log.level`을 `service_name`·`level` label로 올려 `lgtm`의 Loki로 보낸다. label은 이 둘뿐이다.
 - 관측은 앱 컨테이너를 전제로 한다. `obs`는 `app`과 함께 켠다(`docker compose --profile app --profile obs up`).
 
-**비밀번호.** compose는 `${POSTGRES_PASSWORD:-resilientpos}`를 쓴다. 로컬·포트폴리오 용도라 기본값으로 바로 뜨게 하고, 바꾸고 싶으면 gitignore된 `.env`에 적는다. 변수 목록은 커밋하는 `.env.example`에 둔다. `trust` 인증은 쓰지 않는다. `application.yaml`은 바꾸지 않으므로 호스트에서 앱을 띄울 때는 `POSTGRES_PASSWORD=resilientpos`를 직접 준다.
+**비밀번호.** compose는 `${POSTGRES_PASSWORD:-resilientpos}`를 쓴다. 로컬·포트폴리오 용도라 기본값으로 바로 뜨게 하고, 바꾸고 싶으면 gitignore된 `docker/.env`에 적는다(compose는 compose 파일이 있는 디렉터리의 `.env`를 읽는다). 변수 목록은 커밋하는 `docker/.env.example`에 둔다. `trust` 인증은 쓰지 않는다. `application.yaml`은 바꾸지 않으므로 호스트에서 앱을 띄울 때는 `POSTGRES_PASSWORD=resilientpos`를 직접 준다.
 
-**Dockerfile.** multi-stage다. JDK 25 스테이지에서 `./gradlew bootJar`를 돌리고 JRE 25 스테이지로 jar만 복사한다. 호스트 JDK가 없어도 `--build`로 끝난다. `.dockerignore`로 `build/`·`.gradle/`·`.git/` 등을 컨텍스트에서 뺀다.
+**Dockerfile.** multi-stage다. JDK 25 스테이지에서 `./gradlew bootJar`를 돌리고 JRE 25 스테이지로 jar만 복사한다. 호스트 JDK가 없어도 `--build`로 끝난다. `docker/Dockerfile.dockerignore`로 `build/`·`.gradle/`·`.git/` 등을 컨텍스트에서 뺀다. BuildKit은 컨텍스트 루트의 `.dockerignore` 대신 Dockerfile 옆의 이 파일을 읽으므로 루트에 Docker 파일을 두지 않는다.
 
 **이미지 버전.** 사용자 결정으로 `postgres`를 뺀 이미지(Alloy·otel-lgtm·JDK/JRE)는 `latest` 계열 태그를 허용한다. 로컬 개발 전용이라 재현성보다 갱신 비용을 줄인다.
 
@@ -43,10 +43,10 @@
 - [시스템 설계 7절](../references/02_System_Design.md#7-nfr-and-observability): Prometheus·Loki·Grafana 파이프라인 방향이다.
 
 ## 변경 경로
-- compose.yaml
-- Dockerfile
-- .dockerignore
-- .env.example
+- docker/docker-compose.yaml
+- docker/Dockerfile
+- docker/Dockerfile.dockerignore
+- docker/.env.example
 - .gitignore
 - docker/alloy/config.alloy
 - Makefile
@@ -80,6 +80,9 @@ compose 80줄 안팎, Alloy 설정 40줄 안팎, Dockerfile 15줄 안팎, 문서
 
 ## TDD 검증 기록
 업무 동작 변경이 아니라 로컬 인프라 파일 추가라 적용하지 않는다. 대신 인수 조건마다 실제 compose 실행 결과를 결과 절에 남긴다.
+
+## 범위 조정
+- 첫 push 뒤 사용자 요청으로 Docker 관련 파일을 `docker/` 디렉터리로 옮겼다. `compose.yaml`은 `docker/docker-compose.yaml`로 이름을 바꿨고, `Dockerfile`·`.env.example`도 옮겼다. 루트 `.dockerignore`는 `docker/Dockerfile.dockerignore`로 바꿨다. 명령에 `-f docker/docker-compose.yaml`이 붙으므로 Makefile과 README도 함께 고친다. 인수 조건은 경로만 바뀌고 내용은 같으며, 옮긴 뒤 다시 실행해 결과 절에 적는다.
 
 ## 결과
 개발 전 작성. 개발 후 실행 결과와 변경 이유를 추가한다.
