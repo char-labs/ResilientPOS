@@ -83,3 +83,14 @@ compose 80줄 안팎, Alloy 설정 40줄 안팎, Dockerfile 15줄 안팎, 문서
 
 ## 결과
 개발 전 작성. 개발 후 실행 결과와 변경 이유를 추가한다.
+
+- 인수 1: `make up`이 `postgres:18-alpine`을 띄우고 `--wait`로 healthy까지 기다렸다. 호스트의 `POSTGRES_PASSWORD=resilientpos ./gradlew bootRun`이 V001~V007 마이그레이션 7개를 적용하고 기동했으며 `/actuator/health`가 `UP`이었다.
+- 인수 2: `.env`가 없는 상태에서 `docker compose --profile app --profile obs up -d --build --wait`로 이미지를 빌드하고 띄웠다. 앱 컨테이너의 `/actuator/health`가 `UP`이었고 stdout은 `{"@timestamp":...,"log":{"level":"INFO",...},"service":{"name":"ResilientPOS",...},...}` 형태의 ECS JSON이었다.
+- 인수 3: Grafana 데이터소스 proxy(`uid/prometheus`)로 `sum by (uri,status) (http_server_requests_seconds_count{application="ResilientPOS"})`를 조회하니 `/actuator/health` 200, `/**` 404, `/actuator/prometheus` 200 세 series가 나왔다.
+- 인수 4: Loki의 `labels` 응답이 `["level","service_name"]` 두 개였다. `{service_name="ResilientPOS"} | json | log_logger="com.resilientpos.platform.ApiControllerAdvice"`가 앱 로그를 돌려줬다. 다만 kotlin-logging이 logback을 거치지 않고 기동 시 평문 한 줄(`kotlin-logging: initializing... active logger factory: Slf4jLoggerFactory`)을 찍어서, 이 줄은 label 없이 들어가 Loki가 `service_name="unknown_service"`로 둔다. 한 줄뿐이라 그대로 두고 [관측성](../wiki/observability.md)에 적었다.
+- 인수 5: `make down`(`docker compose --profile '*' down`) 뒤 이 프로젝트 label이 붙은 컨테이너가 0개였다. named volume은 남긴다.
+- 인수 6: `.env`를 만든 뒤 `git status --short`에 나오지 않았다.
+- 인수 7: compose를 내린 상태에서 `./gradlew test` 232개 중 실패 0.
+- JDK/JRE 이미지는 `latest`가 아니라 `eclipse-temurin:25-jdk`·`25-jre`다. Gradle toolchain이 25를 요구하므로 메이저는 맞추고 패치만 따라가는 떠다니는 태그로 뒀다.
+- compose 프로젝트 이름을 `resilientpos`로 고정했다. Alloy가 프로젝트·서비스 label로 앱 컨테이너를 고르는데, 이름을 고정하지 않으면 디렉터리 이름(worktree마다 다름)이 프로젝트 이름이 된다.
+- `python3 scripts/check_pr.py --base origin/main --worktree`: PASS(일반 10개/253줄).
