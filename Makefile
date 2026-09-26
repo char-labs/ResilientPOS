@@ -16,7 +16,7 @@ help: ## 이 목록 출력
 		| awk -F'|' '{ printf "  %-11s %s\n", $$1, $$2 }'
 	@printf '\n'
 
-bootstrap: ## 클론 직후 1회 — Obsidian 볼트로 .claude/.codex 링크 생성
+bootstrap: ## 클론·새 worktree 직후, 볼트 rules 수정 후 — .claude/.codex 링크와 rules 복사
 	@python3 scripts/link_claude.py
 
 build: ## 애플리케이션 빌드

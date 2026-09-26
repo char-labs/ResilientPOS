@@ -45,7 +45,7 @@ Claude에서 `/이름`, Codex에서 `$이름`으로 호출한다. 자연어 요�
 - 지침: `workflow-reviewer`(확장, 읽기 전용), `codebase-analyzer`, `document-analyzer`, `rules-generator`.
 - 구현: `tdd-driver`(기존).
 - Codex용(볼트 `codex/agents/*.toml`, 저장소 `.codex/agents` 링크, 2026-09-14 추가): `tdd_driver`, `test_oracle`(workspace-write), `workflow_reviewer`, `code_reviewer`, `spec_validator`, `complexity_reducer`(read-only). Claude 정의와 역할은 같고 형식만 Codex 규약(TOML)을 따른다. 래퍼 4개와 `*-claude` 2개는 옮기지 않았다 — 전자는 Codex가 Codex를 부르는 구조이고 후자는 Claude 전용이다.
-- 규칙(`.claude/rules`, [rules-link-and-ignores](../spec/2026-09-13-rules-link-and-ignores.md) 이후 자동 로드):
+- 규칙(`.claude/rules`, 링크로는 로드되지 않아 [rules-copy-bootstrap](../spec/2026-09-26-rules-copy-bootstrap.md) 이후 복사본으로 로드):
   `engineering-principles`(항상 로드: 설계 최우선, 결정적 도구 vs 지능 책임 경계, Quality Gate, 커밋 형식 요약),
   `implementation-principles`(`src/**/*.kt` 편집 시 로드: SOLID, 파일 구성, TDD),
   `agent-design-principles`(설계 원칙 스킬의 얇은 바인딩).
