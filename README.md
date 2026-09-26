@@ -43,6 +43,22 @@ make bootstrap
 | `make test` | 애플리케이션 테스트 |
 | `make harness` | 로컬 하네스 테스트 (Python 표준 라이브러리) |
 | `make check` | PR 규칙 검사. 기준 커밋은 `BASE` 로 지정 (`make check BASE=main`) |
+| `make up` | 로컬 PostgreSQL 기동 (docker compose) |
+| `make down` | compose로 띄운 컨테이너를 profile 구분 없이 모두 중지 |
+
+### 로컬 실행 (docker compose)
+
+Docker 관련 파일은 모두 `docker/` 아래에 있고 로컬 개발 전용입니다. 테스트는 이 파일과 무관하게 Testcontainers로 PostgreSQL을 띄웁니다.
+
+| 명령 | 뜨는 것 |
+| --- | --- |
+| `make up` | PostgreSQL 18 (`localhost:5432`) |
+| `docker compose -f docker/docker-compose.yaml --profile app up -d --build` | + 앱 컨테이너 (`localhost:8080`, ECS JSON 로그) |
+| `docker compose -f docker/docker-compose.yaml --profile app --profile obs up -d --build` | + Alloy, Grafana LGTM (`localhost:3000`, admin/admin) |
+
+DB 비밀번호는 로컬 전용 기본값 `resilientpos` 입니다. 바꾸려면 `cp docker/.env.example docker/.env` 후 값을 고칩니다(`.env` 는 커밋하지 않습니다).
+`make up` 뒤 IDE나 `./gradlew bootRun` 으로 앱을 띄울 때는 `POSTGRES_PASSWORD=resilientpos` 를 직접 줍니다. 애플리케이션 설정은 이 값에 기본값을 두지 않습니다.
+수집 경로는 [관측성](docs/wiki/observability.md)에 있습니다.
 
 ### 자동완성 (선택)
 

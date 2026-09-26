@@ -13,8 +13,13 @@
 - 배포 환경에 `LOGGING_STRUCTURED_FORMAT_CONSOLE=ecs`를 주고, Alloy가 컨테이너 stdout을 읽어 Loki로 보낸다. Loki label 이름에는 점을 쓸 수 없으므로 Alloy가 ECS 필드 `service.name`·`log.level`을 꺼내 `service_name`·`level` label로 올린다. label은 이 둘로 한정한다. `log.logger`처럼 값이 많은 필드는 label로 두지 않고 쿼리에서 `| json`으로 거른다.
 - `orderId`·`paymentId`·`terminalId`는 metric label로 쓰지 않는다. 로그 필드나 trace attribute로 남긴다.
 
+## 로컬에서 띄우기
+`docker compose -f docker/docker-compose.yaml --profile app --profile obs up -d --build`가 앱 컨테이너, Alloy, `grafana/otel-lgtm`을 띄운다. 설정은 [docker-compose.yaml](../../docker/docker-compose.yaml)과 [Alloy 설정](../../docker/alloy/config.alloy)이다. Grafana는 `localhost:3000`이다.
+- 위 "LGTM을 붙일 때"의 방식을 그대로 쓴다. Alloy가 `app:8080/actuator/prometheus`를 15초마다 scrape하고, docker socket으로 이 compose 프로젝트의 `app` 컨테이너 stdout만 읽어 `service_name`·`level` label을 올린다.
+- 운영과 다른 점: Mimir 자리를 otel-lgtm 안의 Prometheus가 remote_write로 받는다. 호스트(IDE)에서 띄운 앱은 수집하지 않는다.
+- kotlin-logging이 기동할 때 logback을 거치지 않고 평문 한 줄(`kotlin-logging: initializing...`)을 찍는다. JSON이 아니라 label이 없어서 Loki가 `service_name="unknown_service"`로 둔다.
+
 ## 아직 없는 것
 - trace(OpenTelemetry·Tempo), traceId와 correlation id의 MDC 전파.
 - 도메인 metric(`payment_unknown_total` 등). 해당 기능 PR이 더한다.
-- 로컬 LGTM 스택(docker compose).
 - histogram bucket 범위와 SLO 경계. 지금은 Micrometer 기본 bucket이다. endpoint가 늘어 series 비용이 보이면 `minimum-expected-value`·`maximum-expected-value`나 `slo`로 좁힌다.

@@ -53,3 +53,6 @@ out/
 
 # Obsidian 볼트의 현재 상태 문서로 가는 링크(make bootstrap)
 docs/wiki/current-state.md
+
+### 로컬 compose 환경 변수 (docker/.env.example 참고)
+.env
