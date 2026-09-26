@@ -35,9 +35,9 @@
 - 주문 `PAID`: 같은 회차·금액의 승인이 다시 오면 아무것도 하지 않는다.
 - fulfillment: 기존 것을 돌려주고 unique `(order_id)`가 막는다. 경합에서 진 쪽은 unique 위반으로 실패하지만 재시도가 기존 fulfillment를 읽고 끝난다. 그래서 `insert ... on conflict do nothing`으로 바꾸지 않고, `FulfillmentCommandFacade`의 `ponytail:` 표식을 "재시도가 해소한다"로 고친다.
 
-**재시도와 DLT.** blocking 재시도다. `DefaultErrorHandler`가 실패한 메시지를 같은 자리에서 1초에서 시작해 2배씩 최대 5회(합계 약 31초) 다시 시도하고, 모두 실패하면 `DeadLetterPublishingRecoverer`가 `원토픽.DLT`의 같은 파티션으로 보내고 offset을 넘긴다. 그동안 같은 파티션의 뒤 메시지는 기다리므로 주문별 순서가 지켜진다. 합계 31초는 `max.poll.interval.ms` 기본값(5분)보다 짧다. 횟수와 시작 간격은 `resilientpos.kafka.retry.*`로 바꾼다. 실제 provider가 없어 이 숫자에 측정 근거는 없다.
-- 다시 해도 같은 결과인 예외는 재시도하지 않고 바로 DLT로 보낸다. `DomainException`(예: `PAYMENT_APPROVAL_MISMATCH`)과 역직렬화 실패다. 역직렬화는 `ErrorHandlingDeserializer`로 감싸 consumer가 멈추지 않게 한다.
-- 재시도 대상은 그 밖의 예외 전부다. DB 장애, 잠금 대기 초과(`PessimisticLockingFailureException`), unique 경합(`DataIntegrityViolationException`)이 여기 든다.
+**재시도와 DLT.** blocking 재시도다. `DefaultErrorHandler`가 실패한 메시지를 같은 자리에서 1초에서 시작해 2배씩 최대 5회(합계 약 31초) 다시 시도하고, 모두 실패하면 `DeadLetterPublishingRecoverer`가 `원토픽.DLT`로 보내고 offset을 넘긴다. 그동안 같은 파티션의 뒤 메시지는 기다린다. 합계 31초는 `max.poll.interval.ms` 기본값(5분)보다 짧다. 횟수와 시작 간격은 `resilientpos.kafka.retry.*`로 바꾼다. 실제 provider가 없어 이 숫자에 측정 근거는 없다.
+- 다시 해도 같은 결과인 예외는 재시도하지 않고 바로 DLT로 보낸다. `DomainException`(예: `PAYMENT_APPROVAL_MISMATCH`)과 역직렬화·변환 실패다. 변환 실패는 Spring Kafka가 기본으로 재시도하지 않는 예외라 따로 등록하지 않는다(아래 범위 조정).
+- 재시도 대상은 허용 목록이다(아래 범위 조정의 리뷰 반영). 잠금 대기 초과·쿼리 타임아웃(`TransientDataAccessException`)과 unique 경합(`DataIntegrityViolationException`)은 5회, DB에 닿지 못하는 실패(`CannotCreateTransactionException`·`DataAccessResourceFailureException`)는 횟수 없이 30초 간격까지 늘려 기다린다. 목록 밖은 바로 DLT다.
 - DLT를 읽는 consumer와 재투입 운영 진입점은 두지 않는다. 원인을 고친 뒤 DLT 메시지를 원 토픽에 다시 넣는 절차(Kafka CLI)를 도메인 모델 §4.3에 적는다. consumer가 멱등이라 다시 넣어도 안전하다. 재투입할 때 key를 함께 옮겨야 파티션과 순서가 유지된다.
 - `PAYMENT_APPROVAL_MISMATCH`는 지금까지 `FAILED` 발행 기록이 case를 대신했다. 이제 `payment.approved.DLT`의 메시지가 그 자리다. 찾는 조건이 SQL에서 DLT 조회로 바뀐다.
 
@@ -61,11 +61,31 @@ group by listener_id, status;
 ```
 
 관측성:
-- counter `event.kafka.dead-letter{topic}`(Prometheus 이름 `event_kafka_dead_letter_total`). DLT로 보낸 메시지 수다. `topic`은 원 토픽이라 카디널리티는 토픽 수다.
+- counter `event.kafka.dead-letter{topic, reason}`(Prometheus 이름 `event_kafka_dead_letter_total`). DLT로 보낸 메시지 수다. `topic`은 원 토픽, `reason`은 `DomainException`의 코드(유한 집합)나 `error`다. 업무 불일치와 그 밖의 실패는 대응하는 사람이 다르다.
 - Boot가 바인딩하는 Kafka 클라이언트 metric(consumer lag, producer 오류)이 `/actuator/prometheus`로 나간다. 원문 7절의 consumer lag·DLQ count 요구가 여기서 채워진다.
 - 재시도마다 WARN 한 줄(토픽·파티션·offset·key·시도 횟수·예외 이름), DLT로 보낼 때 ERROR 한 줄(같은 필드와 예외 메시지). key(`orderId`)는 로그 필드이고 metric 태그로 쓰지 않는다.
 
 **인프라.** `spring-modulith-events-kafka`와 Boot의 Kafka starter를 더한다. compose에는 `apache/kafka` KRaft 단일 노드를 profile 없이 추가한다. 앱이 Kafka 없이 이벤트를 전달하지 못하므로 postgres와 같은 기본 서비스다. 테스트는 `testcontainers-kafka`의 컨테이너를 `PostgresIntegrationTest`처럼 JVM에 하나만 띄워 공유한다.
+
+### 범위 조정 (2026-09-26, 구현 중)
+- **`ErrorHandlingDeserializer`를 두지 않는다.** Modulith Kafka 모듈이 값의 직렬화기를 `ByteArraySerializer`·`ByteArrayDeserializer`로 정하고 JSON 변환을 리스너 어댑터의 메시지 변환기(`ByteArrayJacksonJsonMessageConverter`)가 맡는다. 그래서 consumer가 받는 값은 늘 바이트이고 역직렬화 단계는 실패하지 않는다. 깨진 JSON은 변환 단계의 `ConversionException`이 되고, `DefaultErrorHandler`가 기본으로 재시도하지 않는 예외라 바로 DLT로 간다(인수 8). 변환기는 메서드 파라미터 타입으로 읽으므로 "타입 헤더를 믿지 않는다"도 설정 없이 성립한다(인수 10).
+- **DLT counter를 기동할 때 토픽별 0으로 등록한다.** 한 번도 DLT로 간 적이 없으면 series가 없어 `increase()` 알림이 첫 증가를 놓친다.
+- **로그의 예외 이름은 원인 예외다.** DLT로 보낼 때 받는 예외는 `ListenerExecutionFailedException`으로 감싸여 있어 그대로 찍으면 원인을 알 수 없었다(compose 확인 중 발견). 재시도 로그의 문구는 "소비 실패"다. 재시도하지 않는 예외도 한 번 찍히기 때문이다.
+- **테스트 기반.** 통합 테스트가 Kafka 컨테이너를 PostgreSQL처럼 JVM에 하나 띄우고 자동 토픽 생성을 끈다. 캐시된 Spring 컨텍스트가 여럿 살아 있으면 같은 consumer group을 나눠 가져 다른 컨텍스트가 메시지를 처리하므로 `src/test/resources/spring.properties`로 컨텍스트 캐시를 하나로 제한한다. 재시도 간격은 테스트에서 20ms로 줄인다. 운영값이면 실패를 다루는 테스트가 약 31초 동안 파티션을 붙잡아 뒤 테스트가 시간을 넘긴다.
+- **기존 테스트 일곱 개가 "처리가 끝났는가"를 옛 리스너의 발행 기록으로 판단하고 있었다.** consumer group의 커밋된 offset과 DLT로 바꿨다. 그중 어댑터가 던지는 경우는 처음에 재시도마다 provider를 다시 불러 호출이 6번이었다. 아래 리뷰 반영으로 재시도가 허용 목록이 되면서 호출 1번과 DLT를 기대값으로 고정했다.
+
+### 범위 조정 (2026-09-26, 시니어 리뷰 반영)
+리뷰 에이전트(결제·이벤트 인프라 관점)의 지적 12건을 spring-kafka 4.1.1 소스와 테스트 로그로 대조했다. 11번(프레임워크 로그 중복)은 실제 로그에 우리 로그만 있어 받지 않았다. 나머지는 사실로 확인했다(기본 DLT 이름 `-dlt`, 음수 파티션은 key로 분배, `KafkaAdmin`의 파티션 자동 증가, backoff가 consumer 스레드를 재움, `resetStateOnRecoveryFailure` 기본 true).
+- **재시도는 허용 목록이다.** "모르는 예외는 재시도"면 버그나 어댑터의 계약 위반에도 provider를 다섯 번 더 부른다. 목록 밖은 바로 DLT로 간다.
+- **DB에 닿지 못하는 실패는 횟수 없이 기다린다.** DB failover가 31초를 넘으면 그동안의 메시지가 차례로 DLT에 쌓여 사람이 되돌려야 했다. DB 없이는 어차피 아무것도 처리할 수 없으므로 30초 간격까지 늘려 기다린다. 간격 하나가 30초라 `max.poll.interval.ms`(5분)를 넘지 않는다.
+- **consumer 스레드 수는 파티션 수와 같다**(`spring.kafka.listener.concurrency`). 재시도 대기가 스레드를 재우므로 스레드 하나가 파티션 셋을 맡으면 한 주문의 실패가 셋을 모두 멈춘다. 스레드는 리스너 넷 × 3 = 12개로 Hikari 풀(10)보다 많지만 동시에 커넥션을 쥐는 것은 처리 중인 스레드뿐이고, 요청 스레드가 이미 풀보다 많아 새 제약은 아니다. 대기 초과는 `CannotCreateTransactionException`이라 기다림 경로로 간다.
+- **파티션 수를 환경 변수로 열지 않는다.** 값이 커지면 `KafkaAdmin`이 기동하면서 파티션을 늘려, rolling 배포 중에 순서가 깨질 수 있다. compose의 파티션 1 설정도 뺐다. 브로커 하나에 파티션 셋은 문제없다. 같은 이유로 relaxed binding이 대신하는 `RESILIENTPOS_KAFKA_*` placeholder를 모두 지웠다.
+- **DLT는 보존 기간이 없다**(`retention.ms=-1`). 불일치 승인의 case 자리라 브로커 기본값 7일에 지워지면 안 된다. 원 토픽은 브로커 기본값을 따르고, 배포하는 쪽이 consumer 정지 허용 시간보다 길게 잡는다.
+- **DLT로 보낼 때 파티션을 정하지 않는다**(`-1`, key로 분배). 원 토픽 파티션만 늘려도 DLT 전송이 막히지 않는다. 같은 주문은 key가 같아 DLT에서도 한 파티션에 모인다.
+- **DLT counter에 `reason` 태그를 더했다.** 로그와 counter는 DLT 전송이 성공한 뒤에 남긴다. 전송이 실패하면 재시도가 처음부터 다시 돌고, 그동안 "DLT로 보냄"이 거짓으로 찍히지 않는다.
+- **consumer가 듣는 토픽이 설정 목록에 있는지 테스트로 대조한다.** 새 이벤트를 더할 때 목록을 빠뜨리면 토픽이 생기지 않는데, 그 누락을 잡는 장치가 없었다.
+- **문서의 순서 표현을 고쳤다.** 파티션 안의 순서는 전송 순서다. externalizer가 비동기라 같은 주문의 두 이벤트가 커밋 순서와 다르게 전송될 수 있고, 후속 PR의 `resubmit`은 오래된 이벤트를 나중에 보낸다. consumer는 순서에 기대지 않고 멱등으로 견딘다.
+- **테스트의 `awaitUntil` 복사본을 `PostgresIntegrationTest` 하나로 모았다.** 이 PR이 고친 테스트 셋의 복사본도 지웠다. checkout 도우미의 복사본과 겹치는 시나리오는 그 테스트가 원래 있던 것이라 두었다.
 
 ## 제외
 - advisory lock으로 payment의 동시 생성 창을 닫는 일. PR ①이 main 위에서 따로 한다.
@@ -102,7 +122,7 @@ group by listener_id, status;
 3. 기동하면 토픽 4개와 DLT 4개가 설정한 파티션 수로 생긴다.
 4. `event_publication`에는 이벤트마다 externalizer의 행 하나만 남고, 전송이 끝나면 완료된다. 네 리스너 이름의 행은 생기지 않는다.
 5. consumer가 일시 장애 예외를 던지다가 성공하면 메시지는 DLT로 가지 않고 업무 결과가 한 번만 반영된다.
-6. consumer가 설정한 횟수만큼 모두 실패하면 메시지가 원 key와 함께 `원토픽.DLT`로 가고 `event.kafka.dead-letter{topic}`이 1 오르며, 같은 파티션의 다음 메시지가 처리된다.
+6. consumer가 설정한 횟수만큼 모두 실패하면 메시지가 원 key와 함께 `원토픽.DLT`로 가고 `event.kafka.dead-letter{topic, reason=error}`가 1 오르며, 같은 파티션의 다음 메시지가 처리된다. DB에 닿지 못하는 실패는 횟수를 넘겨도 DLT로 가지 않고 기다렸다가 처리된다. 허용 목록 밖의 예외는 한 번에 DLT로 간다.
 7. `DomainException`을 던지면 재시도 없이 바로 DLT로 간다. 불일치 승인(`PAYMENT_APPROVAL_MISMATCH`)이 그 경우이고 주문은 `CHECKOUT_REQUESTED`에 남는다.
 8. 역직렬화할 수 없는 값은 consumer를 멈추지 않고 바로 DLT로 간다.
 9. 같은 이벤트를 같은 토픽에 두 번 넣어도 시도·`PAID` 전이·fulfillment는 하나다(네 consumer 각각).
@@ -128,22 +148,33 @@ group by listener_id, status;
 ## 분할 계획
 세 PR로 나눈다. 합치면 약 1,350~1,550줄로 실패 한도(1,400줄)에 걸리고 목표가 셋이다.
 - PR ①(advisory lock): `(orderId, checkoutNo)` `pg_advisory_xact_lock`으로 payment의 동시 생성 창을 닫는다. Kafka와 무관하게 main 위에 선다. 새 worktree에서 이 PR과 나란히 진행한다. 약 150줄.
-- PR ②(이 PR): 예상 main 코드 약 300줄, 테스트 약 450줄, 설정·compose 약 80줄, 문서 약 200줄, 합계 약 1,000줄이다. 경고 한도를 넘으면 문서 문장을 먼저 줄이고, 그래도 넘으면 인수 10(타입 헤더)과 11(metric 노출 확인)을 남기고 compose 검증(인수 12)을 PR ③으로 옮긴다.
+- PR ②(이 PR): 예상 main 코드 약 300줄, 테스트 약 450줄, 설정·compose 약 80줄, 문서 약 200줄, 합계 약 1,000줄이다. 경고 한도를 넘으면 문서 문장을 먼저 줄이고, 그래도 넘으면 인수 10(타입 헤더)과 11(metric 노출 확인)을 남기고 compose 검증(인수 12)을 PR ③으로 옮긴다. 실제는 `git diff --numstat origin/main` 기준 main 코드 약 185줄, 테스트 약 460줄, 설정·compose 약 65줄, 문서(spec·wiki) 약 250줄로 경고 한도(900줄)를 조금 넘는다. 발행 전환·consumer 전환·재시도가 서로 없으면 동작하지 않는 한 목표라 나누지 않았다. 실패 한도(1,400줄) 안이다.
 - PR ③(주기 resubmit과 완료 행 정리): "미완료 기록은 브로커 전송뿐"이라는 전제가 이 PR 뒤에야 서므로 이 PR 머지 뒤 main에서 새 worktree로 시작한다. stacked PR이 아니다. 1분 주기, `pg_try_advisory_xact_lock(상수)`를 잡은 pod 하나, `FAILED`와 `stale-after`(5분)가 지난 끊긴 기록, 한 번에 최대 500건, 완료 후 7일(설정값)이 지난 행 삭제. 약 300줄.
-- 후속 작업(non-blocking 재시도): 사용자는 여러 pod 환경에서 non-blocking 재시도를 기본으로 생각했고, 이번에는 blocking으로 시작하기로 했다. 판단 근거는 pod 수가 아니다. 파티션은 pod마다 나뉘어 배정되므로 blocking이 막는 범위는 실패한 메시지가 있는 파티션 하나다. DLT로 가기 전 그 파티션이 멈추는 시간(지금 약 31초)이 허용 범위를 넘는지, 또는 재시도 간격을 분 단위로 늘려야 하는 장애(provider 장애)가 생기는지가 기준이다. 그때 `@RetryableTopic`으로 바꾸고 같은 주문의 순서가 깨지는 것을 consumer가 견디는지 함께 본다.
+- 후속 작업(non-blocking 재시도): 사용자는 여러 pod 환경에서 non-blocking 재시도를 기본으로 생각했고, 이번에는 blocking으로 시작하기로 했다. 판단 근거는 pod 수가 아니다. 파티션은 pod마다 나뉘어 배정되고 consumer 스레드 수가 파티션 수와 같으므로 blocking이 막는 범위는 실패한 메시지가 있는 파티션 하나다. DLT로 가기 전 그 파티션이 멈추는 시간(지금 약 31초)이 허용 범위를 넘는지, 또는 재시도 간격을 분 단위로 늘려야 하는 장애(provider 장애)가 생기는지가 기준이다. 그때 `@RetryableTopic`으로 바꾸고 같은 주문의 순서가 깨지는 것을 consumer가 견디는지 함께 본다.
 
 ## TDD 검증 기록
 consumer 전환은 업무 흐름의 전달 경로를 바꾸므로 통합 테스트를 먼저 쓰고 RED를 관측한다. 리스너 본문과 Facade는 바뀌지 않는다.
 
 | 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
 |---|---|---|---|
-| 인수 1·2·4: checkout이 네 토픽을 거쳐 `PAID`와 fulfillment가 되고 key가 `orderId`다 | 미실행 | 미실행 | 미실행 |
-| 인수 3: 토픽과 DLT가 설정한 파티션 수로 생긴다 | 미실행 | 미실행 | 미실행 |
-| 인수 5: 일시 장애 뒤 성공하면 DLT로 가지 않는다 | 미실행 | 미실행 | 미실행 |
-| 인수 6: 재시도를 모두 실패하면 DLT와 counter, 다음 메시지 처리 | 미실행 | 미실행 | 미실행 |
-| 인수 7·8: `DomainException`과 역직렬화 실패는 바로 DLT | 미실행 | 미실행 | 미실행 |
-| 인수 9: 같은 이벤트 두 번에도 결과는 하나 | 미실행 | 미실행 | 미실행 |
-| 인수 10: 타입 헤더 없는 메시지를 읽는다 | 미실행 | 미실행 | 미실행 |
+| 인수 1·2: `checkout이 네 토픽을 거쳐 PAID와 fulfillment가 되고 key는 orderId다` | `./gradlew test --tests 'com.resilientpos.platform.KafkaEventDeliveryIntegrationTest'`. 실패: `order.payment-requested 에 key가 orderId인 메시지 하나` 기대 1, 실제 0 | `@Externalized`·`@KafkaListener`·토픽 생성 뒤 같은 명령. 통과 | `./gradlew test`. 251개 중 실패 0 |
+| 인수 4: `발행 기록은 이벤트마다 externalizer 행 하나이고 전송이 끝나면 완료된다` | 같은 명령. 실패: 기대 `...EventExternalizerModuleListener.externalize(java.lang.Object)`, 실제 `...OrderPaymentRequestedListener.on(...)` | 같은 명령. 통과 | `./gradlew test`. 251개 중 실패 0 |
+| 인수 3: `기동하면 토픽과 DLT가 설정한 파티션 수로 생긴다` | 같은 명령. 실패: `order.payment-requested 파티션 수` 기대 1, 실제 null | `KafkaConfiguration.eventTopics` 뒤 같은 명령. 통과 | `./gradlew test`. 251개 중 실패 0 |
+| 인수 5: `일시 장애 뒤 성공하면 DLT로 가지 않고 한 번만 반영된다` | `./gradlew test --tests 'com.resilientpos.platform.KafkaRetryIntegrationTest'`. 오류 처리기 전에도 통과했다(Spring Kafka 기본값이 간격 없이 9회 재시도). characterization으로 남긴다. 처음 실행은 Mockito `any()`가 Kotlin non-null 검사에 걸린 설정 오류라 RED가 아니었고 매처 도우미로 고쳤다 | 같은 명령. 통과(호출 3회) | `./gradlew test`. 251개 중 실패 0 |
+| 인수 6: `재시도를 모두 실패하면 DLT로 가고 다음 메시지가 처리된다` | 같은 명령. 실패: `20초 안에 충족되지 않았다: DLT에 원래 key로 들어간다` | `kafkaErrorHandler`(지수 backoff 5회, DLT 발행, counter) 뒤 같은 명령. 통과(호출 6회, counter +1) | `./gradlew test`. 251개 중 실패 0 |
+| 인수 7: `DomainException은 재시도 없이 DLT로 가고 주문은 그대로다` | 같은 명령. 실패: `DLT에 들어간다` 시간 초과 | `addNotRetryableExceptions(DomainException)` 뒤 같은 명령. 통과(`markPaid` 1회) | `./gradlew test`. 251개 중 실패 0 |
+| 인수 8: `역직렬화할 수 없는 값은 consumer를 멈추지 않고 DLT로 간다` | 같은 명령. 실패: `DLT에 들어간다` 시간 초과 | 같은 오류 처리기로 같은 명령. 통과 | `./gradlew test`. 251개 중 실패 0 |
+| 인수 9: `같은 이벤트를 두 번 받아도 시도와 PAID 전이와 fulfillment는 하나다` | 전환 뒤 처음 실행부터 통과. 기존 멱등 근거(도메인 모델 §4.3)를 Kafka 경로로 확인한 characterization이다 | `KafkaEventDeliveryIntegrationTest`. 통과 | `./gradlew test`. 251개 중 실패 0 |
+| 인수 10: `타입 헤더 없이 온 메시지도 토픽의 이벤트 타입으로 읽는다` | 처음 실행부터 통과. 변환기가 파라미터 타입으로 읽는 것을 고정한 characterization이다 | 같은 명령. 통과 | `./gradlew test`. 251개 중 실패 0 |
+| 인수 6 리뷰 반영: `DB에 닿지 못하는 실패는 재시도 횟수를 넘겨도 기다렸다가 처리한다`, `재시도 허용 목록 밖의 예외는 재시도 없이 DLT로 간다` | 구현을 먼저 고쳐서, 뒤에 쓴 테스트는 구현을 잠시 되돌려(backoff 함수를 빼고 `defaultFalse`를 이전 분류로) 관측했다. 실패: `fulfillment가 생긴다` 시간 초과, 호출 기대 1 실제 6 | `./gradlew test --tests 'com.resilientpos.platform.KafkaRetryIntegrationTest'`. 통과 | `./gradlew test`. 254개 중 실패 0 |
+| 인수 3 리뷰 반영: DLT 보존 기간, 듣는 토픽과 설정 목록 대조 | 보존 기간 설정을 잠시 빼면 실패: `order.payment-requested.DLT 보존 기간` 기대 -1 실제 604800000. 대조 테스트는 처음부터 통과(characterization) | `KafkaEventDeliveryIntegrationTest`. 통과 | `./gradlew test`. 254개 중 실패 0 |
+| 인수 11: `prometheus 엔드포인트가 Kafka consumer metric과 토픽별 DLT 개수를 돌려준다` | `./gradlew test --tests 'com.resilientpos.platform.ObservabilityConfigurationTest'`. 실패: `order.payment-requested 의 event_kafka_dead_letter_total이 없다`(consumer metric은 이미 있었다) | 토픽별 0 등록 뒤 같은 명령. 통과 | `./gradlew test`. 251개 중 실패 0 |
+| 인수 12: compose 실행 | 해당 없음(수동 확인) | 아래 결과 절 | 해당 없음 |
+| 인수 13: 기존 테스트 | 전환 직후 `./gradlew test`에서 7개 실패(옛 리스너의 발행 기록을 기다리다 시간 초과, 어댑터 예외의 재시도가 파티션을 붙잡아 뒤 테스트 시간 초과) | offset·DLT 기준으로 고치고 테스트 재시도 간격을 줄인 뒤 `./gradlew test`. 251개 중 실패 0 | 같은 명령. 실패 0 |
 
 ## 결과
-개발 전 작성. 개발 후 실행 결과와 변경 이유를 추가한다.
+- `./gradlew test`: 251개 중 실패 0(2026-09-26).
+- 인수 12: `docker compose -f docker/docker-compose.yaml --profile app up -d --build` 뒤 `POST /v1/orders`(4500원 한 줄)와 `POST /v1/orders/{orderId}/checkout`을 부르자 3초 안에 주문이 `PAID`, fulfillment 1건, 발행 기록은 externalizer 행 넷이 모두 `COMPLETED`였다. 토픽 여덟 개(원 토픽 넷과 DLT 넷)가 생겼다.
+- DLT 재투입 절차: 깨진 값을 key와 함께 `order.paid`에 넣어 DLT로 보낸 뒤, 도메인 모델 §4.3의 console consumer·producer 명령으로 다시 넣었다. 같은 key로 다시 DLT에 들어가 key가 보존되는 것을 확인했다.
+- consumer lag: `/actuator/prometheus`에 `kafka_consumer_fetch_manager_records_lag_max`가 consumer group마다(`client_id`에 group 이름) 나오는 것을 임시 출력으로 확인하고 되돌렸다.
+- 배포 조건 SQL은 배포된 환경이 없어 실행하지 않았다. 로컬 compose 볼륨에는 전환 전 측정 때 쌓인 행이 없었다(#60에서 `down -v`로 지웠다).
