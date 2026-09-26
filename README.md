@@ -22,7 +22,8 @@ Spring Modulith, Kotlin JDSL, Redis, Kafka, OpenTelemetry는 설계상 도입 �
 
 ## 시작하기
 
-클론 직후 한 번 실행합니다. 스킬·에이전트 정본은 Obsidian 볼트에 있고, 저장소에는 링크만 만듭니다.
+클론 직후와 새 worktree를 만든 직후, 에이전트 세션을 시작하기 전에 실행합니다. 스킬·에이전트 정본은 Obsidian 볼트에 있고, 저장소에는 링크만 만듭니다.
+규칙(`.claude/rules`)만은 Claude Code가 링크를 싣지 않아 실제 파일로 복사하므로, 볼트 rules를 고친 뒤에도 다시 실행해야 반영됩니다.
 
 ```sh
 make bootstrap
@@ -37,7 +38,7 @@ make bootstrap
 
 | 명령 | 설명 |
 | --- | --- |
-| `make bootstrap` | 클론 직후 1회. Obsidian 볼트로 `.claude`·`.codex` 링크 생성 |
+| `make bootstrap` | 클론·새 worktree 직후, 볼트 rules 수정 후. `.claude`·`.codex` 링크 생성과 rules 복사 |
 | `make build` | 애플리케이션 빌드 |
 | `make test` | 애플리케이션 테스트 |
 | `make harness` | 로컬 하네스 테스트 (Python 표준 라이브러리) |

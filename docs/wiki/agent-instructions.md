@@ -19,14 +19,17 @@
 
 ## 스킬·에이전트 정본의 위치
 정본은 Obsidian 볼트의 `ResilientPOS/` 아래 `skills`, `agents`, `rules`, `codex/agents`에 두고 저장소의
-`.claude/skills`, `.claude/agents`, `.claude/rules`, `.codex/agents`를 심볼릭 링크로 연결한다.
-`.claude/rules`는 2026-09-13에 추가했다. 볼트 `rules/*.md`는 Claude가 항상 적용하는 규칙(설계 원칙 바인딩,
-엔지니어링 원칙)이며 링크가 있어야 자동 로드된다. 지침 변경이 제품 PR
+`.claude/skills`, `.claude/agents`, `.codex/agents`를 심볼릭 링크로 연결한다.
+볼트 `rules/*.md`는 Claude가 항상 적용하는 규칙(설계 원칙 바인딩, 엔지니어링 원칙)이다. 2026-09-13에 `.claude/rules`
+링크로 추가했지만, 2026-09-26에 `claude -p`로 확인해 보니 Claude Code는 디렉터리 링크도, 실제 디렉터리 안의 파일 링크도
+규칙으로 싣지 않고 실제 파일만 싣는다. 그래서 `.claude/rules`는 볼트 `rules/`를 미러링한 복사본이다
+([rules-copy-bootstrap](../spec/2026-09-26-rules-copy-bootstrap.md)). 복사본을 고치면 다음 bootstrap이 덮어쓰므로
+규칙은 볼트에서 고치고 `make bootstrap`을 다시 실행해야 반영된다. 지침 변경이 제품 PR
 diff를 오염시키지 않고, 볼트 동기화로 기기 간에 공유되며, Obsidian에서 읽고 편집할 수 있다.
 링크가 저장소 안에 있으므로 스킬은 이 저장소에서 작업할 때만 적용된다.
-링크는 `make bootstrap`이 부르는 `scripts/link_claude.py`가 실행 시점에 홈 경로를 풀어 만든다.
+링크와 복사본은 `make bootstrap`이 부르는 `scripts/link_claude.py`가 실행 시점에 홈 경로를 풀어 만든다.
 커밋되는 파일에 기기별 절대 경로가 들어가지 않고, 볼트가 없으면 안내만 남기고 정상 종료한다.
-네 경로는 `.gitignore` 대상이며, 로컬 검사는 추적하지 않는 경로를 제외하므로 심볼릭 링크 오류가
+네 경로는 `.gitignore` 대상(`.claude/` 통째)이며, 로컬 검사는 추적하지 않는 경로를 제외하므로 심볼릭 링크 오류가
 발생하지 않는다. 링크를 gitignore에서 빼면 검사가 즉시 실패한다.
 
 ## Codex 에이전트
