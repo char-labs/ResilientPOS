@@ -31,6 +31,8 @@ services:
       # gradlew와 src가 필요하므로 컨텍스트는 저장소 루트다. 제외 목록은 Dockerfile.dockerignore다.
       context: ..
       dockerfile: docker/Dockerfile
+    # JVM 힙 비율(MaxRAMPercentage)의 기준이다. 없으면 Docker VM 전체 메모리를 기준으로 힙이 잡힌다.
+    mem_limit: 1g
     depends_on:
       postgres:
         condition: service_healthy
