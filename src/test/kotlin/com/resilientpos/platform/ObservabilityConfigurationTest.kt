@@ -41,6 +41,10 @@ class ObservabilityConfigurationTest(
             body.lines().firstOrNull { it.startsWith("http_server_requests_seconds_bucket") },
             "http_server_requests_seconds_bucket이 없다. percentiles-histogram 설정을 확인한다",
         )
+        // 발행 기록 metric의 신선도는 행이 없어도 늘 나간다. 알림 규칙이 쓰는 Prometheus 이름을 고정한다.
+        val refreshed = body.lines().firstOrNull { it.startsWith("event_publication_incomplete_refreshed_seconds{") }
+        assertNotNull(refreshed, "event_publication_incomplete_refreshed_seconds가 없다")
+        assertContains(refreshed, """application="ResilientPOS"""")
     }
 
     @Test
