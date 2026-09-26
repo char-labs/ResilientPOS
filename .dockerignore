@@ -1,0 +1,10 @@
+.git
+.gradle
+.kotlin
+build
+.idea
+.claude
+.codex
+.agents
+docs
+.env

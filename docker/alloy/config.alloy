@@ -1,0 +1,53 @@
+// 수집 방식은 docs/wiki/observability.md의 "LGTM을 붙일 때"를 따른다.
+
+// metric: 앱의 Prometheus 엔드포인트를 scrape해 lgtm의 Prometheus로 remote_write한다.
+prometheus.scrape "app" {
+  targets         = [{"__address__" = "app:8080"}]
+  metrics_path    = "/actuator/prometheus"
+  scrape_interval = "15s"
+  forward_to      = [prometheus.remote_write.lgtm.receiver]
+}
+
+prometheus.remote_write "lgtm" {
+  endpoint {
+    url = "http://lgtm:9090/api/v1/write"
+  }
+}
+
+// 로그: 이 compose 프로젝트의 app 컨테이너 stdout만 읽는다.
+discovery.docker "app" {
+  host = "unix:///var/run/docker.sock"
+  filter {
+    name   = "label"
+    values = ["com.docker.compose.project=resilientpos", "com.docker.compose.service=app"]
+  }
+}
+
+loki.source.docker "app" {
+  host       = "unix:///var/run/docker.sock"
+  targets    = discovery.docker.app.targets
+  forward_to = [loki.process.ecs.receiver]
+}
+
+// ECS 필드 service.name·log.level만 label로 올린다. 값이 많은 필드는 쿼리에서 | json으로 거른다.
+loki.process "ecs" {
+  stage.json {
+    expressions = {
+      service_name = "service.name",
+      level        = "log.level",
+    }
+  }
+  stage.labels {
+    values = {
+      service_name = "",
+      level        = "",
+    }
+  }
+  forward_to = [loki.write.lgtm.receiver]
+}
+
+loki.write "lgtm" {
+  endpoint {
+    url = "http://lgtm:3100/loki/api/v1/push"
+  }
+}

@@ -1,0 +1,58 @@
+# 로컬 개발 전용. 테스트는 이 파일을 쓰지 않고 Testcontainers로 PostgreSQL을 띄운다.
+#   docker compose up -d                                  PostgreSQL만 (앱은 IDE·bootRun으로)
+#   docker compose --profile app up -d --build            + 앱 컨테이너
+#   docker compose --profile app --profile obs up -d      + Alloy·Grafana LGTM (Grafana: localhost:3000)
+# Alloy가 이 프로젝트 이름으로 앱 컨테이너를 고르므로 이름을 고정한다.
+name: resilientpos
+
+services:
+  postgres:
+    # 메이저를 고정한다. 테스트와 같은 메이저이고, latest면 다음 메이저에서 볼륨의 데이터 디렉터리를 읽지 못한다.
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: resilientpos
+      POSTGRES_USER: resilientpos
+      # 로컬 전용 기본값. 바꾸려면 .env에 적는다(.env.example 참고).
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-resilientpos}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "resilientpos", "-d", "resilientpos"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+  app:
+    profiles: [app]
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      POSTGRES_URL: jdbc:postgresql://postgres:5432/resilientpos
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-resilientpos}
+      # stdout을 ECS JSON으로 내보내 Alloy가 필드로 읽게 한다.
+      LOGGING_STRUCTURED_FORMAT_CONSOLE: ecs
+    ports:
+      - "8080:8080"
+
+  alloy:
+    profiles: [obs]
+    image: grafana/alloy:latest
+    volumes:
+      - ./docker/alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      - lgtm
+
+  # Grafana·Loki·Prometheus·Tempo 올인원. 운영의 Mimir 자리를 여기서는 Prometheus가 맡는다.
+  lgtm:
+    profiles: [obs]
+    image: grafana/otel-lgtm:latest
+    ports:
+      - "3000:3000"
+
+volumes:
+  postgres-data:
