@@ -21,7 +21,9 @@
 
 **비밀번호.** compose는 `${POSTGRES_PASSWORD:-resilientpos}`를 쓴다. 로컬·포트폴리오 용도라 기본값으로 바로 뜨게 하고, 바꾸고 싶으면 gitignore된 `docker/.env`에 적는다(compose는 compose 파일이 있는 디렉터리의 `.env`를 읽는다). 변수 목록은 커밋하는 `docker/.env.example`에 둔다. `trust` 인증은 쓰지 않는다. `application.yaml`은 바꾸지 않으므로 호스트에서 앱을 띄울 때는 `POSTGRES_PASSWORD=resilientpos`를 직접 준다.
 
-**Dockerfile.** multi-stage다. Amazon Corretto 25 JDK(`amazoncorretto:25`) 스테이지에서 `./gradlew bootJar`를 돌리고 실행 스테이지(`amazoncorretto:25-headless`)로 jar만 복사한다. Corretto는 25에 JRE 전용 이미지가 없어서 GUI 라이브러리를 뺀 headless JDK로 실행한다. 호스트 JDK가 없어도 `--build`로 끝난다. `docker/Dockerfile.dockerignore`로 `build/`·`.gradle/`·`.git/` 등을 컨텍스트에서 뺀다. BuildKit은 컨텍스트 루트의 `.dockerignore` 대신 Dockerfile 옆의 이 파일을 읽으므로 루트에 Docker 파일을 두지 않는다.
+**Dockerfile.** multi-stage다. 두 스테이지 모두 `amazoncorretto:25-alpine`이다. 빌드 스테이지에서 `./gradlew bootJar`를 돌리고 실행 스테이지로 jar만 복사한다. Corretto는 25에 JRE 전용 이미지가 없어서 alpine JDK로 실행한다.
+
+**JVM 메모리.** 앱 컨테이너에 메모리 한도 1GB(`mem_limit`)를 두고, JVM은 `-XX:+UseG1GC -XX:MaxRAMPercentage=75 -XX:+ExitOnOutOfMemoryError`로 띄운다. 한도가 없으면 힙 비율이 Docker VM 전체 메모리를 기준으로 잡힌다. 1GB·2 CPU에서는 JVM이 server-class가 아니라고 보고 SerialGC와 힙 256MB(25%)를 고르므로 G1과 힙 비율을 명시한다. OOM이 나면 반쯤 살아 있는 상태로 두지 않고 프로세스를 끝낸다. 호스트 JDK가 없어도 `--build`로 끝난다. `docker/Dockerfile.dockerignore`로 `build/`·`.gradle/`·`.git/` 등을 컨텍스트에서 뺀다. BuildKit은 컨텍스트 루트의 `.dockerignore` 대신 Dockerfile 옆의 이 파일을 읽으므로 루트에 Docker 파일을 두지 않는다.
 
 **이미지 버전.** 사용자 결정으로 `postgres`를 뺀 이미지(Alloy·otel-lgtm·JDK/JRE)는 `latest` 계열 태그를 허용한다. 로컬 개발 전용이라 재현성보다 갱신 비용을 줄인다.
 
@@ -84,6 +86,7 @@ compose 80줄 안팎, Alloy 설정 40줄 안팎, Dockerfile 15줄 안팎, 문서
 ## 범위 조정
 - 첫 push 뒤 사용자 요청으로 Docker 관련 파일을 `docker/` 디렉터리로 옮겼다. `compose.yaml`은 `docker/docker-compose.yaml`로 이름을 바꿨고, `Dockerfile`·`.env.example`도 옮겼다. 루트 `.dockerignore`는 `docker/Dockerfile.dockerignore`로 바꿨다. 명령에 `-f docker/docker-compose.yaml`이 붙으므로 Makefile과 README도 함께 고친다. 인수 조건은 경로만 바뀌고 내용은 같으며, 옮긴 뒤 다시 실행해 결과 절에 적는다.
 - 사용자 요청으로 베이스 이미지를 `eclipse-temurin`에서 Amazon Corretto로 바꾼다. Temurin은 공식 이미지의 기본값이라 골랐을 뿐 이 프로젝트에 맞춘 근거가 없었다. 빌드는 `amazoncorretto:25`, 실행은 `amazoncorretto:25-headless`로 두어 두 스테이지의 OS(Amazon Linux 2023)를 맞춘다. 실행 이미지는 484MB로 Temurin JRE(356MB)보다 크고 `25-alpine`(372MB)보다도 크지만, 로컬 전용이라 크기보다 두 스테이지의 libc 일치를 택했다. 인수 2를 다시 실행해 결과 절에 적는다.
+- 사용자 요청으로 실행·빌드 이미지를 `amazoncorretto:25-alpine`으로 바꾸고, ZGC를 포함한 메모리 설정을 조사해 개선한다. 후보(기본값, G1, G1+Compact Object Headers, ZGC, ZGC+Compact Object Headers)를 같은 조건(1GB·2 CPU, 주문 생성+checkout 3000요청, 동시 16)으로 측정해 고른다. 측정 결과와 채택하지 않은 이유는 결과 절에 적는다.
 
 ## 결과
 개발 전 작성. 개발 후 실행 결과와 변경 이유를 추가한다.
