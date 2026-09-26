@@ -106,6 +106,48 @@ class PaymentAttempt private constructor(
         return Transition(applied, listOf<DomainEvent>(event))
     }
 
+    /**
+     * 거절된 승인 시도를 같은 checkout 회차에서 다시 시도한다. 같은 주문·회차·금액의 `REQUESTED` 시도를 새로 만든다.
+     * 새 provider 요청이라 식별자(곧 멱등 키)가 새로 나고, provider 호출은 생성 사실을 받는 리스너가 이어받는다.
+     *
+     * 거절된 승인 시도만 받는다. `UNKNOWN`은 돈이 이미 움직였을 수 있어 조회·reconciliation으로 수렴하기 전에는
+     * 다시 시도할 수 없고, 진행 중이거나 승인된 시도는 다시 시도할 것이 없다.
+     */
+    fun retry(ids: IdentifierGenerator, now: Instant): Transition<PaymentAttempt, DomainEvent> {
+        if (kind != PaymentAttemptKind.AUTHORIZATION || status != PaymentAttemptStatus.DECLINED) {
+            throw DomainException(
+                PAYMENT_NOT_RETRYABLE,
+                "거절된 승인 시도만 다시 시도할 수 있습니다 paymentId=${id.value} kind=$kind status=$status",
+                DomainErrorKind.UNPROCESSABLE,
+            )
+        }
+
+        val retried = PaymentAttempt(
+            id = PaymentId(ids.next()),
+            orderId = orderId,
+            storeId = storeId,
+            terminalId = terminalId,
+            checkoutNo = checkoutNo,
+            kind = kind,
+            amount = amount,
+            status = PaymentAttemptStatus.REQUESTED,
+            // 새 provider 요청이다. 거절된 시도의 참조를 옮기면 다른 요청을 가리킨다.
+            providerReference = null,
+        )
+        val created = PaymentEvent.AttemptCreated(
+            eventId = ids.next(),
+            occurredAt = now,
+            paymentId = retried.id,
+            orderId = orderId,
+            storeId = storeId,
+            terminalId = terminalId,
+            checkoutNo = checkoutNo,
+            kind = kind,
+            amount = amount,
+        )
+        return Transition(retried, listOf(created))
+    }
+
     /** 결말만 바뀐 새 인스턴스. 나머지 값은 시도가 만들어질 때 확정됐고 바뀌지 않는다. */
     private fun copy(status: PaymentAttemptStatus, providerReference: String?) = PaymentAttempt(
         id = id,
@@ -127,6 +169,7 @@ class PaymentAttempt private constructor(
         const val INVALID_CHECKOUT_NO = "INVALID_CHECKOUT_NO"
         const val PAYMENT_RESULT_ALREADY_APPLIED = "PAYMENT_RESULT_ALREADY_APPLIED"
         const val PAYMENT_ATTEMPT_NOT_FOUND = "PAYMENT_ATTEMPT_NOT_FOUND"
+        const val PAYMENT_NOT_RETRYABLE = "PAYMENT_NOT_RETRYABLE"
 
         /**
          * 이미 저장된 시도를 그대로 재구성한다. 생성 불변식은 최초 `create` 때 검증됐으므로 다시 묻지 않는다.

@@ -37,6 +37,13 @@ interface PaymentAttemptJpaRepository : Repository<PaymentAttemptEntity, UUID> {
         kind: PaymentAttemptKind,
     ): PaymentAttemptEntity?
 
+    /** 그 checkout의 승인 시도 중 가장 나중에 만든 것. `id`가 UUID v7이라 역순 정렬이 곧 생성 역순이다. */
+    fun findFirstByOrderIdAndCheckoutNoAndKindOrderByIdDesc(
+        orderId: UUID,
+        checkoutNo: Int,
+        kind: PaymentAttemptKind,
+    ): PaymentAttemptEntity?
+
     /**
      * PostgreSQL에서는 `select ... for no key update`다. 같은 시도에 결과를 적용하는 트랜잭션이 직렬화된다.
      * 대기는 3초로 제한한다. `OrderJpaRepository.findWithLockById`와 같은 이유다 — 무기한 대기는 커넥션을 쥔 채 쌓여 풀을 말린다.
