@@ -67,7 +67,7 @@ provider가 결제를 거절하면 시도는 `DECLINED`, 주문은 `CHECKOUT_REQ
 - 동작을 지워 테스트가 실패하는지 본다. 최신 시도 판정을 지우고, 잠금을 빼고, `DECLINED` 검사를 빼서 각각 해당 테스트가 빨개지는지 확인한다.
 
 ## Wiki 영향
-- [도메인 모델](../wiki/domain-model.md): 바꾸지 않는다. §4.3의 "거절된 시도는 partial unique의 술어 밖"이 그대로 참이다. 열린 PR #57이 같은 파일을 고치고 있어 충돌도 피한다.
+- [도메인 모델](../wiki/domain-model.md): 바꾸지 않는다. §4.3의 "거절된 시도는 partial unique의 술어 밖"이 그대로 참이다. 작업 중 같은 파일을 고치던 #57(발행 기록 metric)과도 겹치지 않는다.
 - 현재 상태 문서는 볼트에서 갱신한다(재결제 명령이 생겼고 입구는 Facade뿐이라는 사실).
 - 요구사항 변화: 거절된 결제를 같은 회차에서 다시 시도할 수 있다. 외부 API와 스키마는 그대로다.
 
@@ -93,7 +93,7 @@ provider가 결제를 거절하면 시도는 `DECLINED`, 주문은 `CHECKOUT_REQ
 잠금을 뺐을 때의 실패는 래치로 두 호출을 동시에 출발시킨 결과이고 순서를 보장하지는 않는다. 확률적이지만 3회 모두 실패했다.
 
 ## 결과
-`./gradlew test` 228개 통과다(신규 9). `python3 scripts/check_pr.py --base origin/main --worktree` PASS(11개 파일 / 532줄).
+`./gradlew test` 241개 통과다(신규 9). 구현 중에는 228개였고, #57이 머지된 origin/main(620d450)으로 rebase한 뒤 그 PR의 테스트를 더해 다시 돌렸다. `python3 scripts/check_pr.py --base origin/main` PASS.
 
 - 재결제는 `PaymentAttempt.retry`가 만들고 `PaymentManagement.retryAuthorization`이 잠금·최신 판정·저장·발행을 소유한다. provider 호출은 기존 리스너가 이어받는 것을 통합 테스트가 끝까지 확인한다(거절 → 재결제 → 승인 → 주문 `PAID`, 같은 회차에 시도 행 둘).
 - Facade는 `authorize`와 같이 `NEVER`이고 `TransactionOperations`로 트랜잭션을 연다. 범위 절의 "반환 뒤 로그"를 호출자가 아니라 Facade 안에서 커밋 뒤에 찍기 위해서다. 범위 절을 그에 맞게 고쳤다.
