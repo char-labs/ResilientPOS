@@ -112,3 +112,18 @@ compose 80줄 안팎, Alloy 설정 40줄 안팎, Dockerfile 15줄 안팎, 문서
   - `amazoncorretto:25` 최소 이미지에 `xargs`가 없어 `gradlew`가 `xargs is not available`로 실패했다. 빌드 스테이지에만 `dnf install -y findutils`를 더했다. 실행 스테이지는 `java -jar`만 쓰므로 넣지 않았다.
   - `--no-cache` 빌드가 성공했고 앱 이미지는 552MB다. 컨테이너의 `java -version`은 `Corretto-25.0.4.8.1`이었다.
   - 세 profile을 띄워 health `UP`, Grafana `database: ok`를 확인했다. `POST /v1/orders` 201과 checkout 200을 받은 뒤 주문이 `PAID`로 전이됐고, 이 주문의 발행 기록 4개가 모두 `COMPLETED`였다. Prometheus에서 checkout metric이 조회됐고 Loki label은 `level`·`service_name`뿐이었다.
+- alpine·JVM 메모리 조정 뒤:
+  - 측정 조건: 컨테이너 1GB·2 CPU, 줄 20개짜리 주문 생성과 checkout을 300쌍 워밍업한 뒤 1500쌍(3000요청)을 동시 16으로 보냈다. RSS는 `docker stats`, GC는 `/actuator/prometheus`의 `jvm_gc_pause_seconds_*`로 쟀다. 한 번씩 잰 값이라 편차가 있어 G1 두 조합은 두 번 쟀다.
+
+    | 조합 | RSS 유휴→부하 후 | 처리량 | p99 | GC 최대 멈춤 |
+    |---|---|---|---|---|
+    | 옵션 없음(JVM이 SerialGC, 힙 256MB 선택) | 242→385MB | 438 rps | 109ms | 86ms |
+    | G1, 힙 75% (채택, 2회) | 311~328→401~463MB | 490~560 rps | 92~96ms | 14ms |
+    | G1, 힙 75%, Compact Object Headers (2회) | 300→386~430MB | 439~472 rps | 105~107ms | 84~94ms |
+    | ZGC, 힙 75% | 728→984MB | 389 rps | 176ms | 1ms |
+    | ZGC, 힙 75%, Compact Object Headers | 814→934MB | 383 rps | 104ms | 1ms |
+
+  - ZGC는 멈춤이 1ms였지만 RSS가 1GB 한도에 닿았고 처리량과 p99가 나빴다. 이 앱의 지연은 GC 멈춤보다 DB 왕복이 좌우하고, 힙이 작아 ZGC의 메모리 여유분 부담이 더 크다.
+  - Compact Object Headers(JDK 25 정식, 기본값 꺼짐)는 유휴 RSS를 10~25MB 줄였지만 두 번 모두 G1 최대 멈춤이 84~94ms로 늘고 처리량이 낮았다. 살아 있는 객체가 100MB 안팎이라 얻을 것이 적어서 넣지 않았다. 힙이 커지면 다시 잰다.
+  - `amazoncorretto:25-alpine`은 busybox에 `xargs`가 있어서 `findutils` 설치를 뺐다. 앱 이미지는 552MB에서 440MB로 줄었다.
+  - 적용 뒤 컨테이너의 `jcmd VM.flags`에서 `UseG1GC`, `MaxRAMPercentage=75`, `MaxHeapSize=805306368`, `ExitOnOutOfMemoryError`를 확인했다. 유휴 RSS는 316MiB/1GiB였다. 세 profile에서 health `UP`, Grafana `database: ok`, `POST /v1/orders` 201과 checkout 200, 주문 `PAID`와 발행 기록 4개 `COMPLETED`, Prometheus의 `G1 Young Generation` GC metric, Loki label `level`·`service_name`을 확인했다.
