@@ -1,7 +1,8 @@
 # 로컬 개발 전용. 테스트는 이 파일을 쓰지 않고 Testcontainers로 PostgreSQL을 띄운다.
-#   docker compose up -d                                  PostgreSQL만 (앱은 IDE·bootRun으로)
-#   docker compose --profile app up -d --build            + 앱 컨테이너
-#   docker compose --profile app --profile obs up -d      + Alloy·Grafana LGTM (Grafana: localhost:3000)
+# 저장소 루트에서 실행한다. 상대 경로는 이 파일의 디렉터리(docker/) 기준이다.
+#   docker compose -f docker/docker-compose.yaml up -d                                  PostgreSQL만 (앱은 IDE·bootRun으로)
+#   docker compose -f docker/docker-compose.yaml --profile app up -d --build            + 앱 컨테이너
+#   docker compose -f docker/docker-compose.yaml --profile app --profile obs up -d      + Alloy·Grafana LGTM (Grafana: localhost:3000)
 # Alloy가 이 프로젝트 이름으로 앱 컨테이너를 고르므로 이름을 고정한다.
 name: resilientpos
 
@@ -12,7 +13,7 @@ services:
     environment:
       POSTGRES_DB: resilientpos
       POSTGRES_USER: resilientpos
-      # 로컬 전용 기본값. 바꾸려면 .env에 적는다(.env.example 참고).
+      # 로컬 전용 기본값. 바꾸려면 docker/.env에 적는다(.env.example 참고).
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-resilientpos}
     ports:
       - "5432:5432"
@@ -26,7 +27,10 @@ services:
 
   app:
     profiles: [app]
-    build: .
+    build:
+      # gradlew와 src가 필요하므로 컨텍스트는 저장소 루트다. 제외 목록은 Dockerfile.dockerignore다.
+      context: ..
+      dockerfile: docker/Dockerfile
     depends_on:
       postgres:
         condition: service_healthy
@@ -42,7 +46,7 @@ services:
     profiles: [obs]
     image: grafana/alloy:latest
     volumes:
-      - ./docker/alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - ./alloy/config.alloy:/etc/alloy/config.alloy:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
     depends_on:
       - lgtm

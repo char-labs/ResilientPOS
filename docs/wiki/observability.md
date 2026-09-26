@@ -14,7 +14,7 @@
 - `orderId`·`paymentId`·`terminalId`는 metric label로 쓰지 않는다. 로그 필드나 trace attribute로 남긴다.
 
 ## 로컬에서 띄우기
-`docker compose --profile app --profile obs up -d --build`가 앱 컨테이너, Alloy, `grafana/otel-lgtm`을 띄운다. 설정은 [compose.yaml](../../compose.yaml)과 [Alloy 설정](../../docker/alloy/config.alloy)이다. Grafana는 `localhost:3000`이다.
+`docker compose -f docker/docker-compose.yaml --profile app --profile obs up -d --build`가 앱 컨테이너, Alloy, `grafana/otel-lgtm`을 띄운다. 설정은 [docker-compose.yaml](../../docker/docker-compose.yaml)과 [Alloy 설정](../../docker/alloy/config.alloy)이다. Grafana는 `localhost:3000`이다.
 - 위 "LGTM을 붙일 때"의 방식을 그대로 쓴다. Alloy가 `app:8080/actuator/prometheus`를 15초마다 scrape하고, docker socket으로 이 compose 프로젝트의 `app` 컨테이너 stdout만 읽어 `service_name`·`level` label을 올린다.
 - 운영과 다른 점: Mimir 자리를 otel-lgtm 안의 Prometheus가 remote_write로 받는다. 호스트(IDE)에서 띄운 앱은 수집하지 않는다.
 - kotlin-logging이 기동할 때 logback을 거치지 않고 평문 한 줄(`kotlin-logging: initializing...`)을 찍는다. JSON이 아니라 label이 없어서 Loki가 `service_name="unknown_service"`로 둔다.
