@@ -1,0 +1,11 @@
+# 컨텍스트(저장소 루트) 기준 경로다. BuildKit이 루트 .dockerignore 대신 이 파일을 읽는다.
+.git
+.gradle
+.kotlin
+build
+.idea
+.claude
+.codex
+.agents
+docs
+**/.env
