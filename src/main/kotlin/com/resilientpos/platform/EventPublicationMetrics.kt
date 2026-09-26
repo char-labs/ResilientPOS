@@ -30,8 +30,11 @@ import org.springframework.stereotype.Component
  * 갱신은 Spring의 공용 스케줄러가 아니라 전용 스레드 하나에서 돈다. 공용 스케줄러는 스레드가 하나라 느린 조회가
  * Modulith Moments의 시간 이벤트 발행까지 붙잡는다. `@EnableScheduling`이나 Moments 설정과도 무관하게 돈다.
  * 시작과 종료는 [SmartLifecycle]이 맡는다. 모든 싱글턴(Flyway 마이그레이션 포함)이 준비된 뒤 시작하고,
- * 빈을 파괴하기 전에 멈춘다. 멈춰 있는 동안 끝난 옛 갱신의 결과와 오류는 버린다. 다시 시작한 뒤에 끝나면 한 번
- * 적용되지만 모니터 뒤에서 기다리던 새 갱신이 곧 덮는다(재시작은 테스트나 devtools에서만 일어난다).
+ * 빈을 파괴하기 전에 멈춘다.
+ *
+ * 갱신은 그 전용 스레드에 가둔다. executor 하나는 스레드가 하나라 갱신끼리 겹치지 않으므로 줄 세우는 락이 없다.
+ * 결과를 적용할 때 그 갱신을 돌린 executor가 아직 현재 executor인지 확인해서, 제때 멈추지 않은 옛 갱신이
+ * 멈춘 뒤에 끝나든 다시 시작한 뒤에 끝나든 결과와 오류를 버린다.
  */
 @Component
 class EventPublicationMetrics(
@@ -46,18 +49,18 @@ class EventPublicationMetrics(
     private val jdbcTemplate = JdbcTemplate(dataSource).apply { queryTimeout = 10 }
 
     /**
-     * `scheduler`·`stopped`의 변경, 작업 예약, 결과 적용을 묶는 락이다. 안에서 I/O(조회, 로그)를 하지 않아
+     * `scheduler`의 변경(생성·예약·대입, 해제)과 결과 적용을 묶는 락이다. 안에서 I/O(조회, 로그)를 하지 않아
      * `stop()`이 오래 막히지 않는다.
-     * `stop()`은 `refresh()`의 모니터를 잡지 않는다. 잡으면 드라이버에 막힌 조회가 종료를 붙잡는다.
      */
     private val state = Any()
 
+    /** 현재 executor다. 멈추면 비고 다시 시작하면 새것이 된다. 결과를 적용할 자격의 기준이다. */
     @Volatile
     private var scheduler: ScheduledExecutorService? = null
 
-    /** 멈춰 있는 동안에는 모니터를 기다리던 갱신이 들어와도 조회하지 않고, 멈추기 전에 시작한 조회의 결과도 적용하지 않는다. */
+    /** 테스트가 옛 갱신 스레드가 끝나기를 기다릴 수 있게 마지막으로 만든 갱신 스레드를 둔다. */
     @Volatile
-    private var stopped = false
+    internal var worker: Thread? = null
 
     /**
      * 조회 중이던 갱신이 끝나기를 기다리는 시간이다. 멈춘 뒤의 결과와 오류는 어차피 버리므로 길 필요가 없다.
@@ -90,23 +93,22 @@ class EventPublicationMetrics(
         // 생성, 예약, 대입을 한 락 안에서 끝낸다. 그 사이에 stop()이 끼어 멈춘 executor에 예약하는 일이 없다.
         synchronized(state) {
             if (scheduler != null) return
-            stopped = false
-            scheduler = Executors.newSingleThreadScheduledExecutor { Thread(it, THREAD_NAME).apply { isDaemon = true } }.apply {
-                // refresh()가 RuntimeException을 삼키지만 Error가 새면 ScheduledExecutorService는 이후 실행을 조용히 멈춘다.
-                // 그래서 Error도 로그를 남기고 주기를 유지한다.
-                scheduleWithFixedDelay(
-                    { runCatching { refresh() }.onFailure { log.error(it) { "발행 기록 metric 갱신이 실패했다" } } },
-                    0, INTERVAL.toSeconds(), TimeUnit.SECONDS,
-                )
+            val executor = Executors.newSingleThreadScheduledExecutor { task ->
+                Thread(task, THREAD_NAME).apply { isDaemon = true }.also { worker = it }
             }
+            // refresh()가 RuntimeException을 삼키지만 Error가 새면 ScheduledExecutorService는 이후 실행을 조용히 멈춘다.
+            // 그래서 Error도 로그를 남기고 주기를 유지한다.
+            executor.scheduleWithFixedDelay(
+                { runCatching { refresh(executor) }.onFailure { log.error(it) { "발행 기록 metric 갱신이 실패했다" } } },
+                0, INTERVAL.toSeconds(), TimeUnit.SECONDS,
+            )
+            // 첫 갱신이 대입보다 먼저 끝나도 적용은 이 락을 기다리므로 그때는 이미 현재 executor다.
+            scheduler = executor
         }
     }
 
     override fun stop() {
-        val executor = synchronized(state) {
-            stopped = true
-            scheduler.also { scheduler = null }
-        } ?: return
+        val executor = synchronized(state) { scheduler.also { scheduler = null } } ?: return
         executor.shutdownNow()
         // 커넥션 대기는 인터럽트로 바로 끝난다. 드라이버가 조회를 끊지 못해 넘기면 기다리지 않고 넘어간다.
         if (!executor.awaitTermination(stopTimeout.toMillis(), TimeUnit.MILLISECONDS)) {
@@ -119,13 +121,11 @@ class EventPublicationMetrics(
     /** 기본값이지만 뜻을 적어 둔다. 가장 늦게 시작하고 가장 먼저 멈춘다(웹 서버의 graceful shutdown보다 먼저). */
     override fun getPhase(): Int = SmartLifecycle.DEFAULT_PHASE
 
-    /**
-     * 한 번 센다. 멈춘 뒤에는 아무것도 하지 않는다. 모니터가 갱신을 한 줄로 세우므로 다시 시작한 뒤의 첫 갱신은
-     * 옛 갱신이 끝난 뒤에 적용된다. 옛 결과가 새 결과를 덮지 않는다.
-     */
-    @Synchronized
-    fun refresh() {
-        if (stopped) return
+    /** 테스트 전용이다. 시작하지 않은 인스턴스에서 한 번 센다. 도는 스레드가 없어 겹칠 것이 없다. */
+    internal fun refresh() = refresh(null)
+
+    /** [owner]가 이 갱신을 돌린 executor다. 적용할 때 그것이 현재 executor가 아니면(멈췄거나 다시 시작했으면) 버린다. */
+    private fun refresh(owner: ScheduledExecutorService?) {
         val counts = try {
             // completion_date is null 조건이 미완료 인덱스를 타서 완료 행이 쌓여도 비용이 늘지 않는다.
             jdbcTemplate.query(
@@ -150,8 +150,8 @@ class EventPublicationMetrics(
             )
         } catch (e: RuntimeException) {
             synchronized(state) {
-                // 멈춘 뒤 끊긴 조회(인터럽트, 닫힌 풀)는 오류가 아니다. 개수도 건드리지 않는다.
-                if (stopped) return
+                // 옛 갱신이 끊긴 조회(인터럽트, 닫힌 풀)는 오류가 아니다. 개수도 건드리지 않는다.
+                if (scheduler !== owner) return
                 snapshot = emptyMap()
                 gauge.register(emptyList(), false)
             }
@@ -160,7 +160,7 @@ class EventPublicationMetrics(
             return
         }
         synchronized(state) {
-            if (stopped) return
+            if (scheduler !== owner) return
             apply(counts)
         }
     }

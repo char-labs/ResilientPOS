@@ -1,7 +1,6 @@
 package com.resilientpos.platform
 
 import com.resilientpos.PostgresIntegrationTest
-import io.micrometer.core.instrument.MeterRegistry
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry
 import java.sql.Connection
 import java.sql.SQLException
@@ -13,6 +12,7 @@ import java.time.ZoneId
 import java.time.ZoneOffset
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.TimeUnit
 import javax.sql.DataSource
 import kotlin.test.AfterTest
@@ -34,19 +34,21 @@ import org.springframework.transaction.support.TransactionOperations
 /**
  * 통합 테스트는 DB 하나를 나눠 쓰므로 다른 테스트가 남긴 기록도 세어진다.
  * 테스트마다 고유한 리스너 이름으로 행을 넣고 그 태그만 본다.
- * 1분 주기의 스케줄 갱신도 같은 컨텍스트에서 돈다. `refresh()`가 직렬화되어 있어 늦게 끝난 쪽이 늘 최신 조회다.
+ * 세는 테스트는 컨텍스트의 빈이 아니라 테스트마다 새로 만든, 시작하지 않은 인스턴스와 전용 registry를 쓴다.
+ * 도는 스레드가 없어 직접 부른 갱신과 겹칠 것이 없고, registry를 다른 테스트와 나눠 쓰지 않는다.
  * 테스트 전용 리스너는 중첩 `@TestConfiguration`이라 자동 감지되지만 등록 여부가 읽히도록 명시한다.
  */
 @Import(EventPublicationMetricsTest.FailingProbeListener::class)
 class EventPublicationMetricsTest(
     @Autowired private val jdbcTemplate: JdbcTemplate,
-    @Autowired private val metrics: EventPublicationMetrics,
-    @Autowired private val registry: MeterRegistry,
     @Autowired private val transactions: TransactionOperations,
     @Autowired private val eventPublisher: ApplicationEventPublisher,
     @Autowired private val dataSource: DataSource,
     @Autowired private val scheduledTasks: ObjectProvider<ScheduledTaskHolder>,
 ) : PostgresIntegrationTest() {
+
+    private val registry = SimpleMeterRegistry()
+    private val metrics = EventPublicationMetrics(dataSource, Clock.systemUTC(), registry, Duration.ofMinutes(5))
 
     /**
      * 이 클래스가 남긴 행을 지운다. 가짜 이벤트 타입의 미완료 행이 남으면 종료 때 Modulith가 복원하다 실패하고,
@@ -255,9 +257,8 @@ class EventPublicationMetricsTest(
         assertTrue(tasks.none { EventPublicationMetrics::class.java.name in it }, "공용 스케줄러에 올라가 있다: $tasks")
     }
 
-    /** 종료 뒤에는 모니터를 기다리던 갱신이 들어와도 조회하지 않는다. 다시 시작하면 다시 센다. */
     @Test
-    fun `멈춘 뒤의 갱신은 조회하지 않고 다시 시작하면 센다`() {
+    fun `멈추면 갱신이 멈추고 다시 시작하면 센다`() {
         val own = SimpleMeterRegistry()
         val subject = EventPublicationMetrics(dataSource, Clock.systemUTC(), own, Duration.ofMinutes(5))
         val refreshed = own.get("event.publication.incomplete.refreshed").gauge()
@@ -268,9 +269,8 @@ class EventPublicationMetricsTest(
 
             subject.stop()
             assertTrue(!subject.isRunning, "멈추지 않았다")
+            assertTrue(!subject.worker!!.isAlive, "갱신 스레드가 남아 있다")
             insert(a, "FAILED", Duration.ofMinutes(10))
-            subject.refresh()
-            assertTrue(own.find("event.publication.incomplete").tag("listener", a).gauges().isEmpty(), "멈춘 뒤에 조회했다")
 
             subject.start()
             awaitUntil("다시 시작한 뒤 센다") {
@@ -283,11 +283,10 @@ class EventPublicationMetricsTest(
 
     /**
      * 드라이버가 인터럽트에 반응하지 않아 `stop()`이 기다리다 넘어간 경우다. 그 옛 갱신이 멈춰 있는 동안 끝나면
-     * 결과를 적용하지 않는다. 확인과 적용은 `stop()`과 같은 락 안이라 그 사이에 멈춤이 끼어들 수 없다.
-     * `BlockingDataSource`가 인터럽트를 삼키므로 옛 조회는 성공하고, 적용 경로의 멈춤 확인을 검증한다.
+     * 결과를 적용하지 않는다. `BlockingDataSource`가 인터럽트를 삼키므로 옛 조회는 성공하고, 적용 경로의 확인을 검증한다.
      */
     @Test
-    fun `제때 멈추지 않은 옛 갱신의 결과는 버린다`() {
+    fun `멈춘 뒤에 끝난 옛 갱신의 결과는 버린다`() {
         val blocking = BlockingDataSource(dataSource)
         val own = SimpleMeterRegistry()
         val subject = EventPublicationMetrics(blocking, Clock.systemUTC(), own, Duration.ofMinutes(5))
@@ -298,14 +297,47 @@ class EventPublicationMetricsTest(
         try {
             subject.start()
             assertTrue(blocking.entered.await(10, TimeUnit.SECONDS), "첫 갱신이 커넥션을 요청하지 않았다")
+            val old = subject.worker!!
 
             subject.stop()
             blocking.release()
-            // refresh()는 같은 모니터를 쓰므로 옛 갱신이 끝난 뒤에야 돌아온다. 멈춘 상태라 스스로는 아무것도 하지 않는다.
-            subject.refresh()
+            old.join(TimeUnit.SECONDS.toMillis(10))
 
+            assertTrue(!old.isAlive, "옛 갱신이 끝나지 않았다")
             assertTrue(own.find("event.publication.incomplete").tag("listener", a).gauges().isEmpty(), "옛 갱신의 결과가 적용됐다")
             assertEquals(0.0, refreshed.value())
+        } finally {
+            blocking.release()
+            subject.stop()
+        }
+    }
+
+    /**
+     * 옛 갱신이 다시 시작한 뒤에 끝나는 경우다. 새 갱신이 센 뒤에 넣은 행은 늦게 조회하는 옛 갱신만 볼 수 있다.
+     * 옛 결과가 적용되면 그 행이 보이므로, 보이지 않아야 옛 결과를 버린 것이다.
+     */
+    @Test
+    fun `다시 시작한 뒤에 끝난 옛 갱신의 결과는 버린다`() {
+        val blocking = BlockingDataSource(dataSource)
+        val own = SimpleMeterRegistry()
+        val subject = EventPublicationMetrics(blocking, Clock.systemUTC(), own, Duration.ofMinutes(5))
+        subject.stopTimeout = Duration.ofMillis(100)
+        val refreshed = own.get("event.publication.incomplete.refreshed").gauge()
+        val late = uniqueListener("ProbeAfterRestart")
+        try {
+            subject.start()
+            assertTrue(blocking.entered.await(10, TimeUnit.SECONDS), "첫 갱신이 커넥션을 요청하지 않았다")
+            val old = subject.worker!!
+            subject.stop()
+
+            subject.start()
+            awaitUntil("새 갱신이 센다") { refreshed.value() > 0.0 }
+            insert(late, "FAILED", Duration.ofMinutes(10))
+            blocking.release()
+            old.join(TimeUnit.SECONDS.toMillis(10))
+
+            assertTrue(!old.isAlive, "옛 갱신이 끝나지 않았다")
+            assertTrue(own.find("event.publication.incomplete").tag("listener", late).gauges().isEmpty(), "옛 갱신의 결과가 적용됐다")
         } finally {
             blocking.release()
             subject.stop()
@@ -328,14 +360,16 @@ class EventPublicationMetricsTest(
             if (failing) throw SQLException("의도한 조회 실패") else delegate.connection
     }
 
-    /** 첫 커넥션 요청을 인터럽트에도 풀리지 않게 붙잡는다. 인터럽트에 반응하지 않는 드라이버를 흉내 낸다. */
+    /** 첫 커넥션 요청만 인터럽트에도 풀리지 않게 붙잡는다. 인터럽트에 반응하지 않는 드라이버를 흉내 낸다. */
     class BlockingDataSource(private val delegate: DataSource) : DataSource by delegate {
         val entered = CountDownLatch(1)
         private val gate = CountDownLatch(1)
+        private val first = AtomicBoolean(true)
 
         fun release() = gate.countDown()
 
         override fun getConnection(): Connection {
+            if (!first.compareAndSet(true, false)) return delegate.connection
             entered.countDown()
             while (true) {
                 try {
