@@ -266,11 +266,17 @@ class EventPublicationMetricsTest(
         try {
             subject.start()
             awaitUntil("첫 갱신이 돈다") { refreshed.value() > 0.0 }
+            // 시작한 인스턴스에 직접 부른 갱신은 결과가 버려지므로 바로 실패해야 한다.
+            assertFailsWith<IllegalStateException> { subject.refresh() }
 
             subject.stop()
             assertTrue(!subject.isRunning, "멈추지 않았다")
-            assertTrue(!subject.worker!!.isAlive, "갱신 스레드가 남아 있다")
+            // awaitTermination은 스레드가 run()을 빠져나가기 직전에 돌아올 수 있어 join으로 확인한다.
+            val stopped = subject.worker!!
+            stopped.join(TimeUnit.SECONDS.toMillis(10))
+            assertTrue(!stopped.isAlive, "갱신 스레드가 남아 있다")
             insert(a, "FAILED", Duration.ofMinutes(10))
+            assertTrue(own.find("event.publication.incomplete").tag("listener", a).gauges().isEmpty(), "멈춘 동안 셌다")
 
             subject.start()
             awaitUntil("다시 시작한 뒤 센다") {

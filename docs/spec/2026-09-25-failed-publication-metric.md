@@ -15,7 +15,7 @@
 
 **세는 방법.** `event_publication`을 `completion_date is null` 조건으로 한 번 조회해 `(status, module, listener)`별로 센다. 미완료 행만 읽으므로 기존 `completion_date` 인덱스를 쓰고, 완료 행이 쌓여도 비용이 늘지 않는다. 비용은 미완료 행 수에 비례한다. PostgreSQL 18에 `V004`를 적용하고 완료 행 100만 개를 넣은 뒤 `EXPLAIN (ANALYZE, BUFFERS)`로 쟀다. 미완료 1천 개면 인덱스 스캔으로 0.27ms(버퍼 57), 10만 개면 22.7ms(버퍼 5400)였다. 5차에서 상태 조건을 좁힌 뒤 다시 쟀다. 같은 인덱스 스캔이고 스캔 노드 시간은 1천 개 0.2~0.3ms(버퍼 60), 10만 개 13~30ms(버퍼 약 5400, 3회)였다. 미완료 행은 조치되지 않은 실패라 10만 개면 알림이 이미 오래 켜져 있는 상태다. 그때도 1분에 한 번 많아야 30ms라 새 인덱스를 두지 않는다. 이 비용은 인스턴스마다 들어서 인스턴스가 N개면 분당 N번이다. 인스턴스 10개에 미완료 10만 개라도 분당 0.3초 남짓이다. Modulith의 `EventPublicationRepository.countByStatus`는 `events-core`가 runtime 범위라 main에서 컴파일되지 않고, 조건도 맞지 않아 쓰지 않는다. 조회만 하며 상태를 바꾸지 않는다.
 
-**갱신.** 리스너 목록이 데이터에서 나오므로 `MultiGauge`의 row 목록을 1분마다 다시 등록한다. row는 값을 고정하지 않고 스냅샷 맵을 읽는 함수로 두고 overwrite를 끈다(`register(rows, false)`). 이미 있는 조합은 지웠다 다시 등록되지 않아 scrape 사이에 시계열이 빠지지 않고, 목록에 없는 조합만 지워진다. overwrite를 켜면 매 주기 지웠다 다시 등록하는 틈에 scrape가 들어와 시계열이 한 번 빠지고, `for:`를 건 알림은 그때 pending이 초기화된다. 갱신은 `@Synchronized`로 직렬화한다. 두 갱신(주기 갱신과 테스트의 직접 호출)이 겹치면 먼저 조회한 쪽이 나중에 등록해 새 값을 덮을 수 있어서다.
+**갱신.** 리스너 목록이 데이터에서 나오므로 `MultiGauge`의 row 목록을 1분마다 다시 등록한다. row는 값을 고정하지 않고 스냅샷 맵을 읽는 함수로 두고 overwrite를 끈다(`register(rows, false)`). 이미 있는 조합은 지웠다 다시 등록되지 않아 scrape 사이에 시계열이 빠지지 않고, 목록에 없는 조합만 지워진다. overwrite를 켜면 매 주기 지웠다 다시 등록하는 틈에 scrape가 들어와 시계열이 한 번 빠지고, `for:`를 건 알림은 그때 pending이 초기화된다. 갱신끼리 겹치지 않게 하는 방법은 아래 동시성 문단에 있다.
 
 **스케줄링.** 갱신은 Spring의 공용 스케줄러(`@Scheduled`)가 아니라 이 컴포넌트가 가진 전용 스레드 하나(`ScheduledExecutorService`, 스레드 이름 `event-publication-metrics`)에서 1분 간격으로 돈다. 공용 스케줄러는 main에서 이미 켜져 있고(Modulith Moments의 자동 구성 `MomentsAutoConfiguration`이 `@EnableScheduling`을 단다) 스레드가 하나라, 거기 올리면 느린 조회가 매시간·자정의 `HourHasPassed`·`DayHasPassed` 발행까지 붙잡는다. 또 `spring.modulith.moments.enabled=false`로 Moments를 끄면 공용 스케줄러도 함께 꺼진다. 전용 스레드는 둘 다와 무관하다(인수 8·12). 그래서 이 PR은 `@EnableScheduling`을 더하지 않고 커밋 뒤 리스너의 실행기에도 영향을 주지 않는다. 스레드는 컨텍스트(인스턴스)마다 하나이고, 테스트에서는 캐시된 컨텍스트 수만큼 뜬다. `refresh()`는 `RuntimeException`을 삼키지만 `Error`가 새면 `ScheduledExecutorService`가 이후 실행을 멈추므로 주기 작업은 한 번 더 감싼다. 그래서 `Error`(`OutOfMemoryError` 포함)도 로그를 남기고 주기를 유지한다. 주기가 조용히 멈추는 쪽보다 낫다고 봤다.
 
@@ -35,7 +35,7 @@
 
 복구: 해당 없음. 감지만 한다. 조회나 행 매핑이 실패하면(`RuntimeException` 전부) 그 주기의 갱신을 건너뛰고 WARN 로그를 남긴다. 그 인스턴스는 개수 시계열을 내리고 신선도 gauge를 멈춘다. 다음 조회가 성공하면 둘 다 돌아온다.
 
-**`failed`와 끊긴 `stale` 알림은 스스로 꺼지지 않는다.** 재전송이 없고 재기동 때 재발행도 꺼져 있어서(`republish-outstanding-events-on-restart: false`) 그 행은 사람이 조치하기 전까지 남는다. 저절로 풀리는 것은 실행기 큐에 밀려 늦은 `stale`뿐이다. 조치(업무 상태를 바로잡거나 `FailedEventPublications.resubmit`)를 끝내면 그 행의 `completion_date`와 `status = 'COMPLETED'`를 함께 채우거나 행을 지워야 시계열이 사라진다. `completion_date`만 채우면 metric에서는 빠지지만 `status`로 찾는 경로가 그 행을 다시 집을 수 있다. 배포하면 이미 쌓여 있던 행 때문에 알림이 바로 켜질 수 있으니, 배포 전에 미완료 행을 metric과 같은 조건으로 `status`·`listener_id`별로 세어 둔다. `completion_date`가 비어 있고, `status`가 `FAILED`이거나 비어 있거나, `PUBLISHED`·`PROCESSING`·`RESUBMITTED`인 채 마지막 재전송 또는 발행이 5분보다 이전인 행이다. 조건 정본은 `EventPublicationMetrics.refresh()`의 SQL이다.
+**`failed`와 끊긴 `stale` 알림은 스스로 꺼지지 않는다.** 재전송이 없고 재기동 때 재발행도 꺼져 있어서(`republish-outstanding-events-on-restart: false`) 그 행은 사람이 조치하기 전까지 남는다. 저절로 풀리는 것은 실행기 큐에 밀려 늦은 `stale`뿐이다. 조치(업무 상태를 바로잡거나 `FailedEventPublications.resubmit`)를 끝내면 그 행의 `completion_date`와 `status = 'COMPLETED'`를 함께 채우거나 행을 지워야 시계열이 사라진다. `completion_date`만 채우면 metric에서는 빠지지만 `status`로 찾는 경로가 그 행을 다시 집을 수 있다. 배포하면 이미 쌓여 있던 행 때문에 알림이 바로 켜질 수 있으니, 배포 전에 미완료 행을 metric과 같은 조건으로 `status`·`listener_id`별로 세어 둔다. `completion_date`가 비어 있고, `status`가 `FAILED`이거나 비어 있거나, `PUBLISHED`·`PROCESSING`·`RESUBMITTED`인 채 마지막 재전송 또는 발행이 5분보다 이전인 행이다. 조건 정본은 `EventPublicationMetrics`의 조회 SQL이다.
 
 관측성: 이 PR의 산출물이 곧 관측성이다. 알림을 받은 뒤 어느 주문인지는 `serialized_event`에서 찾는다. 찾는 조건은 기존 spec들의 것(`listener_id like '%PaymentApprovedListener%' and status = 'FAILED'` 등)에 `status is null`을 더한다(`failed` 태그가 그 행도 세기 때문이다).
 
@@ -80,7 +80,7 @@
 15. 기존 테스트가 모두 통과한다.
 
 ## 검증
-- 인수 1~10: `./gradlew test --tests 'com.resilientpos.platform.EventPublicationMetricsTest'`. Docker가 필요하다. 행은 테스트가 SQL로 직접 넣고, 갱신은 스케줄을 기다리지 않고 메서드를 직접 부른다. 인수 6은 던지는 테스트 전용 리스너를 중첩 `@TestConfiguration`으로 두고 `@Import`로 명시한다. 인수 9·10은 빈이 아닌 인스턴스를 직접 만든다.
+- 인수 1~10: `./gradlew test --tests 'com.resilientpos.platform.EventPublicationMetricsTest'`. Docker가 필요하다. 행은 테스트가 SQL로 직접 넣는다. 세는 테스트(인수 1~7, 9, 10)는 모두 테스트마다 새로 만든, 시작하지 않은 인스턴스와 전용 registry를 쓰고 갱신을 직접 부른다. 인수 6은 던지는 테스트 전용 리스너를 중첩 `@TestConfiguration`으로 두고 `@Import`로 명시한다. 인수 8만 컨텍스트를 본다.
 - 인수 11: `./gradlew test --tests 'com.resilientpos.platform.ObservabilityConfigurationTest'`.
 - 인수 12: `./gradlew test --tests 'com.resilientpos.platform.EventPublicationMetricsSchedulingTest'`. Moments를 끈 컨텍스트를 하나 더 띄운다. 1분 간격 자체는 상수(`INTERVAL`)라 따로 검증하지 않는다.
 - 인수 13·14: 인수 1~10과 같은 명령. 빈이 아닌 인스턴스를 `start()`·`stop()`한다. 인수 14는 첫 커넥션 요청만 인터럽트에도 풀리지 않게 붙잡는 `DataSource`와 짧은 종료 대기로 옛 작업을 만들고, 옛 작업 스레드가 끝나기를 기다린 뒤 본다. 다시 시작한 뒤에 끝나는 경우는 새 갱신이 센 뒤에 넣은 행을 옛 갱신만 볼 수 있게 해 가린다. 확인과 적용 사이에 `stop()`이 끼어드는 경우는 같은 락이라 생길 수 없어 테스트하지 않는다. 예외 처리의 확인은 멈춘 뒤의 로그 소음만 막는 것이라 테스트하지 않는다. `start()`와 `stop()`의 병렬 호출은 테스트하지 않는다. 10차에서 50번 겹쳐 부르는 테스트를 써 봤지만 예약을 락 밖으로 되돌린 코드에서도 통과해 결함을 잡지 못했다. 원자성은 생성·예약·대입이 한 락 블록이라는 구조로 보장하고, Spring은 refresh와 close를 한 락으로 직렬화해 두 호출이 겹치지 않는다.
@@ -110,13 +110,13 @@
 | 인수 10: `기준 시간이 0 이하면 기동을 막는다`(0과 음수) | 같은 명령. 검사를 잠시 주석 처리하면 실패: 예외가 나지 않았다 | 같은 명령. 통과 | `./gradlew test`. 232개 중 실패 0 |
 | 인수 11: `prometheus 엔드포인트가 ...` 테스트에 검사 하나(4줄) | RED 없음. 기존 테스트에 노출 이름을 고정하는 검사를 더했다 | `./gradlew test --tests 'com.resilientpos.platform.ObservabilityConfigurationTest'`. 통과 | `./gradlew test`. 232개 중 실패 0 |
 | 인수 12: `Moments를 꺼도 갱신은 스스로 돈다` | 같은 명령. 전용 스레드 시작을 잠시 막으면 실패: `10초 안에 첫 갱신이 돌지 않았다` | `./gradlew test --tests 'com.resilientpos.platform.EventPublicationMetricsSchedulingTest'`. 통과 | `./gradlew test`. 232개 중 실패 0 |
-| 인수 13: `멈추면 갱신이 멈추고 다시 시작하면 센다` | 같은 명령. 11차까지는 멈춤 표시를 되돌리는 줄을 잠시 지워 `10초 안에 충족되지 않았다: 다시 시작한 뒤 센다`로 관측했다. 12차(스레드 가둠)에서 멈춤 표시가 없어져 이 테스트는 멈춘 뒤 갱신 스레드가 끝났는지와 재시작 뒤 세는지만 본다 | 같은 명령. 통과 | `./gradlew test`. 232개 중 실패 0 |
+| 인수 13: `멈추면 갱신이 멈추고 다시 시작하면 센다` | 같은 명령. 11차까지는 멈춤 표시를 되돌리는 줄을 잠시 지워 `10초 안에 충족되지 않았다: 다시 시작한 뒤 센다`로 관측했다. 12차(스레드 가둠)에서 멈춤 표시가 없어져 이 테스트는 멈춘 뒤 갱신 스레드가 끝났는지(`join`으로), 멈춘 동안 세지 않는지, 재시작 뒤 세는지를 본다. 시작한 인스턴스에 테스트 전용 `refresh()`를 부르면 실패하는지도 보며, `check`를 잠시 지우면 실패한다: `Expected an exception of class java.lang.IllegalStateException` | 같은 명령. 통과 | `./gradlew test`. 232개 중 실패 0 |
 | 인수 14: `멈춘 뒤에 끝난 옛 갱신의 결과는 버린다`, `다시 시작한 뒤에 끝난 옛 갱신의 결과는 버린다` | 같은 명령. 적용 구간의 executor 확인을 잠시 지우면 둘 다 실패: `옛 갱신의 결과가 적용됐다`. 뒤의 것은 11차까지의 모니터 구조로는 막지 못하던 경우다(8·9차에는 멈춘 뒤의 것만 있었다) | 같은 명령. 통과 | `./gradlew test`. 232개 중 실패 0 |
 | 인수 15: 기존 테스트 | 해당 없음. 회귀 확인이다 | `./gradlew test`. 232개 중 실패 0 | 같은 명령. 같은 결과 |
 
 ## 결과
 - 인수 1~15를 충족했다. `./gradlew test`는 232개(main 219, 신규 13) 중 실패 0이다. `ObservabilityConfigurationTest`에는 검사 하나(4줄)만 더해 테스트 수는 같다.
-- 구현: `platform.EventPublicationMetrics`(스냅샷을 읽는 MultiGauge row와 `overwrite=false`, `module`·`listener` 태그, 신선도 gauge, `SmartLifecycle`로 시작·종료하고 갱신을 가둔 전용 스레드의 1분 갱신(적용 때 현재 executor인지 확인), `@Synchronized`, 전용 `JdbcTemplate`의 쿼리 타임아웃 10초, 기준 시간 검증), 통합 테스트 두 클래스다. `PlatformConfiguration`은 결국 바꾸지 않았다(6차). 새 의존성과 설정 파일 변경은 없다.
+- 구현: `platform.EventPublicationMetrics`(스냅샷을 읽는 MultiGauge row와 `overwrite=false`, `module`·`listener` 태그, 신선도 gauge, `SmartLifecycle`로 시작·종료하고 갱신을 가둔 전용 스레드의 1분 갱신(적용 때 현재 executor인지 상태 락 안에서 확인), 전용 `JdbcTemplate`의 쿼리 타임아웃 10초, 기준 시간 검증), 통합 테스트 두 클래스다. `PlatformConfiguration`은 결국 바꾸지 않았다(6차). 새 의존성과 설정 파일 변경은 없다.
 - 개발 중 확인한 것: 테스트가 가짜 이벤트 타입으로 넣은 미완료 행이 남으면 컨텍스트 종료 때 Modulith가 그 행을 복원하려다 `Unable to locate named class`로 경고를 낸다. 같은 DB를 쓰는 다른 컨텍스트에도 번지므로 테스트마다 이 클래스가 남긴 행(가짜 타입과 테스트 이벤트 타입)을 지운다. 정리 뒤 남은 행이 0인 것을 임시 확인 코드로 봤다(커밋하지 않았다).
 - 병렬 브랜치: #56 머지 전에는 `git merge-tree`로 충돌이 없음을 확인했고, 머지 뒤에는 충돌 없이 rebase했다.
 - `tdd-driver`에 위임하지 않고 주 에이전트가 직접 수행했다. 업무 동작이 아니라 `platform` 인프라다.
@@ -137,6 +137,7 @@ Claude와 Codex(CLI 직접 실행)로 11차까지 돌렸다. Gemini는 CLI가 �
 | 9 | 93 | 84 | 세대 번호를 상태 락으로 줄임, 종료 대기 3초 |
 | 10 | 94 | 88 | `start()`의 생성·예약·대입을 한 락 블록으로, 로그를 락 밖으로 |
 | 11 | 95 | 98 | 없음(93점 기준 충족). 뒤이어 사용자와 모니터를 다시 따져 스레드 가둠으로 범위 조정 |
+| 12 | 92 | 91 | 범위 조정 뒤 spec에 남은 `@Synchronized` 문장 정리, 테스트 전용 `refresh()`를 시작한 인스턴스에서 부르면 실패, `worker` 쓰기 막기, `stop()` 뒤 `join`으로 확인 |
 
 뒤집거나 바로잡은 판단:
 - 3차의 "조회가 실패하면 이전 값을 남긴다"를 4차에 "개수를 내린다"로 뒤집었다. 낡은 개수가 `max` 알림을 붙잡기 때문이다.

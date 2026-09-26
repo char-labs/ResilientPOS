@@ -125,7 +125,7 @@ Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰�
   1. 새 버전 `spring-modulith-events-jdbc` jar의 `schemas/vN/schema-postgresql.sql`을 쓰던 버전의 것과 diff한다. Modulith가 자기 스키마를 버전으로 관리해서 두 버전이 jar에 함께 들어 있다. 실제 v1 → v2 변경은 nullable 컬럼 셋(`status`, `completion_attempts`, `last_resubmission_date`) 추가였다.
   2. 바뀐 만큼 마이그레이션을 추가한다. 추가만 하는 변경이면 이전 버전 인스턴스는 모르는 컬럼이 늘어난 것뿐이라 함께 떠 있어도 된다.
   3. 추가가 아닌 변경(이름·타입)이면 라이브러리 엔티티를 우리가 못 바꿔서 이중 쓰기를 할 수 없다. 남아 있는 미완료 기록을 어떻게 보존할지 함께 정한다.
-  4. `EventPublication.Status`의 값도 diff한다. `status`가 문자열 컬럼이라 새 값은 스키마 diff에 나오지 않는데, 발행 기록 metric은 아는 미완료 상태(`PUBLISHED`·`PROCESSING`·`RESUBMITTED`)만 `stale`로 세므로 새 미완료 상태는 조용히 빠진다. 새 미완료 상태가 있으면 `EventPublicationMetrics.refresh()` SQL의 상태 목록에 더한다.
+  4. `EventPublication.Status`의 값도 diff한다. `status`가 문자열 컬럼이라 새 값은 스키마 diff에 나오지 않는데, 발행 기록 metric은 아는 미완료 상태(`PUBLISHED`·`PROCESSING`·`RESUBMITTED`)만 `stale`로 세므로 새 미완료 상태는 조용히 빠진다. 새 미완료 상태가 있으면 `EventPublicationMetrics`의 조회 SQL 상태 목록에 더한다.
 - **컬럼이 늘거나 타입·테이블 이름이 바뀌면 기동이 막히고 CI가 먼저 잡는다.** `Schema validation: missing column [이름] in table [event_publication]`처럼 대상이 메시지에 나온다. 통합 테스트가 컨텍스트를 띄우므로 버전을 올리는 PR에서 실패한다(2026-09-21에 `V004`를 v1 스키마로 되돌려 확인했다). **반대로 라이브러리가 컬럼을 없애면 조용히 통과한다.** `validate`는 매핑된 컬럼만 검사해서(4.7절 질문 8) 쓰이지 않는 컬럼이 남는다. 이건 사람이 정리한다.
 - **이벤트 클래스의 모양이 저장 형식이다.** 발행 기록은 이벤트를 JSON으로, `event_type`에는 클래스의 정규 이름을 저장한다. 미완료 기록이 남아 있는 동안 이벤트의 필드를 지우거나 이름·타입을 바꾸면, 또는 이벤트 클래스를 옮기거나 이름을 바꾸면 복원이 실패해서 그 이벤트를 다시 보낼 수 없다. 하위 호환인 변경은 기본값이 있는 필드 추가뿐이다. 그 밖의 변경은 새 이벤트 타입을 더하고 옛 타입의 미완료 기록이 비워진 뒤에 옛 타입을 지운다.
 - **리스너의 이름도 저장 형식이다.** `listener_id`에는 리스너의 클래스 정규 이름·메서드·이벤트 타입이 저장되고(`패키지.클래스.메서드(이벤트타입)`) Modulith는 `serialized_event`와 `listener_id`가 같은 행을 찾아 완료를 표시한다. 미완료 기록이 남은 동안 리스너의 패키지·클래스·메서드 이름을 바꾸면 그 기록을 끝낼 주체가 없어진다.

@@ -58,9 +58,12 @@ class EventPublicationMetrics(
     @Volatile
     private var scheduler: ScheduledExecutorService? = null
 
-    /** 테스트가 옛 갱신 스레드가 끝나기를 기다릴 수 있게 마지막으로 만든 갱신 스레드를 둔다. */
     @Volatile
-    internal var worker: Thread? = null
+    private var lastWorker: Thread? = null
+
+    /** 테스트가 옛 갱신 스레드가 끝나기를 기다릴 수 있게 마지막으로 만든 갱신 스레드를 보인다. 읽기만 연다. */
+    internal val worker: Thread?
+        get() = lastWorker
 
     /**
      * 조회 중이던 갱신이 끝나기를 기다리는 시간이다. 멈춘 뒤의 결과와 오류는 어차피 버리므로 길 필요가 없다.
@@ -94,7 +97,7 @@ class EventPublicationMetrics(
         synchronized(state) {
             if (scheduler != null) return
             val executor = Executors.newSingleThreadScheduledExecutor { task ->
-                Thread(task, THREAD_NAME).apply { isDaemon = true }.also { worker = it }
+                Thread(task, THREAD_NAME).apply { isDaemon = true }.also { lastWorker = it }
             }
             // refresh()가 RuntimeException을 삼키지만 Error가 새면 ScheduledExecutorService는 이후 실행을 조용히 멈춘다.
             // 그래서 Error도 로그를 남기고 주기를 유지한다.
@@ -121,8 +124,14 @@ class EventPublicationMetrics(
     /** 기본값이지만 뜻을 적어 둔다. 가장 늦게 시작하고 가장 먼저 멈춘다(웹 서버의 graceful shutdown보다 먼저). */
     override fun getPhase(): Int = SmartLifecycle.DEFAULT_PHASE
 
-    /** 테스트 전용이다. 시작하지 않은 인스턴스에서 한 번 센다. 도는 스레드가 없어 겹칠 것이 없다. */
-    internal fun refresh() = refresh(null)
+    /**
+     * 테스트 전용이다. 시작하지 않은 인스턴스에서 한 번 센다. 도는 스레드가 없어 겹칠 것이 없다.
+     * 시작한 인스턴스에서 부르면 결과가 조용히 버려지므로 바로 실패시킨다.
+     */
+    internal fun refresh() {
+        check(scheduler == null) { "시작한 인스턴스에서는 refresh()를 직접 부르지 않는다" }
+        refresh(null)
+    }
 
     /** [owner]가 이 갱신을 돌린 executor다. 적용할 때 그것이 현재 executor가 아니면(멈췄거나 다시 시작했으면) 버린다. */
     private fun refresh(owner: ScheduledExecutorService?) {
@@ -161,11 +170,11 @@ class EventPublicationMetrics(
         }
         synchronized(state) {
             if (scheduler !== owner) return
-            apply(counts)
+            publish(counts)
         }
     }
 
-    private fun apply(counts: List<Pair<Triple<String, String, String>, Long>>) {
+    private fun publish(counts: List<Pair<Triple<String, String, String>, Long>>) {
         snapshot = counts.groupBy({ it.first }, { it.second }).mapValues { (_, ns) -> ns.sum() }
         // overwrite=false: 이미 있는 조합은 그대로 두고 새 조합만 등록한다. 목록에 없는 조합은 지운다.
         // 스냅샷을 먼저 바꾸므로 그 사이의 scrape에서 사라질 조합은 한 번 0으로, 새 조합은 한 번 빠질 수 있다. `> 0` 알림에는 해가 없다.
