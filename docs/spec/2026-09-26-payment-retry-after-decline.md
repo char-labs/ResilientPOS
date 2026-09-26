@@ -21,7 +21,7 @@ provider가 결제를 거절하면 시도는 `DECLINED`, 주문은 `CHECKOUT_REQ
 
 **새 시도는 aggregate가 만든다.** `PaymentAttempt.retry(ids, now)`가 `DECLINED` 승인 시도에서만 새 시도와 `AttemptCreated`를 돌려주고 그 밖에는 `PAYMENT_NOT_RETRYABLE`로 거절한다. provider 호출은 기존 `PaymentAttemptCreatedListener`가 이어받는다. 재결제 명령은 provider를 부르지 않는다.
 
-**겹친 재결제는 대상 행 잠금으로 직렬화한다.** Facade는 트랜잭션 안에서 대상 시도를 `findByIdForUpdate`로 잠근 뒤 그 회차의 최신 승인 시도를 읽는다. 진 쪽은 앞 트랜잭션의 커밋을 기다렸다가 새로 생긴 시도를 최신으로 보고 그것을 돌려받는다. partial unique는 마지막 방어선으로 남는다. 잠금 대기는 기존과 같은 3초다.
+**겹친 재결제는 대상 행 잠금으로 직렬화한다.** Facade는 `authorize`처럼 `@Transactional(propagation = NEVER)`이고 `TransactionOperations`로 연 트랜잭션 안에서 대상 시도를 `findByIdForUpdate`로 잠근 뒤 그 회차의 최신 승인 시도를 읽는다. 진 쪽은 앞 트랜잭션의 커밋을 기다렸다가 새로 생긴 시도를 최신으로 보고 그것을 돌려받는다. partial unique는 마지막 방어선으로 남는다. 잠금 대기는 기존과 같은 3초다.
 
 **최신 시도 조회를 더한다.** 그 회차의 승인 시도를 `id` 내림차순으로 하나 읽는 파생 조회다(UUID v7이라 곧 생성 역순). 재배달 입구 `findAuthorization`(가장 먼저 만든 것)은 그대로 둔다. 재배달은 새 시도를 만들지 않는다는 판단만 하면 되고 어느 시도를 돌려주는지는 쓰이지 않는다.
 
@@ -31,7 +31,7 @@ provider가 결제를 거절하면 시도는 `DECLINED`, 주문은 `CHECKOUT_REQ
 
 복구: 재결제 트랜잭션이 실패하면 아무것도 남지 않고 호출자가 같은 명령을 다시 보내면 된다. 응답을 잃고 다시 보내도 새 시도는 하나다. 새 시도의 provider 호출 실패는 기존 `PaymentAttemptCreatedListener`의 복구 경로(발행 기록 `FAILED`)를 그대로 따른다. 잠금 대기 3초를 넘기면 `PessimisticLockingFailureException` 계열로 실패하고 아무것도 바꾸지 않는다.
 
-관측성: Facade가 새 시도를 만들면 반환 뒤 `거절된 paymentId → 새 paymentId`를 로그 한 줄로 남긴다. 호출자가 트랜잭션 밖에서 부르므로 반환 시점이 곧 커밋 뒤다.
+관측성: Facade가 새 시도를 만들면 `declinedPaymentId`와 새 `paymentId`를 로그 한 줄로 남긴다. 트랜잭션을 `TransactionOperations`로 열고 그 반환 뒤에 찍으므로 로그 시점이 곧 커밋 뒤다. 이미 재결제한 요청이면 찍지 않는다.
 
 ## 제외
 - HTTP endpoint와 REST Docs. 단말 인증이 없어 외부에 노출하지 않는다. 다음 PR이 만든다.
@@ -77,10 +77,26 @@ provider가 결제를 거절하면 시도는 `DECLINED`, 주문은 `CHECKOUT_REQ
 ## TDD 검증 기록
 | 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
 |---|---|---|---|
-| 거절된 시도에서 새 시도를 만든다 (인수 조건 1·4 도메인) | 미실행 | 미실행 | 미실행 |
-| 재결제 명령의 멱등과 거절 (인수 조건 1·3·4·5) | 미실행 | 미실행 | 미실행 |
-| 거절 뒤 재결제가 승인되어 주문이 PAID가 된다 (인수 조건 2) | 미실행 | 미실행 | 미실행 |
-| 겹친 재결제가 시도 하나로 수렴한다 (인수 조건 6) | 미실행 | 미실행 | 미실행 |
+| 거절된 시도에서 새 시도를 만든다 (인수 조건 1·4 도메인) `PaymentAttemptRetryTest` | `retry`를 `Transition(this, emptyList())`로 두고 `./gradlew test --tests '*PaymentAttemptRetryTest'` — 3개 모두 실패. 새 시도 id가 원래 id였고, 거절 대상 두 테스트는 예외 없이 진행(`actual null`) | 구현 뒤 3개 통과 | `./gradlew test` — 228개 통과 |
+| 재결제 명령의 멱등과 거절 (인수 조건 1·3·4·5) `PaymentManagementTest` | Facade를 대상 시도를 그대로 돌려주는 빈 동작으로 두고 `--tests '*PaymentManagementTest'` — 신규 4개 중 3개 실패(새 시도 없음 `List is empty`, 두 거절 테스트 `actual null`). "이미 재결제한 요청" 테스트는 빈 동작에서 저절로 맞았다 | 구현 뒤 11개 통과 | `./gradlew test` — 228개 통과 |
+| 거절 뒤 재결제가 승인되어 주문이 PAID가 된다 (인수 조건 2) `PaymentRetryIntegrationTest` | 구현 뒤에 쓴 테스트라 새 시도 생성을 지운 코드로 확인했다 — `주문이 PAID가 된다. 현재: CHECKOUT_REQUESTED`로 실패 | 되돌리면 통과 | `./gradlew test` — 228개 통과 |
+| 겹친 재결제가 시도 하나로 수렴한다 (인수 조건 6) `PaymentRetryIntegrationTest` | 대상 잠금을 `findById`로 바꾸면 3회 모두 실패 — 진 쪽이 커밋에서 `ux_payment_attempt_inflight_authorization` 위반(`DataIntegrityViolationException`) | 되돌리면 통과 | `./gradlew test` — 228개 통과 |
+
+통과 뒤 동작을 하나씩 지워 테스트가 다시 빨개지는지 봤다.
+
+| 지운 동작 | 빨개진 테스트 |
+|---|---|
+| 최신 시도 판정(이미 재결제했으면 최신을 돌려준다) | Facade 단위 `이미 재결제한 거절 시도로 다시 요청하면...` 1개 |
+| 대상 행 잠금 | 겹친 재결제 통합 — 3회 모두 |
+| 새 시도 생성 | 재결제 승인 통합 |
+
+잠금을 뺐을 때의 실패는 래치로 두 호출을 동시에 출발시킨 결과이고 순서를 보장하지는 않는다. 확률적이지만 3회 모두 실패했다.
 
 ## 결과
-개발 전 작성. 개발 후 실행 결과와 변경 이유를 추가한다.
+`./gradlew test` 228개 통과다(신규 9). `python3 scripts/check_pr.py --base origin/main --worktree` PASS(11개 파일 / 532줄).
+
+- 재결제는 `PaymentAttempt.retry`가 만들고 `PaymentManagement.retryAuthorization`이 잠금·최신 판정·저장·발행을 소유한다. provider 호출은 기존 리스너가 이어받는 것을 통합 테스트가 끝까지 확인한다(거절 → 재결제 → 승인 → 주문 `PAID`, 같은 회차에 시도 행 둘).
+- Facade는 `authorize`와 같이 `NEVER`이고 `TransactionOperations`로 트랜잭션을 연다. 범위 절의 "반환 뒤 로그"를 호출자가 아니라 Facade 안에서 커밋 뒤에 찍기 위해서다. 범위 절을 그에 맞게 고쳤다.
+- 겹친 재결제에서 진 쪽은 예외 없이 앞 요청이 만든 시도를 돌려받는다. 잠금이 없으면 partial unique가 막아 행은 둘이 되지 않지만 진 쪽이 `DataIntegrityViolationException`을 받는다.
+- `order`는 `markPaid`의 `ponytail:` 표식 문구만 바뀌었다. 동작은 그대로다.
+- 테스트 전용 gateway는 금액마다 처음 한 번만 거절한다. 테스트마다 금액을 다르게 둔다.
