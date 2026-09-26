@@ -5,7 +5,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from link_claude import LINKS, VAULT_ENV, main
+from link_claude import COPIES, LINKS, VAULT_ENV, main
 
 
 def run(**kwargs):
@@ -29,6 +29,9 @@ class LinkClaudeTest(unittest.TestCase):
             else:
                 (self.vault / source).mkdir(parents=True)
                 (self.vault / source / 'placeholder.md').write_text('x\n')
+        for _, source in COPIES:
+            (self.vault / source).mkdir(parents=True)
+            (self.vault / source / 'rule.md').write_text('rule\n')
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -107,19 +110,45 @@ class LinkClaudeTest(unittest.TestCase):
         self.assertTrue((self.root / LINKS[1][0]).is_symlink())
 
 
-    def test_links_rules_directory(self):
-        names = {link for link, _ in LINKS}
-        self.assertIn('.claude/rules', names)
+    def test_copies_rules_as_real_files(self):
+        self.assertNotIn('.claude/rules', {link for link, _ in LINKS})
 
         code, _ = run(root=self.root, vault=self.vault)
 
         self.assertEqual(code, 0)
-        path = self.root / '.claude/rules'
-        self.assertTrue(path.is_symlink())
-        self.assertEqual(path.resolve(), (self.vault / 'rules').resolve())
+        rules = self.root / '.claude/rules'
+        self.assertTrue(rules.is_dir())
+        self.assertFalse(rules.is_symlink())
+        self.assertFalse((rules / 'rule.md').is_symlink())
+        self.assertEqual((rules / 'rule.md').read_text(), 'rule\n')
+
+    def test_replaces_rules_symlink_without_touching_vault(self):
+        rules = self.root / '.claude/rules'
+        rules.parent.mkdir(parents=True)
+        rules.symlink_to(self.vault / 'rules', target_is_directory=True)
+
+        code, _ = run(root=self.root, vault=self.vault)
+
+        self.assertEqual(code, 0)
+        self.assertFalse(rules.is_symlink())
+        self.assertEqual((self.vault / 'rules' / 'rule.md').read_text(), 'rule\n')
+
+    def test_mirrors_vault_over_local_edits_and_stale_files(self):
+        run(root=self.root, vault=self.vault)
+        rules = self.root / '.claude/rules'
+        (rules / 'rule.md').write_text('local edit\n')
+        (self.vault / 'rules' / 'gone.md').write_text('x\n')
+        run(root=self.root, vault=self.vault)
+        (self.vault / 'rules' / 'gone.md').unlink()
+
+        code, _ = run(root=self.root, vault=self.vault)
+
+        self.assertEqual(code, 0)
+        self.assertEqual((rules / 'rule.md').read_text(), 'rule\n')
+        self.assertFalse((rules / 'gone.md').exists())
 
     def test_skips_rules_when_vault_lacks_it(self):
-        (self.vault / 'rules' / 'placeholder.md').unlink()
+        (self.vault / 'rules' / 'rule.md').unlink()
         (self.vault / 'rules').rmdir()
 
         code, _ = run(root=self.root, vault=self.vault)
