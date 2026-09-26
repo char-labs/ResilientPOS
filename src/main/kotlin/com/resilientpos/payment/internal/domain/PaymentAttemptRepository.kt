@@ -15,6 +15,12 @@ interface PaymentAttemptRepository {
      */
     fun findAuthorization(orderId: UUID, checkoutNo: Int): PaymentAttempt?
 
+    /**
+     * 그 checkout의 승인 시도 중 **가장 나중에** 만든 것. 재결제가 거절된 시도를 다시 시도할 수 있는지,
+     * 이미 다시 시도했는지를 가리는 조회다.
+     */
+    fun findLatestAuthorization(orderId: UUID, checkoutNo: Int): PaymentAttempt?
+
     /** 시도 하나를 식별자로 읽는다. 잠그지 않는다. */
     fun findById(paymentId: PaymentId): PaymentAttempt?
 
