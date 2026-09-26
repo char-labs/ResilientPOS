@@ -95,7 +95,7 @@ compose 80줄 안팎, Alloy 설정 40줄 안팎, Dockerfile 15줄 안팎, 문서
 - 인수 5: `make down`(`docker compose --profile '*' down`) 뒤 이 프로젝트 label이 붙은 컨테이너가 0개였다. named volume은 남긴다.
 - 인수 6: `.env`를 만든 뒤 `git status --short`에 나오지 않았다.
 - 인수 7: compose를 내린 상태에서 `./gradlew test` 232개 중 실패 0.
-- JDK/JRE 이미지는 `latest`가 아니라 `eclipse-temurin:25-jdk`·`25-jre`다. Gradle toolchain이 25를 요구하므로 메이저는 맞추고 패치만 따라가는 떠다니는 태그로 뒀다.
+- JDK 이미지는 `latest`가 아니라 메이저 25 태그다. Gradle toolchain이 25를 요구하므로 메이저는 맞추고 패치만 따라가는 떠다니는 태그로 뒀다(처음에는 `eclipse-temurin`, 범위 조정 뒤 Corretto).
 - compose 프로젝트 이름을 `resilientpos`로 고정했다. Alloy가 프로젝트·서비스 label로 앱 컨테이너를 고르는데, 이름을 고정하지 않으면 디렉터리 이름(worktree마다 다름)이 프로젝트 이름이 된다.
 - `python3 scripts/check_pr.py --base origin/main --worktree`: PASS(일반 10개/253줄).
 - 범위 조정 뒤 재검증(`docker/`로 옮긴 경로, `make up`·`make down`은 `-f docker/docker-compose.yaml`을 쓴다):
@@ -105,3 +105,7 @@ compose 80줄 안팎, Alloy 설정 40줄 안팎, Dockerfile 15줄 안팎, 문서
   - DB(psql): 마이그레이션 7개가 성공했다. `t_order`가 `PAID`로 전이됐고 `t_payment_attempt`·`t_fulfillment`에 한 행씩 생겼다. `event_publication` 4행이 모두 `COMPLETED`였다.
   - Grafana: Prometheus에서 `/v1/orders` 201 2건과 checkout 200 1건이 조회됐다. Loki label은 `level`·`service_name`뿐이었다.
   - `make down` 뒤 컨테이너 0개, `docker/.env`는 git이 추적하지 않았다. `./gradlew test --rerun-tasks` 232개 중 실패 0.
+- Corretto 전환 뒤 재검증:
+  - `amazoncorretto:25` 최소 이미지에 `xargs`가 없어 `gradlew`가 `xargs is not available`로 실패했다. 빌드 스테이지에만 `dnf install -y findutils`를 더했다. 실행 스테이지는 `java -jar`만 쓰므로 넣지 않았다.
+  - `--no-cache` 빌드가 성공했고 앱 이미지는 552MB다. 컨테이너의 `java -version`은 `Corretto-25.0.4.8.1`이었다.
+  - 세 profile을 띄워 health `UP`, Grafana `database: ok`를 확인했다. `POST /v1/orders` 201과 checkout 200을 받은 뒤 주문이 `PAID`로 전이됐고, 이 주문의 발행 기록 4개가 모두 `COMPLETED`였다. Prometheus에서 checkout metric이 조회됐고 Loki label은 `level`·`service_name`뿐이었다.
