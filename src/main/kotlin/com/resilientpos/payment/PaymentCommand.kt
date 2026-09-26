@@ -46,4 +46,20 @@ object PaymentCommand {
             val status: PaymentAttemptStatus,
         )
     }
+
+    /**
+     * 거절된 승인 시도를 같은 checkout 회차에서 다시 시도한다. 주문이 아니라 거절된 시도를 가리켜서,
+     * 응답을 잃고 다시 보낸 요청과 새 재결제 의도를 구분한다.
+     */
+    data class RetryAuthorization(
+        val paymentId: PaymentId,
+    ) {
+        /**
+         * 새로 만든 시도, 또는 이미 다시 시도했으면 그 회차의 최신 시도.
+         */
+        data class Result(
+            val paymentId: PaymentId,
+            val status: PaymentAttemptStatus,
+        )
+    }
 }

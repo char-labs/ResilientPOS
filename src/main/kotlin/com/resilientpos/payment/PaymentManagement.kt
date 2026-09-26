@@ -8,6 +8,7 @@ import com.resilientpos.payment.internal.domain.AuthorizationRequest
 import com.resilientpos.payment.internal.domain.PaymentAttempt
 import com.resilientpos.payment.internal.domain.PaymentAttemptRepository
 import com.resilientpos.payment.internal.domain.PaymentGateway
+import com.resilientpos.platform.logger
 import java.time.Clock
 import org.springframework.context.ApplicationEventPublisher
 import org.springframework.stereotype.Service
@@ -78,6 +79,38 @@ class PaymentManagement(
         return requireNotNull(transactions.execute { applyOutcome(command.paymentId, outcome) })
     }
 
+    /**
+     * 거절된 승인 시도를 같은 checkout 회차에서 다시 시도한다. 새 시도를 만들 뿐 provider는 부르지 않는다 —
+     * 생성 사실을 받는 리스너가 [authorize]로 이어받는다.
+     *
+     * 대상이 그 회차의 최신 승인 시도가 아니면 이미 다시 시도한 것이라 최신 시도를 돌려준다. 응답을 잃고 다시 보낸
+     * 요청이 새 provider 호출이 되지 않게 하려는 것이다. 최신인데 거절이 아니면 aggregate가 거절한다.
+     *
+     * 대상 행을 잠그고 최신을 읽는다. 겹친 두 요청 중 진 쪽은 앞 커밋을 기다렸다가 그 새 시도를 최신으로 본다.
+     * 트랜잭션을 [TransactionOperations]로 열어 반환 뒤의 로그가 커밋 뒤의 사실이 되게 한다([authorize]와 같다).
+     */
+    @Transactional(propagation = Propagation.NEVER)
+    fun retryAuthorization(command: PaymentCommand.RetryAuthorization): PaymentCommand.RetryAuthorization.Result {
+        val (result, retried) = requireNotNull(transactions.execute { retry(command.paymentId) })
+        if (retried) {
+            log.info { "결제를 다시 시도한다 declinedPaymentId=${command.paymentId.value} paymentId=${result.paymentId.value}" }
+        }
+        return result
+    }
+
+    private fun retry(paymentId: PaymentId): Pair<PaymentCommand.RetryAuthorization.Result, Boolean> {
+        val target = repository.findByIdForUpdate(paymentId) ?: throw attemptNotFound()
+        val latest = repository.findLatestAuthorization(target.orderId, target.checkoutNo)
+        if (latest != null && latest.id != target.id) {
+            return PaymentCommand.RetryAuthorization.Result(latest.id, latest.status) to false
+        }
+
+        val transition = target.retry(identifierGenerator, clock.instant())
+        val saved = repository.save(transition.aggregate)
+        transition.events.forEach(eventPublisher::publishEvent)
+        return PaymentCommand.RetryAuthorization.Result(saved.id, saved.status) to true
+    }
+
     /** 잠그고 다시 읽는다. 호출하는 동안 다른 `authorize`가 먼저 적용했으면 덮지 않고 그 결말을 돌려준다. */
     private fun applyOutcome(paymentId: PaymentId, outcome: AuthorizationOutcome): PaymentCommand.Authorize.Result {
         val current = repository.findByIdForUpdate(paymentId) ?: throw attemptNotFound()
@@ -97,4 +130,8 @@ class PaymentManagement(
         "결제 시도를 찾을 수 없습니다",
         DomainErrorKind.NOT_FOUND,
     )
+
+    companion object {
+        private val log by logger()
+    }
 }

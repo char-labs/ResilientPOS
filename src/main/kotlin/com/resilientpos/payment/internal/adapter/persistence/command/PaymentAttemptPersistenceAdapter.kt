@@ -27,6 +27,13 @@ class PaymentAttemptPersistenceAdapter(
             kind = PaymentAttemptKind.AUTHORIZATION,
         )?.toDomain()
 
+    override fun findLatestAuthorization(orderId: UUID, checkoutNo: Int): PaymentAttempt? =
+        jpaRepository.findFirstByOrderIdAndCheckoutNoAndKindOrderByIdDesc(
+            orderId = orderId,
+            checkoutNo = checkoutNo,
+            kind = PaymentAttemptKind.AUTHORIZATION,
+        )?.toDomain()
+
     override fun findById(paymentId: PaymentId): PaymentAttempt? =
         jpaRepository.findById(paymentId.value)?.toDomain()
 
