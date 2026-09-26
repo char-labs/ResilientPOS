@@ -87,6 +87,7 @@ compose 80줄 안팎, Alloy 설정 40줄 안팎, Dockerfile 15줄 안팎, 문서
 - 첫 push 뒤 사용자 요청으로 Docker 관련 파일을 `docker/` 디렉터리로 옮겼다. `compose.yaml`은 `docker/docker-compose.yaml`로 이름을 바꿨고, `Dockerfile`·`.env.example`도 옮겼다. 루트 `.dockerignore`는 `docker/Dockerfile.dockerignore`로 바꿨다. 명령에 `-f docker/docker-compose.yaml`이 붙으므로 Makefile과 README도 함께 고친다. 인수 조건은 경로만 바뀌고 내용은 같으며, 옮긴 뒤 다시 실행해 결과 절에 적는다.
 - 사용자 요청으로 베이스 이미지를 `eclipse-temurin`에서 Amazon Corretto로 바꾼다. Temurin은 공식 이미지의 기본값이라 골랐을 뿐 이 프로젝트에 맞춘 근거가 없었다. 빌드는 `amazoncorretto:25`, 실행은 `amazoncorretto:25-headless`로 두어 두 스테이지의 OS(Amazon Linux 2023)를 맞춘다. 실행 이미지는 484MB로 Temurin JRE(356MB)보다 크고 `25-alpine`(372MB)보다도 크지만, 로컬 전용이라 크기보다 두 스테이지의 libc 일치를 택했다. 인수 2를 다시 실행해 결과 절에 적는다.
 - 사용자 요청으로 실행·빌드 이미지를 `amazoncorretto:25-alpine`으로 바꾸고, ZGC를 포함한 메모리 설정을 조사해 개선한다. 후보(기본값, G1, G1+Compact Object Headers, ZGC, ZGC+Compact Object Headers)를 같은 조건(1GB·2 CPU, 주문 생성+checkout 3000요청, 동시 16)으로 측정해 고른다. 측정 결과와 채택하지 않은 이유는 결과 절에 적는다.
+- 사용자 요청으로 가상 스레드(`spring.threads.virtual.enabled`)를 켤지 같은 방식으로 측정했다. 켜지 않기로 했으므로 애플리케이션 설정과 코드는 바뀌지 않고, 측정과 병목 원인만 결과 절에 기록한다. 동작이 바뀌지 않으므로 wiki 본문은 고치지 않는다. 저장소 밖에 있는 볼트의 현재 상태 문서는 머지 뒤 이 결과를 옮긴다.
 
 ## 결과
 개발 전 작성. 개발 후 실행 결과와 변경 이유를 추가한다.
@@ -127,3 +128,20 @@ compose 80줄 안팎, Alloy 설정 40줄 안팎, Dockerfile 15줄 안팎, 문서
   - Compact Object Headers(JDK 25 정식, 기본값 꺼짐)는 유휴 RSS를 10~25MB 줄였지만 두 번 모두 G1 최대 멈춤이 84~94ms로 늘고 처리량이 낮았다. 살아 있는 객체가 100MB 안팎이라 얻을 것이 적어서 넣지 않았다. 힙이 커지면 다시 잰다.
   - `amazoncorretto:25-alpine`은 busybox에 `xargs`가 있어서 `findutils` 설치를 뺐다. 앱 이미지는 552MB에서 440MB로 줄었다.
   - 적용 뒤 컨테이너의 `jcmd VM.flags`에서 `UseG1GC`, `MaxRAMPercentage=75`, `MaxHeapSize=805306368`, `ExitOnOutOfMemoryError`를 확인했다. 유휴 RSS는 316MiB/1GiB였다. 세 profile에서 health `UP`, Grafana `database: ok`, `POST /v1/orders` 201과 checkout 200, 주문 `PAID`와 발행 기록 4개 `COMPLETED`, Prometheus의 `G1 Young Generation` GC metric, Loki label `level`·`service_name`을 확인했다.
+- 가상 스레드 검토(켜지 않음):
+  - 현재 상태: `spring.threads.virtual.enabled`가 없어서 꺼져 있다.
+  - 측정: 위와 같은 컨테이너(1GB·2 CPU, G1·힙 75%)에서 주문 생성과 checkout 3000요청을 보내고, 이번 실행이 만든 발행 기록만 셌다.
+
+    | 동시 요청 | 설정 | 처리량 | p50 | p99 | 부하 종료 때 밀린 이벤트 | 실패한 발행 기록 |
+    |---|---|---|---|---|---|---|
+    | 16 | 끔 | 643 rps | 11ms | 86ms | 1,448건, 4초 뒤 0 | 0 |
+    | 16 | 켬 | 365 rps | 35ms | 152ms | 0 | 0 |
+    | 64 | 끔 | 658 rps | 94ms | 297ms | 1,501건, 4초 뒤 0 | 0 |
+    | 64 | 켬 | 312 rps | 133ms | 1,014ms | 0 | 0 |
+    | 16·64 | 켬, `spring.task.execution.simple.concurrency-limit=8` | 요청이 500으로 실패해 측정 중단 | | | | |
+
+  - 병목은 스레드 수가 아니라 Hikari 커넥션 10개다. 요청과 리스너가 모두 트랜잭션 하나마다 커넥션 하나를 쥔다. 플랫폼 스레드일 때도 Tomcat 요청 스레드(최대 200)가 이미 커넥션보다 많으므로, 스레드를 늘려도 DB가 한 번에 처리하는 양은 늘지 않는다.
+  - 켜면 느려지는 이유: 이 설정은 Tomcat 요청 스레드뿐 아니라 Spring Boot 기본 task executor도 바꾼다. Modulith의 커밋 뒤 비동기 리스너가 여기서 돈다. 꺼져 있을 때 이 executor는 코어 8의 `ThreadPoolTaskExecutor`라 리스너는 최대 8개만 돌고 나머지는 메모리 큐에서 기다린다. 요청은 남은 커넥션을 쓰고, 이벤트 처리는 뒤로 밀린다(밀린 1,448건). 켜면 상한이 없는 가상 스레드 `SimpleAsyncTaskExecutor`가 되어, checkout 하나가 만드는 리스너 4개가 모두 곧바로 커넥션을 달라고 줄을 선다. 해야 할 일의 총량은 같고 순서만 바뀐다. 이벤트는 밀리지 않게 되지만(밀린 이벤트 0), 요청 트랜잭션이 리스너 트랜잭션 뒤에서 커넥션을 기다린다. 그래서 p50이 11ms에서 35ms로 늘고 처리량이 43~53% 줄었다.
+  - 상한을 다시 걸면 실패하는 이유: `SimpleAsyncTaskExecutor`는 상한에 닿으면 기본값(`rejectTasksWhenLimitReached=false`)에서 작업을 넘기는 스레드를 `await()`로 막는다. 커밋 뒤 리스너를 넘기는 스레드는 요청 스레드다. Spring TX의 `processCommit`은 커밋 뒤 동기화 콜백(`triggerAfterCommit`·`triggerAfterCompletion`, 리스너 전달이 여기서 일어난다)을 부른 다음에야 `cleanupAfterCompletion`에서 커넥션을 반납한다. 그래서 요청 스레드가 커넥션을 쥔 채 리스너 자리를 기다리고, 자리를 차지한 리스너는 커넥션을 받지 못한다. 로그에 `HikariPool-1 - Connection is not available, request timed out after 3009ms (total=10, active=10, idle=0, waiting=60)`가 찍혔고 요청이 500으로 끝났다. 이 교착 경로는 spring-tx 7.0.9와 spring-core 소스로 확인한 추론이다. 스레드 덤프로 직접 확인하지는 않았다.
+  - 다시 볼 조건: 실제 PG HTTP 호출처럼 DB 커넥션을 쥐지 않고 오래 기다리는 I/O가 생길 때다. 그때는 리스너 전용 executor를 두고 상한은 호출자를 막지 않는 큐로 건다. 커넥션 풀 크기와 PG 호출이 트랜잭션 밖에서 일어나는지도 함께 정한다.
+  - 함께 드러난 것: 꺼진 상태에서 부하가 끝난 시점에 메모리 큐에 밀린 이벤트는 컨테이너가 내려가면 처리되지 않는다. 측정 컨테이너를 내릴 때 `PUBLISHED` 12,562건과 `PROCESSING` 43건이 미완료로 남았다. 현재 상태 문서의 알려진 빈틈(종료할 때 리스너를 기다리지 않음, 재전달 절차 없음)이 재현된 것이다. 측정 데이터가 섞인 로컬 볼륨은 `docker compose -f docker/docker-compose.yaml --profile '*' down -v`로 지웠다.
