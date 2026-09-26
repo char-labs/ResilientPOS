@@ -1,0 +1,85 @@
+# PR spec: 로컬 개발용 docker compose로 PostgreSQL·앱·LGTM을 띄운다
+
+## 목적
+로컬에서 앱을 돌리려면 PostgreSQL을 손으로 준비해야 하고, #56·#57이 만든 metric과 ECS 로그를 실제로 수집해 볼 곳이 없다. 외부 인프라를 끼는 작업의 첫 단계로 저장소에 compose와 Dockerfile을 둔다.
+
+기대 결과: `make up` 한 번이면 IDE에서 띄운 앱이 붙을 PostgreSQL이 뜨고, profile을 켜면 앱 컨테이너와 LGTM까지 떠서 Grafana에서 앱의 metric과 로그를 조회할 수 있다.
+
+## 범위
+운영 코드와 테스트는 바뀌지 않는다. 저장소 루트의 인프라 파일과 문서만 더한다.
+
+**서비스와 profile.** 루트 `compose.yaml` 하나에 둔다.
+- 기본(profile 없음): `postgres`. `postgres:18-alpine`으로 메이저를 고정한다. 테스트(Testcontainers)와 같은 메이저이고, `latest`로 두면 다음 메이저가 나오는 날 named volume에 남은 데이터 디렉터리를 읽지 못해 기동하지 않는다. 5432를 호스트에 연다. 데이터는 named volume에 둔다. healthcheck는 `pg_isready`다.
+- `app` profile: `app`. 루트 `Dockerfile`로 빌드한다. `postgres`가 healthy가 된 뒤 뜨고 `POSTGRES_URL`은 compose 네트워크의 `postgres`를 가리킨다. `LOGGING_STRUCTURED_FORMAT_CONSOLE=ecs`를 줘서 stdout이 ECS JSON이 된다. 8080을 호스트에 연다.
+- `obs` profile: `alloy`와 `lgtm`(`grafana/otel-lgtm`). Grafana는 3000을 호스트에 연다.
+- Kafka·Redis는 넣지 않는다. 빌드 의존성에 없어 앱이 붙지 않으므로 검증할 방법이 없다. 의존성을 더하는 기능 PR이 compose 서비스도 함께 더한다.
+
+**수집 경로.** [관측성](../wiki/observability.md)의 "LGTM을 붙일 때"에 정한 방식을 로컬에서 그대로 쓴다. 설정은 `docker/alloy/config.alloy` 하나다.
+- metric: Alloy `prometheus.scrape`가 `app:8080/actuator/prometheus`를 scrape하고 `prometheus.remote_write`로 `lgtm`의 Prometheus에 보낸다. 운영의 Mimir 자리를 로컬에서는 otel-lgtm 안의 Prometheus가 맡는다.
+- 로그: Alloy가 docker socket을 읽기 전용으로 마운트해 `app` 컨테이너의 stdout만 읽고, ECS 필드 `service.name`·`log.level`을 `service_name`·`level` label로 올려 `lgtm`의 Loki로 보낸다. label은 이 둘뿐이다.
+- 관측은 앱 컨테이너를 전제로 한다. `obs`는 `app`과 함께 켠다(`docker compose --profile app --profile obs up`).
+
+**비밀번호.** compose는 `${POSTGRES_PASSWORD:-resilientpos}`를 쓴다. 로컬·포트폴리오 용도라 기본값으로 바로 뜨게 하고, 바꾸고 싶으면 gitignore된 `.env`에 적는다. 변수 목록은 커밋하는 `.env.example`에 둔다. `trust` 인증은 쓰지 않는다. `application.yaml`은 바꾸지 않으므로 호스트에서 앱을 띄울 때는 `POSTGRES_PASSWORD=resilientpos`를 직접 준다.
+
+**Dockerfile.** multi-stage다. JDK 25 스테이지에서 `./gradlew bootJar`를 돌리고 JRE 25 스테이지로 jar만 복사한다. 호스트 JDK가 없어도 `--build`로 끝난다. `.dockerignore`로 `build/`·`.gradle/`·`.git/` 등을 컨텍스트에서 뺀다.
+
+**이미지 버전.** 사용자 결정으로 `postgres`를 뺀 이미지(Alloy·otel-lgtm·JDK/JRE)는 `latest` 계열 태그를 허용한다. 로컬 개발 전용이라 재현성보다 갱신 비용을 줄인다.
+
+**Makefile.** `up`(PostgreSQL만)과 `down` 두 타깃을 더한다. profile 조합은 README에 적고 `docker compose`를 직접 쓴다.
+
+계약·복구·관측성: 앱의 API와 설정은 바뀌지 않는다. 상태를 바꾸지 않는다. 이 PR이 로컬 관측 경로를 만든다.
+
+## 제외
+- Kafka·Redis compose 서비스. 해당 기능 PR로 미룬다.
+- `spring-boot-docker-compose` 연동. 의존성이 늘고 앱 컨테이너와 자동 기동 대상이 겹친다.
+- `application.yaml`의 `POSTGRES_PASSWORD` 기본값. 변수를 빠뜨린 인스턴스가 뜨지 않게 한 기존 결정을 유지한다.
+- Grafana 대시보드·알림 규칙 provisioning, trace(Tempo는 otel-lgtm에 들어 있지만 앱이 보내지 않는다).
+- 호스트에서 띄운 앱을 Alloy가 scrape하는 경로.
+- 테스트 구성 변경. 테스트는 계속 Testcontainers만 쓴다.
+- 운영 배포용 이미지 최적화(layered jar, 비루트 사용자 강제, digest 고정).
+
+## 관련 문서
+- [관측성](../wiki/observability.md): 수집 방식과 label 규칙의 정본이다.
+- [시스템 설계 7절](../references/02_System_Design.md#7-nfr-and-observability): Prometheus·Loki·Grafana 파이프라인 방향이다.
+
+## 변경 경로
+- compose.yaml
+- Dockerfile
+- .dockerignore
+- .env.example
+- .gitignore
+- docker/alloy/config.alloy
+- Makefile
+- README.md
+- docs/wiki/observability.md
+- docs/spec/2026-09-26-local-docker-compose.md
+
+## 인수 조건
+1. `make up`이 PostgreSQL만 띄우고 healthy가 된다. 그 상태에서 호스트의 `POSTGRES_PASSWORD=resilientpos ./gradlew bootRun`이 Flyway 마이그레이션을 마치고 기동한다.
+2. `.env` 없이 `docker compose --profile app up --build`가 앱 이미지를 빌드하고, 앱이 컨테이너의 PostgreSQL에 붙어 `GET localhost:8080/actuator/health`가 `UP`을 돌려준다. 앱 stdout은 ECS JSON이다.
+3. `docker compose --profile app --profile obs up`에서 Grafana(localhost:3000)의 Prometheus 데이터소스로 `http_server_requests_seconds_count{application="ResilientPOS"}`가 조회된다.
+4. 같은 상태에서 Loki 데이터소스로 `{service_name="ResilientPOS"}`가 앱 로그를 돌려주고, label은 `service_name`·`level` 두 개만 붙는다(Loki가 스스로 붙이는 label은 제외).
+5. `make down`이 모든 profile의 컨테이너를 내린다.
+6. `.env`는 git이 추적하지 않는다.
+7. `./gradlew test`가 compose와 무관하게 통과한다.
+
+## 검증
+- 인수 1~5: 실제로 각 명령을 실행하고 `docker compose ps`, `curl`, Grafana 데이터소스 proxy API(`/api/datasources/proxy/uid/...`) 또는 Prometheus·Loki HTTP API 조회 결과를 결과 절에 적는다.
+- 인수 6: `.env`를 만든 뒤 `git status --short`에 나오지 않는지 본다.
+- 인수 7: `./gradlew test`. Docker가 필요하다.
+- `python3 scripts/check_pr.py --base origin/main --worktree`, 제출 전에는 `--worktree` 없이 한 번 더.
+
+## Wiki 영향
+- [관측성](../wiki/observability.md): "아직 없는 것"에서 로컬 LGTM 스택을 빼고, 로컬에서 수집 경로를 띄우는 방법과 운영과의 차이(Mimir 자리를 Prometheus가 맡음)를 적는다.
+- README: 로컬 실행 방법(compose profile, 비밀번호 기본값, make 타깃)을 적는다.
+- 볼트의 현재 상태 문서는 저장소 밖이라 머지 뒤 따로 고친다.
+- 요구사항 변화: 없다. 기존 관측성 wiki가 정한 수집 방식을 로컬에서 구현할 뿐이다.
+
+## 분할 계획
+compose 80줄 안팎, Alloy 설정 40줄 안팎, Dockerfile 15줄 안팎, 문서 50줄 안팎이다. 분할하지 않는다.
+
+## TDD 검증 기록
+업무 동작 변경이 아니라 로컬 인프라 파일 추가라 적용하지 않는다. 대신 인수 조건마다 실제 compose 실행 결과를 결과 절에 남긴다.
+
+## 결과
+개발 전 작성. 개발 후 실행 결과와 변경 이유를 추가한다.
