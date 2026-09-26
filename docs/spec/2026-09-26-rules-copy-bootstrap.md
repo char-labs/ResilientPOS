@@ -66,7 +66,15 @@
 
 | 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
 |---|---|---|---|
-| rules 복사·링크 교체·미러링 | 미실행 | 미실행 | 미실행 |
+| test_copies_rules_as_real_files, test_replaces_rules_symlink_without_touching_vault, test_mirrors_vault_over_local_edits_and_stale_files, test_skips_rules_when_vault_lacks_it | `python3 -m unittest discover -s scripts -p 'test_link_claude.py'`, `COPIES`가 없어 import 실패 | 같은 명령, 통과 | `python3 -m unittest discover -s scripts -p 'test_*.py'`, 136개 OK |
 
 ## 결과
-개발 전 작성. 개발 후 실행 결과와 변경 이유를 추가한다.
+개발 전 spec을 독립 커밋으로 작성했다. 구현 후 아래를 확인했다.
+
+- `link_claude.py`는 `.claude/rules`를 `LINKS`에서 빼고 `COPIES`로 옮겼다. `copy_one`은 기존 경로가 링크면 링크만 지우고, 실제 디렉터리면 지운 뒤 `shutil.copytree`로 볼트를 복사한다.
+- 하네스 136개 통과.
+- 이 worktree에서 `make bootstrap`을 두 번 실행해 두 번 모두 `linked 4/4, copied 1/1`을 확인했다. `.claude/rules`와 안의 6개 파일은 실제 파일이다.
+- 실측: 도구를 막은 `claude -p --model haiku`에게 engineering-principles의 첫 `##` 제목을 컨텍스트에서만 인용하게 했다. 복사본일 때는 `## 설계 최우선 원칙 (Design First)`를 인용했다.
+  대조군으로 `.claude/rules`를 볼트 디렉터리 링크로 되돌리자 `NOT_LOADED`로 답했다.
+- 그 링크 상태에서 bootstrap을 다시 실행하자 `.claude/rules`가 실제 디렉터리로 바뀌었고, 볼트 `rules/`의 파일 6개는 그대로 남았다.
+- `python3 scripts/check_pr.py --base origin/main --worktree`: PASS, 일반 9개/175줄.
