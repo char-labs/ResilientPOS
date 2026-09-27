@@ -87,6 +87,15 @@ group by listener_id, status;
 - **문서의 순서 표현을 고쳤다.** 파티션 안의 순서는 전송 순서다. externalizer가 비동기라 같은 주문의 두 이벤트가 커밋 순서와 다르게 전송될 수 있고, 후속 PR의 `resubmit`은 오래된 이벤트를 나중에 보낸다. consumer는 순서에 기대지 않고 멱등으로 견딘다.
 - **테스트의 `awaitUntil` 복사본을 `PostgresIntegrationTest` 하나로 모았다.** 이 PR이 고친 테스트 셋의 복사본도 지웠다. checkout 도우미의 복사본과 겹치는 시나리오는 그 테스트가 원래 있던 것이라 두었다.
 
+### 범위 조정 (2026-09-27, 공식 문서 점검)
+[Spring Modulith 이벤트 문서](https://docs.spring.io/spring-modulith/reference/events.html), [Spring Kafka 오류 처리 문서](https://docs.spring.io/spring-kafka/reference/kafka/annotation-error-handling.html)와 이 설정을 대조했다. Apache Kafka 설정 문서 페이지는 가져오지 못해서, kafka-clients 4.2.1이 테스트 기동 때 로그로 찍은 실제 값을 보았다.
+- **맞게 쓰고 있는 것.** `@Externalized("토픽::#{#this.orderId}")`는 문서의 `$target::$key` 형식 그대로이고, Kafka에서는 target이 토픽, key가 메시지 key가 된다. DLT 목적지를 명시하는 것, 파티션을 음수로 두면 Kafka가 key로 고르는 것, 목록 밖 예외를 바로 recoverer로 보내는 것, 대기 한 번(최대 30초)이 `max.poll.interval.ms`(300초)보다 짧아 기본 `BackOffHandler`(스레드 대기)로 충분한 것 모두 문서와 같다. `DeadLetterPublishingRecoverer`는 원래 key를 유지하고 이전 예외 헤더를 지운다(`stripPreviousExceptionHeaders` 기본 true). producer는 `acks=-1`(all), `enable.idempotence=true`, `retries` 최대, `delivery.timeout.ms=120000`이고 consumer는 `enable.auto.commit=false`, `auto.offset.reset=earliest`, `max.poll.interval.ms=300000`이다. 설정하지 않아도 내구성 권장값이다.
+- **전송 순서를 직렬화하지 않는다(`spring.modulith.events.externalization.serialize-externalization: false`, 기본값).** 문서가 "externalizer가 여러 스레드에서 돌아 특히 resubmit 때 순서가 뒤집힐 수 있고, 켜면 한 번에 하나씩 보낸다"고 적는다. consumer가 순서에 기대지 않고 멱등이므로 처리량을 내주지 않는다. 결정을 `application.yaml`에 적어 둔다.
+- **PR ③은 Modulith의 공식 도구로 짠다.** 끊긴 기록은 직접 조회하지 않고 staleness monitor(`spring.modulith.events.staleness.published`·`processing`·`resubmitted`, 기본 0 = 꺼짐)가 `FAILED`로 바꾸게 한다. 재전송은 `FailedEventPublications.resubmit(ResubmissionOptions)`(`withBatchSize`·`withMaxInFlight`·`withMinAge`·`withFilter`)로, 정리는 `CompletedEventPublications.purge(Duration)`로 한다. 문서가 여러 인스턴스의 동시 resubmit은 외부 조정이 필요하다고 적으므로 advisory lock 결정은 그대로다. 대안인 outbox 모드(`spring.modulith.events.externalization.mode: outbox`, Namastack·JobRunr)는 의존성이 늘어 PR ③에서 비교만 한다.
+- **`Error`는 오류 처리기를 거치지 않는다.** 문서가 `DefaultErrorHandler`는 `RuntimeException`만 다루고 `Error`는 consumer를 끝내 버린다고 경고한다. 리스너 본문이 `Error`를 직접 던지지 않고 Kotlin의 `check`·`require`·`error`는 `RuntimeException`이라 해당하지 않는다. `OutOfMemoryError` 같은 JVM 오류로 consumer가 멈추면 lag metric(`kafka_consumer_fetch_manager_records_lag_max`)이 오르므로 그것으로 알린다.
+- **운영 브로커의 내구성 설정은 배포 PR이 정한다.** 지금 복제 수는 1이다. 운영은 복제 3과 `min.insync.replicas=2`를 `acks=all`과 함께 쓰는 것이 일반적인 권장이고, 그 PR이 `replicas`와 토픽 config를 함께 정한다.
+- **consumer 리밸런스 프로토콜은 기본 `classic`에 둔다.** Kafka 4의 새 프로토콜(`group.protocol=consumer`, KIP-848)은 리밸런스 중 멈춤을 줄이지만 pod가 여럿이 되기 전에는 이득을 잴 수 없다. 여러 pod로 배포하는 PR이 본다.
+
 ## 제외
 - advisory lock으로 payment의 동시 생성 창을 닫는 일. PR ①이 main 위에서 따로 한다.
 - 브로커 미전송 기록의 주기 resubmit(1분, advisory lock을 잡은 pod 하나, `FAILED`와 5분 지난 끊긴 기록, 최대 500건)과 완료 후 7일이 지난 행 정리. PR ③이 이 PR 머지 뒤 한다.
@@ -149,7 +158,7 @@ group by listener_id, status;
 세 PR로 나눈다. 합치면 약 1,350~1,550줄로 실패 한도(1,400줄)에 걸리고 목표가 셋이다.
 - PR ①(advisory lock): `(orderId, checkoutNo)` `pg_advisory_xact_lock`으로 payment의 동시 생성 창을 닫는다. Kafka와 무관하게 main 위에 선다. 새 worktree에서 이 PR과 나란히 진행한다. 약 150줄.
 - PR ②(이 PR): 예상 main 코드 약 300줄, 테스트 약 450줄, 설정·compose 약 80줄, 문서 약 200줄, 합계 약 1,000줄이다. 경고 한도를 넘으면 문서 문장을 먼저 줄이고, 그래도 넘으면 인수 10(타입 헤더)과 11(metric 노출 확인)을 남기고 compose 검증(인수 12)을 PR ③으로 옮긴다. 실제는 `git diff --numstat origin/main` 기준 main 코드 약 185줄, 테스트 약 460줄, 설정·compose 약 65줄, 문서(spec·wiki) 약 250줄로 경고 한도(900줄)를 조금 넘는다. 발행 전환·consumer 전환·재시도가 서로 없으면 동작하지 않는 한 목표라 나누지 않았다. 실패 한도(1,400줄) 안이다.
-- PR ③(주기 resubmit과 완료 행 정리): "미완료 기록은 브로커 전송뿐"이라는 전제가 이 PR 뒤에야 서므로 이 PR 머지 뒤 main에서 새 worktree로 시작한다. stacked PR이 아니다. 1분 주기, `pg_try_advisory_xact_lock(상수)`를 잡은 pod 하나, `FAILED`와 `stale-after`(5분)가 지난 끊긴 기록, 한 번에 최대 500건, 완료 후 7일(설정값)이 지난 행 삭제. 약 300줄.
+- PR ③(주기 resubmit과 완료 행 정리): "미완료 기록은 브로커 전송뿐"이라는 전제가 이 PR 뒤에야 서므로 이 PR 머지 뒤 main에서 새 worktree로 시작한다. stacked PR이 아니다. 1분 주기, `pg_try_advisory_xact_lock(상수)`를 잡은 pod 하나, staleness monitor(5분)가 `FAILED`로 바꾼 끊긴 기록과 원래 `FAILED`를 `FailedEventPublications.resubmit(ResubmissionOptions)`로 한 번에 최대 500건, `CompletedEventPublications.purge`로 완료 후 7일(설정값)이 지난 행 삭제(위 공식 문서 점검). 약 300줄.
 - 후속 작업(non-blocking 재시도): 사용자는 여러 pod 환경에서 non-blocking 재시도를 기본으로 생각했고, 이번에는 blocking으로 시작하기로 했다. 판단 근거는 pod 수가 아니다. 파티션은 pod마다 나뉘어 배정되고 consumer 스레드 수가 파티션 수와 같으므로 blocking이 막는 범위는 실패한 메시지가 있는 파티션 하나다. DLT로 가기 전 그 파티션이 멈추는 시간(지금 약 31초)이 허용 범위를 넘는지, 또는 재시도 간격을 분 단위로 늘려야 하는 장애(provider 장애)가 생기는지가 기준이다. 그때 `@RetryableTopic`으로 바꾸고 같은 주문의 순서가 깨지는 것을 consumer가 견디는지 함께 본다.
 
 ## TDD 검증 기록
