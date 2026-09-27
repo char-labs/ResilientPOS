@@ -9,6 +9,7 @@ import com.resilientpos.foundation.UuidV7IdentifierGenerator
 import com.resilientpos.payment.internal.domain.PaymentAttempt
 import com.resilientpos.payment.internal.domain.AuthorizationOutcome
 import com.resilientpos.payment.internal.domain.AuthorizationRequest
+import com.resilientpos.payment.internal.domain.CheckoutLock
 import com.resilientpos.payment.internal.domain.PaymentAttemptRepository
 import com.resilientpos.payment.internal.domain.PaymentGateway
 import com.resilientpos.store.StoreId
@@ -90,6 +91,10 @@ class PaymentManagementTest {
         Clock.fixed(Instant.parse("2026-09-22T01:00:00Z"), ZoneOffset.UTC),
         publisher,
         TransactionOperations.withoutTransaction(),
+        // 잠금은 인스턴스 사이의 동시성만 다룬다. 단위 테스트의 판단에는 끼지 않는다.
+        object : CheckoutLock {
+            override fun lockUntilTransactionEnds(orderId: UUID, checkoutNo: Int) = Unit
+        },
     )
 
     @Test
