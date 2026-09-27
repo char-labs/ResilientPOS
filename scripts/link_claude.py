@@ -27,6 +27,8 @@ LINKS = (
     ('.codex/agents', 'codex/agents'),
     # PR마다 한 줄씩 바뀌어 병렬 PR이 늘 충돌하던 문서라 저장소 밖에 둔다.
     ('docs/wiki/current-state.md', 'wiki/current-state.md'),
+    # Kafka·Modulith 작업을 끝낼 때마다 갱신하는 키워드 문서. 정본은 볼트다.
+    ('docs/wiki/modulith-kafka-keywords.md', 'wiki/modulith-kafka-keywords.md'),
 )
 # (저장소 안 복사 경로, 볼트 안 원본 경로). 로컬 수정은 덮어쓰고 볼트에 없는 파일은 지운다.
 COPIES = (
