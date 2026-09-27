@@ -30,7 +30,7 @@
 **소비.** 네 리스너의 `@ApplicationModuleListener(propagation = NOT_SUPPORTED)`를 `@KafkaListener`로 바꾼다. 리스너가 트랜잭션이 아닌 것은 그대로다. 트랜잭션은 Facade가 나눠 연다(도메인 모델 §4.3). 리스너 본문(Facade 호출과 로그)은 바꾸지 않는다. offset은 리스너가 반환한 뒤 커밋한다. 커밋 전에 죽으면 같은 메시지가 다시 오고(at-least-once) consumer가 멱등이라 해가 없다.
 
 멱등 근거는 기존 것을 그대로 쓴다.
-- payment 시도 생성: 그 checkout의 시도를 결말과 무관하게 찾아 돌려주고, partial unique가 진행 중인 시도를 하나로 묶는다. 앞 시도가 거절된 직후의 동시 생성 창은 PR ①(`(orderId, checkoutNo)` `pg_advisory_xact_lock`)이 닫는다. 이 PR은 그 창을 키 직렬화로 리밸런스 순간까지 좁힌다.
+- payment 시도 생성: 그 checkout의 시도를 결말과 무관하게 찾아 돌려주고, partial unique가 진행 중인 시도를 하나로 묶는다. 앞 시도가 거절된 직후의 동시 생성 창은 #61이 닫았다. 사실로 만든 첫 승인 시도를 `(order_id, checkout_no)`당 하나로 묶는 DB unique(`V008`)가 방어선이고, Redis 잠금은 늦은 요청이 실패하지 않고 앞 시도를 돌려받게 하는 보조다([payment-advisory-lock](2026-09-26-payment-advisory-lock.md)). 이 PR은 key 직렬화로 그 창을 리밸런스 순간까지 좁힌다.
 - 승인 호출: `PaymentManagement.authorize`가 결말이 난 시도를 걸러 낸다.
 - 주문 `PAID`: 같은 회차·금액의 승인이 다시 오면 아무것도 하지 않는다.
 - fulfillment: 기존 것을 돌려주고 unique `(order_id)`가 막는다. 경합에서 진 쪽은 unique 위반으로 실패하지만 재시도가 기존 fulfillment를 읽고 끝난다. 그래서 `insert ... on conflict do nothing`으로 바꾸지 않고, `FulfillmentCommandFacade`의 `ponytail:` 표식을 "재시도가 해소한다"로 고친다.
@@ -96,15 +96,21 @@ group by listener_id, status;
 - **운영 브로커의 내구성 설정은 배포 PR이 정한다.** 지금 복제 수는 1이다. 운영은 복제 3과 `min.insync.replicas=2`를 `acks=all`과 함께 쓰는 것이 일반적인 권장이고, 그 PR이 `replicas`와 토픽 config를 함께 정한다.
 - **consumer 리밸런스 프로토콜은 기본 `classic`에 둔다.** Kafka 4의 새 프로토콜(`group.protocol=consumer`, KIP-848)은 리밸런스 중 멈춤을 줄이지만 pod가 여럿이 되기 전에는 이득을 잴 수 없다. 여러 pod로 배포하는 PR이 본다.
 
+### 범위 조정 (2026-09-27, #61 머지 뒤 rebase)
+#61이 먼저 머지되어 이 브랜치를 origin/main `8c0b56d` 위로 rebase했다. spec 첫 커밋은 첫 자리를 지켰다.
+- **충돌**: `docker/docker-compose.yaml`·`PostgresIntegrationTest.kt`는 양쪽이 서로 다른 인프라(Redis와 Kafka)를 더한 것이라 둘 다 살렸다. `docs/wiki/domain-model.md` §4.3 첫 줄은 #61이 결제 멱등 키 설명을 고친 것이고 이 PR은 그 아래에 문단을 더했을 뿐이라, 첫 줄은 #61의 것을 쓰고 Kafka 문단을 이어 붙였다. `application.yaml`·`build.gradle.kts`는 자동으로 합쳐졌다(`spring.data.redis`와 `spring.kafka`, Redis starter와 Kafka 의존성이 나란히 있다).
+- **PR ①의 결과가 계획과 달랐다.** advisory lock 대신 DB unique와 Redis 보조 잠금으로 머지됐다. 이 spec에서 PR ①을 advisory lock으로 적은 곳을 고쳤다. Kafka consumer 쪽의 결론은 같다. 동시 배달이 와도 두 번째 첫 승인 시도는 DB unique가 막고, 막힌 쪽은 unique 위반(`DataIntegrityViolationException`)이라 재시도 허용 목록에 들어 다시 읽고 기존 시도를 돌려받는다.
+- **검증**: rebase 뒤 `./gradlew test` 258개 중 실패 0(#61의 테스트 포함).
+
 ## 제외
-- advisory lock으로 payment의 동시 생성 창을 닫는 일. PR ①이 main 위에서 따로 한다.
+- payment의 동시 생성 창을 닫는 일. PR ①(#61, DB unique와 Redis 보조 잠금)이 main 위에서 따로 했다.
 - 브로커 미전송 기록의 주기 resubmit(1분, advisory lock을 잡은 pod 하나, `FAILED`와 5분 지난 끊긴 기록, 최대 500건)과 완료 후 7일이 지난 행 정리. PR ③이 이 PR 머지 뒤 한다.
 - non-blocking 재시도(`@RetryableTopic`). 아래 분할 계획의 후속 작업이다.
 - DLT consumer, DLT 재투입 API. 재투입은 wiki 절차로 둔다. API를 열면 인증을 함께 정해야 한다.
 - 옛 `listener_id` 기록을 옮기는 이관 코드. 배포 조건으로만 둔다.
 - Kafka 트랜잭션(exactly-once). consumer가 DB에 쓰고 DB와 Kafka를 한 트랜잭션으로 묶을 수 없어 이득이 없다. 멱등 consumer로 대신한다.
 - 스레드 풀·큐·거절 정책. 실제 provider가 붙는 PR이 정한다.
-- Redis·Redisson. 정합성 수단을 Redis로 대신하지 않는다(AGENTS.md).
+- Redis를 Kafka 경로의 정합성 수단으로 쓰는 일. 정합성은 DB unique가 맡는다(AGENTS.md). #61이 들인 Redis는 결제 시도 생성의 보조 잠금에만 쓰인다.
 
 ## 관련 문서
 없음. 이 PR이 따르는 장기 스펙 문서(DESIGN·concerns·flows)가 없다. 바꾸는 wiki는 Wiki 영향 절에 적는다.
@@ -156,7 +162,7 @@ group by listener_id, status;
 
 ## 분할 계획
 세 PR로 나눈다. 합치면 약 1,350~1,550줄로 실패 한도(1,400줄)에 걸리고 목표가 셋이다.
-- PR ①(advisory lock): `(orderId, checkoutNo)` `pg_advisory_xact_lock`으로 payment의 동시 생성 창을 닫는다. Kafka와 무관하게 main 위에 선다. 새 worktree에서 이 PR과 나란히 진행한다. 약 150줄.
+- PR ①(#61, 머지됨): payment의 동시 생성 창을 닫는다. 계획은 `pg_advisory_xact_lock`이었지만 그 PR에서 DB unique(첫 승인 시도)와 Redis 보조 잠금으로 바뀌어 머지됐다. 이 PR은 #61 머지 뒤 origin/main 위로 rebase했다.
 - PR ②(이 PR): 예상 main 코드 약 300줄, 테스트 약 450줄, 설정·compose 약 80줄, 문서 약 200줄, 합계 약 1,000줄이다. 경고 한도를 넘으면 문서 문장을 먼저 줄이고, 그래도 넘으면 인수 10(타입 헤더)과 11(metric 노출 확인)을 남기고 compose 검증(인수 12)을 PR ③으로 옮긴다. 실제는 `git diff --numstat origin/main` 기준 main 코드 약 185줄, 테스트 약 460줄, 설정·compose 약 65줄, 문서(spec·wiki) 약 250줄로 경고 한도(900줄)를 조금 넘는다. 발행 전환·consumer 전환·재시도가 서로 없으면 동작하지 않는 한 목표라 나누지 않았다. 실패 한도(1,400줄) 안이다.
 - PR ③(주기 resubmit과 완료 행 정리): "미완료 기록은 브로커 전송뿐"이라는 전제가 이 PR 뒤에야 서므로 이 PR 머지 뒤 main에서 새 worktree로 시작한다. stacked PR이 아니다. 1분 주기, `pg_try_advisory_xact_lock(상수)`를 잡은 pod 하나, staleness monitor(5분)가 `FAILED`로 바꾼 끊긴 기록과 원래 `FAILED`를 `FailedEventPublications.resubmit(ResubmissionOptions)`로 한 번에 최대 500건, `CompletedEventPublications.purge`로 완료 후 7일(설정값)이 지난 행 삭제(위 공식 문서 점검). 약 300줄.
 - 후속 작업(non-blocking 재시도): 사용자는 여러 pod 환경에서 non-blocking 재시도를 기본으로 생각했고, 이번에는 blocking으로 시작하기로 했다. 판단 근거는 pod 수가 아니다. 파티션은 pod마다 나뉘어 배정되고 consumer 스레드 수가 파티션 수와 같으므로 blocking이 막는 범위는 실패한 메시지가 있는 파티션 하나다. DLT로 가기 전 그 파티션이 멈추는 시간(지금 약 31초)이 허용 범위를 넘는지, 또는 재시도 간격을 분 단위로 늘려야 하는 장애(provider 장애)가 생기는지가 기준이다. 그때 `@RetryableTopic`으로 바꾸고 같은 주문의 순서가 깨지는 것을 consumer가 견디는지 함께 본다.
