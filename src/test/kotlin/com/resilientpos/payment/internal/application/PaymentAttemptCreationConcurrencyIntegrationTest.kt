@@ -5,6 +5,7 @@ import com.resilientpos.foundation.Money
 import com.resilientpos.order.OrderFixtures
 import com.resilientpos.payment.PaymentCommand
 import com.resilientpos.payment.PaymentManagement
+import com.resilientpos.payment.internal.domain.CheckoutLock
 import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.TerminalId
 import java.util.UUID
@@ -16,6 +17,9 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.fail
 import org.springframework.beans.factory.annotation.Autowired
+import org.springframework.boot.test.context.TestConfiguration
+import org.springframework.context.annotation.Bean
+import org.springframework.context.annotation.Primary
 import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.transaction.support.TransactionOperations
@@ -29,12 +33,23 @@ import org.springframework.transaction.support.TransactionOperations
  * 이 전제가 깨진다. B 안의 폴링이 A의 커밋을 보는 것은 READ COMMITTED 전제다.
  *
  * 시도는 Facade로 직접 만든다. 주문 이벤트로 만들면 리스너가 세 번째 호출자로 끼어든다.
+ *
+ * Redis 잠금은 빈 구현으로 바꾼다. 이 테스트는 잠금이 통하지 않을 때(Redis 장애·대기 초과) DB 방어선만 보는 것이다.
  */
 class PaymentAttemptCreationConcurrencyIntegrationTest(
     @Autowired private val paymentManagement: PaymentManagement,
     @Autowired private val transactions: TransactionOperations,
     @Autowired private val jdbcTemplate: JdbcTemplate,
 ) : PostgresIntegrationTest() {
+
+    @TestConfiguration
+    class NoCheckoutLockConfiguration {
+        @Bean
+        @Primary
+        fun noCheckoutLock() = object : CheckoutLock {
+            override fun lockUntilTransactionEnds(orderId: UUID, checkoutNo: Int) = Unit
+        }
+    }
 
     private fun attempts(orderId: UUID): List<Map<String, Any?>> = jdbcTemplate.queryForList(
         "select id, status from t_payment_attempt where order_id = ? and kind = 'AUTHORIZATION' order by id",
