@@ -67,6 +67,10 @@ spring:
       # 인스턴스가 여럿이면 같은 미완료 이벤트를 모두가 다시 보낸다. 브로커로 보내지 못한 기록의 재전송은
       # 한 인스턴스만 도는 주기 작업이 맡는다(kafka-event-redelivery spec의 PR ③).
       republish-outstanding-events-on-restart: false
+      externalization:
+        # 기본값과 같다. 켜면 브로커 전송을 한 번에 하나로 줄 세워 순서를 지키지만 처리량을 내준다.
+        # consumer가 순서에 기대지 않고 멱등이라 끈다(kafka-event-redelivery spec의 공식 문서 점검).
+        serialize-externalization: false
 
 resilientpos:
   kafka:
