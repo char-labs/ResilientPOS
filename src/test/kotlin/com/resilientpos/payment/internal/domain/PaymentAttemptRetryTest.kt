@@ -51,6 +51,7 @@ class PaymentAttemptRetryTest {
         amount = Money.of("4501", krw),
         status = status,
         providerReference = "PROVIDER-REF-1",
+        retriedFrom = null,
     )
 
     @Test
@@ -70,6 +71,8 @@ class PaymentAttemptRetryTest {
         assertEquals(PaymentAttemptStatus.REQUESTED, retried.status)
         // 새 provider 요청이다. 거절된 시도의 참조를 옮기면 다른 요청을 가리킨다.
         assertNull(retried.providerReference)
+        // 사실로 만든 첫 시도와 구분하는 값이다. 없으면 DB의 첫 승인 시도 unique가 재결제를 거절한다.
+        assertEquals(declined.id, retried.retriedFrom)
 
         val created = assertIs<PaymentEvent.AttemptCreated>(transition.events.single())
         assertEquals(eventId, created.eventId)

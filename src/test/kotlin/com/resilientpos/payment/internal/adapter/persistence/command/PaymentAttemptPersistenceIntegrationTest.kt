@@ -59,6 +59,7 @@ class PaymentAttemptPersistenceIntegrationTest(
         status: PaymentAttemptStatus = PaymentAttemptStatus.REQUESTED,
         amount: Money = Money.of("4500", krw),
         providerReference: String? = null,
+        retriedFrom: PaymentId? = null,
     ) = PaymentAttempt.restore(
         id = PaymentId(ids.next()),
         orderId = orderId,
@@ -69,6 +70,7 @@ class PaymentAttemptPersistenceIntegrationTest(
         amount = amount,
         status = status,
         providerReference = providerReference,
+        retriedFrom = retriedFrom,
     )
 
     private fun save(vararg attempts: PaymentAttempt) =
@@ -77,17 +79,22 @@ class PaymentAttemptPersistenceIntegrationTest(
     @Test
     fun `거절 뒤 재시도와 취소가 같은 주문에 나란히 쌓인다`() {
         // 1-to-many가 성립하는 실제 경로다. 진행 중인 승인이 하나뿐이면 회차가 같아도 여러 건이 들어간다.
+        // 재결제 시도는 원래 시도를 가리켜야 사실로 만든 첫 승인 시도의 unique 밖이다.
         val orderId = UUID.randomUUID()
+        val first = stored(orderId, status = PaymentAttemptStatus.DECLINED)
+        val second = stored(orderId, status = PaymentAttemptStatus.DECLINED, retriedFrom = first.id)
 
         save(
-            stored(orderId, status = PaymentAttemptStatus.DECLINED),
-            stored(orderId, status = PaymentAttemptStatus.DECLINED),
-            stored(orderId, status = PaymentAttemptStatus.APPROVED),
+            first,
+            second,
+            stored(orderId, status = PaymentAttemptStatus.APPROVED, retriedFrom = second.id),
             stored(orderId, kind = PaymentAttemptKind.CANCELLATION, status = PaymentAttemptStatus.APPROVED),
             stored(orderId, checkoutNo = 2),
         )
 
-        assertEquals(5, repository.findAllByOrderIdOrderById(orderId).size)
+        val rows = repository.findAllByOrderIdOrderById(orderId)
+        assertEquals(5, rows.size)
+        assertEquals(first.id, rows[1].toDomain().retriedFrom)
     }
 
     @Test

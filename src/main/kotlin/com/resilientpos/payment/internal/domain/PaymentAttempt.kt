@@ -23,6 +23,8 @@ import java.util.UUID
  * 한 주문에 시도가 여럿 달릴 수 있다. 거절 뒤 재결제와 취소·환불은 각각 별도 시도다.
  * 식별은 [PaymentId] 하나가 하고 `orderId`는 참조일 뿐이라, 한 주문에 몇 건이 달리든 제약이 없다.
  * 무엇을 요청한 시도인지는 [PaymentAttemptKind]가 말한다.
+ * 재결제로 만든 시도는 [retriedFrom]에 거절된 원래 시도를 가진다. 사실(`OrderPaymentRequested`)로 만든 시도는 null이고,
+ * DB가 그런 승인 시도를 checkout 회차당 하나로 묶는다(`ux_payment_attempt_first_authorization`).
  * 그 `orderId`가 raw `UUID`인 이유는 `PaymentEvent`에 있다.
  */
 class PaymentAttempt private constructor(
@@ -35,6 +37,7 @@ class PaymentAttempt private constructor(
     val amount: Money,
     val status: PaymentAttemptStatus,
     val providerReference: String?,
+    val retriedFrom: PaymentId?,
 ) {
 
     /**
@@ -133,6 +136,7 @@ class PaymentAttempt private constructor(
             status = PaymentAttemptStatus.REQUESTED,
             // 새 provider 요청이다. 거절된 시도의 참조를 옮기면 다른 요청을 가리킨다.
             providerReference = null,
+            retriedFrom = id,
         )
         val created = PaymentEvent.AttemptCreated(
             eventId = ids.next(),
@@ -159,6 +163,7 @@ class PaymentAttempt private constructor(
         amount = amount,
         status = status,
         providerReference = providerReference,
+        retriedFrom = retriedFrom,
     )
 
     override fun equals(other: Any?) = other is PaymentAttempt && other.id == id
@@ -185,7 +190,9 @@ class PaymentAttempt private constructor(
             amount: Money,
             status: PaymentAttemptStatus,
             providerReference: String?,
-        ): PaymentAttempt = PaymentAttempt(id, orderId, storeId, terminalId, checkoutNo, kind, amount, status, providerReference)
+            retriedFrom: PaymentId?,
+        ): PaymentAttempt =
+            PaymentAttempt(id, orderId, storeId, terminalId, checkoutNo, kind, amount, status, providerReference, retriedFrom)
 
         /**
          * 한 주문의 **승인** 시도를 만든다.
@@ -217,6 +224,7 @@ class PaymentAttempt private constructor(
                 status = if (zero) PaymentAttemptStatus.APPROVED else PaymentAttemptStatus.REQUESTED,
                 // provider를 부르지 않았으므로 참조가 없다. 값을 지어내면 그 참조가 거짓이 된다.
                 providerReference = null,
+                retriedFrom = null,
             )
 
             val created = PaymentEvent.AttemptCreated(

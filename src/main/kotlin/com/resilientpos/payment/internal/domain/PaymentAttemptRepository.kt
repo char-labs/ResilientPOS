@@ -11,7 +11,7 @@ interface PaymentAttemptRepository {
     /**
      * 그 checkout의 승인 시도를 **결말과 무관하게** 읽는다. 여럿이면 가장 먼저 만든 것이다.
      * 같은 사실이 다시 와도 시도를 두 번 만들지 않기 위한 조회다.
-     * 동시에 들어온 요청까지 막지는 못한다. 진행 중인 시도끼리의 그 창은 DB의 partial unique가 닫는다.
+     * 동시에 들어온 요청까지 막지는 못한다. 그 창은 사실로 만든 첫 승인 시도의 unique가 닫는다.
      */
     fun findAuthorization(orderId: UUID, checkoutNo: Int): PaymentAttempt?
 
@@ -39,7 +39,8 @@ interface PaymentAttemptRepository {
 
     /**
      * 새 시도를 넣는다. 트랜잭션 안에서만 부른다.
-     * 같은 checkout에 진행 중인 승인이 이미 있으면 DB 제약이 거절하고 이 호출이 실패한다.
+     * 같은 checkout에 진행 중인 승인이나 사실로 만든 첫 승인 시도가 이미 있으면 DB 제약이 거절한다.
+     * 실패는 이 호출이 아니라 삽입이 flush될 때(보통 커밋) 난다.
      */
     fun save(attempt: PaymentAttempt): PaymentAttempt
 }

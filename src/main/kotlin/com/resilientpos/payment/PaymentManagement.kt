@@ -5,6 +5,7 @@ import com.resilientpos.foundation.DomainException
 import com.resilientpos.foundation.IdentifierGenerator
 import com.resilientpos.payment.internal.domain.AuthorizationOutcome
 import com.resilientpos.payment.internal.domain.AuthorizationRequest
+import com.resilientpos.payment.internal.domain.CheckoutLock
 import com.resilientpos.payment.internal.domain.PaymentAttempt
 import com.resilientpos.payment.internal.domain.PaymentAttemptRepository
 import com.resilientpos.payment.internal.domain.PaymentGateway
@@ -28,6 +29,7 @@ class PaymentManagement(
     private val clock: Clock,
     private val eventPublisher: ApplicationEventPublisher,
     private val transactions: TransactionOperations,
+    private val checkoutLock: CheckoutLock,
 ) {
 
     /**
@@ -39,14 +41,14 @@ class PaymentManagement(
      * provider를 다시 부르는데, 멱등 키가 달라 provider도 막아 주지 못한다. 거절 뒤 재결제는 사용자가
      * 명시적으로 요청하는 별도 명령이 할 일이다 — 사실의 재배달과 재결제 의도를 같은 입구로 받지 않는다.
      *
-     * 읽은 뒤 넣기 전의 창은 partial unique가 닫는다 — 진행 중인 승인 행은 둘이 되지 않는다. 진 쪽은
-     * 커밋에서 실패한다(`persist`가 flush를 미룬다).
+     * 같은 사실이 여러 인스턴스에 동시에 오면 읽기 전에 건 [CheckoutLock]이 줄 세운다. 늦게 온 요청은 앞 요청의
+     * 커밋을 기다렸다가 그 시도를 돌려받는다. 잠금은 최선 노력이고 방어선은 DB다. 사실로 만든 승인 시도는 checkout
+     * 회차당 하나라서(`retriedFrom`이 없는 행의 unique) 잠금이 통하지 않아도 두 번째가 들어가지 않는다.
+     * 그때 늦은 요청은 커밋에서 실패한다(`persist`가 flush를 미룬다).
      */
     @Transactional
     fun createAttempt(command: PaymentCommand.CreateAttempt): PaymentCommand.CreateAttempt.Result {
-        // ponytail: 같은 사실이 동시에 두 번 오면 둘 다 "없음"을 읽고, 앞 시도가 거절된 뒤 뒤쪽이 새 시도를 넣을 수 있다
-        // (partial unique는 DECLINED를 빼고 본다). 지금은 재발행이 꺼져 동시 배달이 없다. 재발행·Kafka·sync 경로가
-        // 생기면 (orderId, checkoutNo)에 pg_advisory_xact_lock을 걸어 조회부터 삽입까지 직렬화한다.
+        checkoutLock.lockUntilTransactionEnds(command.orderId, command.checkoutNo)
         val existing = repository.findAuthorization(command.orderId, command.checkoutNo)
         if (existing != null) {
             return PaymentCommand.CreateAttempt.Result(existing.id, existing.status)
