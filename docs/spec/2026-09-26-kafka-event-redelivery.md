@@ -108,7 +108,7 @@ PR 리뷰 포인트의 🔴 항목 때문에 multi-review를 돌렸다(Claude·C
 - **받았다: 복제 수 기본값 1**(Claude 3). 설정이 없으면 복제 수를 지정하지 않아 브로커의 `default.replication.factor`를 따른다. `KafkaAdmin`은 복제 수를 바꾸지 않아 한 번 잘못 만들면 되돌리기 어렵다.
 - **받았다: DLT 전송 실패가 조용하다**(Claude 2). 재시도 리스너의 `recoveryFailed`에서 ERROR 로그와 counter `event.kafka.dead-letter.failed{topic}`를 남긴다. 전송 실패 루프에서 목록 밖 예외라도 리스너가 다시 불리는 동작 자체는 그대로다(메시지를 버리지 않기 위해서다). 실제 provider를 붙이는 PR은 이 counter에 알림을 건다.
 - **받았다: `max.poll.records` 기본값 500**(Claude 4). 50으로 줄였다. 레코드 처리가 느려지면 한 poll의 처리가 `max.poll.interval.ms`(300초)를 넘어 group에서 쫓겨난다.
-- **받았다: 기동 때 브로커가 없으면 토픽 없이 뜬다**(Claude 9). `spring.kafka.admin.fail-fast: true`. compose에서 브로커를 내리고 앱만 다시 띄우면 `Application run failed`로 끝나는 것을 확인했다. `max.block.ms` 단축은 PR ③(미전송 기록 회수)과 함께 본다.
+- **받았다: 기동 때 브로커가 없으면 토픽 없이 뜬다**(Claude 9). `spring.kafka.admin.fail-fast: true`. compose에서 브로커를 내리고 앱만 다시 띄우면 `Application run failed`로 끝나는 것을 확인했다. 브로커 장애 때 전송 실패가 드러나는 시간은 PR ③(미전송 기록 회수)과 함께 본다. 실측으로는 `max.block.ms`(60초)가 아니라 `delivery.timeout.ms`(120초)가 정한다(결과 절).
 - **남긴다**: `@Externalized` 발행 토픽과 설정 목록의 대조(Claude 8), 재시도 counter(Claude 11), Redis 잠금의 `InterruptedException` 처리(Claude 10, #61 범위), 번역 경로를 더 넓게 보는 분류 단위 테스트(Claude 5의 일부). 커밋 시점 unique 위반이 `DataIntegrityViolationException`으로 오는 것은 #61의 `PaymentAttemptCreationConcurrencyIntegrationTest`가 확인한다.
 - **받지 않았다(Codex)**: 사실과 달랐다.
   - "import가 없어 컴파일되지 않는다": `FulfillmentCommand`는 같은 패키지다.
@@ -209,3 +209,4 @@ consumer 전환은 업무 흐름의 전달 경로를 바꾸므로 통합 테스�
 - consumer lag: `/actuator/prometheus`에 `kafka_consumer_fetch_manager_records_lag_max`가 consumer group마다(`client_id`에 group 이름) 나오는 것을 임시 출력으로 확인하고 되돌렸다.
 - 배포 조건 SQL은 배포된 환경이 없어 실행하지 않았다. 로컬 compose 볼륨에는 전환 전 측정 때 쌓인 행이 없었다(#60에서 `down -v`로 지웠다).
 - multi-review 반영 뒤(2026-09-27): `./gradlew test` 259개 중 실패 0. compose에서 주문이 `PAID`까지 가고, DLT가 복제 수를 지정하지 않아 브로커 기본값(1)·`retention.ms=-1`로 만들어지며, 브로커를 내린 채 앱을 띄우면 기동이 실패(exit 1)하는 것을 확인했다.
+- 발행 기록 실측(2026-09-27, compose): 승인되는 주문 3건은 이벤트 4종마다 externalizer 행 하나씩 12행이 모두 `COMPLETED`였고, 결과를 모르는 주문은 2행이었다. 브로커를 내린 채 checkout하면 요청은 200으로 바로 끝나고 행은 `PROCESSING`으로 남았다가 약 120초 뒤 `FAILED`가 됐다(`Expiring 1 record(s) … 120003 ms has passed since batch creation`). 토픽 metadata가 캐시돼 있으면 전송이 막히지 않고 버퍼에 들어가 `delivery.timeout.ms`까지 재시도하기 때문이다. 브로커를 다시 올려도 행은 `FAILED`로 남고 주문은 `CHECKOUT_REQUESTED`에 머물렀으며, `event_publication_incomplete{status="failed"}`가 1이 됐다. 자동 재전송은 PR ③이다.
