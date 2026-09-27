@@ -39,7 +39,8 @@ interface PaymentAttemptRepository {
 
     /**
      * 새 시도를 넣는다. 트랜잭션 안에서만 부른다.
-     * 같은 checkout에 진행 중인 승인이 이미 있으면 DB 제약이 거절하고 이 호출이 실패한다.
+     * 같은 checkout에 진행 중인 승인이나 사실로 만든 첫 승인 시도가 이미 있으면 DB 제약이 거절한다.
+     * 실패는 이 호출이 아니라 삽입이 flush될 때(보통 커밋) 난다.
      */
     fun save(attempt: PaymentAttempt): PaymentAttempt
 }

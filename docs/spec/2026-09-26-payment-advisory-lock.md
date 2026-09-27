@@ -34,6 +34,7 @@
 - `fulfillment`의 같은 창(`FulfillmentCommandFacade`의 `ponytail:`). Kafka 재시도가 해소하기로 합의했다.
 - `retried_from`에 unique를 걸어 "거절 시도당 재결제 하나"를 DB로 묶는 것. 지금은 재결제의 대상 행 잠금이 막고, 그 경로를 바꾸는 PR이 정한다.
 - `retried_from`을 읽는 조회. 지금은 제약만 쓴다.
+- 진 쪽 실패를 흡수하는 것. 진 쪽 발행 기록은 `FAILED`로 남아 진짜 실패와 같은 알림(`event.publication.incomplete{status=failed}`)에 섞이고, `createAttempt`가 바깥 트랜잭션(§4.6 sync intake)에 합류하면 그 트랜잭션 전체가 롤백된다. 리스너나 호출자가 이 제약 이름의 위반만 잡아 `createAttempt`를 한 번 더 부르면 기존 시도를 돌려받는다. 빈도가 생기는 Kafka PR과 sync intake PR이 정한다.
 
 ## 검토한 대안
 - **`(orderId, checkoutNo)` advisory lock**(이 PR의 첫 구현): 스키마 없이 창을 닫지만, 불변식이 DB 제약이 아니라 앱 코드에 숨는다. 새 삽입 경로가 잠금을 잊으면 다시 열리고, `createAttempt`마다 쿼리가 네 개 늘며(잠금 대기 한도를 걸고 되돌리는 처리 포함), 해시 충돌과 PostgreSQL 전용 기능을 떠안는다. 이 문제는 동시 실행 제어보다 "같은 사실은 시도 하나"라는 멱등 키 문제라서, 저장소 원칙(멱등 키는 unique)대로 제약으로 옮겼다.
@@ -66,10 +67,10 @@
 4. 불변식의 마지막 방어선인가: 그렇다. "같은 사실로 만든 승인 시도는 하나"의 멱등 키다. soft delete된 행에도 걸리는 전체 제약으로 둔다(`deleted_at` 술어 없음). 멱등 키라서 삭제 뒤 재사용하면 안 된다. `findAuthorization`은 `@SoftDelete`로 삭제된 행을 거르지만 이 테이블의 행은 지우지 않는다(V006 주석). 지우는 명령이 생기면 그 조회가 삭제된 행도 보게 해야 한다. Redis·Kafka로 대신하지 않는다.
 5. 정본은 하나인가: `retried_from`은 정본이다. 사본이 아니다.
 6. check-then-act: `createAttempt`가 읽고 없으면 넣는다. 경합은 이 unique가 막는다(진 쪽은 커밋에서 실패). 재결제는 대상 행 잠금이 직렬화하고, 재결제가 넣는 행은 `retried_from`이 있어 이 제약 밖이다.
-7. 락과 크기: nullable 컬럼 추가는 메타데이터 변경이라 `ACCESS EXCLUSIVE`가 짧다. 일반 `CREATE UNIQUE INDEX`는 빌드 동안 `SHARE` 락으로 쓰기를 막는다. `t_payment_attempt`는 주문 수를 따라가지만 아직 작다. 행이 커지면 인덱스를 `CONCURRENTLY` 별도 마이그레이션으로 나눈다. V005처럼 `set local lock_timeout = '5s'`를 둔다. 제약 위반 행을 세는 쿼리: `select order_id, checkout_no, count(*) from t_payment_attempt where kind = 'AUTHORIZATION' and retried_from is null group by 1, 2 having count(*) > 1`. 배포 전 0행이어야 한다. 위반이 있으면 인덱스 생성이 실패하고 V008 전체(컬럼 추가 포함)가 롤백되어 새 버전이 기동하지 않는다. PostgreSQL에서 실패한 V008은 트랜잭션째 롤백되어 Flyway 이력에도 남지 않으므로 V008을 고쳐 다시 배포할 수 있다. 사람이 그 행이 재결제인지 경합 흔적인지 확인하고, 확인한 결과대로 `retried_from`을 채우는 `update`를 V008의 컬럼 추가와 인덱스 생성 사이에 넣는 수정 PR로 다시 배포한다. 컬럼을 손으로 먼저 더하면 V008의 `add column`이 실패하므로 그렇게 하지 않는다. 이 절차는 V008이 어느 환경에서도 성공하지 않았을 때만 쓴다. 이미 성공한 환경이 있으면 checksum이 달라져 기동이 막히므로 V008을 그대로 두고 새 마이그레이션을 붙인다. 경합 흔적으로 판정한 행도 지울 수 없다(soft delete한 행도 이 제약에 걸린다). 그 행은 `retried_from`에 앞 시도를 적어 제약 밖으로 옮기고, 경합 흔적이라는 사실은 운영 기록에 남긴다.
+7. 락과 크기: V008은 Flyway가 한 트랜잭션으로 돌린다. `add column`이 잡은 `ACCESS EXCLUSIVE`는 커밋까지 유지되므로 뒤의 `CREATE UNIQUE INDEX` 빌드 동안에도 `t_payment_attempt`의 읽기와 쓰기가 모두 막힌다. 지금 행 수에서는 짧다. 행이 커지면 컬럼 추가와 인덱스를 나누고 인덱스는 `CONCURRENTLY` 별도 마이그레이션으로 둔다. V005처럼 `set local lock_timeout = '5s'`를 둔다. 배포 전 위반 행 쿼리 `select order_id, checkout_no, count(*) from t_payment_attempt where kind = 'AUTHORIZATION' and retried_from is null group by 1, 2 having count(*) > 1`가 0행이어야 한다. 0행이 아니면 V008이 통째로 롤백되어(Flyway 이력에도 남지 않는다) 새 버전이 뜨지 않는다. 그때는 사람이 재결제인지 경합 흔적인지 판정하고, 그 행에 `retried_from`을 채우는 수정 마이그레이션을 쓴다. 삭제로는 치울 수 없다(soft delete한 행도 이 제약에 걸린다).
 8. 이전 버전 호환: 이전 버전은 `retried_from`을 모르므로 기동한다(nullable, JPA `validate`는 매핑된 컬럼만 본다). 이전 버전의 `createAttempt`는 null로 넣어 새 제약과 맞는다. 이전 버전의 `retryAuthorization`은 null로 넣어 새 제약에 걸리지만 이 명령은 HTTP endpoint가 없어 운영에서 부르는 곳이 없다.
 9. 이벤트·캐시: 싣지 않는다.
-- 대조 기록: code-reviewer 에이전트(읽기 전용), 2026-09-27, 대조 대상 V008__payment_first_authorization.sql·V006__payment_payment_attempt.sql·PaymentAttempt.kt(create·retry·copy·restore)·PaymentAttemptEntity.kt·PaymentAttemptPersistenceAdapter.kt·PaymentAttemptJpaRepository.kt·PaymentManagement.kt(createAttempt·retryAuthorization)·application.yaml(flyway), 1차 불일치(lag backfill이 경합 흔적을 재결제로 덮음)는 backfill 제거로 반영 확인, 2차 불일치(롤백 뒤 retried_from을 채울 수 없는 복구 절차)는 V008 수정 재배포 절차로 반영 확인, 3차 불일치 없음(보완 권장 두 가지 — V008이 이미 성공한 환경의 checksum, 경합 흔적 행의 처리 — 는 구현자가 7번 답에 더함, 재대조 안 함)
+- 대조 기록: code-reviewer 에이전트(읽기 전용), 2026-09-27, 대조 대상 V008__payment_first_authorization.sql·V006__payment_payment_attempt.sql·PaymentAttempt.kt(create·retry·copy·restore)·PaymentAttemptEntity.kt·PaymentAttemptPersistenceAdapter.kt·PaymentAttemptJpaRepository.kt·PaymentManagement.kt(createAttempt·retryAuthorization)·application.yaml(flyway), 1차 불일치(lag backfill이 경합 흔적을 재결제로 덮음)는 backfill 제거로 반영 확인, 2차 불일치(롤백 뒤 retried_from을 채울 수 없는 복구 절차)는 V008 수정 재배포 절차로 반영 확인, 3차 불일치 없음(보완 권장 두 가지 — V008이 이미 성공한 환경의 checksum, 경합 흔적 행의 처리 — 는 구현자가 7번 답에 더함, 재대조 안 함). 이후 multi-review(Claude·Codex) 지적으로 질문 7의 락 설명을 정정하고(`add column`의 `ACCESS EXCLUSIVE`가 인덱스 빌드 끝까지 유지됨) 복구 절차를 줄였다. 이 변경도 재대조하지 않았다
 
 ## 검증
 - 경합 재현 통합 테스트: 한 트랜잭션(B)이 `createAttempt`를 마치고 커밋하지 않은 채로, 다른 스레드(A)가 같은 checkout으로 `createAttempt`를 불러 커밋한다. 금액 끝자리가 1이라 `FakePaymentGateway`가 거절한다. A가 거절된 것을 본 뒤 B를 커밋한다. 제약이 없으면 B가 통과해 시도가 둘이 된다(RED). 제약이 있으면 B의 커밋이 unique 위반으로 실패하고 시도는 하나다.
@@ -89,11 +90,11 @@
 ## TDD 검증 기록
 | 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
 |---|---|---|---|
-| 겹친 생성이 거절까지 가도 시도는 하나다 (인수 조건 1) `PaymentAttemptCreationConcurrencyIntegrationTest` | 제약 없는 main 코드로 `./gradlew test --tests '*PaymentAttemptCreationConcurrencyIntegrationTest'` — `Expected an exception of class DataIntegrityViolationException ... but was completed successfully`. B의 커밋이 통과해 시도가 둘이 됐다 | V008 뒤 같은 명령 통과. B의 커밋이 `ux_payment_attempt_first_authorization` 위반으로 실패하고 시도는 하나다 | `./gradlew test` — 242개 통과 |
-| 재결제 시도는 원래 시도를 가리킨다 (인수 조건 2) `PaymentAttemptRetryTest` | 속성만 두고 `retry`가 null을 넣은 채로 `--tests '*PaymentAttemptRetryTest'` — `expected: PaymentId(...0001) but was: null` | `retriedFrom = id`로 통과 | `./gradlew test` — 242개 통과 |
+| 겹친 생성이 거절까지 가도 시도는 하나다 (인수 조건 1) `PaymentAttemptCreationConcurrencyIntegrationTest` | 제약 없는 main 코드로 `./gradlew test --tests '*PaymentAttemptCreationConcurrencyIntegrationTest'` — `Expected an exception of class DataIntegrityViolationException ... but was completed successfully`. B의 커밋이 통과해 시도가 둘이 됐다 | V008 뒤 같은 명령 통과. B의 커밋이 `ux_payment_attempt_first_authorization` 위반으로 실패하고 시도는 하나다 | `./gradlew test` — 243개 통과 |
+| 재결제 시도는 원래 시도를 가리킨다 (인수 조건 2) `PaymentAttemptRetryTest` | 속성만 두고 `retry`가 null을 넣은 채로 `--tests '*PaymentAttemptRetryTest'` — `expected: PaymentId(...0001) but was: null` | `retriedFrom = id`로 통과 | `./gradlew test` — 243개 통과 |
 
 ## 결과
-`./gradlew test` 242개 통과다(main 241 + 신규 1). `python3 scripts/check_pr.py --base origin/main --worktree` PASS.
+`./gradlew test` 243개 통과다(main 241 + 신규 2). `python3 scripts/check_pr.py --base origin/main --worktree` PASS.
 
 - `PaymentAttempt`에 `retriedFrom`이 생겼고 `retry`만 채운다. 엔티티는 `retried_from`으로 옮긴다. `PaymentManagement`와 repository는 동작이 그대로이고 주석만 제약 기준으로 바뀌었다(`ponytail:` 표식 삭제).
 - V008이 컬럼 추가와 unique 인덱스를 한 트랜잭션으로 한다. backfill은 없다.
@@ -101,4 +102,5 @@
 - 마이그레이션은 일회성으로 확인했다. PostgreSQL 18 컨테이너에 V001~V007을 적용하고 1회차 승인, 2회차 승인, 취소 한 행씩을 넣은 뒤 V008을 적용하면 통과했다. 같은 회차에 거절된 승인 시도를 하나 더 넣고 다시 적용하면 `could not create unique index ... Key (order_id, checkout_no)=(..., 1) is duplicated`로 실패하고 컬럼 추가도 함께 롤백됐다(인수 조건 3).
 - 첫 V008은 `lag(id)` backfill로 기존 재결제 행을 채웠다. 리뷰 대조에서 그 backfill이 이미 일어난 경합 흔적까지 재결제로 분류해 "위반이 남으면 기동을 막는다"는 방어가 동작하지 않는다는 지적을 받았고, 채울 행이 원래 없으므로 backfill을 뺐다.
 - 기존 테스트 두 개를 고쳤다. `SchemaMigrationTest`에 008을 더했고, `PaymentAttemptPersistenceIntegrationTest`의 1-to-many 사례가 재결제 행에 `retriedFrom`을 주도록 바꿨다(그렇지 않으면 사실로 만든 시도가 한 회차에 셋이 되어 새 제약에 걸린다). `PaymentAttemptSchemaTest`의 컬럼 목록에 `retried_from`을 더했다.
+- multi-review(Claude 86점, Codex 68점, Gemini CLI 없음)를 반영했다. 경합 테스트가 걸린 제약 이름을 확인하고, 새 인덱스의 술어(`retried_from IS NULL`, `deleted_at` 없음)를 `PaymentAttemptSchemaTest`로 고정했다. `save` KDoc과 wiki §4.3의 멱등 키 설명, spec 질문 7의 락 설명을 고치고 제외 절에 진 쪽 실패 흡수를 더했다. 테스트 결정성(A의 커밋이 B의 flush보다 먼저다)과 엔티티 `private set`(allOpen 때문에 쓸 수 없다) 지적은 받아들이지 않았다.
 - advisory lock 첫 구현(커밋 `bfb760f`)은 이 방향으로 대체했다. 이유는 "검토한 대안" 절에 있다.
