@@ -20,6 +20,7 @@
 - 비즈니스·도메인·Controller 개발: 용어·aggregate 경계·유비쿼터스 언어는 [도메인 모델](docs/wiki/domain-model.md)을 먼저 읽는다. 구현은 [TDD 스킬](.claude/skills/resilientpos-tdd/SKILL.md)을 사용하고 지원 환경에서는 `tdd-driver`에 한 동작의 구현/테스트를 맡긴다. Repository 자체 테스트는 제외한다.
 - 도메인 규칙 위반은 `require`가 아니라 `foundation.DomainException(code, message, kind)`으로 던진다. `kind`는 HTTP 숫자가 아닌 업무 의미이고 기본값은 `INVALID`다.
 - 컬럼·테이블·제약·인덱스를 더하거나 빼는 PR은 [도메인 모델](docs/wiki/domain-model.md)의 "스키마 변경 검토" 절 질문에 답을 spec의 `스키마 변경 검토` 절에 적는다. 필요성(기존 데이터로 대신할 수 있고 나중에 채울 수도 있으면 넣지 않는다), 정합성(unique·`@Version`·멱등 키는 Redis·Kafka로 대신하지 않는다), 반영(락과 이전 버전 호환) 세 관점이다. 답은 구현자가 아닌 리뷰어가 DDL·엔티티·코드와 대조하고 `- 대조 기록:` 줄을 남긴다. 마이그레이션을 바꾸는 PR에 이 절이 없으면 `check_pr.py`가 실패하고, 대조 기록이 없으면 `--worktree`에서는 경고, `--worktree` 없는 제출 전 검사에서는 실패한다.
+- Kafka·Spring Kafka·Modulith 이벤트(externalization, 재시도·DLT·재전송) 작업은 공식 문서로 Best Practice를 대조하고 근거를 PR spec에 남긴다. 문서가 기본값을 말하지 않으면 sources jar나 기동 로그의 ProducerConfig·ConsumerConfig values로 실제 값을 확인하고 추측으로 적지 않는다. 작업을 끝내면 PR 전에 [Modulith·Kafka 키워드](docs/wiki/modulith-kafka-keywords.md)를 그 문서의 "갱신 규칙"대로 갱신한다.
 - Controller는 DTO만 돌려준다. 응답 envelope는 `platform`의 `ApiResponseBodyAdvice`가 씌우고 오류 변환은 `ApiControllerAdvice`가 맡는다.
 - 애플리케이션/빌드 변경 검증: `./gradlew test`로 검증한다. 통합 테스트가 Testcontainers로 PostgreSQL과 Redis를 띄우므로 Docker가 필요하다. 특정 테스트는 `./gradlew test --tests 'com.resilientpos.테스트클래스'`로 좁혀 실행할 수 있다.
 - 하네스 코드 변경: `python3 -m unittest discover -s scripts -p 'test_*.py'`를 실행한다. Python 3 표준 라이브러리만 사용한다.

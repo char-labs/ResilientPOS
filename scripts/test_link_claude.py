@@ -53,6 +53,12 @@ class LinkClaudeTest(unittest.TestCase):
         self.assertIn('.claude/agents', names)
         self.assertIn('.codex/agents', names)
 
+    def test_links_cover_vault_wiki_documents(self):
+        names = {link for link, _ in LINKS}
+
+        self.assertIn('docs/wiki/current-state.md', names)
+        self.assertIn('docs/wiki/modulith-kafka-keywords.md', names)
+
     def test_running_twice_keeps_the_same_links(self):
         run(root=self.root, vault=self.vault)
         before = {link: os.readlink(self.root / link) for link, _ in LINKS}
