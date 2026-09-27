@@ -3,6 +3,7 @@ package com.resilientpos.platform
 import com.resilientpos.foundation.DomainException
 import io.micrometer.core.instrument.MeterRegistry
 import java.time.Duration
+import org.apache.kafka.clients.consumer.ConsumerRecord
 import org.apache.kafka.common.TopicPartition
 import org.apache.kafka.common.config.TopicConfig
 import org.springframework.beans.factory.annotation.Value
@@ -17,8 +18,12 @@ import org.springframework.kafka.core.KafkaOperations
 import org.springframework.kafka.listener.CommonErrorHandler
 import org.springframework.kafka.listener.DeadLetterPublishingRecoverer
 import org.springframework.kafka.listener.DefaultErrorHandler
+import org.springframework.kafka.listener.RetryListener
 import org.springframework.kafka.support.ExponentialBackOffWithMaxRetries
+import org.springframework.orm.jpa.JpaSystemException
 import org.springframework.transaction.CannotCreateTransactionException
+import org.springframework.transaction.TransactionSystemException
+import org.springframework.transaction.TransactionTimedOutException
 import org.springframework.util.backoff.ExponentialBackOff
 
 /**
@@ -36,21 +41,26 @@ class KafkaConfiguration {
      *
      * 파티션 수를 설정보다 크게 바꾸면 `KafkaAdmin`이 기동하면서 늘린다. 그 순간 key 배치가 바뀌어 같은 주문의 순서가
      * 깨질 수 있으므로 환경 변수로 열지 않는다. 늘리는 PR이 consumer를 비운 뒤 설정을 바꾼다.
+     *
+     * 복제 수는 설정이 없으면 지정하지 않아 브로커의 `default.replication.factor`를 따른다. 앱 기본값을 1로 두면 운영에서
+     * 설정을 빠뜨렸을 때 복제 1인 토픽이 생기고, `KafkaAdmin`은 복제 수를 바꾸지 않아 되돌리기 어렵다.
      */
     @Bean
     fun eventTopics(
         @Value("\${resilientpos.kafka.topics}") topics: List<String>,
         @Value("\${resilientpos.kafka.partitions}") partitions: Int,
-        @Value("\${resilientpos.kafka.replicas}") replicas: Int,
-    ): KafkaAdmin.NewTopics = KafkaAdmin.NewTopics(
-        *topics.flatMap { topic ->
-            listOf(
-                TopicBuilder.name(topic).partitions(partitions).replicas(replicas).build(),
-                TopicBuilder.name(topic + DLT_SUFFIX).partitions(partitions).replicas(replicas)
-                    .config(TopicConfig.RETENTION_MS_CONFIG, "-1").build(),
-            )
-        }.toTypedArray(),
-    )
+        @Value("\${resilientpos.kafka.replicas:#{null}}") replicas: Int?,
+    ): KafkaAdmin.NewTopics {
+        fun builder(name: String) = TopicBuilder.name(name).partitions(partitions).apply { replicas?.let(::replicas) }
+        return KafkaAdmin.NewTopics(
+            *topics.flatMap { topic ->
+                listOf(
+                    builder(topic).build(),
+                    builder(topic + DLT_SUFFIX).config(TopicConfig.RETENTION_MS_CONFIG, "-1").build(),
+                )
+            }.toTypedArray(),
+        )
+    }
 
     /**
      * 실패한 메시지를 같은 자리에서 다시 시도한다(blocking). 대기는 consumer 스레드가 잠드는 방식이라 그 스레드가 맡은
@@ -58,7 +68,11 @@ class KafkaConfiguration {
      *
      * 재시도는 허용 목록이다. 목록에 없는 예외(업무 규칙 위반 `DomainException`, 변환 실패, 버그)는 다시 해도 같은 결과라
      * 바로 DLT로 간다. 특히 provider를 부르는 consumer가 모르는 예외로 승인을 거듭 요청하지 않는다.
-     * - 경합(잠금 대기 초과, 쿼리 타임아웃, unique 경합): 시작 간격에서 2배씩 `max-retries`번(기본 1초·5회, 약 31초).
+     * - 경합(잠금 대기 초과, 쿼리 타임아웃, 트랜잭션 시간 초과, unique 경합): 시작 간격에서 2배씩 `max-retries`번(기본 1초·5회, 약 31초).
+     *   처리 도중 DB 연결이 끊긴 경우도 여기서 시작한다. 원래 예외(SQLState 57P01)가 롤백 실패에 덮여
+     *   `JpaSystemException`·`TransactionSystemException`으로 오기 때문이다(2026-09-27 `pg_terminate_backend`로 실측).
+     *   다음 시도에서 DB가 아직 없으면 커넥션 획득이 실패해 아래 기다림으로 넘어간다(예외가 바뀌면 재시도 상태가 새로 시작된다).
+     *   대가로 JPA 계열의 버그성 예외도 5회 재시도된다. consumer가 멱등이라 감수한다.
      * - DB에 닿지 못함(커넥션 획득 실패, 연결 끊김): 상한 없이 30초 간격까지 늘려 기다린다. DB가 돌아오면 그대로 이어지고,
      *   장애 동안 들어온 메시지가 DLT에 쌓여 사람이 되돌려야 하는 일이 없다.
      */
@@ -94,6 +108,9 @@ class KafkaConfiguration {
             addRetryableExceptions(
                 TransientDataAccessException::class.java,
                 DataIntegrityViolationException::class.java,
+                TransactionTimedOutException::class.java,
+                JpaSystemException::class.java,
+                TransactionSystemException::class.java,
                 CannotCreateTransactionException::class.java,
                 DataAccessResourceFailureException::class.java,
             )
@@ -102,12 +119,28 @@ class KafkaConfiguration {
                     exception.causes().any { it is CannotCreateTransactionException || it is DataAccessResourceFailureException }
                 }
             }
-            setRetryListeners({ record, exception, attempt ->
-                log.warn {
-                    "소비 실패 topic=${record.topic()} partition=${record.partition()} offset=${record.offset()} " +
-                        "key=${record.key()} attempt=$attempt exception=${(exception?.cause ?: exception)?.javaClass?.name}"
-                }
-            })
+            setRetryListeners(retryLogging(meterRegistry))
+        }
+    }
+
+    /**
+     * 실패마다 WARN 한 줄을 남긴다. DLT 전송까지 실패하면 재시도 상태가 처음으로 돌아가(`resetStateOnRecoveryFailure` 기본값)
+     * 같은 메시지를 다시 처리하므로, 목록 밖 예외라도 리스너가 다시 불린다. 그 사실이 조용히 지나가지 않게 ERROR와 counter를 남긴다.
+     */
+    private fun retryLogging(meterRegistry: MeterRegistry) = object : RetryListener {
+        override fun failedDelivery(record: ConsumerRecord<*, *>, ex: Exception?, deliveryAttempt: Int) {
+            log.warn {
+                "소비 실패 topic=${record.topic()} partition=${record.partition()} offset=${record.offset()} " +
+                    "key=${record.key()} attempt=$deliveryAttempt exception=${(ex?.cause ?: ex)?.javaClass?.name}"
+            }
+        }
+
+        override fun recoveryFailed(record: ConsumerRecord<*, *>, original: Exception?, failure: Exception) {
+            meterRegistry.counter(DEAD_LETTER_FAILED_METRIC, "topic", record.topic()).increment()
+            log.error(failure) {
+                "DLT 전송 실패, 처음부터 다시 시도한다 topic=${record.topic()} partition=${record.partition()} " +
+                    "offset=${record.offset()} key=${record.key()} original=${(original?.cause ?: original)?.javaClass?.name}"
+            }
         }
     }
 
@@ -119,6 +152,9 @@ class KafkaConfiguration {
 
         /** DLT로 보낸 메시지 수. `topic`은 원래 토픽, `reason`은 도메인 오류 코드나 `error`다. 주문 식별자는 로그에만 남긴다. */
         const val DEAD_LETTER_METRIC = "event.kafka.dead-letter"
+
+        /** DLT 전송 자체가 실패한 횟수. 0보다 크면 DLT(브로커·권한·크기)를 먼저 고친다. */
+        const val DEAD_LETTER_FAILED_METRIC = "event.kafka.dead-letter.failed"
 
         private val log by logger()
     }

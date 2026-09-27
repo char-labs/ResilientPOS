@@ -30,6 +30,9 @@ import org.springframework.dao.TransientDataAccessResourceException
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.kafka.core.KafkaTemplate
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean
+import java.sql.SQLException
+import org.hibernate.TransactionException as HibernateTransactionException
+import org.springframework.orm.jpa.JpaSystemException
 import org.springframework.transaction.CannotCreateTransactionException
 import org.springframework.transaction.support.TransactionOperations
 
@@ -120,6 +123,23 @@ class KafkaRetryIntegrationTest(
 
         awaitUntil("fulfillment가 생긴다") { fulfillmentCount(orderId) == 1L }
         assertEquals(9, fulfillmentCalls.getValue(orderId).get(), "운영 재시도 횟수(5)를 넘긴 여덟 번 실패 뒤 성공")
+        KafkaTestSupport.awaitConsumed("fulfillment.order-paid", "order.paid")
+        assertEquals(emptyList(), KafkaTestSupport.records("order.paid.DLT", orderId))
+    }
+
+    /**
+     * 처리 도중 DB 연결이 끊기면(failover 순간의 관리자 종료, SQLState 57P01) 원래 예외는 롤백 실패에 덮여
+     * 리스너에는 이 모양으로 온다. 2026-09-27 `pg_terminate_backend`로 실측한 체인을 그대로 만든다.
+     */
+    private fun connectionLostDuringTransaction() =
+        JpaSystemException(HibernateTransactionException("Unable to rollback against JDBC Connection", SQLException("Connection is closed")))
+
+    @Test
+    fun `처리 도중 DB 연결이 끊겨 롤백까지 실패해도 DLT로 보내지 않고 다시 시도한다`() {
+        val orderId = checkoutApproved(failures = 2) { connectionLostDuringTransaction() }
+
+        awaitUntil("fulfillment가 생긴다") { fulfillmentCount(orderId) == 1L }
+        assertEquals(3, fulfillmentCalls.getValue(orderId).get())
         KafkaTestSupport.awaitConsumed("fulfillment.order-paid", "order.paid")
         assertEquals(emptyList(), KafkaTestSupport.records("order.paid.DLT", orderId))
     }
