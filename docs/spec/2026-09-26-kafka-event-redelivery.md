@@ -102,6 +102,20 @@ group by listener_id, status;
 - **PR ①의 결과가 계획과 달랐다.** advisory lock 대신 DB unique와 Redis 보조 잠금으로 머지됐다. 이 spec에서 PR ①을 advisory lock으로 적은 곳을 고쳤다. Kafka consumer 쪽의 결론은 같다. 동시 배달이 와도 두 번째 첫 승인 시도는 DB unique가 막고, 막힌 쪽은 unique 위반(`DataIntegrityViolationException`)이라 재시도 허용 목록에 들어 다시 읽고 기존 시도를 돌려받는다.
 - **검증**: rebase 뒤 `./gradlew test` 258개 중 실패 0(#61의 테스트 포함).
 
+### 범위 조정 (2026-09-27, multi-review 반영)
+PR 리뷰 포인트의 🔴 항목 때문에 multi-review를 돌렸다(Claude·Codex 실행, Gemini는 CLI가 없어 미실행). GitHub에는 리뷰가 없었다.
+- **받았다: DB 연결이 끊긴 경우의 예외가 재시도 목록 밖이었다**(Claude 1, P1). `pg_terminate_backend`로 트랜잭션 도중 연결을 끊어 실측했다. 커밋 시점이면 `DataAccessResourceFailureException`(SQLState 57P01)이라 이미 기다림 경로였다. 하지만 쿼리 도중이면 원래 예외(57P01)가 롤백 실패에 덮여 `JpaSystemException` ← `org.hibernate.TransactionException` ← `SQLException("Connection is closed")`(SQLState 없음)으로 왔고 곧장 DLT로 갔다. failover 한 번에 처리 중이던 메시지가 DLT에 쌓이는 것이다. SQLState를 해석하지 않고 `JpaSystemException`·`TransactionSystemException`·`TransactionTimedOutException`을 경합 재시도에 넣었다. 다음 시도에서 DB가 아직 없으면 `CannotCreateTransactionException`이 나고 예외가 바뀌어 재시도 상태가 새로 시작되므로 기다림 경로로 넘어간다. 대가로 JPA 계열 버그성 예외도 5회 재시도된다.
+- **받았다: 복제 수 기본값 1**(Claude 3). 설정이 없으면 복제 수를 지정하지 않아 브로커의 `default.replication.factor`를 따른다. `KafkaAdmin`은 복제 수를 바꾸지 않아 한 번 잘못 만들면 되돌리기 어렵다.
+- **받았다: DLT 전송 실패가 조용하다**(Claude 2). 재시도 리스너의 `recoveryFailed`에서 ERROR 로그와 counter `event.kafka.dead-letter.failed{topic}`를 남긴다. 전송 실패 루프에서 목록 밖 예외라도 리스너가 다시 불리는 동작 자체는 그대로다(메시지를 버리지 않기 위해서다). 실제 provider를 붙이는 PR은 이 counter에 알림을 건다.
+- **받았다: `max.poll.records` 기본값 500**(Claude 4). 50으로 줄였다. 레코드 처리가 느려지면 한 poll의 처리가 `max.poll.interval.ms`(300초)를 넘어 group에서 쫓겨난다.
+- **받았다: 기동 때 브로커가 없으면 토픽 없이 뜬다**(Claude 9). `spring.kafka.admin.fail-fast: true`. compose에서 브로커를 내리고 앱만 다시 띄우면 `Application run failed`로 끝나는 것을 확인했다. `max.block.ms` 단축은 PR ③(미전송 기록 회수)과 함께 본다.
+- **남긴다**: `@Externalized` 발행 토픽과 설정 목록의 대조(Claude 8), 재시도 counter(Claude 11), Redis 잠금의 `InterruptedException` 처리(Claude 10, #61 범위), 번역 경로를 더 넓게 보는 분류 단위 테스트(Claude 5의 일부). 커밋 시점 unique 위반이 `DataIntegrityViolationException`으로 오는 것은 #61의 `PaymentAttemptCreationConcurrencyIntegrationTest`가 확인한다.
+- **받지 않았다(Codex)**: 사실과 달랐다.
+  - "import가 없어 컴파일되지 않는다": `FulfillmentCommand`는 같은 패키지다.
+  - "3초·30초 대기가 session timeout(10초)을 넘겨 리밸런스된다": heartbeat는 별도 스레드가 보내고 session timeout은 45초(기동 로그)다. 처리 스레드의 대기가 걸리는 상한은 `max.poll.interval.ms`(300초)다.
+  - "unique 위반은 재시도해도 성공하지 않는다": PostgreSQL에서 진 쪽의 INSERT는 이긴 쪽의 커밋을 기다렸다 실패하므로, 재시도하면 이미 커밋된 행을 읽고 `created=false`로 끝난다.
+  - "`setBackOffFunction`의 null 의미가 불명확하다": 공식 문서가 null이면 기본 `BackOff`를 쓴다고 적는다.
+
 ## 제외
 - payment의 동시 생성 창을 닫는 일. PR ①(#61, DB unique와 Redis 보조 잠금)이 main 위에서 따로 했다.
 - 브로커 미전송 기록의 주기 resubmit(1분, advisory lock을 잡은 pod 하나, `FAILED`와 5분 지난 끊긴 기록, 최대 500건)과 완료 후 7일이 지난 행 정리. PR ③이 이 PR 머지 뒤 한다.
@@ -186,6 +200,7 @@ consumer 전환은 업무 흐름의 전달 경로를 바꾸므로 통합 테스�
 | 인수 11: `prometheus 엔드포인트가 Kafka consumer metric과 토픽별 DLT 개수를 돌려준다` | `./gradlew test --tests 'com.resilientpos.platform.ObservabilityConfigurationTest'`. 실패: `order.payment-requested 의 event_kafka_dead_letter_total이 없다`(consumer metric은 이미 있었다) | 토픽별 0 등록 뒤 같은 명령. 통과 | `./gradlew test`. 251개 중 실패 0 |
 | 인수 12: compose 실행 | 해당 없음(수동 확인) | 아래 결과 절 | 해당 없음 |
 | 인수 13: 기존 테스트 | 전환 직후 `./gradlew test`에서 7개 실패(옛 리스너의 발행 기록을 기다리다 시간 초과, 어댑터 예외의 재시도가 파티션을 붙잡아 뒤 테스트 시간 초과) | offset·DLT 기준으로 고치고 테스트 재시도 간격을 줄인 뒤 `./gradlew test`. 251개 중 실패 0 | 같은 명령. 실패 0 |
+| 리뷰 반영: `처리 도중 DB 연결이 끊겨 롤백까지 실패해도 DLT로 보내지 않고 다시 시도한다` | `./gradlew test --tests 'com.resilientpos.platform.KafkaRetryIntegrationTest'`. 실측한 예외 체인(`JpaSystemException` ← `TransactionException` ← `SQLException`)을 던지게 하자 실패: `fulfillment가 생긴다` 시간 초과(바로 DLT로 갔다) | 재시도 목록에 세 예외를 더한 뒤 같은 명령. 통과 | `./gradlew test`. 259개 중 실패 0 |
 
 ## 결과
 - `./gradlew test`: 251개 중 실패 0(2026-09-26).
@@ -193,3 +208,4 @@ consumer 전환은 업무 흐름의 전달 경로를 바꾸므로 통합 테스�
 - DLT 재투입 절차: 깨진 값을 key와 함께 `order.paid`에 넣어 DLT로 보낸 뒤, 도메인 모델 §4.3의 console consumer·producer 명령으로 다시 넣었다. 같은 key로 다시 DLT에 들어가 key가 보존되는 것을 확인했다.
 - consumer lag: `/actuator/prometheus`에 `kafka_consumer_fetch_manager_records_lag_max`가 consumer group마다(`client_id`에 group 이름) 나오는 것을 임시 출력으로 확인하고 되돌렸다.
 - 배포 조건 SQL은 배포된 환경이 없어 실행하지 않았다. 로컬 compose 볼륨에는 전환 전 측정 때 쌓인 행이 없었다(#60에서 `down -v`로 지웠다).
+- multi-review 반영 뒤(2026-09-27): `./gradlew test` 259개 중 실패 0. compose에서 주문이 `PAID`까지 가고, DLT가 복제 수를 지정하지 않아 브로커 기본값(1)·`retention.ms=-1`로 만들어지며, 브로커를 내린 채 앱을 띄우면 기동이 실패(exit 1)하는 것을 확인했다.
