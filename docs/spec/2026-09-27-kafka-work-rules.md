@@ -32,7 +32,7 @@
 - #62 범위의 코드·wiki. #62와 겹치는 파일은 바꾸지 않는다.
 
 ## 관련 문서
-없음.
+없음. 파일 링크 방식의 선례는 [current-state-to-vault](2026-09-23-current-state-to-vault.md)다.
 
 ## 변경 경로
 - AGENTS.md
@@ -68,7 +68,16 @@
 
 | 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
 |---|---|---|---|
-| test_links_cover_vault_wiki_documents | 미실행 | 미실행 | 미실행 |
+| test_links_cover_vault_wiki_documents | `python3 -m unittest discover -s scripts -p 'test_link_claude.py'`, `LINKS`에 키워드 문서가 없어 12개 중 1개 실패 | 같은 명령, 통과 | `python3 -m unittest discover -s scripts -p 'test_*.py'`, 137개 OK |
 
 ## 결과
-개발 전 작성. 개발 후 실행 결과와 변경 이유를 추가한다.
+개발 전 spec을 독립 커밋으로 작성했다. 구현 후 아래를 확인했다.
+
+- `link_claude.py`의 `LINKS`에 키워드 문서 한 줄만 더했다. 링크 로직은 바꾸지 않았다.
+- `make bootstrap`: `linked 5/5, copied 1/1`. `docs/wiki/modulith-kafka-keywords.md`는 볼트 파일을 가리키는 링크이고 `git status`에 나타나지 않는다.
+- 하네스 137개 통과. `python3 scripts/check_pr.py --base origin/main --worktree`: PASS, 일반 6개/86줄.
+- #62와 겹치는 파일이 없다. #61은 AGENTS.md의 "애플리케이션/빌드 변경 검증" 줄을 고치므로 새 줄을 "스키마 변경 검토" 줄 뒤에 둬 한 줄을 띄웠다.
+- `workflow-reviewer` 읽기 전용 검토: WARN(차단 없음). 반영한 것은 TDD 표·결과 채우기와 관련 문서 링크다. 반영하지 않은 것과 이유는 아래다.
+  - #62가 `domain-model.md` §4.3에 더하는 "Kafka 관련 작업은 공식 문서로 대조한다"와 AGENTS.md 새 줄이 겹친다. §4.3 줄은 참조할 공식 문서 링크와 설계 판단을 담은 지식이고 AGENTS.md는 작업 계약이라 역할이 다르다. 충돌을 피하려고 이 PR에서 §4.3을 건드리지 않는다.
+  - AGENTS.md의 "기본값은 sources jar나 기동 로그로 확인" 문장은 키워드 문서 "갱신 규칙"의 근거 항목과 겹친다. 키워드 문서뿐 아니라 PR spec과 코드에도 적용되는 규칙이라 AGENTS.md에 둔다.
+  - `agent-instructions.md`가 볼트 링크 대상으로 wiki 파일을 나열하지 않는 것은 current-state 때부터 있던 누락이라 이번 범위에서 고치지 않는다.
