@@ -30,6 +30,8 @@ import org.hibernate.type.SqlTypes
  * 두 enum은 `EnumType.STRING`이다. 기본값인 ORDINAL로 두면 값을 하나 끼워 넣는 순간
  * 이미 저장된 행의 뜻이 통째로 바뀐다.
  *
+ * `retriedFrom`은 재결제로 만든 시도가 가리키는 원래 시도다. 사실로 만든 시도는 null이다.
+ *
  * 바뀌는 것은 결말뿐이다. [applyResult]만 값을 바꾸고 나머지는 시도가 만들어질 때 확정된다.
  * 전 필드는 `var`에 `protected set`이다. `val`로 두지 않는 이유는 `OrderEntity`의 KDoc에 있다. 생성은 `from`만 한다(도메인 규칙 §5).
  */
@@ -46,6 +48,7 @@ class PaymentAttemptEntity private constructor(
     currency: String,
     status: PaymentAttemptStatus,
     providerReference: String?,
+    retriedFrom: UUID?,
 ) : BaseEntity() {
 
     @Id
@@ -83,6 +86,9 @@ class PaymentAttemptEntity private constructor(
     var providerReference: String? = providerReference
         protected set
 
+    var retriedFrom: UUID? = retriedFrom
+        protected set
+
     /**
      * provider 결과를 반영한다. 바꿀 수 있는 것이 이 둘뿐이라는 사실을 시그니처로 말한다.
      * 무엇으로 바꿀 수 있는지는 aggregate의 `applyAuthorization`이 정하고, 여기는 그 결과를 옮기기만 한다.
@@ -102,6 +108,7 @@ class PaymentAttemptEntity private constructor(
         amount = Money.of(amount, Currency.getInstance(currency)),
         status = status,
         providerReference = providerReference,
+        retriedFrom = retriedFrom?.let(::PaymentId),
     )
 
     companion object {
@@ -116,6 +123,7 @@ class PaymentAttemptEntity private constructor(
             currency = attempt.amount.currency.currencyCode,
             status = attempt.status,
             providerReference = attempt.providerReference,
+            retriedFrom = attempt.retriedFrom?.value,
         )
     }
 }

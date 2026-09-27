@@ -36,7 +36,7 @@ class OrderPaymentRequestedListener(
             ),
         )
 
-        // Facade가 반환했으면 이미 커밋됐다. 같은 사실이 겹치면 뒤쪽은 앞쪽의 커밋을 기다렸다가 그 시도를 돌려받는다.
+        // Facade가 반환했으면 이미 커밋됐다. 경합에서 진 쪽은 그 커밋에서 unique 위반을 받아 여기 닿지 않는다.
         log.info {
             "결제 시도 기록 orderId=${event.orderId} checkoutNo=${event.checkoutNo} " +
                 "paymentId=${result.paymentId.value} status=${result.status}"

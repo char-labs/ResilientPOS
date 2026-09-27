@@ -39,13 +39,12 @@ class PaymentManagement(
      * provider를 다시 부르는데, 멱등 키가 달라 provider도 막아 주지 못한다. 거절 뒤 재결제는 사용자가
      * 명시적으로 요청하는 별도 명령이 할 일이다 — 사실의 재배달과 재결제 의도를 같은 입구로 받지 않는다.
      *
-     * 같은 사실이 동시에 오면 읽을 때 거는 `(orderId, checkoutNo)` 잠금이 직렬화한다. 뒤쪽은 앞쪽의 커밋을
-     * 기다렸다가 그 시도를 돌려받는다. 잠금이 없으면 둘 다 "없음"을 읽고, 앞 시도가 거절된 뒤 뒤쪽이 새 시도를
-     * 넣을 수 있다(partial unique는 `DECLINED`를 빼고 본다). partial unique는 마지막 방어선으로 남는다.
+     * 읽은 뒤 넣기 전의 창은 DB가 닫는다. 사실로 만든 승인 시도는 checkout 회차당 하나라서(`retriedFrom`이 없는
+     * 행의 unique) 앞 시도가 거절된 뒤에도 두 번째가 들어가지 않는다. 진 쪽은 커밋에서 실패한다(`persist`가 flush를 미룬다).
      */
     @Transactional
     fun createAttempt(command: PaymentCommand.CreateAttempt): PaymentCommand.CreateAttempt.Result {
-        val existing = repository.findAuthorizationForUpdate(command.orderId, command.checkoutNo)
+        val existing = repository.findAuthorization(command.orderId, command.checkoutNo)
         if (existing != null) {
             return PaymentCommand.CreateAttempt.Result(existing.id, existing.status)
         }

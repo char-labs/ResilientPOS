@@ -9,13 +9,11 @@ import java.util.UUID
 interface PaymentAttemptRepository {
 
     /**
-     * 그 checkout을 잠그고 승인 시도를 **결말과 무관하게** 읽는다. 여럿이면 가장 먼저 만든 것이다.
-     * 같은 사실이 다시 와도, 동시에 와도 시도를 두 번 만들지 않기 위한 조회다.
-     *
-     * 행이 아니라 checkout을 잠근다 — 시도가 아직 없어도 잠겨야 동시 생성을 막는다. 잠금은 트랜잭션이 끝날 때 풀리므로
-     * 트랜잭션 안에서만 부른다. 대기는 3초로 제한하고 넘으면 `PessimisticLockingFailureException` 계열 예외다.
+     * 그 checkout의 승인 시도를 **결말과 무관하게** 읽는다. 여럿이면 가장 먼저 만든 것이다.
+     * 같은 사실이 다시 와도 시도를 두 번 만들지 않기 위한 조회다.
+     * 동시에 들어온 요청까지 막지는 못한다. 그 창은 사실로 만든 첫 승인 시도의 unique가 닫는다.
      */
-    fun findAuthorizationForUpdate(orderId: UUID, checkoutNo: Int): PaymentAttempt?
+    fun findAuthorization(orderId: UUID, checkoutNo: Int): PaymentAttempt?
 
     /**
      * 그 checkout의 승인 시도 중 **가장 나중에** 만든 것. 재결제가 거절된 시도를 다시 시도할 수 있는지,

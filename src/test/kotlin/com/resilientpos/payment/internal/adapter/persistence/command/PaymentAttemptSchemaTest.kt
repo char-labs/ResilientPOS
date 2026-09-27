@@ -52,6 +52,7 @@ class PaymentAttemptSchemaTest(
                 Triple("kind", "character varying", 32),
                 Triple("order_id", "uuid", null),
                 Triple("provider_reference", "character varying", 255),
+                Triple("retried_from", "uuid", null),
                 Triple("status", "character varying", 32),
                 Triple("store_id", "uuid", null),
                 Triple("terminal_id", "uuid", null),

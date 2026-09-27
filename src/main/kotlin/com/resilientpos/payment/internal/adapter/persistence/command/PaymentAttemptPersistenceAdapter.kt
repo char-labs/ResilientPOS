@@ -20,32 +20,12 @@ class PaymentAttemptPersistenceAdapter(
     private val entityManager: EntityManager,
 ) : PaymentAttemptRepository {
 
-    /**
-     * `pg_advisory_xact_lock(int4, int4)`로 checkout을 잠근다. 첫 키는 `orderId`의 `UUID.hashCode()`, 둘째는 `checkoutNo`다.
-     * 해시가 겹치면 다른 checkout끼리 기다릴 뿐 정합성은 그대로다.
-     *
-     * 대기 한도는 `findWithLockById`와 같게 Hibernate가 하는 대로 건다 — 기존 값을 읽고, 바꾸고, 잠근 뒤 되돌린다.
-     * 되돌리지 않으면 트랜잭션 한정 설정이 호출자 트랜잭션의 이후 잠금까지 묶는다. 잠금이 실패하면 트랜잭션이 끝나 설정도 사라진다.
-     */
-    override fun findAuthorizationForUpdate(orderId: UUID, checkoutNo: Int): PaymentAttempt? {
-        val baseline = entityManager.createNativeQuery("select current_setting('lock_timeout')").singleResult
-        setLockTimeout("${PAYMENT_ATTEMPT_LOCK_TIMEOUT_MILLIS}ms")
-        entityManager.createNativeQuery("select 1 from pg_advisory_xact_lock(?1, ?2)")
-            .setParameter(1, orderId.hashCode())
-            .setParameter(2, checkoutNo)
-            .singleResult
-        setLockTimeout(baseline as String)
-
-        return jpaRepository.findFirstByOrderIdAndCheckoutNoAndKindOrderById(
+    override fun findAuthorization(orderId: UUID, checkoutNo: Int): PaymentAttempt? =
+        jpaRepository.findFirstByOrderIdAndCheckoutNoAndKindOrderById(
             orderId = orderId,
             checkoutNo = checkoutNo,
             kind = PaymentAttemptKind.AUTHORIZATION,
         )?.toDomain()
-    }
-
-    private fun setLockTimeout(value: String) {
-        entityManager.createNativeQuery("select set_config('lock_timeout', ?1, true)").setParameter(1, value).singleResult
-    }
 
     override fun findLatestAuthorization(orderId: UUID, checkoutNo: Int): PaymentAttempt? =
         jpaRepository.findFirstByOrderIdAndCheckoutNoAndKindOrderByIdDesc(
