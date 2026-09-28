@@ -10,9 +10,10 @@ import com.resilientpos.payment.internal.application.PaymentEventPublisher
 import com.resilientpos.payment.internal.domain.PaymentAttempt
 import com.resilientpos.payment.internal.domain.AuthorizationOutcome
 import com.resilientpos.payment.internal.domain.AuthorizationRequest
-import com.resilientpos.payment.internal.domain.CheckoutLock
 import com.resilientpos.payment.internal.domain.PaymentAttemptRepository
 import com.resilientpos.payment.internal.domain.PaymentGateway
+import com.resilientpos.platform.DistributedLock
+import com.resilientpos.platform.Lock
 import com.resilientpos.platform.Tx
 import com.resilientpos.platform.TxRunner
 import com.resilientpos.store.StoreId
@@ -40,6 +41,11 @@ class PaymentManagementTest {
     init {
         // 프록시가 아닌 러너라 블록을 그대로 부른다. 저장소가 가짜라 트랜잭션이 필요 없다.
         Tx.initialize(TxRunner())
+        // 잠금은 인스턴스 사이의 동시성만 다룬다. 단위 테스트의 판단에는 끼지 않는다.
+        Lock.initialize(object : DistributedLock {
+            override fun tryAcquire(key: String): String? = null
+            override fun release(key: String, token: String) = Unit
+        })
     }
 
     private val krw: Currency = Currency.getInstance("KRW")
@@ -106,10 +112,6 @@ class PaymentManagementTest {
             ids,
             clock,
             events,
-            // 잠금은 인스턴스 사이의 동시성만 다룬다. 단위 테스트의 판단에는 끼지 않는다.
-            object : CheckoutLock {
-                override fun lockUntilTransactionEnds(orderId: UUID, checkoutNo: Int) = Unit
-            },
         )
     }
 
