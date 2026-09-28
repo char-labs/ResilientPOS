@@ -65,7 +65,7 @@ Claude에서 `/이름`, Codex에서 `$이름`으로 호출한다. 자연어 요�
 | 원본 방식 (들여온 것) | 저장소 계약 | 상태 |
 |---|---|---|
 | `.claude/rules` 자동 로드, 휘발성 산출물(`.develop-workflow/` 등) | 링크 3개, gitignore에 없음 | [rules-link-and-ignores](../spec/2026-09-13-rules-link-and-ignores.md)에서 해소 |
-| 스펙 계층 위치, epic과 PR 단위, rebase 정책, 커밋 형식·언어, PR 본문 4단, Checkpoint 관계, grill 선행 | PR당 날짜형 spec 한 개, 작은 PR 분할, 자동 rebase 금지 | [development-rules-original-first](../spec/2026-09-13-development-rules-original-first.md)에서 조정 |
+| 스펙 계층 위치, epic과 PR 단위, rebase 정책, 커밋 형식·언어, PR 본문 4단, Checkpoint 관계, grill 선행 | PR당 날짜형 spec 한 개, 개발 컨텍스트 단위 PR·스택 PR 금지, 자동 rebase 금지 | [development-rules-original-first](../spec/2026-09-13-development-rules-original-first.md)에서 조정, PR 단위는 [pr-unit-by-context](../spec/2026-09-28-pr-unit-by-context.md)에서 조정 |
 | PR 본문 4단 고정(왜 / 무엇을 / 어떻게 / 확인 방법) | 네 가지 질문을 골격으로 둔 의사결정 문서 8절. 양식은 `.github/PULL_REQUEST_TEMPLATE.md`가 정한다 | [pr-template-decision-doc](../spec/2026-09-20-pr-template-decision-doc.md)에서 조정. 미해소: 볼트의 git 스킬 cli-reference와 communicate 스킬이 아직 4단 고정을 단일 출처로 선언한다. 저장소에서는 템플릿이 우선하고, 볼트 문구 수정은 후속 작업으로 남아 있다 |
 | 모든 git 작업에 `resilientpos-git` 적용 | commit/push 요청에서만 스킬 선택 | 이번 PR: 진입점 안내를 추가했고, commit/push 범위 판단은 `resilientpos-commit-push`가 계속 담당한다 |
 | 에이전트 `model:` 명시 | 모델은 기존 설정 상속 | 이번 PR: 역할별 배정으로 변경 |
