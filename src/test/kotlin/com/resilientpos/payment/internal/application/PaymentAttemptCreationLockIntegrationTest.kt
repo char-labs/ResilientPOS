@@ -5,6 +5,7 @@ import com.resilientpos.foundation.Money
 import com.resilientpos.order.OrderFixtures
 import com.resilientpos.payment.PaymentCommand
 import com.resilientpos.payment.PaymentManagement
+import com.resilientpos.payment.internal.domain.CheckoutLock
 import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.TerminalId
 import java.util.UUID
@@ -12,6 +13,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.transaction.support.TransactionOperations
@@ -28,6 +30,7 @@ class PaymentAttemptCreationLockIntegrationTest(
     @Autowired private val paymentManagement: PaymentManagement,
     @Autowired private val transactions: TransactionOperations,
     @Autowired private val jdbcTemplate: JdbcTemplate,
+    @Autowired private val checkoutLock: CheckoutLock,
 ) : PostgresIntegrationTest() {
 
     private fun attempts(orderId: UUID): List<Map<String, Any?>> = jdbcTemplate.queryForList(
@@ -61,6 +64,14 @@ class PaymentAttemptCreationLockIntegrationTest(
             assertEquals(1, attempts(orderId).size)
         } finally {
             executor.shutdownNow()
+        }
+    }
+
+    @Test
+    fun `트랜잭션 밖에서 잠그면 거절한다`() {
+        // 해제가 트랜잭션 끝에 걸리므로 트랜잭션이 없으면 잠금이 TTL까지 남는다.
+        assertFailsWith<IllegalStateException> {
+            checkoutLock.lockUntilTransactionEnds(UUID.randomUUID(), 1)
         }
     }
 }

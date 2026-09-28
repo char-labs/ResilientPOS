@@ -1,5 +1,6 @@
 package com.resilientpos.payment.internal.adapter.lock
 
+import com.resilientpos.foundation.UuidV7IdentifierGenerator
 import java.util.UUID
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
@@ -27,7 +28,7 @@ class RedisCheckoutLockTest {
         val redis = mock(StringRedisTemplate::class.java)
         given(redis.opsForValue()).willThrow(RedisConnectionFailureException("Redis down"))
 
-        RedisCheckoutLock(redis).lockUntilTransactionEnds(UUID.randomUUID(), 1)
+        RedisCheckoutLock(redis, UuidV7IdentifierGenerator()).lockUntilTransactionEnds(UUID.randomUUID(), 1)
 
         // 잠그지 않았으니 트랜잭션 끝에 풀 것도 없다.
         assertTrue(TransactionSynchronizationManager.getSynchronizations().isEmpty())

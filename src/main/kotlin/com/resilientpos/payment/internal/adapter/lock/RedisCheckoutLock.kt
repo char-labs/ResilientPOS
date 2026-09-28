@@ -1,5 +1,6 @@
 package com.resilientpos.payment.internal.adapter.lock
 
+import com.resilientpos.foundation.IdentifierGenerator
 import com.resilientpos.payment.internal.domain.CheckoutLock
 import com.resilientpos.platform.logger
 import java.time.Duration
@@ -18,16 +19,19 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
  * TTL은 해제가 불리지 않은 경우(프로세스가 죽음)의 상한이다. `createAttempt`는 provider를 부르지 않는 짧은 트랜잭션이다.
  *
  * Redis 오류나 대기 초과면 경고만 남기고 잠그지 않는다(fail-open). DB unique가 방어선이라 결제를 멈출 이유가 없다.
+ *
+ * 트랜잭션 밖 호출은 해제를 거는 `registerSynchronization`이 `IllegalStateException`으로 거절한다.
+ * 잠금을 얻은 뒤라 그 키는 TTL까지 남는다. 프로그래밍 오류에서만 생긴다.
  */
 @Component
 class RedisCheckoutLock(
     private val redis: StringRedisTemplate,
+    private val identifierGenerator: IdentifierGenerator,
 ) : CheckoutLock {
 
     override fun lockUntilTransactionEnds(orderId: UUID, checkoutNo: Int) {
-        check(TransactionSynchronizationManager.isSynchronizationActive()) { "checkout 잠금은 트랜잭션 안에서만 건다" }
         val key = "payment:checkout-lock:$orderId:$checkoutNo"
-        val token = UUID.randomUUID().toString()
+        val token = identifierGenerator.next().toString()
 
         val acquired = try {
             acquire(key, token)
