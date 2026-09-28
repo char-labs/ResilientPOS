@@ -13,6 +13,7 @@ import com.resilientpos.payment.internal.domain.PaymentGateway
 import com.resilientpos.platform.logger
 import java.time.Clock
 import org.springframework.stereotype.Service
+import org.springframework.transaction.TransactionStatus
 import org.springframework.transaction.annotation.Propagation
 import org.springframework.transaction.annotation.Transactional
 import org.springframework.transaction.support.TransactionOperations
@@ -20,6 +21,8 @@ import org.springframework.transaction.support.TransactionOperations
 /**
  * `payment` 모듈의 유일한 진입점. 결제 정본 상태를 바꾸는 일은 전부 여기를 거친다.
  * 인터페이스를 따로 두지 않는 구체 클래스다. 구현이 둘이 될 때 뽑는다.
+ *
+ * 트랜잭션은 [TransactionOperations]로 연다. 발행에 넘길 트랜잭션 증거(`TransactionStatus`)를 블록에서 얻는다.
  */
 @Service
 class PaymentManagement(
@@ -46,19 +49,8 @@ class PaymentManagement(
      * 회차당 하나라서(`retriedFrom`이 없는 행의 unique) 잠금이 통하지 않아도 두 번째가 들어가지 않는다.
      * 그때 늦은 요청은 커밋에서 실패한다(`persist`가 flush를 미룬다).
      */
-    @Transactional
-    fun createAttempt(command: PaymentCommand.CreateAttempt): PaymentCommand.CreateAttempt.Result {
-        checkoutLock.lockUntilTransactionEnds(command.orderId, command.checkoutNo)
-        val existing = repository.findAuthorization(command.orderId, command.checkoutNo)
-        if (existing != null) {
-            return PaymentCommand.CreateAttempt.Result(existing.id, existing.status)
-        }
-
-        val transition = PaymentAttempt.create(command, identifierGenerator, clock.instant())
-        val saved = repository.save(transition.aggregate)
-        eventPublisher.publishAll(transition.events)
-        return PaymentCommand.CreateAttempt.Result(saved.id, saved.status)
-    }
+    fun createAttempt(command: PaymentCommand.CreateAttempt): PaymentCommand.CreateAttempt.Result =
+        requireNotNull(transactions.execute { transaction -> create(transaction, command) })
 
     /**
      * 기록된 시도에 provider 승인을 요청하고 결과를 적용한다.
@@ -78,7 +70,7 @@ class PaymentManagement(
 
         val outcome = gateway.authorize(AuthorizationRequest(attempt.id, attempt.amount))
 
-        return requireNotNull(transactions.execute { applyOutcome(command.paymentId, outcome) })
+        return requireNotNull(transactions.execute { transaction -> applyOutcome(transaction, command.paymentId, outcome) })
     }
 
     /**
@@ -93,14 +85,27 @@ class PaymentManagement(
      */
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
     fun retryAuthorization(command: PaymentCommand.RetryAuthorization): PaymentCommand.RetryAuthorization.Result {
-        val (result, retried) = requireNotNull(transactions.execute { retry(command.paymentId) })
+        val (result, retried) = requireNotNull(transactions.execute { transaction -> retry(transaction, command.paymentId) })
         if (retried) {
             log.info { "결제를 다시 시도한다 declinedPaymentId=${command.paymentId.value} paymentId=${result.paymentId.value}" }
         }
         return result
     }
 
-    private fun retry(paymentId: PaymentId): Pair<PaymentCommand.RetryAuthorization.Result, Boolean> {
+    private fun create(transaction: TransactionStatus, command: PaymentCommand.CreateAttempt): PaymentCommand.CreateAttempt.Result {
+        checkoutLock.lockUntilTransactionEnds(command.orderId, command.checkoutNo)
+        val existing = repository.findAuthorization(command.orderId, command.checkoutNo)
+        if (existing != null) {
+            return PaymentCommand.CreateAttempt.Result(existing.id, existing.status)
+        }
+
+        val transition = PaymentAttempt.create(command, identifierGenerator, clock.instant())
+        val saved = repository.save(transition.aggregate)
+        eventPublisher.publishAll(transaction, transition.events)
+        return PaymentCommand.CreateAttempt.Result(saved.id, saved.status)
+    }
+
+    private fun retry(transaction: TransactionStatus, paymentId: PaymentId): Pair<PaymentCommand.RetryAuthorization.Result, Boolean> {
         val target = repository.findByIdForUpdate(paymentId) ?: throw attemptNotFound()
         val latest = repository.findLatestAuthorization(target.orderId, target.checkoutNo)
         if (latest != null && latest.id != target.id) {
@@ -109,12 +114,16 @@ class PaymentManagement(
 
         val transition = target.retry(identifierGenerator, clock.instant())
         val saved = repository.save(transition.aggregate)
-        eventPublisher.publishAll(transition.events)
+        eventPublisher.publishAll(transaction, transition.events)
         return PaymentCommand.RetryAuthorization.Result(saved.id, saved.status) to true
     }
 
     /** 잠그고 다시 읽는다. 호출하는 동안 다른 `authorize`가 먼저 적용했으면 덮지 않고 그 결말을 돌려준다. */
-    private fun applyOutcome(paymentId: PaymentId, outcome: AuthorizationOutcome): PaymentCommand.Authorize.Result {
+    private fun applyOutcome(
+        transaction: TransactionStatus,
+        paymentId: PaymentId,
+        outcome: AuthorizationOutcome,
+    ): PaymentCommand.Authorize.Result {
         val current = repository.findByIdForUpdate(paymentId) ?: throw attemptNotFound()
         if (current.status != PaymentAttemptStatus.REQUESTED) {
             return PaymentCommand.Authorize.Result(current.id, current.status)
@@ -123,7 +132,7 @@ class PaymentManagement(
         val transition = current.applyAuthorization(outcome, identifierGenerator, clock.instant())
         val applied = repository.update(transition.aggregate)
         // 발행 기록이 결과와 같은 커밋에 들어가야 하므로 이 트랜잭션 안에서 발행한다(도메인 모델 §4.3).
-        eventPublisher.publishAll(transition.events)
+        eventPublisher.publishAll(transaction, transition.events)
         return PaymentCommand.Authorize.Result(applied.id, applied.status)
     }
 
