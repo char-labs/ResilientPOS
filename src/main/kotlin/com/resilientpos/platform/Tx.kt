@@ -6,8 +6,8 @@ import org.springframework.transaction.annotation.Transactional
 
 /**
  * 읽기 전용 트랜잭션 선언. 호출자 트랜잭션이 있으면 합류하고 없으면 트랜잭션 없이 돈다(`SUPPORTS`).
- * 트랜잭션 없이 돌면 여러 쿼리가 서로 다른 시점을 보고, readOnly 힌트(flush 생략, 레플리카 라우팅)도 걸리지 않는다.
- * 한 시점이 필요한 조회는 [Tx.masterTx]로 감싸거나 한 쿼리로 읽는다(도메인 모델 §4.3).
+ * 트랜잭션 없이 돌면 쿼리마다 따로 커밋되고 세션·커넥션 read-only는 걸리지 않는다. 읽기 전용 표시와 flush 생략은 걸린다.
+ * 한 시점이 필요한 조회는 한 쿼리로 읽거나 루트를 잠그고 읽는다(도메인 모델 §4.3).
  */
 @Target(AnnotationTarget.FUNCTION)
 @Retention(AnnotationRetention.RUNTIME)
