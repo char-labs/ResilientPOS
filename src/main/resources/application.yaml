@@ -24,10 +24,10 @@ spring:
     enabled: true
   data:
     redis:
-      # 결제 시도 생성의 중복 완화 잠금에만 쓴다(payment-advisory-lock). 정합성의 정본은 DB unique다.
+      # 결제 시도 생성·주문 생성의 중복 완화 잠금(platform.Lock)에만 쓴다. 정합성의 정본은 DB unique다.
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
-      # 잠금은 Redis가 느리거나 없으면 잠금 없이 진행한다(fail-open). 기본 60초를 기다리면 그동안 결제가 멈춘다.
+      # 잠금은 Redis가 느리거나 없으면 잠금 없이 진행한다(fail-open). 기본 60초를 기다리면 그동안 결제와 주문 생성이 멈춘다.
       timeout: 1s
       connect-timeout: 1s
   jackson:
@@ -96,7 +96,7 @@ resilientpos:
 management:
   health:
     redis:
-      # Redis는 보조 잠금이라 장애여도 결제는 계속된다. 켜 두면 Redis 장애에 모든 pod가 DOWN이 되어 트래픽에서 빠진다.
+      # Redis는 보조 잠금이라 장애여도 결제와 주문 생성은 계속된다. 켜 두면 Redis 장애에 모든 pod가 DOWN이 되어 트래픽에서 빠진다.
       enabled: false
   endpoints:
     web:
