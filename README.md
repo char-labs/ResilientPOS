@@ -79,11 +79,11 @@ ResilientPOS는 **PR 단위로 명세를 먼저 작성하고 구현·검증하�
 개발 의도와 완료 기준을 명세에 남기고, 구현 중 결정이 바뀌면 명세와 프로젝트 지식을 함께 갱신합니다.
 
 1. **명세**: 개발 전에 `docs/spec/yyyy-mm-dd-slug.md`에 목적, 범위, 제외 항목, 인수 조건과 검증 방법을 작성하고 독립 커밋으로 기록합니다.
-2. **구현**: 한 PR은 하나의 목표로 제한합니다. 범위가 커지면 후속 PR과 새 spec으로 분리합니다.
+2. **구현**: 한 PR은 개발 컨텍스트 하나입니다. 크기로 나누지 않고, 다른 목표는 별도 spec의 PR로 냅니다.
 3. **검증**: 인수 조건에 따라 관련 테스트와 로컬 PR 검사를 실행하고 결과를 spec에 기록합니다.
 4. **지식 갱신**: 요구사항·설계 변경은 `docs/wiki` 본문에 반영하고, 그 근거는 해당 PR spec에 남깁니다.
 
-별도 plan 문서 대신 spec에 범위 조정과 개발 이력을 남깁니다. 상세 절차와 PR 분할 기준은 [개발 규칙](docs/wiki/development-workflow.md), 작성 형식은 [spec 템플릿](docs/spec-template.md)에서 관리합니다.
+별도 plan 문서 대신 spec에 범위 조정과 개발 이력을 남깁니다. 상세 절차와 PR 단위 기준은 [개발 규칙](docs/wiki/development-workflow.md), 작성 형식은 [spec 템플릿](docs/spec-template.md)에서 관리합니다.
 
 ### TDD — Test-Driven Development
 

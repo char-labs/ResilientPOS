@@ -10,9 +10,6 @@ from pathlib import Path
 
 SPEC = re.compile(r"docs/spec/(\d{4}-\d{2}-\d{2})-[a-z0-9]+(?:-[a-z0-9]+)*\.md$")
 SECTIONS = ('목적', '범위', '제외', '변경 경로', '인수 조건', '검증', 'Wiki 영향', '분할 계획', '결과')
-# 조건과 메시지가 같은 값을 쓴다. 숫자를 두 곳에 적으면 조건만 바꿔도 메시지를 보는 단언이 통과한다.
-WARN_LINES = 900
-FAIL_LINES = 1400
 # Flyway가 읽는 경로 전부다. 확장자 대소문자를 가리지 않고, 하위 디렉터리와 R(반복) 접두,
 # db.migration 패키지의 Java·Kotlin 마이그레이션도 읽는다. src 밖의 예시 SQL은 대상이 아니다.
 SCHEMA_CHANGE = re.compile(
@@ -254,14 +251,9 @@ def check(base, head='HEAD', worktree=False, migrations_only=False):
             source_files += 1
             source_lines += lines
         else:
+            # PR 단위는 개발 컨텍스트다. 일반 변경의 파일 수·줄 수는 통계 줄에만 내보내고 판정하지 않는다.
             regular_files += 1
             regular_lines += lines
-    # 파일 수는 리뷰 부담을 재지 못한다. 한 줄씩 바뀐 25개 파일과 서른 줄씩 바뀐 25개 파일은 다른 일이다.
-    # 통계 줄에는 계속 내보내 사람이 보게 두고, 통과/실패는 줄 수로만 가른다.
-    if regular_lines > FAIL_LINES:
-        errors.append(f'PR 상한 {FAIL_LINES}줄 초과: 후속 PR로 분할하세요.')
-    elif regular_lines >= WARN_LINES:
-        warnings.append(f'{WARN_LINES}줄 도달: 남은 개발은 후속 PR로 분할하세요.')
     if source_files > 10 or source_lines > 5000:
         errors.append('원문 보관 상한 10개 파일/5000줄 초과')
     return errors, warnings, f'일반 {regular_files}개/{regular_lines}줄; 원문 {source_files}개/{source_lines}줄'
