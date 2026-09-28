@@ -9,6 +9,7 @@ import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import org.springframework.beans.factory.annotation.Autowired
@@ -81,6 +82,22 @@ class LockIntegrationTest(
         }
 
         assertEquals(1, probes(id))
+    }
+
+    @Test
+    fun `블록이 던지면 롤백한 뒤 락을 푼다`() {
+        val key = "test:lock:${UUID.randomUUID()}"
+        val id = UUID.randomUUID()
+
+        assertFailsWith<IllegalStateException> {
+            Lock.executeWithLock(key) {
+                insertProbe(id)
+                error("블록 실패")
+            }
+        }
+
+        assertEquals(0, probes(id))
+        assertFalse(redis.hasKey(key))
     }
 
     @Test
