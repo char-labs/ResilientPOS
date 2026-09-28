@@ -63,15 +63,15 @@
 없다. wiki는 테스트 헬퍼 이름이나 `Money`의 비교 방식을 적지 않는다. 요구사항 변화도 없다. 반복 호출을 모으는 정리이고 동작이 같다.
 
 ## 분할 계획
-35개 파일, 추가와 삭제 합계 620줄 안쪽이다. 경고선(900줄)에 이르지 않는다. 앞 PR이 squash merge되면 `git rebase --onto origin/main` 으로 이 PR의 커밋만 main 위로 옮긴다. 앞 PR의 최종 내용 위에 쌓았으므로 충돌하지 않는다.
+36개 파일, 추가와 삭제 합계 650줄 안쪽이다. 경고선(900줄)에 이르지 않는다. 앞 PR이 squash merge되면 `git rebase --onto origin/main` 으로 이 PR의 커밋만 main 위로 옮긴다. 앞 PR의 최종 내용 위에 쌓았으므로 충돌하지 않는다.
 
 ## TDD 검증 기록
 운영 동작은 바뀌지 않는 정리다. 새 멤버 `Money.isZero`·`isNegative`만 테스트를 먼저 쓴다. 테스트 정리는 기존 테스트가 그대로 통과하는지로 확인한다.
 
 | 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
 |---|---|---|---|
-| 0인지와 음수인지를 부호로 판정한다 | `./gradlew compileTestKotlin`, `isZero`가 없어 테스트 컴파일 실패 | `./gradlew test --tests 'com.resilientpos.foundation.MoneyTest'`, 통과 | 단위 테스트 118개 통과, 통합 테스트 미실행 |
-| JSON에는 금액과 통화만 나간다 | `./gradlew test --tests 'com.resilientpos.foundation.MoneyTest'`, 멤버 판정이라 `isNegative`·`isZero` 필드가 섞여 실패 | 같은 명령, 확장 프로퍼티로 옮겨 통과 | 단위 테스트 118개 통과, 통합 테스트 미실행 |
+| 0인지와 음수인지를 부호로 판정한다 | `./gradlew compileTestKotlin`, `isZero`가 없어 테스트 컴파일 실패 | `./gradlew test --tests 'com.resilientpos.foundation.MoneyTest'`, 통과 | `./gradlew test`, 254개 통과 |
+| JSON에는 금액과 통화만 나간다 | `./gradlew test --tests 'com.resilientpos.foundation.MoneyTest'`, 멤버 판정이라 `isNegative`·`isZero` 필드가 섞여 실패 | 같은 명령, 확장 프로퍼티로 옮겨 통과 | `./gradlew test`, 254개 통과 |
 
 ## 결과
 개발 전 spec을 독립 커밋으로 작성했다. 구현 후 아래를 확인했다.
@@ -80,4 +80,4 @@
 - 운영 코드는 `Money.isZero`·`isNegative` 확장 프로퍼티(0 비교 3곳)와 `findByIdOrNull`(2곳)이다. 멤버로 두면 금액 JSON에 필드가 더해지는 것을 실측해 확장으로 옮겼고, JSON 모양을 테스트로 고정했다.
 - multi-review(Claude 78점, Codex 96점, Gemini는 CLI가 없어 미실행)를 반영했다. 위 JSON 계약, `requestCheckout`을 검증하는 주문 모듈 테스트의 두 줄 호출 복원, 헬퍼 이름 `createAndRequestCheckout`, 이미 설치된 Awaitility 위의 `awaitUntil`, 실패 시점에 평가하는 `awaitStatus` 진단, 행 수 non-null, 주석 위치를 고쳤다.
 - 인수 조건 2·3을 `grep`으로 확인했다. main의 `Money.zero`는 합계 fold의 시작값 1곳만 남았다(비교가 아니다).
-- 리뷰 반영 전 `./gradlew test`: 253개 통과. 반영 뒤에는 Docker 데몬이 응답하지 않아 통합 테스트를 돌리지 못했고, Docker가 필요 없는 단위 테스트 18개 클래스 118개가 통과했다. 전체 실행은 Docker를 되살린 뒤 한다.
+- `./gradlew test`: 254개 통과, 실패 0.
