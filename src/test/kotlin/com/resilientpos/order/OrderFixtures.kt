@@ -41,15 +41,4 @@ object OrderFixtures {
             .setExp(OrderCommand.Create::currency, currency)
             .setExp(OrderCommand.Create::lines, lines)
             .sample()
-
-    /** 단가와 수량만 정한 line. 결제 결말은 FakePaymentGateway가 합계의 끝자리로 정한다. */
-    fun line(unitPrice: String, quantity: Int = 1): OrderCommand.Create.Line =
-        OrderCommand.Create.Line("SKU-1", "아메리카노", Money.of(unitPrice, krw), quantity)
-}
-
-/** 주문을 만들고 checkout을 요청한다. 결제 쪽 테스트가 `OrderPaymentRequested`를 내게 하는 가장 짧은 길이다. */
-fun OrderCommandFacade.checkout(command: OrderCommand.Create = OrderFixtures.createOrderCommand()): OrderId {
-    val created = create(command)
-    requestCheckout(OrderCommand.RequestCheckout(created.orderId))
-    return created.orderId
 }

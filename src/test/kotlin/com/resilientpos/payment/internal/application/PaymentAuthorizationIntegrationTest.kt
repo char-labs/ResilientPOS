@@ -1,11 +1,10 @@
 package com.resilientpos.payment.internal.application
 
 import com.resilientpos.PostgresIntegrationTest
-import com.resilientpos.awaitUntil
+import com.resilientpos.foundation.Money
 import com.resilientpos.order.OrderCommand
 import com.resilientpos.order.OrderCommandFacade
 import com.resilientpos.order.OrderFixtures
-import com.resilientpos.order.checkout
 import com.resilientpos.payment.PaymentAttemptStatus
 import com.resilientpos.payment.PaymentCommand
 import com.resilientpos.payment.PaymentId
@@ -18,20 +17,20 @@ import jakarta.persistence.EntityManagerFactory
 import java.math.BigInteger
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.test.fail
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.TestConfiguration
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Primary
 import javax.sql.DataSource
 import org.springframework.jdbc.core.JdbcTemplate
-import org.springframework.jdbc.core.queryForList
-import org.springframework.jdbc.core.queryForObject
 import org.springframework.transaction.support.TransactionOperations
 import org.springframework.transaction.support.TransactionSynchronizationManager
 
@@ -80,8 +79,15 @@ class PaymentAuthorizationIntegrationTest(
         fun probingGateway(emf: EntityManagerFactory, dataSource: DataSource) = ProbingGateway(emf, dataSource)
     }
 
-    private fun checkoutOrder(unitPrice: String): UUID =
-        orderFacade.checkout(OrderFixtures.createOrderCommand(lines = listOf(OrderFixtures.line(unitPrice)))).value
+    private fun checkoutOrder(unitPrice: String): UUID {
+        val created = orderFacade.create(
+            OrderFixtures.createOrderCommand(
+                lines = listOf(OrderCommand.Create.Line("SKU-1", "아메리카노", Money.of(unitPrice, OrderFixtures.krw), 1)),
+            ),
+        )
+        orderFacade.requestCheckout(OrderCommand.RequestCheckout(created.orderId))
+        return created.orderId.value
+    }
 
     private fun attempt(orderId: UUID): Map<String, Any?>? = jdbcTemplate.queryForList(
         "select id, status, provider_reference from t_payment_attempt where order_id = ?",
@@ -89,6 +95,14 @@ class PaymentAuthorizationIntegrationTest(
     ).singleOrNull()
 
     private fun paymentId(row: Map<String, Any?>) = PaymentId(row["id"] as UUID)
+
+    private fun awaitUntil(description: String, condition: () -> Boolean) {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
+        while (!condition()) {
+            if (System.nanoTime() >= deadline) fail("10초 안에 충족되지 않았다: $description")
+            Thread.sleep(20)
+        }
+    }
 
     private fun awaitStatus(orderId: UUID, expected: PaymentAttemptStatus): Map<String, Any?> {
         awaitUntil("시도가 $expected 가 된다. 현재: ${attempt(orderId)}") { attempt(orderId)?.get("status") == expected.name }
@@ -106,7 +120,7 @@ class PaymentAuthorizationIntegrationTest(
         """.trimIndent()
         var status: String? = null
         awaitUntil("승인 리스너가 끝난다") {
-            status = jdbcTemplate.queryForList<String>(query, "%$orderId%").singleOrNull()
+            status = jdbcTemplate.queryForList(query, String::class.java, "%$orderId%").singleOrNull()
             status == "COMPLETED" || status == "FAILED"
         }
         return requireNotNull(status)
@@ -186,7 +200,7 @@ class PaymentAuthorizationIntegrationTest(
         assertEquals(false, gateway.resourceBoundDuringCall(paymentId))
         assertEquals(
             PaymentAttemptStatus.APPROVED.name,
-            jdbcTemplate.queryForObject<String>("select status from t_payment_attempt where id = ?", paymentId.value),
+            jdbcTemplate.queryForObject("select status from t_payment_attempt where id = ?", String::class.java, paymentId.value),
         )
     }
 

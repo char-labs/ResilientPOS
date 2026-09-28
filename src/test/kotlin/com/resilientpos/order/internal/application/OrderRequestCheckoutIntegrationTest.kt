@@ -1,22 +1,17 @@
 package com.resilientpos.order.internal.application
 
 import com.resilientpos.PostgresIntegrationTest
-import com.resilientpos.awaitUntil
 import com.resilientpos.foundation.DomainErrorKind
 import com.resilientpos.foundation.DomainException
 import com.resilientpos.foundation.Money
-import com.resilientpos.ofType
 import com.resilientpos.order.OrderCommand
 import com.resilientpos.order.OrderCommandFacade
 import com.resilientpos.order.OrderFixtures
 import com.resilientpos.order.OrderId
 import com.resilientpos.contract.OrderPaymentRequested
 import com.resilientpos.order.OrderStatus
-import com.resilientpos.order.checkout
-import com.resilientpos.order.checkoutRowCount
 import com.resilientpos.order.internal.domain.Order
 import com.resilientpos.order.internal.domain.OrderRepository
-import com.resilientpos.order.orderStatus
 import java.sql.Timestamp
 import java.util.Currency
 import java.util.UUID
@@ -33,7 +28,6 @@ import kotlin.test.assertTrue
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.dao.PessimisticLockingFailureException
 import org.springframework.jdbc.core.JdbcTemplate
-import org.springframework.jdbc.core.queryForObject
 import org.springframework.test.context.event.ApplicationEvents
 import org.springframework.test.context.event.RecordApplicationEvents
 import org.springframework.transaction.support.TransactionTemplate
@@ -53,13 +47,13 @@ class OrderRequestCheckoutIntegrationTest(
     private val fixtureTotal = Money.of("3502", OrderFixtures.krw)
 
     private fun checkoutRowCount(orderId: OrderId): Long =
-        jdbcTemplate.checkoutRowCount(orderId.value) ?: 0L
+        jdbcTemplate.queryForObject("select count(*) from t_order_checkout where order_id = ?", Long::class.java, orderId.value) ?: 0L
 
     private fun storedStatus(orderId: OrderId): String? =
-        jdbcTemplate.orderStatus(orderId.value)
+        jdbcTemplate.queryForObject("select status from t_order where id = ?", String::class.java, orderId.value)
 
-    private fun paymentRequestedCount(events: ApplicationEvents, orderId: OrderId): Int =
-        events.ofType<OrderPaymentRequested>().count { it.orderId == orderId.value }
+    private fun paymentRequestedCount(events: ApplicationEvents, orderId: OrderId): Long =
+        events.stream(OrderPaymentRequested::class.java).filter { it.orderId == orderId.value }.count()
 
     @Test
     fun `requestCheckout은 CHECKOUT_REQUESTED와 checkout 행을 저장하고 OrderPaymentRequested를 한 번 발행한다`(events: ApplicationEvents) {
@@ -73,7 +67,7 @@ class OrderRequestCheckoutIntegrationTest(
         assertEquals(fixtureTotal, result.amount)
         assertEquals("CHECKOUT_REQUESTED", storedStatus(orderId))
         assertEquals(1L, checkoutRowCount(orderId))
-        assertEquals(1, paymentRequestedCount(events, orderId))
+        assertEquals(1L, paymentRequestedCount(events, orderId))
     }
 
     @Test
@@ -107,7 +101,8 @@ class OrderRequestCheckoutIntegrationTest(
 
     @Test
     fun `checkout을 요청한 주문을 다시 읽으면 checkouts가 그대로 복원된다`() {
-        val orderId = facade.checkout(OrderFixtures.createOrderCommand())
+        val orderId = facade.create(OrderFixtures.createOrderCommand()).orderId
+        facade.requestCheckout(OrderCommand.RequestCheckout(orderId))
 
         val checkout = assertNotNull(repository.findById(orderId)).checkouts.single()
 
@@ -115,7 +110,7 @@ class OrderRequestCheckoutIntegrationTest(
         assertEquals(fixtureTotal, checkout.amount)
         assertEquals(
             checkout.id.value,
-            jdbcTemplate.queryForObject<UUID>("select id from t_order_checkout where order_id = ?", orderId.value),
+            jdbcTemplate.queryForObject("select id from t_order_checkout where order_id = ?", UUID::class.java, orderId.value),
         )
     }
 
@@ -129,7 +124,7 @@ class OrderRequestCheckoutIntegrationTest(
         assertEquals(OrderStatus.CHECKOUT_REQUESTED, second.status)
         assertEquals(first, second)
         assertEquals(1L, checkoutRowCount(orderId))
-        assertEquals(1, paymentRequestedCount(events, orderId))
+        assertEquals(1L, paymentRequestedCount(events, orderId))
     }
 
     @Test
@@ -144,7 +139,7 @@ class OrderRequestCheckoutIntegrationTest(
 
     /** 다른 세션이 쥔 잠금을 기다리는 세션 수. 테스트는 한 번에 한 클래스만 돌므로 이 테스트가 만든 대기만 잡힌다. */
     private fun sessionsWaitingForLock(): Long =
-        jdbcTemplate.queryForObject<Long>("select count(*) from pg_stat_activity where wait_event_type = 'Lock'") ?: 0L
+        jdbcTemplate.queryForObject("select count(*) from pg_stat_activity where wait_event_type = 'Lock'", Long::class.java) ?: 0L
 
     @Test
     fun `커밋 전인 requestCheckout과 겹친 요청은 기다렸다가 같은 결과를 받는다`() {
@@ -165,7 +160,8 @@ class OrderRequestCheckoutIntegrationTest(
             assertTrue(firstRequested.await(10, TimeUnit.SECONDS), "앞 요청이 잠금을 쥔 채 커밋 전 상태에 도달해야 한다")
 
             val second = executor.submit<OrderCommand.RequestCheckout.Result> { facade.requestCheckout(command) }
-            awaitUntil("뒤 요청이 주문 행 잠금을 기다린다") { sessionsWaitingForLock() != 0L }
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
+            while (sessionsWaitingForLock() == 0L && System.nanoTime() < deadline) Thread.sleep(20)
             assertEquals(1L, sessionsWaitingForLock(), "뒤 요청이 주문 행 잠금을 기다리고 있어야 한다")
             assertFalse(second.isDone, "앞 트랜잭션이 커밋하기 전에는 끝나지 않아야 한다")
 
@@ -222,7 +218,8 @@ class OrderRequestCheckoutIntegrationTest(
     @Test
     fun `checkout을 요청한 주문의 생성 재시도는 CHECKOUT_REQUESTED를 돌려준다`() {
         val createCommand = OrderFixtures.createOrderCommand()
-        val orderId = facade.checkout(createCommand)
+        val orderId = facade.create(createCommand).orderId
+        facade.requestCheckout(OrderCommand.RequestCheckout(orderId))
 
         val retried = facade.create(createCommand)
 

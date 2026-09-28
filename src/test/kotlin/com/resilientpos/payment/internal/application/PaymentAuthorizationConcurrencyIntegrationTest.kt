@@ -19,7 +19,6 @@ import org.springframework.boot.test.context.TestConfiguration
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Primary
 import org.springframework.jdbc.core.JdbcTemplate
-import org.springframework.jdbc.core.queryForObject
 
 /**
  * 같은 시도에 `authorize`가 겹칠 때 결과가 한 번만 적용되는지 본다.
@@ -86,8 +85,8 @@ class PaymentAuthorizationConcurrencyIntegrationTest(
             executor.shutdownNow()
         }
 
-        val stored = jdbcTemplate.queryForObject<String>(
-            "select status from t_payment_attempt where id = ?", paymentId.value,
+        val stored = jdbcTemplate.queryForObject(
+            "select status from t_payment_attempt where id = ?", String::class.java, paymentId.value,
         )
         // 먼저 적용한 결말 하나가 남고, 진 쪽은 그것을 그대로 돌려받는다.
         assertEquals(1, results.map { it.status }.distinct().size, "두 호출이 서로 다른 결말을 돌려받았다: $results")

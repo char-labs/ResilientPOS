@@ -23,7 +23,7 @@ import java.util.Currency
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFailsWith
+import kotlin.test.assertIs
 import kotlin.test.assertTrue
 import org.springframework.context.ApplicationEventPublisher
 
@@ -228,7 +228,10 @@ class PaymentManagementTest {
         val gateway = StubGateway(AuthorizationOutcome.Approved("PROVIDER-REF"))
         val management = management(RecordingRepository(), RecordingPublisher(), gateway)
 
-        val domain = assertFailsWith<DomainException> { management.authorize(PaymentCommand.Authorize(PaymentId(UUID.randomUUID()))) }
+        val thrown = runCatching { management.authorize(PaymentCommand.Authorize(PaymentId(UUID.randomUUID()))) }
+            .exceptionOrNull()
+
+        val domain = assertIs<DomainException>(thrown)
         assertEquals(PaymentAttempt.PAYMENT_ATTEMPT_NOT_FOUND, domain.code)
         assertEquals(DomainErrorKind.NOT_FOUND, domain.kind)
         assertEquals(0, gateway.calls)
@@ -289,7 +292,10 @@ class PaymentManagementTest {
         repository.saved.clear()
         publisher.published.clear()
 
-        val domain = assertFailsWith<DomainException> { management.retryAuthorization(PaymentCommand.RetryAuthorization(created.paymentId)) }
+        val thrown = runCatching { management.retryAuthorization(PaymentCommand.RetryAuthorization(created.paymentId)) }
+            .exceptionOrNull()
+
+        val domain = assertIs<DomainException>(thrown)
         assertEquals(PaymentAttempt.PAYMENT_NOT_RETRYABLE, domain.code)
         assertEquals(emptyList(), repository.saved)
         assertEquals(emptyList(), publisher.published)
@@ -299,10 +305,10 @@ class PaymentManagementTest {
     fun `없는 시도를 재결제하려 하면 거절한다`() {
         val management = management(RecordingRepository(), RecordingPublisher())
 
-        val failure = assertFailsWith<DomainException> {
+        val thrown = runCatching {
             management.retryAuthorization(PaymentCommand.RetryAuthorization(PaymentId(UUID.randomUUID())))
-        }
+        }.exceptionOrNull()
 
-        assertEquals(PaymentAttempt.PAYMENT_ATTEMPT_NOT_FOUND, failure.code)
+        assertEquals(PaymentAttempt.PAYMENT_ATTEMPT_NOT_FOUND, assertIs<DomainException>(thrown).code)
     }
 }

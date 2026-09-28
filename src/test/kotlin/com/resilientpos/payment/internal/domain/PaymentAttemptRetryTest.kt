@@ -15,7 +15,6 @@ import java.util.Currency
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 
@@ -89,7 +88,9 @@ class PaymentAttemptRetryTest {
     fun `거절되지 않은 시도는 재결제를 거절한다`() {
         listOf(PaymentAttemptStatus.REQUESTED, PaymentAttemptStatus.UNKNOWN, PaymentAttemptStatus.APPROVED)
             .forEach { status ->
-                val domain = assertFailsWith<DomainException>("$status") { attempt(status).retry(ids(), now) }
+                val thrown = runCatching { attempt(status).retry(ids(), now) }.exceptionOrNull()
+
+                val domain = assertIs<DomainException>(thrown, "$status")
                 assertEquals(PaymentAttempt.PAYMENT_NOT_RETRYABLE, domain.code)
                 assertEquals(DomainErrorKind.UNPROCESSABLE, domain.kind)
             }
@@ -97,10 +98,10 @@ class PaymentAttemptRetryTest {
 
     @Test
     fun `거절된 취소 시도는 재결제 대상이 아니다`() {
-        val failure = assertFailsWith<DomainException> {
+        val thrown = runCatching {
             attempt(PaymentAttemptStatus.DECLINED, PaymentAttemptKind.CANCELLATION).retry(ids(), now)
-        }
+        }.exceptionOrNull()
 
-        assertEquals(PaymentAttempt.PAYMENT_NOT_RETRYABLE, failure.code)
+        assertEquals(PaymentAttempt.PAYMENT_NOT_RETRYABLE, assertIs<DomainException>(thrown).code)
     }
 }

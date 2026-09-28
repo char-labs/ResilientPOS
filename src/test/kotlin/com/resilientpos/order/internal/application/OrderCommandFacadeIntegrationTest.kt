@@ -5,7 +5,6 @@ import com.resilientpos.foundation.DomainErrorKind
 import com.resilientpos.foundation.DomainException
 import com.resilientpos.foundation.Money
 import com.resilientpos.foundation.UuidV7IdentifierGenerator
-import com.resilientpos.ofType
 import com.resilientpos.order.ClientOrderId
 import com.resilientpos.order.OrderCommand
 import com.resilientpos.order.OrderCommandFacade
@@ -16,7 +15,6 @@ import com.resilientpos.order.OrderStatus
 import com.resilientpos.order.internal.domain.Order
 import com.resilientpos.order.internal.domain.OrderLine
 import com.resilientpos.order.internal.domain.OrderRepository
-import com.resilientpos.order.internal.domain.restored
 import com.resilientpos.terminal.TerminalId
 import java.time.Clock
 import java.util.UUID
@@ -29,8 +27,6 @@ import kotlin.test.assertTrue
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.jdbc.core.JdbcTemplate
-import org.springframework.jdbc.core.queryForList
-import org.springframework.jdbc.core.queryForObject
 import org.springframework.test.context.event.ApplicationEvents
 import org.springframework.test.context.event.RecordApplicationEvents
 import org.springframework.transaction.support.TransactionTemplate
@@ -44,15 +40,17 @@ class OrderCommandFacadeIntegrationTest(
 ) : PostgresIntegrationTest() {
 
     private fun orderRowCount(terminalId: TerminalId, clientOrderId: ClientOrderId): Long =
-        jdbcTemplate.queryForObject<Long>(
+        jdbcTemplate.queryForObject(
             "select count(*) from t_order where terminal_id = ? and client_order_id = ?",
+            Long::class.java,
             terminalId.value,
             clientOrderId.value,
         ) ?: 0L
 
     private fun orderLineRowCount(orderId: UUID): Long =
-        jdbcTemplate.queryForObject<Long>(
+        jdbcTemplate.queryForObject(
             "select count(*) from t_order_line where order_id = ?",
+            Long::class.java,
             orderId,
         ) ?: 0L
 
@@ -115,14 +113,14 @@ class OrderCommandFacadeIntegrationTest(
 
         val first = facade.create(command)
         assertEquals(
-            1,
-            events.ofType<OrderEvent.Created>().count { it.orderId == first.orderId },
+            1L,
+            events.stream(OrderEvent.Created::class.java).filter { it.orderId == first.orderId }.count(),
         )
 
         facade.create(command)
         assertEquals(
-            1,
-            events.ofType<OrderEvent.Created>().count { it.orderId == first.orderId },
+            1L,
+            events.stream(OrderEvent.Created::class.java).filter { it.orderId == first.orderId }.count(),
         )
     }
 
@@ -141,6 +139,9 @@ class OrderCommandFacadeIntegrationTest(
         assertEquals(0L, orderRowCount(terminalId, clientOrderId))
     }
 
+    private fun Order.withLines(lines: List<OrderLine>): Order =
+        Order.restore(id, storeId, terminalId, clientOrderId, currency, status, lines, checkouts)
+
     @Test
     fun `line이 바뀐 주문을 다시 저장하면 같은 ID는 갱신하고 새 ID는 추가하고 없어진 ID는 soft delete한다`() {
         val orderId = facade.create(OrderFixtures.createOrderCommand()).orderId
@@ -148,15 +149,15 @@ class OrderCommandFacadeIntegrationTest(
         val added = OrderLine(OrderLineId(UUID.randomUUID()), "SKU-3", "바닐라라떼", Money.of("700", OrderFixtures.krw), 1)
         val grown = listOf(stored.lines[0].copy(quantity = 5), stored.lines[1], added)
 
-        transaction.executeWithoutResult { repository.save(stored.restored(lines = grown)) }
+        transaction.executeWithoutResult { repository.save(stored.withLines(grown)) }
         assertEquals(grown, repository.findById(orderId)?.lines)
 
         val middleRemoved = listOf(grown[0], grown[2])
-        transaction.executeWithoutResult { repository.save(stored.restored(lines = middleRemoved)) }
+        transaction.executeWithoutResult { repository.save(stored.withLines(middleRemoved)) }
         assertEquals(middleRemoved, repository.findById(orderId)?.lines)
         assertEquals(
             listOf(grown[1].id.value),
-            jdbcTemplate.queryForList<UUID>("select id from t_order_line where order_id = ? and deleted_at is not null", orderId.value),
+            jdbcTemplate.queryForList("select id from t_order_line where order_id = ? and deleted_at is not null", UUID::class.java, orderId.value),
         )
     }
 
@@ -195,7 +196,7 @@ class OrderCommandFacadeIntegrationTest(
         // t_order_line.product_code는 varchar(64)다. 길이는 도메인이 아직 거절하지 않아서 INSERT에서 실패한다.
         val tooLong = OrderLine(OrderLineId(UUID.randomUUID()), "X".repeat(65), "긴 코드", Money.of("100", OrderFixtures.krw), 1)
 
-        assertFailsWith<DataIntegrityViolationException> { repository.save(order.restored(lines = order.lines + tooLong)) }
+        assertFailsWith<DataIntegrityViolationException> { repository.save(order.withLines(order.lines + tooLong)) }
 
         assertEquals(0L, orderRowCount(order.terminalId, order.clientOrderId))
         assertEquals(0L, orderLineRowCount(order.id.value))
@@ -218,8 +219,8 @@ class OrderCommandFacadeIntegrationTest(
         val stored = assertNotNull(repository.findById(first.orderId))
         assertEquals(command.lines.map { it.quantity }, stored.lines.map { it.quantity })
         assertEquals(
-            1,
-            events.ofType<OrderEvent.Created>().count { it.orderId == first.orderId },
+            1L,
+            events.stream(OrderEvent.Created::class.java).filter { it.orderId == first.orderId }.count(),
         )
     }
 

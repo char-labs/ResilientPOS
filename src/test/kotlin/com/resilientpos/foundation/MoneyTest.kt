@@ -6,7 +6,6 @@ import kotlin.system.measureTimeMillis
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
-import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class MoneyTest {
@@ -108,16 +107,6 @@ class MoneyTest {
         assertFailsWith<DomainException>("minus") { large - Money.of("-1", krw) }
         assertFailsWith<DomainException>("생성자") { Money(BigDecimal("1000000000000000"), krw) }
         assertFailsWith<DomainException>("copy") { large.copy(amount = BigDecimal("1000000000000000")) }
-    }
-
-    @Test
-    fun `0인지와 음수인지를 scale과 무관하게 판정한다`() {
-        assertTrue(Money.zero(usd).isZero)
-        assertTrue(Money.of("0.00", usd).isZero)
-        assertFalse(Money.of("0.01", usd).isZero)
-        assertTrue(Money.of("-1", krw).isNegative)
-        assertFalse(Money.zero(krw).isNegative)
-        assertFalse(Money.of("1", krw).isNegative)
     }
 
     @Test

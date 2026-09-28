@@ -6,7 +6,6 @@ import com.resilientpos.order.internal.domain.Order
 import com.resilientpos.order.internal.domain.OrderRepository
 import com.resilientpos.terminal.TerminalId
 import jakarta.persistence.EntityManager
-import org.springframework.data.repository.findByIdOrNull
 import org.springframework.stereotype.Repository
 import org.springframework.transaction.annotation.Transactional
 
@@ -29,7 +28,7 @@ class OrderPersistenceAdapter(
 ) : OrderRepository {
 
     override fun findById(id: OrderId): Order? =
-        jpaRepository.findByIdOrNull(id.value)?.let(::toDomain)
+        jpaRepository.findById(id.value).orElse(null)?.let(::toDomain)
 
     override fun findByIdForUpdate(id: OrderId): Order? =
         jpaRepository.findWithLockById(id.value)?.let(::toDomain)
@@ -44,7 +43,7 @@ class OrderPersistenceAdapter(
     @Transactional
     override fun save(order: Order): Order {
         val orderId = order.id.value
-        val existing = jpaRepository.findByIdOrNull(orderId)
+        val existing = jpaRepository.findById(orderId).orElse(null)
         jpaRepository.save(existing?.also { it.apply(order) } ?: OrderEntity.from(order))
 
         val existingLines = if (existing == null) emptyMap()

@@ -24,7 +24,7 @@ data class OrderLine(
         if (quantity < 1) {
             throw DomainException(INVALID_QUANTITY, "수량은 1 이상이어야 합니다")
         }
-        if (unitPrice.isNegative) {
+        if (unitPrice < Money.zero(unitPrice.currency)) {
             throw DomainException(NEGATIVE_UNIT_PRICE, "단가는 음수일 수 없습니다")
         }
     }
