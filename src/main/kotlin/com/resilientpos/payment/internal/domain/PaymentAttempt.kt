@@ -7,6 +7,8 @@ import com.resilientpos.foundation.DomainException
 import com.resilientpos.foundation.IdentifierGenerator
 import com.resilientpos.foundation.Money
 import com.resilientpos.foundation.Transition
+import com.resilientpos.foundation.isNegative
+import com.resilientpos.foundation.isZero
 import com.resilientpos.payment.PaymentEvent
 import com.resilientpos.payment.PaymentAttemptStatus
 import com.resilientpos.payment.PaymentCommand

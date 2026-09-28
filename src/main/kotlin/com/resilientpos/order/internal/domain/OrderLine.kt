@@ -2,6 +2,7 @@ package com.resilientpos.order.internal.domain
 
 import com.resilientpos.foundation.DomainException
 import com.resilientpos.foundation.Money
+import com.resilientpos.foundation.isNegative
 import com.resilientpos.order.OrderLineId
 
 /**
