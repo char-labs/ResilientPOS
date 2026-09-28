@@ -18,6 +18,8 @@ Redis 분산 락이 `payment` 안의 `CheckoutLock`/`RedisCheckoutLock`에만 �
 - port `DistributedLock`을 둔다. `tryAcquire(key): String?`는 잠금을 얻으면 토큰을, 못 얻으면 null을 돌려준다. `release(key, token)`은 토큰이 자기 것일 때만 지운다.
 - Redis 구현 `RedisDistributedLock`은 `RedisCheckoutLock`의 획득·해제를 그대로 옮긴다. `SET key token NX PX 10s`로 얻고, 50ms 간격으로 최대 3초까지 다시 시도하고, Lua 스크립트로 토큰을 비교해 지운다. 토큰은 `IdentifierGenerator`로 만든다.
 - **fail-open을 유지한다.** Redis 오류나 3초 초과면 경고 로그(키와 이유)를 남기고 null을 돌려준다. 이때 블록은 잠금 없이 실행된다. 해제 실패도 경고만 남기고, 그 키는 TTL이 치운다. 정합성의 정본은 DB이고 이 락은 README가 허용한 "짧은 중복 요청 완화"다.
+  - Redis 오류로 보는 예외는 `DataAccessException`과 `IllegalStateException`(종료 중이라 닫힌 커넥션 팩토리)이다. 그 밖의 예외는 프로그래밍 오류라 그대로 던진다. `RuntimeException` 전체를 잡지 않는다.
+  - 해제할 때 키가 이미 만료됐거나 남의 것이면(Lua가 0을 돌려줌) 경고 로그를 남긴다. 블록이 TTL 10초를 넘겨 락이 먼저 풀린 경우를 보이게 하려는 것이다.
 - `Tx`에 `newTx { }`를 더한다. `TxRunner.runNewTx`가 `@Transactional(propagation = REQUIRES_NEW)`로 연다.
 - 전역 `object Lock`을 둔다. `executeWithLock(key, action)`은 `tryAcquire` → `Tx.newTx(action)` → `finally`에서 `release` 순서로 돈다.
   - `REQUIRES_NEW`를 쓰는 이유: 바깥 트랜잭션이 있어도 블록의 커밋이 해제보다 먼저 일어나야 한다. 뒤에 온 요청이 커밋되지 않은 상태를 읽으면 안 된다(컬리 `AopForTransaction` 패턴).
@@ -43,7 +45,9 @@ Redis 분산 락이 `payment` 안의 `CheckoutLock`/`RedisCheckoutLock`에만 �
 
 **실패와 복구**: 잠금이 통하지 않으면(fail-open, TTL 만료) 지금과 같이 DB unique가 막는다. 그때 진 요청은 커밋에서 실패하고 트랜잭션이 롤백되어 행이 남지 않는다.
 
-**관측성**: 잠금 없이 진행할 때와 해제에 실패할 때 키와 이유를 경고 로그로 남긴다. metric은 더하지 않는다.
+**관측성**: 잠금 없이 진행할 때, 해제에 실패할 때, 해제 전에 락이 만료됐을 때 키와 이유를 경고 로그로 남긴다. metric은 더하지 않는다.
+
+**시간 정책**: 대기 3초(50ms 간격 재시도), TTL 10초 고정, Redis 명령 타임아웃 1초를 유지한다. 트래픽 근거가 아직 없어서 k6 부하테스트나 예상 트래픽 산정 뒤에 조정한다. TTL이 트랜잭션 상한(30초)보다 짧은 한계는 PR 본문에 적는다.
 
 ## 제외
 - **AOP 기반 `@DistributedLock`.** 이유는 네 가지다.
@@ -62,6 +66,11 @@ Redis 분산 락이 `payment` 안의 `CheckoutLock`/`RedisCheckoutLock`에만 �
   - 바깥이 롤백돼도 블록의 커밋은 남는다.
   - 바깥 트랜잭션이 있으면 커넥션을 두 개 쓴다.
   - 바깥이 잠근 행을 블록이 기다리면 대기 한도까지 스스로를 기다린다.
+- **제출 전 리뷰(Claude·Codex)에서 나왔지만 미룬 것**
+  - `Lock` 첫 줄에서 바깥 트랜잭션 안의 호출을 거절하는 `check`. 인수 조건 2가 바뀌는 설계 변경이라 sync intake PR에서 정한다.
+  - 단위 테스트가 전역 `Tx`/`Lock`을 바꾸고 되돌리지 않는 문제. 병렬 실행을 켜지 않았고, `Tx` 쪽은 이 PR 전부터 있었다.
+  - 커밋 뒤 해제 순서를 결정적으로 고정하는 테스트, `Tx.newTx` 호출처를 `Lock`으로 제한하는 ArchUnit 규칙, line 개수 검사가 Redis를 건드리지 않는지 보는 테스트.
+  - 같은 키로 겹쳐 부르면 재진입이 되지 않는다. 지금 겹쳐 부르는 곳은 없다.
 
 ## 관련 문서
 없음
@@ -79,7 +88,7 @@ Redis 분산 락이 `payment` 안의 `CheckoutLock`/`RedisCheckoutLock`에만 �
 ## 인수 조건
 1. 같은 키로 `Lock.executeWithLock`이 겹치면, 뒤 블록은 앞 블록이 커밋한 뒤에 실행되고 앞 블록이 쓴 행을 본다.
 2. 바깥 트랜잭션 안에서 불러도, 블록이 쓴 행은 블록이 끝날 때 커밋된다. 바깥 트랜잭션이 롤백돼도 그 행은 남는다.
-3. Redis가 오류를 내면 `tryAcquire`가 던지지 않고 null을 돌려주고, 블록은 잠금 없이 실행된다. 해제는 토큰이 자기 것일 때만 지운다.
+3. Redis가 오류를 내면 `tryAcquire`가 던지지 않고 null을 돌려주고, 블록은 잠금 없이 실행된다. 커넥션 팩토리가 닫혀 `IllegalStateException`이 나도 같다. 해제는 토큰이 자기 것일 때만 지우고, 실패해도 던지지 않는다.
 4. 주문 생성: 같은 `(terminalId, clientOrderId)`의 락을 앞 요청이 쥐고 있는 동안 온 `create`는 기다린다. 앞 요청이 커밋하면 같은 `orderId`를 받고, `t_order` 행은 하나다.
 5. 결제 시도 생성: 같은 checkout의 `createAttempt`가 락에서 기다렸다가 앞 시도를 돌려받는다. 락이 통하지 않으면 `ux_payment_attempt_first_authorization`이 두 번째 시도를 막는다. 두 번째 시도는 Facade가 아니라 repository로 직접 넣는다. Facade는 이제 늘 자기 트랜잭션에서 커밋하므로 커밋을 붙잡을 수 없기 때문이다.
 6. `CheckoutLock`·`RedisCheckoutLock`을 참조하는 코드가 없다.
@@ -103,7 +112,9 @@ Redis 분산 락이 `payment` 안의 `CheckoutLock`/`RedisCheckoutLock`에만 �
   - 질문 6에 "한 경로에서 락 하나만 기다린다"는 규칙을 더한다.
   - §4.x의 `CheckoutLock` 설명을 `Lock.executeWithLock`으로 바꾼다.
   - 주문 생성 경합의 방어 수단을 적는다.
+  - §4.6에 "`create`·`createAttempt`는 지금 `Lock`의 `REQUIRES_NEW`로 커밋한다"는 포인터를 둔다. sync PR 작성자는 이 절을 읽는다.
 - README: "Redis는 결제 시도 생성에만" 문구를 공용 분산 락(결제 시도 생성·주문 생성)으로 고친다.
+- 볼트 rules `domain-modeling-kotlin.md` §4·§6에서 지운 `registerSynchronization`을 걷어내고 `Lock` 블록을 적는다. 저장소 커밋 없이 볼트에서 고치고 `make bootstrap`을 다시 실행한다.
 - current-state는 볼트 파일이라 저장소 커밋 없이 볼트에서 고친다. 결제 시도 생성의 락 설명과 주문 생성의 알려진 빈틈이 대상이다.
 
 ## 분할 계획
