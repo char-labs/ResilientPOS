@@ -1,6 +1,5 @@
 package com.resilientpos.payment.internal.domain
 
-import com.resilientpos.contract.PaymentApproved
 import com.resilientpos.contract.PaymentAttemptKind
 import com.resilientpos.foundation.DomainErrorKind
 import com.resilientpos.foundation.DomainException
@@ -8,7 +7,6 @@ import com.resilientpos.foundation.IdentifierGenerator
 import com.resilientpos.foundation.Money
 import com.resilientpos.payment.PaymentAttemptStatus
 import com.resilientpos.payment.PaymentCommand
-import com.resilientpos.payment.PaymentEvent
 import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.TerminalId
 import java.time.Instant
@@ -54,15 +52,11 @@ class PaymentAttemptAuthorizationTest {
     fun `승인을 적용하면 APPROVED가 되고 provider 참조가 남는다`() {
         val attempt = requested()
 
-        val transition = attempt.applyAuthorization(
-            AuthorizationOutcome.Approved("PROVIDER-REF-1"),
-            ids(1),
-            now,
-        )
+        val transition = attempt.approve("PROVIDER-REF-1", ids(1), now)
 
         assertEquals(PaymentAttemptStatus.APPROVED, transition.aggregate.status)
         assertEquals("PROVIDER-REF-1", transition.aggregate.providerReference)
-        val approved = assertIs<PaymentApproved>(transition.events.single())
+        val approved = transition.events.single()
         assertEquals(attempt.id.value, approved.paymentId)
         assertEquals("PROVIDER-REF-1", approved.providerReference)
         assertEquals(PaymentAttemptKind.AUTHORIZATION, approved.kind)
@@ -73,15 +67,11 @@ class PaymentAttemptAuthorizationTest {
     fun `거절을 적용하면 DECLINED가 되고 거절 사실을 낸다`() {
         val attempt = requested()
 
-        val transition = attempt.applyAuthorization(
-            AuthorizationOutcome.Declined("PROVIDER-REF-2"),
-            ids(1),
-            now,
-        )
+        val transition = attempt.decline("PROVIDER-REF-2", ids(1), now)
 
         assertEquals(PaymentAttemptStatus.DECLINED, transition.aggregate.status)
         assertEquals("PROVIDER-REF-2", transition.aggregate.providerReference)
-        val declined = assertIs<PaymentEvent.Declined>(transition.events.single())
+        val declined = transition.events.single()
         assertEquals(attempt.id, declined.paymentId)
         assertEquals("PROVIDER-REF-2", declined.providerReference)
     }
@@ -90,12 +80,12 @@ class PaymentAttemptAuthorizationTest {
     fun `미확인을 적용하면 UNKNOWN이 되고 참조가 없다`() {
         val attempt = requested()
 
-        val transition = attempt.applyAuthorization(AuthorizationOutcome.Unknown, ids(1), now)
+        val transition = attempt.markUnknown(ids(1), now)
 
         assertEquals(PaymentAttemptStatus.UNKNOWN, transition.aggregate.status)
         // provider가 무엇을 했는지 모르는 상태다. 참조를 지어내면 그 참조가 거짓이 된다.
         assertNull(transition.aggregate.providerReference)
-        val unknown = assertIs<PaymentEvent.Unknown>(transition.events.single())
+        val unknown = transition.events.single()
         assertEquals(attempt.id, unknown.paymentId)
     }
 
@@ -103,7 +93,7 @@ class PaymentAttemptAuthorizationTest {
     fun `원본 시도는 그대로 남는다`() {
         val attempt = requested()
 
-        attempt.applyAuthorization(AuthorizationOutcome.Approved("PROVIDER-REF-3"), ids(1), now)
+        attempt.approve("PROVIDER-REF-3", ids(1), now)
 
         assertEquals(PaymentAttemptStatus.REQUESTED, attempt.status)
         assertNull(attempt.providerReference)
@@ -111,17 +101,20 @@ class PaymentAttemptAuthorizationTest {
 
     @Test
     fun `이미 결말이 난 시도에 다시 적용하면 거절한다`() {
-        val approved = requested()
-            .applyAuthorization(AuthorizationOutcome.Approved("PROVIDER-REF-4"), ids(1), now)
-            .aggregate
+        val approved = requested().approve("PROVIDER-REF-4", ids(1), now).aggregate
+        val applications = mapOf<String, (PaymentAttempt) -> Unit>(
+            "approve" to { it.approve("PROVIDER-REF-6", ids(2), now) },
+            "decline" to { it.decline(null, ids(2), now) },
+            "markUnknown" to { it.markUnknown(ids(2), now) },
+        )
 
-        val thrown = kotlin.runCatching {
-            approved.applyAuthorization(AuthorizationOutcome.Declined(null), ids(2), now)
-        }.exceptionOrNull()
+        for ((name, apply) in applications) {
+            val thrown = kotlin.runCatching { apply(approved) }.exceptionOrNull()
 
-        val domain = assertIs<DomainException>(thrown)
-        assertEquals(PaymentAttempt.PAYMENT_RESULT_ALREADY_APPLIED, domain.code)
-        assertEquals(DomainErrorKind.CONFLICT, domain.kind)
+            val domain = assertIs<DomainException>(thrown, name)
+            assertEquals(PaymentAttempt.PAYMENT_RESULT_ALREADY_APPLIED, domain.code, name)
+            assertEquals(DomainErrorKind.CONFLICT, domain.kind, name)
+        }
     }
 
     @Test
@@ -129,8 +122,7 @@ class PaymentAttemptAuthorizationTest {
         val attempt = requested()
         val generator = ids(1)
 
-        val event = attempt.applyAuthorization(AuthorizationOutcome.Approved("PROVIDER-REF-5"), generator, now)
-            .events.single()
+        val event = attempt.approve("PROVIDER-REF-5", generator, now).events.single()
 
         // 시도의 식별자를 eventId로 되쓰면 소비자 멱등 기록 (consumer, eventId)에서 서로 다른 사실이 하나로 접힌다.
         assertEquals(UUID.fromString("00000000-0000-0000-0000-000000010000"), event.eventId)

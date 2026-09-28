@@ -91,7 +91,7 @@ class PaymentAttemptEntity private constructor(
 
     /**
      * provider 결과를 반영한다. 바꿀 수 있는 것이 이 둘뿐이라는 사실을 시그니처로 말한다.
-     * 무엇으로 바꿀 수 있는지는 aggregate의 `applyAuthorization`이 정하고, 여기는 그 결과를 옮기기만 한다.
+     * 무엇으로 바꿀 수 있는지는 aggregate의 `approve`·`decline`·`markUnknown`이 정하고, 여기는 그 결과를 옮기기만 한다.
      */
     fun applyResult(status: PaymentAttemptStatus, providerReference: String?) {
         this.status = status

@@ -3,6 +3,7 @@ package com.resilientpos.order
 import com.resilientpos.foundation.DomainException
 import com.resilientpos.foundation.Money
 import com.resilientpos.foundation.UuidV7IdentifierGenerator
+import com.resilientpos.order.internal.application.OrderEventPublisher
 import com.resilientpos.order.internal.domain.Order
 import com.resilientpos.order.internal.domain.OrderRepository
 import com.resilientpos.store.StoreId
@@ -25,7 +26,7 @@ class OrderCommandFacadeLineLimitTest {
 
     private val repository = mock(OrderRepository::class.java)
     private val eventPublisher = mock(ApplicationEventPublisher::class.java)
-    private val facade = OrderCommandFacade(repository, UuidV7IdentifierGenerator(), Clock.systemUTC(), eventPublisher)
+    private val facade = OrderCommandFacade(repository, UuidV7IdentifierGenerator(), Clock.systemUTC(), OrderEventPublisher(eventPublisher))
 
     @Test
     fun `line 개수가 상한을 넘으면 저장소를 부르기 전에 거절한다`() {
