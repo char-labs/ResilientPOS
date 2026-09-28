@@ -18,7 +18,7 @@ ResilientPOS는 네트워크 단절과 부분 실패 속에서도 주문·결제
 | 개발 하네스 | Python 3 표준 라이브러리 기반 로컬 PR 검사 |
 
 현재는 단일 Gradle 프로젝트의 애플리케이션 초기 구조입니다. PostgreSQL 연결 구성과 도메인 구현은 아직 완료되지 않았습니다.
-Kafka, OpenTelemetry는 설계상 도입 방향이며 현재 의존성에는 없습니다. Redis는 결제 시도 생성의 중복 완화 잠금에만 쓰고, 정합성의 정본은 PostgreSQL 제약입니다. [구현 현황](docs/wiki/current-state.md)에서 계획과 실제 상태를 구분합니다.
+Kafka, OpenTelemetry는 설계상 도입 방향이며 현재 의존성에는 없습니다. Redis는 결제 시도 생성·주문 생성의 중복 완화 잠금(`platform.Lock`)에만 쓰고, 정합성의 정본은 PostgreSQL 제약입니다. [구현 현황](docs/wiki/current-state.md)에서 계획과 실제 상태를 구분합니다.
 
 ## 시작하기
 
