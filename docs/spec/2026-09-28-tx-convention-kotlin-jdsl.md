@@ -65,8 +65,8 @@ Kotlin JDSL
 - src/main/kotlin/com/resilientpos/fulfillment/**
 - src/test/kotlin/com/resilientpos/**
 - docs/spec/2026-09-28-tx-convention-kotlin-jdsl.md
+- src/test/resources/META-INF/spring.factories
 - docs/wiki/domain-model.md
-- docs/wiki/current-state.md
 
 ## 인수 조건
 1. main 코드에 `@Transactional(readOnly = true)`를 직접 붙인 메서드가 없고 `TransactionDeclarationTest`가 이를 막는다. 위반을 넣으면 실패한다.
@@ -84,7 +84,7 @@ Kotlin JDSL
 
 ## Wiki 영향
 - [도메인 모델](../wiki/domain-model.md) §4.3 트랜잭션 규칙: `Tx.masterTx`·`readOnlyTx`와 `@ReadOnlyTransactional`, `SUPPORTS`의 한계(단독 호출이면 트랜잭션이 없어 여러 쿼리가 서로 다른 시점을 보고 readOnly 힌트가 적용되지 않는다), `NOT_SUPPORTED` 허용 조건, 쓰기 경로에 트랜잭션이 필요한 이유, `findById` 선언 기준, 조회는 Kotlin JDSL. §4.2는 자식 엔티티의 조회를 adapter가 JDSL로 한다는 것으로 고친다.
-- [현재 상태](../wiki/current-state.md): 의존성 표에 Kotlin JDSL, "현재 빌드 의존성에는 없다" 문장, `authorize` 트랜잭션 서술.
+- [현재 상태](../wiki/current-state.md): 의존성 표에 Kotlin JDSL, "현재 빌드 의존성에는 없다" 문장, `authorize` 트랜잭션 서술. 이 문서는 Obsidian 볼트로 가는 링크(gitignore 대상)라 볼트에서 고치고 저장소 커밋에는 들어가지 않는다.
 - 요구사항 변화는 없다. 업무 동작이 같다.
 
 ## 분할 계획
@@ -95,10 +95,21 @@ Kotlin JDSL
 
 | 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
 |---|---|---|---|
-| 메서드에 읽기 전용 트랜잭션을 직접 선언하지 않는다 | 미실행 | 미실행 | 미실행 |
-| 컨텍스트 없이 Facade를 부르면 Tx 미초기화로 실패한다(단위 테스트) | 미실행 | 미실행 | 미실행 |
-| provider를 부르는 동안 DB 자원을 쥐지 않는다(findById를 SUPPORTS로 옮긴 뒤) | 미실행 | 미실행 | 미실행 |
-| 잠금 조회·버전 충돌·발행 순서 기존 통합 테스트 | 해당 없음(기존 테스트) | 미실행 | 미실행 |
+| 메서드에 읽기 전용 트랜잭션을 직접 선언하지 않는다(`TransactionDeclarationTest`) | `./gradlew test --tests 'com.resilientpos.TransactionDeclarationTest'`, `createFulfillment`에 임시로 `@Transactional(readOnly = true)`를 붙여 위반 1건으로 실패 | 같은 명령, 임시 위반을 되돌려 통과 | `./gradlew test`, 269개 통과 |
+| 컨텍스트 없이 Facade를 부르면 Tx 미초기화로 실패한다(`PaymentManagementTest`, `FulfillmentCommandFacadeTest`) | 세 단위 테스트를 걸러 실행, Facade 본문을 `Tx.masterTx`로 옮긴 뒤 12개 중 11개와 1개 중 1개가 `kotlin.UninitializedPropertyAccessException: lateinit property runner has not been initialized`로 실패. line 상한 테스트는 트랜잭션 전에 거절해 통과 | 같은 명령, 테스트가 프록시 없는 `TxRunner()`를 넣어 통과 | `./gradlew test`, 269개 중 3개 실패(아래 결과 절의 전역 러너 덮어쓰기). 테스트 실행 리스너를 더한 뒤 269개 통과 |
+| provider를 부르는 동안 DB 자원을 쥐지 않는다, 트랜잭션 안에서 승인을 요청해도 바깥 트랜잭션과 따로 적용한다(`PaymentAuthorizationIntegrationTest`) | `./gradlew test --tests 'com.resilientpos.payment.internal.application.PaymentAuthorizationIntegrationTest'`, `findById`를 `@ReadOnlyTransactional`로 옮기고 `authorize`가 그대로 부르자 두 테스트가 자원 결속 `expected false but was true`로 실패 | 같은 명령, 첫 조회를 `Tx.masterTx`로 감싸 8개 통과 | `./gradlew test`, 269개 통과 |
+| 잠금 조회·버전 충돌·발행 순서·문장 수 기존 통합 테스트 | 해당 없음(기존 테스트가 그대로 지키는 동작) | `./gradlew test`, 통과 | `./gradlew test`, 269개 통과 |
 
 ## 결과
-개발 전 작성. 개발 후 실행 결과와 변경 이유를 추가한다.
+개발 전 spec을 독립 커밋으로 작성했다. 구현 후 아래를 확인했다.
+
+- `platform/Tx.kt`에 `ReadOnlyTransactional`·`Tx`·`TxRunner`를 두고 `PlatformConfiguration.txInitializer`(`InitializingBean`)가 러너를 넣는다. Facade 다섯 곳의 `@Transactional`을 `Tx.masterTx` 블록으로 옮겼고 `create`의 line 개수 검사는 블록 앞에 있다. `PaymentAttemptTransitions`를 지우고 `applyOutcome`·`retry`·`updateAndPublish`를 `PaymentManagement`의 private 메서드로 흡수했다. 발행은 그대로 `transition.events.forEach(eventPublisher::publish)`와 `updateAndPublish(..., eventPublisher::publish)`다.
+- main의 `@Transactional`은 `TxRunner.runTx`, `OrderPersistenceAdapter.save`, `authorize`·`retryAuthorization`의 `NOT_SUPPORTED`, `ReadOnlyTransactional` 정의뿐이다(`grep`으로 확인, 인수 조건 2).
+- 컨텍스트 없이 `Tx`를 부르면 `kotlin.UninitializedPropertyAccessException: lateinit property runner has not been initialized`로 실패한다(인수 조건 6).
+- **전역 러너 덮어쓰기가 실제로 났다.** 증상: 전체 테스트에서 `FulfillmentFlowIntegrationTest`가 `InvalidDataAccessApiUsageException: No active transaction`(주문 잠금 조회)으로, `OrderPaidListenerIntegrationTest` 2개가 "20초 안에 fulfillment가 생긴다" 시간 초과(리스너 쪽 `TransactionRequiredException: No EntityManager with actual transaction available ... 'persist'`)로 실패했다. 원인: 컨텍스트 없는 `FulfillmentCommandFacadeTest`가 프록시 없는 `TxRunner()`를 전역에 넣었고, 바로 뒤의 통합 테스트는 캐시된 컨텍스트를 다시 써서 기동 때의 초기화가 돌지 않았다. 그래서 `Tx.masterTx`가 트랜잭션 없이 블록을 불렀다. 컨텍스트 사이의 덮어쓰기는 나타나지 않았다. `spring.test.context.cache.maxSize=1`이라 컨텍스트가 바뀔 때마다 새로 떠서 다시 초기화된다. 사용자 결정(발생하면 그때 수정)대로 운영 코드는 그대로 두고 테스트 전용 `TxRebindingTestExecutionListener`(`META-INF/spring.factories` 등록)가 Spring 테스트마다 그 컨텍스트의 `TxRunner`로 다시 묶게 했다. 러너가 없는 웹 슬라이스 컨텍스트는 건드리지 않는다. 이후 269개 통과.
+- 조회는 모두 `JdslQueryExecutor`를 거친다. main에 Spring Data 파생 조회 메서드와 `findByIdOrNull`이 없다(`grep`, 인수 조건 4). `OrderCheckoutJpaRepository`·`PaymentAttemptJpaRepository`·`FulfillmentJpaRepository`를 지웠고 JPA repository가 없는 이유(대량 삭제 메서드)는 adapter KDoc으로 옮겼다. `OrderJpaRepository`·`OrderLineJpaRepository`는 조회 메서드 없이 `save`·`deleteAll`에만 쓴다. 반복되는 `select(entity(X)).from(entity(X))`는 `platform`의 확장 `Jpql.selectFrom`으로 줄였다(다른 저장소의 JDSL support 클래스를 참고했다).
+- 잠금: 요청 checkout 통합 테스트를 Hibernate SQL 로그로 한 번 돌려 `select ... from t_order ... where oe1_0.id=? and oe1_0.deleted_at is null for no key update`와 조회 앞뒤의 `lock_timeout = 3000`·`lock_timeout = 0`(`set_config('lock_timeout', ..., true)`)을 확인했다. "잠금을 3초 넘게 기다린 요청은 잠금 실패로 끝난다" 테스트가 `PessimisticLockingFailureException`으로 통과한다(인수 조건 5).
+- `PaymentAttempt.findById`를 `SUPPORTS`로 옮기자 `NOT_SUPPORTED` 구간에서 EntityManager가 provider 호출 동안 묶였다(RED). 검사를 바꾸지 않고 `authorize`의 첫 조회를 `Tx.masterTx`로 감쌌다. `Tx`에 진짜 읽기 전용 트랜잭션을 더하지 않은 이유는 검토한 대안 절에 있다.
+- `PaymentAttemptPersistenceIntegrationTest`는 지운 repository 대신 adapter의 `save`를 테스트 트랜잭션에서 부르고 JDSL로 다시 읽는다. unique 위반은 커밋에서 `DataIntegrityViolationException`으로 나온다.
+- 볼트 rules `domain-modeling-kotlin.md`(§4 발행, §5 repository·조회, §6 트랜잭션 소유)를 같은 규칙으로 고치고 `make bootstrap`을 다시 돌렸다.
+- `./gradlew test`: 269개 통과, 실패 0.
