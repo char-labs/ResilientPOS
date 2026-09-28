@@ -5,11 +5,12 @@ import kotlin.test.fail
 import org.awaitility.Awaitility.await
 import org.awaitility.core.ConditionTimeoutException
 
-private val AWAIT_AT_MOST: Duration = Duration.ofSeconds(10)
+private val AWAIT_AT_MOST: Duration = Duration.ofSeconds(20)
 private val POLL_INTERVAL: Duration = Duration.ofMillis(20)
 
 /**
- * 커밋 뒤에 도는 리스너처럼 비동기로 끝나는 일을 10초까지 기다린다. 넘으면 [description]으로 실패한다.
+ * 커밋 뒤에 도는 리스너처럼 비동기로 끝나는 일을 20초까지 기다린다. 이벤트가 Kafka를 거쳐 다른 스레드에서 처리되는 흐름도 있다.
+ * 넘으면 [description]으로 실패한다.
  * 기다리기는 Awaitility에 맡기고, 조건은 호출 스레드에서 곧바로 평가한다.
  * [diagnostics]는 실패할 때만 불러 원인을 좁힐 상태(발행 기록 등)를 메시지 끝에 붙인다.
  */

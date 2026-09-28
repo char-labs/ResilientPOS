@@ -3,7 +3,6 @@ package com.resilientpos.payment.internal.application
 import com.resilientpos.KafkaTestSupport
 import com.resilientpos.PostgresIntegrationTest
 import com.resilientpos.awaitUntil
-import com.resilientpos.foundation.Money
 import com.resilientpos.order.OrderCommand
 import com.resilientpos.order.OrderCommandFacade
 import com.resilientpos.order.OrderFixtures

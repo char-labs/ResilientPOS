@@ -1,7 +1,7 @@
 package com.resilientpos.platform
 
 import com.resilientpos.KafkaTestSupport
-import com.resilientpos.PostgresIntegrationTest.Companion.awaitUntil
+import com.resilientpos.awaitUntil
 import com.resilientpos.PostgresIntegrationTest
 import com.resilientpos.contract.PaymentApproved
 import com.resilientpos.contract.PaymentAttemptKind
@@ -11,6 +11,7 @@ import com.resilientpos.fulfillment.internal.application.FulfillmentCommandFacad
 import com.resilientpos.order.OrderCommand
 import com.resilientpos.order.OrderCommandFacade
 import com.resilientpos.order.OrderFixtures
+import com.resilientpos.order.orderStatus
 import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.TerminalId
 import io.micrometer.core.instrument.MeterRegistry
@@ -28,6 +29,7 @@ import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.context.ApplicationEventPublisher
 import org.springframework.dao.TransientDataAccessResourceException
 import org.springframework.jdbc.core.JdbcTemplate
+import org.springframework.jdbc.core.queryForObject
 import org.springframework.kafka.core.KafkaTemplate
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean
 import java.sql.SQLException
@@ -86,7 +88,7 @@ class KafkaRetryIntegrationTest(
     }
 
     private fun fulfillmentCount(orderId: UUID) =
-        jdbcTemplate.queryForObject("select count(*) from t_fulfillment where order_id = ?", Long::class.java, orderId)
+        jdbcTemplate.queryForObject<Long>("select count(*) from t_fulfillment where order_id = ?", orderId)
 
     private fun deadLetters(topic: String, reason: String = "error") =
         meterRegistry.find("event.kafka.dead-letter").tag("topic", topic).tag("reason", reason).counter()?.count() ?: 0.0
@@ -194,7 +196,7 @@ class KafkaRetryIntegrationTest(
         assertEquals(before + 1, deadLetters("payment.approved", "PAYMENT_APPROVAL_MISMATCH"))
         assertEquals(
             "CHECKOUT_REQUESTED",
-            jdbcTemplate.queryForObject("select status from t_order where id = ?", String::class.java, orderId),
+            jdbcTemplate.orderStatus(orderId),
         )
     }
 
