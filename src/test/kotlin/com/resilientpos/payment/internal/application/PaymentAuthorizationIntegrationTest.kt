@@ -23,7 +23,6 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -33,7 +32,6 @@ import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Primary
 import javax.sql.DataSource
 import org.springframework.jdbc.core.JdbcTemplate
-import org.springframework.transaction.IllegalTransactionStateException
 import org.springframework.transaction.support.TransactionOperations
 import org.springframework.transaction.support.TransactionSynchronizationManager
 
@@ -167,7 +165,7 @@ class PaymentAuthorizationIntegrationTest(
     }
 
     @Test
-    fun `트랜잭션 안에서 승인을 요청하면 provider를 부르기 전에 거절한다`() {
+    fun `트랜잭션 안에서 승인을 요청해도 바깥 트랜잭션과 따로 적용한다`() {
         // 이벤트로 만들면 승인 리스너가 먼저 처리해 버린다. REQUESTED로 남은 시도를 직접 넣는다.
         val paymentId = PaymentId(UUID.randomUUID())
         jdbcTemplate.update(
@@ -179,15 +177,16 @@ class PaymentAuthorizationIntegrationTest(
             paymentId.value, UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(),
         )
 
-        // 안에서 부르면 적용이 바깥 트랜잭션에 합류해 잠금 조회가 먼저 읽어 둔 낡은 값을 돌려받는다.
-        val thrown = runCatching {
-            transactions.execute { paymentManagement.authorize(PaymentCommand.Authorize(paymentId)) }
-        }.exceptionOrNull()
+        // 바깥 트랜잭션을 멈추고 provider를 부른 뒤 적용을 따로 커밋하므로, 바깥을 롤백해도 적용은 남는다.
+        transactions.executeWithoutResult { outer ->
+            paymentManagement.authorize(PaymentCommand.Authorize(paymentId))
+            outer.setRollbackOnly()
+        }
 
-        assertIs<IllegalTransactionStateException>(thrown)
-        assertEquals(0, gateway.callsFor(paymentId))
+        assertEquals(1, gateway.callsFor(paymentId))
+        assertEquals(false, gateway.resourceBoundDuringCall(paymentId))
         assertEquals(
-            PaymentAttemptStatus.REQUESTED.name,
+            PaymentAttemptStatus.APPROVED.name,
             jdbcTemplate.queryForObject("select status from t_payment_attempt where id = ?", String::class.java, paymentId.value),
         )
     }

@@ -26,6 +26,7 @@ import org.springframework.boot.test.context.TestConfiguration
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Primary
 import org.springframework.jdbc.core.JdbcTemplate
+import org.springframework.transaction.support.TransactionOperations
 
 /**
  * 거절된 결제를 같은 checkout 회차에서 다시 시도해 주문이 결제되기까지를 끝까지 태운다.
@@ -37,6 +38,7 @@ class PaymentRetryIntegrationTest(
     @Autowired private val orderFacade: OrderCommandFacade,
     @Autowired private val paymentManagement: PaymentManagement,
     @Autowired private val jdbcTemplate: JdbcTemplate,
+    @Autowired private val transactions: TransactionOperations,
 ) : PostgresIntegrationTest() {
 
     class DeclineFirstGateway : PaymentGateway {
@@ -125,5 +127,19 @@ class PaymentRetryIntegrationTest(
 
         assertEquals(1, results.map { it.paymentId }.distinct().size, "두 호출이 서로 다른 시도를 돌려받았다: $results")
         assertEquals(2, attempts(orderId).size)
+    }
+
+    @Test
+    fun `트랜잭션 안에서 재결제를 요청해도 바깥 트랜잭션과 따로 커밋한다`() {
+        val orderId = checkoutOrder("4705")
+        val declined = awaitDeclined(orderId)
+
+        // 바깥 트랜잭션을 멈추고 새 시도를 따로 커밋하므로, 바깥을 롤백해도 새 시도는 남는다.
+        transactions.executeWithoutResult { outer ->
+            paymentManagement.retryAuthorization(PaymentCommand.RetryAuthorization(declined))
+            outer.setRollbackOnly()
+        }
+
+        assertEquals(2, attempts(orderId).size, "새 시도가 바깥 롤백에 휩쓸렸다: ${attempts(orderId)}")
     }
 }
