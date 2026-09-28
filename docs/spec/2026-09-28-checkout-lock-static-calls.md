@@ -173,4 +173,4 @@
 - 남은 리뷰 지적: 이미 승인된 0원 시도의 `approveIfFree` 거절 테스트, `RedisCheckoutLock`이 잠금을 얻으면 해제 동기화를 등록하는지 보는 단위 테스트, `authorize` 문서의 0원 전제, `Order.kt` import 순서를 반영했다.
 - `PaymentManagement`의 `TransactionOperations` 주입을 없앴다. 승인 결과 적용과 재결제 시도 생성은 `PaymentAttemptTransitions`의 `@Transactional` 메서드로 옮겼고, 두 트랜잭션 경계 테스트(트랜잭션 안의 `authorize`·`retryAuthorization`, 바깥 롤백 뒤 결과 유지)가 그대로 통과한다. main 코드에서 `TransactionOperations`·`TransactionTemplate`·`PlatformTransactionManager`를 찾으면 없다. `inTransaction` 확장은 테스트 소스로 옮겼다.
 - 확장 함수·테스트 헬퍼 정리는 되돌림 커밋으로 빼고 후속 PR에서 다시 적용한다.
-- `./gradlew test`: 250개 통과, 실패 0.
+- `./gradlew test`: 252개 통과, 실패 0.
