@@ -3,10 +3,10 @@ package com.resilientpos.order
 import com.resilientpos.foundation.DomainErrorKind
 import com.resilientpos.foundation.DomainException
 import com.resilientpos.foundation.IdentifierGenerator
+import com.resilientpos.order.internal.application.OrderEventPublisher
 import com.resilientpos.order.internal.domain.Order
 import com.resilientpos.order.internal.domain.OrderRepository
 import java.time.Clock
-import org.springframework.context.ApplicationEventPublisher
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 
@@ -19,7 +19,7 @@ class OrderCommandFacade(
     private val repository: OrderRepository,
     private val identifierGenerator: IdentifierGenerator,
     private val clock: Clock,
-    private val eventPublisher: ApplicationEventPublisher,
+    private val eventPublisher: OrderEventPublisher,
 ) {
 
     @Transactional
@@ -37,7 +37,7 @@ class OrderCommandFacade(
 
         val transition = Order.create(command, identifierGenerator, clock.instant())
         val saved = repository.save(transition.aggregate)
-        transition.events.forEach(eventPublisher::publishEvent)
+        eventPublisher.publishAll(transition.events)
         return OrderCommand.Create.Result(saved.id, saved.status)
     }
 
@@ -52,7 +52,7 @@ class OrderCommandFacade(
 
         val transition = order.requestCheckout(identifierGenerator, clock.instant())
         val saved = repository.save(transition.aggregate)
-        transition.events.forEach(eventPublisher::publishEvent)
+        eventPublisher.publishAll(transition.events)
         val checkout = saved.checkouts.last()
         return OrderCommand.RequestCheckout.Result(saved.id, saved.status, checkout.checkoutNo, checkout.amount)
     }
@@ -65,7 +65,7 @@ class OrderCommandFacade(
 
         val transition = order.markPaid(command.checkoutNo, command.amount, identifierGenerator, clock.instant())
         val saved = repository.save(transition.aggregate)
-        transition.events.forEach(eventPublisher::publishEvent)
+        eventPublisher.publishAll(transition.events)
         return OrderCommand.MarkPaid.Result(saved.id, saved.status)
     }
 }

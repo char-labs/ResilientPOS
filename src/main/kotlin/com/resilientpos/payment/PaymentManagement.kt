@@ -3,6 +3,7 @@ package com.resilientpos.payment
 import com.resilientpos.foundation.DomainErrorKind
 import com.resilientpos.foundation.DomainException
 import com.resilientpos.foundation.IdentifierGenerator
+import com.resilientpos.payment.internal.application.PaymentEventPublisher
 import com.resilientpos.payment.internal.domain.AuthorizationOutcome
 import com.resilientpos.payment.internal.domain.AuthorizationRequest
 import com.resilientpos.payment.internal.domain.CheckoutLock
@@ -11,7 +12,6 @@ import com.resilientpos.payment.internal.domain.PaymentAttemptRepository
 import com.resilientpos.payment.internal.domain.PaymentGateway
 import com.resilientpos.platform.logger
 import java.time.Clock
-import org.springframework.context.ApplicationEventPublisher
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Propagation
 import org.springframework.transaction.annotation.Transactional
@@ -27,7 +27,7 @@ class PaymentManagement(
     private val gateway: PaymentGateway,
     private val identifierGenerator: IdentifierGenerator,
     private val clock: Clock,
-    private val eventPublisher: ApplicationEventPublisher,
+    private val eventPublisher: PaymentEventPublisher,
     private val transactions: TransactionOperations,
     private val checkoutLock: CheckoutLock,
 ) {
@@ -56,7 +56,7 @@ class PaymentManagement(
 
         val transition = PaymentAttempt.create(command, identifierGenerator, clock.instant())
         val saved = repository.save(transition.aggregate)
-        transition.events.forEach(eventPublisher::publishEvent)
+        eventPublisher.publishAll(transition.events)
         return PaymentCommand.CreateAttempt.Result(saved.id, saved.status)
     }
 
@@ -109,7 +109,7 @@ class PaymentManagement(
 
         val transition = target.retry(identifierGenerator, clock.instant())
         val saved = repository.save(transition.aggregate)
-        transition.events.forEach(eventPublisher::publishEvent)
+        eventPublisher.publishAll(transition.events)
         return PaymentCommand.RetryAuthorization.Result(saved.id, saved.status) to true
     }
 
@@ -123,7 +123,7 @@ class PaymentManagement(
         val transition = current.applyAuthorization(outcome, identifierGenerator, clock.instant())
         val applied = repository.update(transition.aggregate)
         // 발행 기록이 결과와 같은 커밋에 들어가야 하므로 이 트랜잭션 안에서 발행한다(도메인 모델 §4.3).
-        transition.events.forEach(eventPublisher::publishEvent)
+        eventPublisher.publishAll(transition.events)
         return PaymentCommand.Authorize.Result(applied.id, applied.status)
     }
 

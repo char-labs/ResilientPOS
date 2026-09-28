@@ -6,6 +6,7 @@ import com.resilientpos.foundation.DomainErrorKind
 import com.resilientpos.foundation.DomainException
 import com.resilientpos.foundation.Money
 import com.resilientpos.foundation.UuidV7IdentifierGenerator
+import com.resilientpos.payment.internal.application.PaymentEventPublisher
 import com.resilientpos.payment.internal.domain.PaymentAttempt
 import com.resilientpos.payment.internal.domain.AuthorizationOutcome
 import com.resilientpos.payment.internal.domain.AuthorizationRequest
@@ -89,7 +90,7 @@ class PaymentManagementTest {
         gateway,
         UuidV7IdentifierGenerator(),
         Clock.fixed(Instant.parse("2026-09-22T01:00:00Z"), ZoneOffset.UTC),
-        publisher,
+        PaymentEventPublisher(publisher),
         TransactionOperations.withoutTransaction(),
         // 잠금은 인스턴스 사이의 동시성만 다룬다. 단위 테스트의 판단에는 끼지 않는다.
         object : CheckoutLock {
