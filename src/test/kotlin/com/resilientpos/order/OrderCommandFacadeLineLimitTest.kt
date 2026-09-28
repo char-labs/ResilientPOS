@@ -16,7 +16,6 @@ import kotlin.test.assertEquals
 import org.mockito.Mockito.mock
 import org.mockito.Mockito.verifyNoInteractions
 import org.springframework.context.ApplicationEventPublisher
-import org.springframework.transaction.support.TransactionOperations
 
 /**
  * line 개수 상한이 **저장소를 건드리기 전에** 걸리는지 본다.
@@ -27,14 +26,7 @@ class OrderCommandFacadeLineLimitTest {
 
     private val repository = mock(OrderRepository::class.java)
     private val eventPublisher = mock(ApplicationEventPublisher::class.java)
-    private val transactions = mock(TransactionOperations::class.java)
-    private val facade = OrderCommandFacade(
-        repository,
-        UuidV7IdentifierGenerator(),
-        Clock.systemUTC(),
-        OrderEventPublisher(eventPublisher),
-        transactions,
-    )
+    private val facade = OrderCommandFacade(repository, UuidV7IdentifierGenerator(), Clock.systemUTC(), OrderEventPublisher(eventPublisher))
 
     @Test
     fun `line 개수가 상한을 넘으면 저장소를 부르기 전에 거절한다`() {
@@ -43,7 +35,6 @@ class OrderCommandFacadeLineLimitTest {
         assertEquals(Order.TOO_MANY_ORDER_LINES, failure.code)
         verifyNoInteractions(repository)
         verifyNoInteractions(eventPublisher)
-        verifyNoInteractions(transactions)
     }
 
     private fun assertFailsWithDomain(block: () -> Unit): DomainException =
