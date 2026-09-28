@@ -14,6 +14,7 @@ import java.util.Currency
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -97,7 +98,7 @@ class PaymentAttemptTest {
     fun `이미 승인된 0원 시도를 다시 승인하려 하면 거절한다`() {
         val (_, approval) = createFree()
 
-        val failure = assertFailsWithDomain { approval.aggregate.approveIfFree(ids(1), now) }
+        val failure = assertFailsWith<DomainException> { approval.aggregate.approveIfFree(ids(1), now) }
 
         assertEquals(PaymentAttempt.PAYMENT_RESULT_ALREADY_APPLIED, failure.code)
     }
@@ -113,7 +114,7 @@ class PaymentAttemptTest {
 
     @Test
     fun `음수 금액을 거절한다`() {
-        val failure = assertFailsWithDomain { create(amount = "-1", ids = ids()) }
+        val failure = assertFailsWith<DomainException> { create(amount = "-1", ids = ids()) }
 
         assertEquals(PaymentAttempt.NEGATIVE_PAYMENT_AMOUNT, failure.code)
         assertTrue(failure.message.isNotBlank())
@@ -123,7 +124,7 @@ class PaymentAttemptTest {
     @Test
     fun `1 미만인 checkout 회차를 거절한다`() {
         for (checkoutNo in listOf(0, -1)) {
-            val failure = assertFailsWithDomain { create(checkoutNo = checkoutNo, ids = ids()) }
+            val failure = assertFailsWith<DomainException> { create(checkoutNo = checkoutNo, ids = ids()) }
 
             assertEquals(PaymentAttempt.INVALID_CHECKOUT_NO, failure.code, checkoutNo.toString())
         }
@@ -152,7 +153,6 @@ class PaymentAttemptTest {
         assertEquals(7, approval.events.single().checkoutNo)
     }
 
-
     @Test
     fun `매장과 단말을 두 이벤트에 그대로 옮긴다`() {
         val (creation, approval) = createFree()
@@ -168,8 +168,8 @@ class PaymentAttemptTest {
     @Test
     fun `거절 예외의 kind는 INVALID라서 400이 된다`() {
         // 기본값에 얹혀 있으면 누군가 kind를 바꿔도 아무도 모른다. HTTP 상태가 따라 바뀐다.
-        assertEquals(DomainErrorKind.INVALID, assertFailsWithDomain { create(amount = "-1", ids = ids()) }.kind)
-        assertEquals(DomainErrorKind.INVALID, assertFailsWithDomain { create(checkoutNo = 0, ids = ids()) }.kind)
+        assertEquals(DomainErrorKind.INVALID, assertFailsWith<DomainException> { create(amount = "-1", ids = ids()) }.kind)
+        assertEquals(DomainErrorKind.INVALID, assertFailsWith<DomainException> { create(checkoutNo = 0, ids = ids()) }.kind)
     }
 
     @Test
@@ -187,7 +187,4 @@ class PaymentAttemptTest {
         assertEquals(PaymentAttemptKind.AUTHORIZATION, created.events.single().kind)
         assertEquals(PaymentAttemptKind.AUTHORIZATION, approval.events.single().kind)
     }
-
-    private fun assertFailsWithDomain(block: () -> Unit): DomainException =
-        runCatching(block).exceptionOrNull() as? DomainException ?: error("DomainException이 나지 않았다")
 }

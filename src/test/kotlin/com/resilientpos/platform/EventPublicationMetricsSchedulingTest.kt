@@ -1,10 +1,9 @@
 package com.resilientpos.platform
 
 import com.resilientpos.PostgresIntegrationTest
+import com.resilientpos.awaitUntil
 import io.micrometer.core.instrument.MeterRegistry
-import java.util.concurrent.TimeUnit
 import kotlin.test.Test
-import kotlin.test.fail
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.test.context.TestPropertySource
 
@@ -19,11 +18,7 @@ class EventPublicationMetricsSchedulingTest(
 
     @Test
     fun `Moments를 꺼도 갱신은 스스로 돈다`() {
-        val refreshed = registry.get("event.publication.incomplete.refreshed").gauge()
-        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
-        while (refreshed.value() == 0.0) {
-            if (System.nanoTime() >= deadline) fail("10초 안에 첫 갱신이 돌지 않았다")
-            Thread.sleep(20)
-        }
+        val refreshed = registry.refreshedGauge()
+        awaitUntil("첫 갱신이 돈다") { refreshed.value() != 0.0 }
     }
 }

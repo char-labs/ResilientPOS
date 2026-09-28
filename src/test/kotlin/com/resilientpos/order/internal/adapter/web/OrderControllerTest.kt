@@ -2,10 +2,10 @@ package com.resilientpos.order.internal.adapter.web
 
 import com.resilientpos.foundation.DomainErrorKind
 import com.resilientpos.foundation.DomainException
-import com.resilientpos.foundation.Money
 import com.resilientpos.order.ClientOrderId
 import com.resilientpos.order.OrderCommand
 import com.resilientpos.order.OrderCommandFacade
+import com.resilientpos.order.OrderFixtures
 import com.resilientpos.order.OrderId
 import com.resilientpos.order.OrderStatus
 import com.resilientpos.store.StoreId
@@ -258,7 +258,7 @@ class OrderControllerTest(
         private val krw: Currency = Currency.getInstance("KRW")
 
         private fun command(
-            lines: List<OrderCommand.Create.Line> = listOf(OrderCommand.Create.Line("SKU-1", "아메리카노", Money.of("4500", krw), 2)),
+            lines: List<OrderCommand.Create.Line> = listOf(OrderFixtures.line("4500", 2)),
         ) = OrderCommand.Create(
             storeId = StoreId(UUID.fromString(STORE_ID)),
             terminalId = TerminalId(UUID.fromString(TERMINAL_ID)),

@@ -59,7 +59,7 @@ class PaymentAttempt private constructor(
      * 여기서 거절하면 전액 할인·프로모션 주문이 결제 단계에서 막힌다. provider를 부르지 않았으므로 참조가 없다.
      */
     fun approveIfFree(ids: IdentifierGenerator, now: Instant): Transition<PaymentAttempt, PaymentApproved>? =
-        if (amount == Money.zero(amount.currency)) approved(null, ids, now) else null
+        if (amount.isZero) approved(null, ids, now) else null
 
     /** 참조가 없는 승인은 [approveIfFree]만 만든다. provider가 승인했다면 참조가 늘 있다. */
     private fun approved(providerReference: String?, ids: IdentifierGenerator, now: Instant): Transition<PaymentAttempt, PaymentApproved> {
@@ -222,7 +222,7 @@ class PaymentAttempt private constructor(
             ids: IdentifierGenerator,
             now: Instant,
         ): Transition<PaymentAttempt, PaymentEvent.AttemptCreated> {
-            if (command.amount < Money.zero(command.amount.currency)) {
+            if (command.amount.isNegative) {
                 throw DomainException(NEGATIVE_PAYMENT_AMOUNT, "결제 금액은 음수일 수 없습니다")
             }
             if (command.checkoutNo < 1) {
