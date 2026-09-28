@@ -66,7 +66,12 @@
 
 | 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
 |---|---|---|---|
-| 0인지와 음수인지를 scale과 무관하게 판정한다 | `./gradlew compileTestKotlin`, `isZero`가 없어 테스트 컴파일 실패 | `./gradlew test --tests 'com.resilientpos.foundation.MoneyTest'`, 멤버를 두고 통과 | 미실행 |
+| 0인지와 음수인지를 scale과 무관하게 판정한다 | `./gradlew compileTestKotlin`, `isZero`가 없어 테스트 컴파일 실패 | `./gradlew test --tests 'com.resilientpos.foundation.MoneyTest'`, 멤버를 두고 통과 | `./gradlew test`, 253개 통과 |
 
 ## 결과
-개발 전 작성. 개발 후 실행 결과와 변경 이유를 추가한다.
+개발 전 spec을 독립 커밋으로 작성했다. 구현 후 아래를 확인했다.
+
+- 테스트 대기 루프 9벌과 인라인 2곳을 `awaitUntil` 하나로 모았다. `JdbcTemplate` 조회는 reified 확장과 `orderStatus`·`checkoutRowCount` 확장, 주문 준비는 `OrderCommandFacade.checkout`·`OrderFixtures.line`, 사본은 `Order.restored`, 단언은 `assertFailsWith`, 이벤트·metric 조회는 확장 함수로 바꿨다.
+- 운영 코드는 `Money.isZero`·`isNegative`(0 비교 3곳)와 `findByIdOrNull`(2곳)이다.
+- 인수 조건 2·3을 `grep`으로 확인했다. main의 `Money.zero`는 합계 fold의 시작값 1곳만 남았다(비교가 아니다).
+- `./gradlew test`: 253개 통과, 실패 0.
