@@ -131,4 +131,5 @@
 - IDE: 플러그인 판정을 흉내 낸 inspection 스크립트로, 이전 발행 지점은 `forEach`·`KFunction`으로 읽히고 구체 타입 파라미터(`OrderPaidListenerIntegrationTest`)는 `com.resilientpos.contract.OrderPaid`로 읽히는 것을 확인했다. IDE가 연 프로젝트가 main checkout이라 이 브랜치의 거터는 머지 뒤 확인한다.
 - `NOT_SUPPORTED` 구간에서 `findById`는 EntityManager를 놓고(바인딩 없음) 파생 쿼리는 묶는(바인딩 있음) 것을 임시 통합 테스트로 확인하고 지웠다. 이 사실을 `authorize` 문서와 wiki에 적었다.
 - `TransactionDeclarationTest`는 클래스에 붙인 `@Transactional`을 잡는다(임시 위반으로 확인).
+- 트랜잭션 증거(`TransactionStatus`)를 발행에 넘기던 변경은 되돌렸다. Facade는 `@Transactional`로 트랜잭션을 연다.
 - `./gradlew test`: 247개 통과, 실패 0.
