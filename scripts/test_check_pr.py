@@ -107,11 +107,11 @@ class HarnessTest(unittest.TestCase):
         """PR 단위는 개발 컨텍스트다. 줄 수가 아무리 커도 크기로는 오류·경고를 내지 않고 통계로만 보여 준다."""
         self.start()
         self.implementation()
-        self.write('src/large.txt', 'line\n' * 5000)
+        self.write('src/large.txt', 'line\n' * 10000)
         errors, warnings, _ = check(self.base, worktree=True)
         self.assertEqual([], errors)
         self.assertEqual([], warnings)
-        self.assertGreaterEqual(self.counted_lines(), 5000)
+        self.assertGreaterEqual(self.counted_lines(), 10000)
 
     def test_file_count_does_not_fail(self):
         """파일 수는 판정하지 않는다. 패키지 이동처럼 파일만 많은 변경을 막지 않기 위해서다."""
@@ -259,8 +259,8 @@ class MigrationsOnlyModeTest(HarnessTest):
         self.assertEqual(1, len(errors), errors)
         self.assertIn('Flyway 버전 2', errors[0])
 
-    def test_ignores_missing_spec_and_size_rules(self):
-        self.write('src/example.txt', 'spec 없이 큰 변경\n')
+    def test_ignores_missing_spec_rules(self):
+        self.write('src/example.txt', 'spec 없는 변경\n')
         self.migration('V002__order_create_orders.sql')
         self.commit()
         errors, _, _ = check(self.base, migrations_only=True)

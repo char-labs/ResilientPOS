@@ -251,9 +251,9 @@ def check(base, head='HEAD', worktree=False, migrations_only=False):
             source_files += 1
             source_lines += lines
         else:
+            # PR 단위는 개발 컨텍스트다. 일반 변경의 파일 수·줄 수는 통계 줄에만 내보내고 판정하지 않는다.
             regular_files += 1
             regular_lines += lines
-    # PR 단위는 개발 컨텍스트다. 일반 변경의 파일 수·줄 수는 통계 줄에만 내보내고 판정하지 않는다.
     if source_files > 10 or source_lines > 5000:
         errors.append('원문 보관 상한 10개 파일/5000줄 초과')
     return errors, warnings, f'일반 {regular_files}개/{regular_lines}줄; 원문 {source_files}개/{source_lines}줄'
