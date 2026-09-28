@@ -14,7 +14,7 @@
 - `OrderPersistenceAdapter`의 `findById(id).orElse(null)` 2곳을 spring-data에 있는 `findByIdOrNull`로 바꾼다.
 
 테스트
-- 대기 루프 `awaitUntil` 9벌을 테스트 공용 최상위 함수 하나(`Await.kt`)로 모은다. 기다리기는 테스트 클래스패스에 이미 있는 Awaitility(`spring-modulith-starter-test`가 끌어온다)에 맡기고, 쓰는 의존이므로 `build.gradle.kts`에 버전 없이(Boot BOM 관리) 명시한다. 이 함수는 10초 상한·20ms 간격·호출 스레드 평가를 고정하고, 실패할 때만 평가하는 진단(발행 기록 등)을 메시지에 붙인다. 같은 루프를 인라인으로 쓴 2곳도 옮긴다. 기다리기 전에 평가되던 진단 문자열(`awaitStatus`)도 실패 시점에 평가하도록 옮긴다.
+- 대기 루프 `awaitUntil`의 private 사본과 `PostgresIntegrationTest.Companion.awaitUntil`을 테스트 공용 최상위 함수 하나(`Await.kt`)로 모은다. 상한은 이벤트가 Kafka를 거치는 흐름에 맞춰 20초다. 기다리기는 테스트 클래스패스에 이미 있는 Awaitility(`spring-modulith-starter-test`가 끌어온다)에 맡기고, 쓰는 의존이므로 `build.gradle.kts`에 버전 없이(Boot BOM 관리) 명시한다. 이 함수는 20초 상한·20ms 간격·호출 스레드 평가를 고정하고, 실패할 때만 평가하는 진단(발행 기록 등)을 메시지에 붙인다. 같은 루프를 인라인으로 쓴 2곳도 옮긴다. 기다리기 전에 평가되던 진단 문자열(`awaitStatus`)도 실패 시점에 평가하도록 옮긴다.
 - `JdbcTemplate` 조회를 spring-jdbc의 reified 확장(`queryForObject`·`queryForList`의 타입 인자 형태)으로 바꾸고, 여러 파일에 반복되는 주문 상태·checkout 행 수 조회는 테스트 확장 함수 `orderStatus`·`checkoutRowCount`로 둔다. 행 수는 null이 될 수 없으므로 `Long`으로 돌려준다.
 - 주문 생성 뒤 checkout을 요청하는 헬퍼 4벌과 다른 모듈 테스트의 준비 코드를 테스트 확장 `OrderCommandFacade.createAndRequestCheckout`으로, 단가·수량만 다른 line 생성을 `OrderFixtures.line`으로 모은다. 이름을 도메인 동사(`checkout`)로 두면 나중에 같은 이름의 멤버가 생길 때 멤버가 확장을 조용히 가린다. `requestCheckout`을 검증하는 주문 모듈 테스트(`OrderRequestCheckoutIntegrationTest`, `OrderEventPublicationIntegrationTest`)는 Arrange와 Act가 드러나도록 두 줄 호출을 그대로 둔다.
 - `Order.restore`로 필드 일부만 바꾼 사본을 만드는 4곳을 테스트 확장 `Order.restored`로 모은다. 운영 코드에 두면 불변식을 우회하는 길이 되므로 테스트에만 둔다.
@@ -37,7 +37,7 @@
 - **`Order` 사본 생성을 운영 코드의 `copy` 멤버로 두기**: 전이를 거치지 않고 상태를 바꾸는 길이 운영 코드에 생긴다.
 
 ## 관련 문서
-[checkout-lock-static-calls](2026-09-28-checkout-lock-static-calls.md)에서 나눈 후속 PR이다. 그 PR 브랜치(`refactor/checkout-lock-static-calls`)를 base로 쌓는다.
+[checkout-lock-static-calls](2026-09-28-checkout-lock-static-calls.md)에서 나눈 후속 PR이다. main 기준이다.
 
 ## 변경 경로
 - src/main/kotlin/com/resilientpos/foundation/Money.kt
@@ -57,21 +57,21 @@
 ## 검증
 - `./gradlew test` 전체를 돌린다. Docker가 필요하다.
 - 인수 조건 2·3은 `grep`으로 확인한다.
-- `python3 scripts/check_pr.py --base refactor/checkout-lock-static-calls --worktree`, 제출 전 `--worktree` 없이 한 번 더.
+- `python3 scripts/check_pr.py --base origin/main --worktree`, 제출 전 `--worktree` 없이 한 번 더.
 
 ## Wiki 영향
 없다. wiki는 테스트 헬퍼 이름이나 `Money`의 비교 방식을 적지 않는다. 요구사항 변화도 없다. 반복 호출을 모으는 정리이고 동작이 같다.
 
 ## 분할 계획
-36개 파일, 추가와 삭제 합계 650줄 안쪽이다. 경고선(900줄)에 이르지 않는다. 앞 PR이 squash merge되면 `git rebase --onto origin/main` 으로 이 PR의 커밋만 main 위로 옮긴다. 앞 PR의 최종 내용 위에 쌓았으므로 충돌하지 않는다.
+한 개발 컨텍스트(반복 호출 정리)라 나누지 않는다. `KafkaTestSupport`의 두 폴링 루프는 컨슈머·관리 클라이언트 상태를 쌓으며 도는 루프라 공용 대기 함수로 옮기지 않는다.
 
 ## TDD 검증 기록
 운영 동작은 바뀌지 않는 정리다. 새 멤버 `Money.isZero`·`isNegative`만 테스트를 먼저 쓴다. 테스트 정리는 기존 테스트가 그대로 통과하는지로 확인한다.
 
 | 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
 |---|---|---|---|
-| 0인지와 음수인지를 부호로 판정한다 | `./gradlew compileTestKotlin`, `isZero`가 없어 테스트 컴파일 실패 | `./gradlew test --tests 'com.resilientpos.foundation.MoneyTest'`, 통과 | `./gradlew test`, 254개 통과 |
-| JSON에는 금액과 통화만 나간다 | `./gradlew test --tests 'com.resilientpos.foundation.MoneyTest'`, 멤버 판정이라 `isNegative`·`isZero` 필드가 섞여 실패 | 같은 명령, 확장 프로퍼티로 옮겨 통과 | `./gradlew test`, 254개 통과 |
+| 0인지와 음수인지를 부호로 판정한다 | `./gradlew compileTestKotlin`, `isZero`가 없어 테스트 컴파일 실패 | `./gradlew test --tests 'com.resilientpos.foundation.MoneyTest'`, 통과 | `./gradlew test`, 268개 통과 |
+| JSON에는 금액과 통화만 나간다 | `./gradlew test --tests 'com.resilientpos.foundation.MoneyTest'`, 멤버 판정이라 `isNegative`·`isZero` 필드가 섞여 실패 | 같은 명령, 확장 프로퍼티로 옮겨 통과 | `./gradlew test`, 268개 통과 |
 
 ## 결과
 개발 전 spec을 독립 커밋으로 작성했다. 구현 후 아래를 확인했다.
@@ -80,4 +80,5 @@
 - 운영 코드는 `Money.isZero`·`isNegative` 확장 프로퍼티(0 비교 3곳)와 `findByIdOrNull`(2곳)이다. 멤버로 두면 금액 JSON에 필드가 더해지는 것을 실측해 확장으로 옮겼고, JSON 모양을 테스트로 고정했다.
 - multi-review(Claude 78점, Codex 96점, Gemini는 CLI가 없어 미실행)를 반영했다. 위 JSON 계약, `requestCheckout`을 검증하는 주문 모듈 테스트의 두 줄 호출 복원, 헬퍼 이름 `createAndRequestCheckout`, 이미 설치된 Awaitility 위의 `awaitUntil`, 실패 시점에 평가하는 `awaitStatus` 진단, 행 수 non-null, 주석 위치를 고쳤다.
 - 인수 조건 2·3을 `grep`으로 확인했다. main의 `Money.zero`는 합계 fold의 시작값 1곳만 남았다(비교가 아니다).
-- `./gradlew test`: 254개 통과, 실패 0.
+- main 위로 옮기면서 Kafka 전달 PR이 만든 `PostgresIntegrationTest.Companion.awaitUntil`(20초)과 이 PR의 `awaitUntil`을 `Await.kt` 하나로 합쳤고, Kafka 테스트의 `JdbcTemplate` 조회도 같은 형태로 맞췄다.
+- `./gradlew test`: 268개 통과, 실패 0.
