@@ -60,6 +60,10 @@ class PaymentManagement(
      * 열어 반환 전에 커밋한다 — 같은 클래스의 `@Transactional` 메서드는 프록시를 거치지 않아 열리지 않는다.
      *
      * 결말이 난 시도면 provider를 부르지 않는다(0원·재배달). 이중 청구 방어는 provider의 `PaymentId` 멱등성이다.
+     *
+     * 처음 읽는 `findById`는 Spring Data가 붙인 읽기 전용 트랜잭션에서 돈다. 그 트랜잭션이 끝나며 EntityManager를 놓으므로
+     * provider를 부르는 동안 DB 자원을 쥐지 않는다. 트랜잭션이 없는 파생 쿼리로 바꾸면 `NOT_SUPPORTED` 구간이 끝날 때까지
+     * EntityManager가 묶인다.
      */
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
     fun authorize(command: PaymentCommand.Authorize): PaymentCommand.Authorize.Result {
