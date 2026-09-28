@@ -22,6 +22,10 @@ data class Money(val amount: BigDecimal, val currency: Currency) {
         }
     }
 
+    val isZero: Boolean get() = amount.signum() == 0
+
+    val isNegative: Boolean get() = amount.signum() < 0
+
     operator fun plus(other: Money): Money = Money(amount + other.amountIn(currency), currency)
 
     operator fun minus(other: Money): Money = Money(amount - other.amountIn(currency), currency)
