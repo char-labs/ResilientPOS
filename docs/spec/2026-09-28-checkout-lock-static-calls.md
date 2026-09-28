@@ -83,6 +83,7 @@
 - src/main/kotlin/com/resilientpos/order/OrderCommandFacade.kt
 - src/main/kotlin/com/resilientpos/order/internal/domain/Order.kt
 - src/main/kotlin/com/resilientpos/payment/internal/domain/PaymentAttempt.kt
+- src/main/kotlin/com/resilientpos/payment/internal/adapter/persistence/command/PaymentAttemptEntity.kt
 - src/main/kotlin/com/resilientpos/order/internal/application/OrderEventPublisher.kt
 - src/test/kotlin/com/resilientpos/payment/internal/adapter/lock/RedisCheckoutLockTest.kt
 - src/test/kotlin/com/resilientpos/payment/internal/application/PaymentAttemptCreationLockIntegrationTest.kt
@@ -92,6 +93,7 @@
 - src/test/kotlin/com/resilientpos/TransactionDeclarationTest.kt
 - src/test/kotlin/com/resilientpos/payment/internal/domain/PaymentAttemptAuthorizationTest.kt
 - src/test/kotlin/com/resilientpos/payment/internal/domain/PaymentAttemptTest.kt
+- src/test/kotlin/com/resilientpos/payment/internal/adapter/persistence/command/PaymentAttemptPersistenceIntegrationTest.kt
 - docs/wiki/domain-model.md
 - docs/spec/2026-09-28-checkout-lock-static-calls.md
 
@@ -119,7 +121,7 @@
 - 요구사항 변화: 없다. 업무 동작과 이벤트 계약이 그대로이고, 트랜잭션 안에서 부른 승인·재결제가 거절 대신 따로 실행되는 것은 지금 호출자가 없는 경로다.
 
 ## 분할 계획
-17개 파일, 추가와 삭제 합계 600줄 안쪽이다. 경고선(20개 파일/600줄)에 이르지 않는다.
+19개 파일, 추가와 삭제 합계 610줄 안쪽이다. 경고선(추가와 삭제 900줄, 파일 수는 판정하지 않음)에 이르지 않는다.
 
 ## TDD 검증 기록
 업무 동작은 바뀌지 않는 리팩터링이다. 바뀌는 두 경계(트랜잭션 밖 잠금 호출, 트랜잭션 안 승인 호출)는 통합 테스트로 RED→GREEN을 본다. publisher의 타입별 분기는 기존 Facade 테스트의 발행 검증이 덮는다. 클래스 선언 규칙은 위반을 넣어 실패를 본다.
@@ -128,6 +130,7 @@
 |---|---|---|---|
 | 트랜잭션 밖에서 잠그면 거절한다 | `./gradlew test --tests 'com.resilientpos.payment.internal.application.PaymentAttemptCreationLockIntegrationTest'`, 전파 설정 구현이 `IllegalTransactionStateException`을 던져 실패 | 같은 명령, 설정을 지운 뒤 통과 | `./gradlew test`, 246개 통과 |
 | 트랜잭션 안에서 승인을 요청해도 바깥 트랜잭션과 따로 적용한다 | `./gradlew test --tests 'com.resilientpos.payment.internal.application.PaymentAuthorizationIntegrationTest'`, `NEVER`가 `IllegalTransactionStateException`으로 거절해 실패 | `./gradlew test --tests 'com.resilientpos.payment.*' --tests 'com.resilientpos.order.*'`, `NOT_SUPPORTED`로 바꾸고 publisher를 옮긴 뒤 통과 | `./gradlew test`, 246개 통과 |
+| 결말별 전이(`approve`·`decline`·`markUnknown`)와 `approveIfFree`, 이미 결말이 난 시도에 세 전이 모두 거절 | `./gradlew compileTestKotlin`, 새 메서드가 없어 테스트 컴파일 실패 | `./gradlew test`, 도메인을 나누고 0원 persistence 테스트를 `approveIfFree`로 이은 뒤 통과 | `./gradlew test`, 248개 통과 |
 | 클래스에 트랜잭션을 선언하지 않는다 | `./gradlew test --tests 'com.resilientpos.TransactionDeclarationTest'`, `FulfillmentCommandFacade` 클래스에 `@Transactional`을 임시로 붙여 규칙 위반으로 실패 | 같은 명령, 되돌린 뒤 통과 | `./gradlew test`, 247개 통과 |
 
 ## 결과
@@ -141,4 +144,6 @@
 - `NOT_SUPPORTED` 구간에서 `findById`는 EntityManager를 놓고(바인딩 없음) 파생 쿼리는 묶는(바인딩 있음) 것을 임시 통합 테스트로 확인하고 지웠다. 이 사실을 `authorize` 문서와 wiki에 적었다.
 - `TransactionDeclarationTest`는 클래스에 붙인 `@Transactional`을 잡는다(임시 위반으로 확인).
 - 트랜잭션 증거(`TransactionStatus`)를 발행에 넘기던 변경은 되돌렸다. Facade는 `@Transactional`로 트랜잭션을 연다.
-- `./gradlew test`: 247개 통과, 실패 0.
+- publisher는 이벤트 타입마다 `publish`를 따로 두고 `when`이 없다. Facade는 `transition.events.forEach(eventPublisher::publish)`로 부르고, 전이마다 `Transition`의 이벤트 타입이 하나다.
+- `applyAuthorization`을 `approve`·`decline`·`markUnknown`으로 나눴고 `PaymentManagement`가 `when (outcome)`으로 고른다. 0원 시도는 `create` 뒤 `approveIfFree`로 승인해 지금과 같은 행과 이벤트 순서를 남긴다(`PaymentManagementTest`의 0원 발행 순서 검증이 그대로 통과).
+- `./gradlew test`: 248개 통과, 실패 0.
