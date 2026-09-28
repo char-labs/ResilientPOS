@@ -1,5 +1,7 @@
 package com.resilientpos.order.internal.domain
 
+import com.resilientpos.contract.OrderPaid
+import com.resilientpos.contract.OrderPaymentRequested
 import com.resilientpos.foundation.DomainErrorKind
 import com.resilientpos.foundation.DomainException
 import com.resilientpos.foundation.IdentifierGenerator
@@ -11,8 +13,6 @@ import com.resilientpos.order.OrderCommand
 import com.resilientpos.order.OrderEvent
 import com.resilientpos.order.OrderId
 import com.resilientpos.order.OrderLineId
-import com.resilientpos.contract.OrderPaid
-import com.resilientpos.contract.OrderPaymentRequested
 import com.resilientpos.order.OrderStatus
 import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.TerminalId

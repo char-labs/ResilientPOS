@@ -95,6 +95,15 @@ class PaymentAttemptTest {
     }
 
     @Test
+    fun `이미 승인된 0원 시도를 다시 승인하려 하면 거절한다`() {
+        val (_, approval) = createFree()
+
+        val failure = assertFailsWith<DomainException> { approval.aggregate.approveIfFree(ids(1), now) }
+
+        assertEquals(PaymentAttempt.PAYMENT_RESULT_ALREADY_APPLIED, failure.code)
+    }
+
+    @Test
     fun `0원 승인에는 provider 참조가 없다`() {
         // provider를 부르지 않았으므로 참조가 있으면 그것이 거짓이다.
         val (_, approval) = createFree()

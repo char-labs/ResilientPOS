@@ -74,6 +74,7 @@ class PaymentManagement(
      * 열어 반환 전에 커밋한다 — 같은 클래스의 `@Transactional` 메서드는 프록시를 거치지 않아 열리지 않는다.
      *
      * 결말이 난 시도면 provider를 부르지 않는다(0원·재배달). 이중 청구 방어는 provider의 `PaymentId` 멱등성이다.
+     * 0원 시도는 [createAttempt]가 만들자마자 승인해 저장하므로 `REQUESTED`로 여기 오지 않는다.
      *
      * 호출자 트랜잭션에 합류하지 않으므로 §4.6 sync intake처럼 한 커밋으로 묶어야 하는 흐름 안에서 부르지 않는다.
      * 그 안에서 부르면 바깥이 롤백돼도 적용 결과는 따로 커밋된다.
