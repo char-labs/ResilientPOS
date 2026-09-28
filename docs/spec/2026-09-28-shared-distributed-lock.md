@@ -112,11 +112,15 @@ Redis 분산 락이 `payment` 안의 `CheckoutLock`/`RedisCheckoutLock`에만 �
 ## TDD 검증 기록
 | 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
 |---|---|---|---|
-| 인수 1, 같은 키 블록의 직렬화와 커밋 뒤 해제 | 미실행 | 미실행 | 미실행 |
-| 인수 2, 바깥 트랜잭션과 분리된 커밋 | 미실행 | 미실행 | 미실행 |
-| 인수 3, Redis 오류 fail-open과 토큰 확인 해제 | 미실행 | 미실행 | 미실행 |
-| 인수 4, 겹친 주문 생성이 기존 주문을 받음 | 미실행 | 미실행 | 미실행 |
-| 인수 5, 겹친 결제 시도 생성과 DB 방어선 | 미실행 | 미실행 | 미실행 |
+| 인수 1, `LockIntegrationTest`의 `같은 키의 블록은 앞 블록이 커밋한 뒤에 돌아 그 쓰기를 본다` | `./gradlew test --tests 'com.resilientpos.platform.LockIntegrationTest'`. `Lock`을 `Tx.masterTx`만 부르는 최소 선언으로 두고 실행. 뒤 블록이 앞 블록의 커밋 전 상태를 읽어 `AssertionFailedError`(기대 1, 실제 0) | 같은 명령. `DistributedLock`·`RedisDistributedLock`·`Tx.newTx`·`Lock`을 구현한 뒤 통과 | `./gradlew test` 통과 |
+| 인수 2, `LockIntegrationTest`의 `바깥 트랜잭션이 롤백돼도 블록의 쓰기는 남는다` | 같은 명령. 블록이 바깥 트랜잭션에 합류해 함께 롤백되어 `AssertionFailedError`(기대 1, 실제 0) | 같은 명령. `REQUIRES_NEW`로 통과 | `./gradlew test` 통과 |
+| 인수 3, `LockTest`의 `Redis 오류면 던지지 않고 토큰 없이 돌아온다`·`잠그지 못하면 잠금 없이 블록을 실행하고 풀지 않는다`, `LockIntegrationTest`의 `토큰이 다르면 풀지 않는다` | characterization. `RedisCheckoutLock`의 획득·해제를 옮긴 코드라 처음부터 통과. 기존 `RedisCheckoutLockTest`를 대체한다 | `./gradlew test --tests 'com.resilientpos.platform.Lock*'` 통과 | `./gradlew test` 통과 |
+| 인수 4, `OrderCreateLockIntegrationTest`의 `같은 키의 생성이 겹치면 늦은 요청이 앞 주문을 받는다` | `./gradlew test --tests 'com.resilientpos.order.internal.application.OrderCreateLockIntegrationTest'`. 키 함수 `createLockKey`만 선언하고 실행. 늦은 요청이 락을 기다리지 않고 500ms 안에 끝나 `AssertionFailedError`("늦은 요청이 락을 기다리지 않았다") | 같은 명령. `create`를 `Lock.executeWithLock` 블록으로 바꾼 뒤 통과 | `./gradlew test --tests 'com.resilientpos.order.*'`, `./gradlew test` 통과 |
+| 인수 5, `PaymentAttemptCreationLockIntegrationTest`의 `같은 checkout의 생성이 겹치면 늦은 요청이 앞 요청의 시도를 돌려받는다`, `PaymentAttemptCreationConcurrencyIntegrationTest`의 `같은 checkout의 생성이 겹쳐 앞 시도가 거절되어도 시도는 하나다` | characterization. 동작을 바꾸지 않는 리팩터링이다. 새 모양의 락 테스트를 이전 `CheckoutLock` 구현에서 먼저 돌려 통과했다 — 새 `Lock`이 잡은 키를 이전 구현도 기다리므로 롤링 배포 중에도 두 버전이 서로를 막는다 | `./gradlew test --tests 'com.resilientpos.payment.*'`. `createAttempt`를 `Lock`으로 옮기고 `CheckoutLock`을 지운 뒤 통과. DB 방어선 테스트는 뒤 요청을 repository로 직접 넣게 바꿨고 여전히 `ux_payment_attempt_first_authorization`에 걸린다 | `./gradlew test` 통과 |
 
 ## 결과
-개발 전 작성. 개발 후 실행 결과와 변경 이유를 추가한다.
+- `./gradlew test` 전체 통과(1분 10초), `python3 scripts/check_pr.py --base origin/main --worktree` PASS.
+- platform에 `Lock`(전역 object), `DistributedLock`(port), `RedisDistributedLock`(구현), `Tx.newTx`/`TxRunner.runNewTx`(`REQUIRES_NEW`)를 더했다. `PlatformConfiguration`이 기동할 때 `Lock`을 초기화하고, `TxRebindingTestExecutionListener`가 테스트마다 다시 묶는다.
+- `payment`의 `CheckoutLock`·`RedisCheckoutLock`·`RedisCheckoutLockTest`를 지웠다. 트랜잭션 밖에서 잠그면 거절하던 테스트는 해제가 `finally`로 바뀌어 대상이 없어졌다.
+- `PaymentAttemptCreationConcurrencyIntegrationTest`는 뒤 요청을 Facade 대신 repository로 넣는다. Facade가 늘 자기 트랜잭션에서 커밋해 바깥 트랜잭션으로 커밋을 붙잡을 수 없기 때문이다. 검증하는 것(락이 통하지 않을 때의 DB 방어선)은 같다.
+- wiki: domain-model에 "분산 락은 `Lock` 블록으로 건다" 규칙과 질문 6의 "한 경로에 기다리는 수단 하나"를 더하고, `CheckoutLock`·`registerSynchronization` 설명을 걷어냈다. README·`application.yaml`의 Redis 용도 문구를 고쳤다. current-state(볼트)에 주문 생성과 결제 시도 생성의 락을 적었다.
