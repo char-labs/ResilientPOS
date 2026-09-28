@@ -4,8 +4,6 @@ import java.util.UUID
 import org.springframework.data.jpa.repository.JpaRepository
 
 /**
- * `t_order_line`용 Spring Data repository. `OrderPersistenceAdapter`만 사용한다.
+ * `t_order_line`용 Spring Data repository. `OrderPersistenceAdapter`가 삭제에만 쓴다. 조회는 `JdslQueryExecutor`로 한다.
  */
-interface OrderLineJpaRepository : JpaRepository<OrderLineEntity, UUID> {
-    fun findAllByOrderIdOrderByLineNo(orderId: UUID): List<OrderLineEntity>
-}
+interface OrderLineJpaRepository : JpaRepository<OrderLineEntity, UUID>

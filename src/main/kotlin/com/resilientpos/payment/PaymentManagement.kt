@@ -79,7 +79,7 @@ class PaymentManagement(
      */
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
     fun authorize(command: PaymentCommand.Authorize): PaymentCommand.Authorize.Result {
-        val attempt = repository.findById(command.paymentId) ?: throw PaymentAttempt.notFound()
+        val attempt = Tx.masterTx { repository.findById(command.paymentId) } ?: throw PaymentAttempt.notFound()
         if (attempt.status != PaymentAttemptStatus.REQUESTED) {
             return PaymentCommand.Authorize.Result(attempt.id, attempt.status)
         }
