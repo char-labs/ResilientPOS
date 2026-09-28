@@ -6,6 +6,7 @@ import com.resilientpos.foundation.DomainErrorKind
 import com.resilientpos.foundation.DomainException
 import com.resilientpos.foundation.Money
 import com.resilientpos.foundation.UuidV7IdentifierGenerator
+import com.resilientpos.payment.internal.application.PaymentAttemptTransitions
 import com.resilientpos.payment.internal.application.PaymentEventPublisher
 import com.resilientpos.payment.internal.domain.PaymentAttempt
 import com.resilientpos.payment.internal.domain.AuthorizationOutcome
@@ -25,7 +26,6 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 import org.springframework.context.ApplicationEventPublisher
-import org.springframework.transaction.support.TransactionOperations
 
 /**
  * Facade가 **어떤 사실을 발행하는지** 고정한다.
@@ -90,18 +90,23 @@ class PaymentManagementTest {
         repository: PaymentAttemptRepository,
         publisher: ApplicationEventPublisher,
         gateway: PaymentGateway = StubGateway(AuthorizationOutcome.Unknown),
-    ) = PaymentManagement(
-        repository,
-        gateway,
-        UuidV7IdentifierGenerator(),
-        Clock.fixed(Instant.parse("2026-09-22T01:00:00Z"), ZoneOffset.UTC),
-        PaymentEventPublisher(publisher),
-        TransactionOperations.withoutTransaction(),
-        // 잠금은 인스턴스 사이의 동시성만 다룬다. 단위 테스트의 판단에는 끼지 않는다.
-        object : CheckoutLock {
-            override fun lockUntilTransactionEnds(orderId: UUID, checkoutNo: Int) = Unit
-        },
-    )
+    ): PaymentManagement {
+        val ids = UuidV7IdentifierGenerator()
+        val clock = Clock.fixed(Instant.parse("2026-09-22T01:00:00Z"), ZoneOffset.UTC)
+        val events = PaymentEventPublisher(publisher)
+        return PaymentManagement(
+            repository,
+            gateway,
+            ids,
+            clock,
+            events,
+            PaymentAttemptTransitions(repository, ids, clock, events),
+            // 잠금은 인스턴스 사이의 동시성만 다룬다. 단위 테스트의 판단에는 끼지 않는다.
+            object : CheckoutLock {
+                override fun lockUntilTransactionEnds(orderId: UUID, checkoutNo: Int) = Unit
+            },
+        )
+    }
 
     @Test
     fun `승인이 필요한 시도는 생성 사실만 발행한다`() {

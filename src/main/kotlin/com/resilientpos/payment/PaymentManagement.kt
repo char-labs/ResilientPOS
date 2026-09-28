@@ -1,24 +1,18 @@
 package com.resilientpos.payment
 
-import com.resilientpos.foundation.DomainErrorKind
-import com.resilientpos.foundation.DomainEvent
-import com.resilientpos.foundation.DomainException
 import com.resilientpos.foundation.IdentifierGenerator
-import com.resilientpos.foundation.Transition
+import com.resilientpos.payment.internal.application.PaymentAttemptTransitions
 import com.resilientpos.payment.internal.application.PaymentEventPublisher
-import com.resilientpos.payment.internal.domain.AuthorizationOutcome
 import com.resilientpos.payment.internal.domain.AuthorizationRequest
 import com.resilientpos.payment.internal.domain.CheckoutLock
 import com.resilientpos.payment.internal.domain.PaymentAttempt
 import com.resilientpos.payment.internal.domain.PaymentAttemptRepository
 import com.resilientpos.payment.internal.domain.PaymentGateway
-import com.resilientpos.platform.inTransaction
 import com.resilientpos.platform.logger
 import java.time.Clock
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Propagation
 import org.springframework.transaction.annotation.Transactional
-import org.springframework.transaction.support.TransactionOperations
 
 /**
  * `payment` 모듈의 유일한 진입점. 결제 정본 상태를 바꾸는 일은 전부 여기를 거친다.
@@ -31,7 +25,7 @@ class PaymentManagement(
     private val identifierGenerator: IdentifierGenerator,
     private val clock: Clock,
     private val eventPublisher: PaymentEventPublisher,
-    private val transactions: TransactionOperations,
+    private val transitions: PaymentAttemptTransitions,
     private val checkoutLock: CheckoutLock,
 ) {
 
@@ -70,7 +64,7 @@ class PaymentManagement(
      * 기록된 시도에 provider 승인을 요청하고 결과를 적용한다.
      *
      * provider 호출은 트랜잭션 밖이다(도메인 모델 §4.6). `NOT_SUPPORTED`로 호출자 트랜잭션이 있으면 멈춘다.
-     * 합류하면 적용의 잠금 조회가 먼저 읽어 둔 낡은 값을 돌려받는다. 적용 트랜잭션은 [TransactionOperations]로 새로
+     * 합류하면 적용의 잠금 조회가 먼저 읽어 둔 낡은 값을 돌려받는다. 적용 트랜잭션은 [PaymentAttemptTransitions]가 새로
      * 열어 반환 전에 커밋한다 — 같은 클래스의 `@Transactional` 메서드는 프록시를 거치지 않아 열리지 않는다.
      *
      * 결말이 난 시도면 provider를 부르지 않는다(0원·재배달). 이중 청구 방어는 provider의 `PaymentId` 멱등성이다.
@@ -85,14 +79,14 @@ class PaymentManagement(
      */
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
     fun authorize(command: PaymentCommand.Authorize): PaymentCommand.Authorize.Result {
-        val attempt = repository.findById(command.paymentId) ?: throw attemptNotFound()
+        val attempt = repository.findById(command.paymentId) ?: throw PaymentAttempt.notFound()
         if (attempt.status != PaymentAttemptStatus.REQUESTED) {
             return PaymentCommand.Authorize.Result(attempt.id, attempt.status)
         }
 
         val outcome = gateway.authorize(AuthorizationRequest(attempt.id, attempt.amount))
 
-        return transactions.inTransaction { applyOutcome(command.paymentId, outcome) }
+        return transitions.applyOutcome(command.paymentId, outcome)
     }
 
     /**
@@ -103,65 +97,17 @@ class PaymentManagement(
      * 요청이 새 provider 호출이 되지 않게 하려는 것이다. 최신인데 거절이 아니면 aggregate가 거절한다.
      *
      * 대상 행을 잠그고 최신을 읽는다. 겹친 두 요청 중 진 쪽은 앞 커밋을 기다렸다가 그 새 시도를 최신으로 본다.
-     * 트랜잭션을 [TransactionOperations]로 열어 반환 뒤의 로그가 커밋 뒤의 사실이 되게 한다([authorize]와 같다).
+     * 트랜잭션을 [PaymentAttemptTransitions]가 열어 반환 뒤의 로그가 커밋 뒤의 사실이 되게 한다([authorize]와 같다).
      * 같은 이유로 sync intake의 한 커밋 안에서 부르지 않는다. 바깥이 롤백돼도 새 시도와 생성 사실이 따로 커밋된다.
      */
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
     fun retryAuthorization(command: PaymentCommand.RetryAuthorization): PaymentCommand.RetryAuthorization.Result {
-        val (result, retried) = transactions.inTransaction { retry(command.paymentId) }
+        val (result, retried) = transitions.retry(command.paymentId)
         if (retried) {
             log.info { "결제를 다시 시도한다 declinedPaymentId=${command.paymentId.value} paymentId=${result.paymentId.value}" }
         }
         return result
     }
-
-    private fun retry(paymentId: PaymentId): Pair<PaymentCommand.RetryAuthorization.Result, Boolean> {
-        val target = repository.findByIdForUpdate(paymentId) ?: throw attemptNotFound()
-        val latest = repository.findLatestAuthorization(target.orderId, target.checkoutNo)
-        if (latest != null && latest.id != target.id) {
-            return PaymentCommand.RetryAuthorization.Result(latest.id, latest.status) to false
-        }
-
-        val transition = target.retry(identifierGenerator, clock.instant())
-        val saved = repository.save(transition.aggregate)
-        transition.events.forEach(eventPublisher::publish)
-        return PaymentCommand.RetryAuthorization.Result(saved.id, saved.status) to true
-    }
-
-    /** 잠그고 다시 읽는다. 호출하는 동안 다른 `authorize`가 먼저 적용했으면 덮지 않고 그 결말을 돌려준다. */
-    private fun applyOutcome(paymentId: PaymentId, outcome: AuthorizationOutcome): PaymentCommand.Authorize.Result {
-        val current = repository.findByIdForUpdate(paymentId) ?: throw attemptNotFound()
-        if (current.status != PaymentAttemptStatus.REQUESTED) {
-            return PaymentCommand.Authorize.Result(current.id, current.status)
-        }
-
-        val now = clock.instant()
-        val applied = when (outcome) {
-            is AuthorizationOutcome.Approved ->
-                updateAndPublish(current.approve(outcome.providerReference, identifierGenerator, now), eventPublisher::publish)
-            is AuthorizationOutcome.Declined ->
-                updateAndPublish(current.decline(outcome.providerReference, identifierGenerator, now), eventPublisher::publish)
-            AuthorizationOutcome.Unknown ->
-                updateAndPublish(current.markUnknown(identifierGenerator, now), eventPublisher::publish)
-        }
-        return PaymentCommand.Authorize.Result(applied.id, applied.status)
-    }
-
-    /**
-     * 결말을 저장한 뒤 그 사실을 발행한다. 발행 기록이 결과와 같은 커밋에 들어가야 하므로 이 트랜잭션 안에서 발행한다(도메인 모델 §4.3).
-     * `publish`는 호출부가 넘긴 메서드 참조의 기대 타입으로 publisher의 오버로드가 정해진다.
-     */
-    private fun <E : DomainEvent> updateAndPublish(transition: Transition<PaymentAttempt, E>, publish: (E) -> Unit): PaymentAttempt {
-        val applied = repository.update(transition.aggregate)
-        transition.events.forEach(publish)
-        return applied
-    }
-
-    private fun attemptNotFound() = DomainException(
-        PaymentAttempt.PAYMENT_ATTEMPT_NOT_FOUND,
-        "결제 시도를 찾을 수 없습니다",
-        DomainErrorKind.NOT_FOUND,
-    )
 
     companion object {
         private val log by logger()

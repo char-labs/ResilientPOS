@@ -6,7 +6,7 @@ import com.resilientpos.order.OrderFixtures
 import com.resilientpos.payment.PaymentCommand
 import com.resilientpos.payment.PaymentManagement
 import com.resilientpos.payment.internal.domain.CheckoutLock
-import com.resilientpos.platform.inTransaction
+import com.resilientpos.inTransaction
 import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.TerminalId
 import java.util.UUID

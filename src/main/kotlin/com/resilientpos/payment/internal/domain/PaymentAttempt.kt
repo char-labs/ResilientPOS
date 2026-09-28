@@ -190,6 +190,10 @@ class PaymentAttempt private constructor(
         const val PAYMENT_ATTEMPT_NOT_FOUND = "PAYMENT_ATTEMPT_NOT_FOUND"
         const val PAYMENT_NOT_RETRYABLE = "PAYMENT_NOT_RETRYABLE"
 
+        /** 찾는 시도가 없다. 응답은 404다. */
+        fun notFound(): DomainException =
+            DomainException(PAYMENT_ATTEMPT_NOT_FOUND, "결제 시도를 찾을 수 없습니다", DomainErrorKind.NOT_FOUND)
+
         /**
          * 이미 저장된 시도를 그대로 재구성한다. 생성 불변식은 최초 `create` 때 검증됐으므로 다시 묻지 않는다.
          * persistence adapter의 `toDomain()`만 부른다.
