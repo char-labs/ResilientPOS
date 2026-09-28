@@ -14,7 +14,7 @@
 소유 모듈은 `payment`와 `order`다.
 
 **전파 설정을 `NOT_SUPPORTED`로 모은다.**
-- `PaymentManagement.authorize`와 `retryAuthorization`의 `@Transactional(propagation = Propagation.NEVER)`를 `NOT_SUPPORTED`로 바꾼다. 트랜잭션 안에서 불리면 거절하던 것을, 호출자 트랜잭션을 멈추고 트랜잭션 없이 도는 것으로 바꾼다. provider 호출은 어느 경우에도 트랜잭션 밖이고(§4.6), 적용 트랜잭션은 지금처럼 `TransactionOperations`가 새로 열어 반환 전에 커밋한다. 호출자 트랜잭션이 나중에 롤백돼도 적용 결과는 남는다.
+- `PaymentManagement.authorize`와 `retryAuthorization`의 `@Transactional(propagation = Propagation.NEVER)`를 `NOT_SUPPORTED`로 바꾼다. 트랜잭션 안에서 불리면 거절하던 것을, 호출자 트랜잭션을 멈추고 트랜잭션 없이 도는 것으로 바꾼다. provider 호출은 어느 경우에도 트랜잭션 밖이고(§4.6), 적용 트랜잭션은 `PaymentAttemptTransitions`의 `@Transactional` 메서드가 새로 열어 반환 전에 커밋한다. 호출자 트랜잭션이 나중에 롤백돼도 적용 결과는 남는다.
 - 한계: 멈춘 호출자 트랜잭션이 커밋하지 않은 행은 보이지 않고, 호출자가 그 시도 행을 잠그고 있으면 적용 트랜잭션이 행 잠금 대기 한도(3초)까지 기다린 뒤 실패한다. 지금 호출자는 트랜잭션이 없는 리스너뿐이라 해당하지 않는다. 호출자 트랜잭션에 합류하지 않으므로 §4.6 sync intake처럼 한 커밋으로 묶어야 하는 흐름 안에서 부르지 않는다. 그 안에서 부르면 바깥이 롤백돼도 승인 적용과 재결제 시도가 따로 커밋된다. 두 메서드 문서와 wiki에 적는다.
 - 리스너 4개의 `@ApplicationModuleListener(propagation = NOT_SUPPORTED)`는 그대로 둔다. 기본값 `REQUIRES_NEW`를 쓰면 Facade가 리스너 트랜잭션에 합류해 provider 호출이 트랜잭션 안에 들어간다.
 - Facade의 `@Transactional`(기본값 `REQUIRED`)은 그대로 둔다. §4.6 sync intake가 바깥 트랜잭션에 합류하는 계약이다.
@@ -35,10 +35,11 @@
 - `PaymentAttempt.applyAuthorization(outcome)`를 `approve(providerReference)`·`decline(providerReference)`·`markUnknown()`으로 나눈다. provider 승인에는 참조가 늘 있으므로 공개 `approve`는 null이 아닌 참조만 받고, 참조 없는 승인은 `approveIfFree`만 낸다. 셋 다 `REQUESTED`가 아니면 지금과 같은 `PAYMENT_RESULT_ALREADY_APPLIED`로 거절하고, 상태와 사실은 각 메서드 안에서 함께 정한다. provider 결과(`AuthorizationOutcome`)를 어느 전이로 옮길지는 `PaymentManagement`가 `when (outcome)`으로 고른다. sealed 타입이라 `else`가 없다. 세 분기는 같은 private 함수로 저장한 뒤 발행한다(Facade 순서: 저장 → 발행). 발행 메서드는 그 함수에 넘긴 메서드 참조(`eventPublisher::publish`)의 기대 타입으로 정해진다.
 - `PaymentAttempt.create`는 금액과 무관하게 `REQUESTED` 시도와 `AttemptCreated`만 낸다. 0원 승인은 새 도메인 메서드 `approveIfFree()`가 맡는다. 0원이면 provider 참조 없는 `approve` 결과를, 아니면 `null`을 돌려준다. 0원이면 provider를 부르지 않고 승인한다는 판단은 도메인에 남는다. `createAttempt`는 두 전이를 이어 최종 시도(0원이면 `APPROVED`)를 저장하고 생성·승인 사실을 그 순서로 발행한다. 저장되는 행과 이벤트 순서·내용은 지금과 같다.
 
-**트랜잭션 블록 결과를 non-null로 받는 확장 함수를 둔다.**
-- `platform`에 확장 함수 `TransactionOperations.inTransaction(action)`을 둔다. 블록의 결과 타입은 null이 될 수 없고, 반환값도 null이 아니다. `execute`가 nullable을 돌려줘 호출부마다 `requireNotNull(transactions.execute { ... })`를 쓰던 것을 `transactions.inTransaction { ... }`으로 줄인다. 블록은 `TransactionStatus`를 받지 않는다.
-- spring-tx 7.0.9에는 `TransactionOperations`용 Kotlin 확장이 없다(반응형 `TransactionalOperatorExtensions`만 있다). Spring 타입이라 `foundation`·`internal.domain`이 아닌 `platform`에 둔다(`DependencyDirectionTest`).
-- 쓰는 곳: `PaymentManagement.authorize`·`retryAuthorization`, `PaymentAttemptCreationLockIntegrationTest`.
+**트랜잭션 인프라 타입을 주입하지 않는다.**
+- main 코드는 `TransactionOperations`·`TransactionTemplate`·`PlatformTransactionManager` 같은 내장 트랜잭션 타입을 주입받지 않는다. 트랜잭션 경계는 메서드의 `@Transactional`로만 선언한다.
+- `PaymentManagement`가 `TransactionOperations`로 열던 두 트랜잭션(승인 결과 적용, 재결제 시도 생성)을 `payment.internal.application.PaymentAttemptTransitions`의 `@Transactional` 메서드 `applyOutcome`·`retry`로 옮긴다. 같은 클래스의 `@Transactional` 메서드는 프록시를 거치지 않아 열리지 않으므로 다른 빈에 둔다. 전파는 기본값 `REQUIRED`이고, 호출하는 `authorize`·`retryAuthorization`이 `NOT_SUPPORTED`라 늘 새 트랜잭션이다.
+- 이 빈은 모듈 밖에 공개하지 않는 `internal` 패키지의 Facade 보조 빈이다. "Facade가 `@Transactional`의 소유자"라는 규칙은 "Facade와, Facade가 트랜잭션을 나눠 열려고 둔 같은 모듈의 보조 빈"으로 넓힌다.
+- 호출부의 `requireNotNull(transactions.execute { ... })`를 줄이던 확장 함수 `TransactionOperations.inTransaction`은 main에서 쓰는 곳이 없어지므로 테스트 소스로 옮긴다. 테스트는 바깥 트랜잭션을 커밋하거나 롤백하는 시나리오를 직접 만들어야 해서 `TransactionOperations`를 그대로 쓴다.
 
 **반복되는 호출을 확장 함수·멤버·공용 헬퍼로 줄인다.**
 프로젝트 전체를 훑어 두 곳 이상 반복되는 호출만 고른다. 우리 값 객체는 멤버로, 외부 라이브러리 타입은 확장 함수로, 수신 객체가 필요 없는 것은 최상위 함수로 둔다. 이미 설치된 라이브러리 확장이 있으면 그것을 쓴다.
@@ -89,7 +90,8 @@
 - **Spring Data `findById`를 트랜잭션 없는 쿼리로 덮어 숨은 트랜잭션을 없애기**: 쿼리는 줄지만 `authorize`에서는 그 트랜잭션이 EntityManager를 놓아 주는 장치라 없애면 provider 호출 내내 DB 자원을 쥔다.
 - **publisher가 `TransactionStatus`를 트랜잭션 증거로 받기**: 트랜잭션 밖 발행이 컴파일되지 않지만, Spring 트랜잭션 타입이 쓰지 않는 인자로 발행 API에 드러나고 Facade가 `@Transactional` 대신 `TransactionOperations` 블록으로 트랜잭션을 열어야 한다. 사용자 결정으로 기각했다.
 
-- **트랜잭션 실행기를 정적 객체로 두고 `readOnlyTx { }`처럼 어디서나 부르기**: 호출부가 짧아지지만 주입 대신 정적 접근이 생기고, 트랜잭션을 여는 곳이 Facade 밖으로 퍼진다. 주입받은 `TransactionOperations`의 확장으로 둔다.
+- **`TransactionOperations`를 주입받아 블록으로 트랜잭션 열기**: 한 메서드 안에서 트랜잭션을 나눌 수 있지만, 내장 인프라 타입이 업무 Facade의 생성자에 드러난다. 사용자 결정으로 `@Transactional` 메서드를 가진 보조 빈으로 옮겼다.
+- **트랜잭션 실행기를 정적 객체로 두고 `readOnlyTx { }`처럼 어디서나 부르기**: 호출부가 짧아지지만 주입 대신 정적 접근이 생기고, 트랜잭션을 여는 곳이 Facade 밖으로 퍼진다. 트랜잭션은 메서드의 `@Transactional`로만 연다.
 
 ## 관련 문서
 [도메인 모델](../wiki/domain-model.md) §4.3·§4.6, [Modulith·Kafka 키워드](../wiki/modulith-kafka-keywords.md). 잠금은 [payment-advisory-lock](2026-09-26-payment-advisory-lock.md), 승인의 트랜잭션 경계는 [payment-gateway-authorization](2026-09-23-payment-gateway-authorization.md)이 정했다.
@@ -101,7 +103,7 @@
 ## 변경 경로
 - src/main/kotlin/com/resilientpos/payment/internal/adapter/lock/RedisCheckoutLock.kt
 - src/main/kotlin/com/resilientpos/payment/PaymentManagement.kt
-- src/main/kotlin/com/resilientpos/platform/TransactionOperationsExtensions.kt
+- src/main/kotlin/com/resilientpos/payment/internal/application/PaymentAttemptTransitions.kt
 - src/main/kotlin/com/resilientpos/foundation/Money.kt
 - src/main/kotlin/com/resilientpos/order/internal/domain/OrderLine.kt
 - src/main/kotlin/com/resilientpos/order/internal/adapter/persistence/command/OrderPersistenceAdapter.kt
@@ -133,7 +135,7 @@
 4-1. 모든 전이의 `Transition` 이벤트 타입이 구체 이벤트 하나다. `applyAuthorization`은 없고, 0원 시도는 `create`와 `approveIfFree`로 지금과 같은 행(`APPROVED`, 참조 없음)과 이벤트(생성 뒤 승인)를 남긴다.
 5. 기존 테스트(이벤트 발행 순서와 내용, 발행 기록, 잠금, 동시성)가 깨지지 않는다.
 5-1. 트랜잭션 안에서 `retryAuthorization`을 불러도 바깥을 롤백하면 새 시도가 남는다(따로 커밋). `authorize`가 미확인 결말을 적용하면 `PaymentEvent.Unknown`을 발행한다. 0원 시도는 최종 상태(`APPROVED`)로 한 번만 저장된다.
-5-2. main 코드에 `requireNotNull(transactions.execute` 호출이 없다.
+5-2. main 코드는 `TransactionOperations`·`TransactionTemplate`·`PlatformTransactionManager`를 주입받지 않는다.
 6. main 코드의 클래스에 `@Transactional`이 붙으면 `TransactionDeclarationTest`가 실패한다.
 7. `authorize` 문서가 `findById`의 읽기 전용 트랜잭션에 기대는 이유를 적는다.
 
@@ -180,7 +182,6 @@
 - publisher는 이벤트 타입마다 `publish`를 따로 두고 `when`이 없다. Facade는 `transition.events.forEach(eventPublisher::publish)`로 부르고, 전이마다 `Transition`의 이벤트 타입이 하나다.
 - `applyAuthorization`을 `approve`·`decline`·`markUnknown`으로 나눴고 `PaymentManagement`가 `when (outcome)`으로 고른다. 0원 시도는 `create` 뒤 `approveIfFree`로 승인해 지금과 같은 행과 이벤트 순서를 남긴다(`PaymentManagementTest`의 0원 발행 순서 검증이 그대로 통과).
 - multi-review(Claude 84점, Codex 76점, Gemini는 CLI가 없어 미실행)를 반영했다. 두 리뷰가 모두 짚은 wiki §4.5의 옛 서술(`Transition`이 `DomainEvent`까지 넓어진다)과 승인 결과를 저장보다 먼저 발행하던 순서를 고쳤다. 그 밖에 미확인 발행·0원 단일 저장·재결제 따로 커밋 테스트, 공개 `approve`의 참조 non-null, `RedisCheckoutLock`·wiki·`current-state` 문구, sync intake 안에서 부르지 않는다는 문서를 반영했다.
-- `TransactionOperations.inTransaction` 확장을 `platform`에 두고 `requireNotNull(transactions.execute` 호출을 없앴다.
 - 확장 함수 정리: 테스트 대기 루프 9벌과 인라인 2곳을 `awaitUntil` 하나로, `JdbcTemplate` 조회를 spring-jdbc reified 확장과 `orderStatus`·`checkoutRowCount` 테스트 확장으로, checkout 헬퍼 4벌과 준비 코드를 `OrderCommandFacade.checkout` 테스트 확장과 `OrderFixtures.line`으로, `Order.restore` 사본 4곳을 `Order.restored` 테스트 확장으로, 직접 만든 `DomainException` 단언을 `assertFailsWith`로, `ApplicationEvents`·`MeterRegistry` 조회를 테스트 확장으로 바꿨다. 운영 코드는 `Money.isZero`·`isNegative` 멤버(0 비교 3곳)와 `findByIdOrNull`(2곳)이다. 검사 방식이 다른 `MeterRegistry.get` 한 곳과, checkout 요청 자체를 검증하는 주문 모듈 테스트의 인라인 호출은 그대로 뒀다.
 - 남은 리뷰 지적: 이미 승인된 0원 시도의 `approveIfFree` 거절 테스트, `RedisCheckoutLock`이 잠금을 얻으면 해제 동기화를 등록하는지 보는 단위 테스트, `authorize` 문서의 0원 전제, `Order.kt` import 순서를 반영했다.
 - `./gradlew test`: 253개 통과, 실패 0.
