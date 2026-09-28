@@ -41,16 +41,8 @@
 - 이 빈은 모듈 밖에 공개하지 않는 `internal` 패키지의 Facade 보조 빈이다. "Facade가 `@Transactional`의 소유자"라는 규칙은 "Facade와, Facade가 트랜잭션을 나눠 열려고 둔 같은 모듈의 보조 빈"으로 넓힌다.
 - 호출부의 `requireNotNull(transactions.execute { ... })`를 줄이던 확장 함수 `TransactionOperations.inTransaction`은 main에서 쓰는 곳이 없어지므로 테스트 소스로 옮긴다. 테스트는 바깥 트랜잭션을 커밋하거나 롤백하는 시나리오를 직접 만들어야 해서 `TransactionOperations`를 그대로 쓴다.
 
-**반복되는 호출을 확장 함수·멤버·공용 헬퍼로 줄인다.**
-프로젝트 전체를 훑어 두 곳 이상 반복되는 호출만 고른다. 우리 값 객체는 멤버로, 외부 라이브러리 타입은 확장 함수로, 수신 객체가 필요 없는 것은 최상위 함수로 둔다. 이미 설치된 라이브러리 확장이 있으면 그것을 쓴다.
-- 테스트 대기 루프 `awaitUntil` 9벌을 테스트 공용 최상위 함수 하나로 모은다. 발행 기록을 덧붙이던 변형은 실패 진단 인자로 흡수한다. 같은 루프를 인라인으로 쓴 곳도 옮긴다.
-- 테스트의 `JdbcTemplate` 조회를 spring-jdbc에 있는 reified 확장(`queryForObject`·`queryForList`의 타입 인자 형태)으로 바꾸고, 여러 파일에 반복되는 주문 상태·checkout 행 수 조회는 테스트 확장 함수로 둔다.
-- `OrderPersistenceAdapter`의 `findById(id).orElse(null)`을 spring-data의 `findByIdOrNull`로 바꾼다.
-- `Money`에 `isZero`·`isNegative` 멤버를 두고 0과 비교하던 도메인 코드 3곳을 바꾼다. 값 객체라 확장이 아니라 멤버다.
-- 주문 생성 뒤 checkout을 요청하는 테스트 헬퍼 4벌과 인라인 반복을 테스트 확장 함수로, `Order.restore`로 필드 하나만 바꾼 사본을 만드는 테스트 코드 4곳을 테스트 확장 함수로 모은다.
-- 직접 만든 `DomainException` 단언(`assertFailsWithDomain`, `runCatching` 뒤 `assertIs`)을 kotlin.test의 `assertFailsWith`로 바꾼다.
-- 테스트의 `ApplicationEvents` 타입별 조회와 `MeterRegistry` 발행 기록 metric 조회를 테스트 확장 함수로 둔다.
-- 제외: 도메인 `if`·`throw`를 한 줄 함수로 바꾸는 것(스타일 변경), executor 정리를 `use`로 바꾸는 것(대기 상한이 사라짐), Hibernate 문장 수 측정·커밋 뒤 발행 헬퍼(이득이 작음).
+**확장 함수·테스트 헬퍼 정리는 후속 PR로 나눈다.**
+- 반복 호출을 확장 함수·멤버·공용 헬퍼로 줄이는 정리(`Money.isZero`·`isNegative`, `findByIdOrNull`, 테스트 헬퍼)는 이 PR과 합치면 실패 한도(1400줄)를 넘으므로 후속 PR [extension-function-cleanup](2026-09-28-extension-function-cleanup.md)에서 한다. 그 PR은 이 PR 브랜치를 base로 쌓는다.
 
 **남은 리뷰 지적을 반영한다.**
 - 이미 결말이 난 시도에 `approveIfFree`를 부르면 거절하는지 테스트한다. `RedisCheckoutLock`이 잠금을 얻으면 해제 동기화를 등록하는지 단위 테스트한다.
@@ -104,9 +96,6 @@
 - src/main/kotlin/com/resilientpos/payment/internal/adapter/lock/RedisCheckoutLock.kt
 - src/main/kotlin/com/resilientpos/payment/PaymentManagement.kt
 - src/main/kotlin/com/resilientpos/payment/internal/application/PaymentAttemptTransitions.kt
-- src/main/kotlin/com/resilientpos/foundation/Money.kt
-- src/main/kotlin/com/resilientpos/order/internal/domain/OrderLine.kt
-- src/main/kotlin/com/resilientpos/order/internal/adapter/persistence/command/OrderPersistenceAdapter.kt
 - src/test/kotlin/com/resilientpos/**
 - src/main/kotlin/com/resilientpos/payment/internal/application/PaymentEventPublisher.kt
 - src/main/kotlin/com/resilientpos/order/OrderCommandFacade.kt
@@ -153,7 +142,7 @@
 - 요구사항 변화: 없다. 업무 동작과 이벤트 계약이 그대로이고, 트랜잭션 안에서 부른 승인·재결제가 거절 대신 따로 실행되는 것은 지금 호출자가 없는 경로다.
 
 ## 분할 계획
-확장 함수 정리까지 넣어 일반 48개 파일, 추가와 삭제 합계 1300줄 안팎이다. 경고선(900줄)을 넘고 실패 한도(1400줄) 안이다. 확장 함수 정리는 별도 목표라 후속 PR로 나누는 것이 기본이지만, 사용자가 이 PR에 한 번에 넣기로 결정했다. 대부분 중복을 지우는 테스트 변경이라 리뷰는 파일별로 기계적으로 볼 수 있다.
+확장 함수·테스트 헬퍼 정리를 함께 넣자 합계가 실패 한도(1400줄)를 넘어, 그 정리를 후속 PR로 나눴다. 이 PR은 경고선(900줄) 안팎이다. 후속 PR은 이 PR 브랜치를 base로 쌓고, 이 PR이 squash merge되면 main 위로 옮긴다.
 
 ## TDD 검증 기록
 업무 동작은 바뀌지 않는 리팩터링이다. 바뀌는 두 경계(트랜잭션 밖 잠금 호출, 트랜잭션 안 승인 호출)는 통합 테스트로 RED→GREEN을 본다. publisher의 타입별 분기는 기존 Facade 테스트의 발행 검증이 덮는다. 클래스 선언 규칙은 위반을 넣어 실패를 본다.
@@ -165,7 +154,6 @@
 | 결말별 전이(`approve`·`decline`·`markUnknown`)와 `approveIfFree`, 이미 결말이 난 시도에 세 전이 모두 거절 | `./gradlew compileTestKotlin`, 새 메서드가 없어 테스트 컴파일 실패 | `./gradlew test`, 도메인을 나누고 0원 persistence 테스트를 `approveIfFree`로 이은 뒤 통과 | `./gradlew test` 통과 |
 | 승인을 적용하면 저장한 뒤 승인 사실을 발행한다 | `./gradlew test --tests 'com.resilientpos.payment.PaymentManagementTest'`, 발행 시점 갱신 횟수가 0이라 실패(발행이 저장보다 먼저) | 같은 명령, `updateAndPublish`로 저장 뒤 발행해 통과 | `./gradlew test` 통과 |
 | 트랜잭션 안에서 재결제를 요청해도 바깥 트랜잭션과 따로 커밋한다 | `./gradlew test --tests 'com.resilientpos.payment.internal.application.PaymentRetryIntegrationTest'`, `retryAuthorization`을 잠시 `NEVER`로 되돌리자 `IllegalTransactionStateException`으로 실패 | 같은 명령, `NOT_SUPPORTED`로 원복해 통과 | `./gradlew test` 통과 |
-| 0인지와 음수인지를 scale과 무관하게 판정한다 | `./gradlew compileTestKotlin`, `isZero`가 없어 테스트 컴파일 실패 | `./gradlew test --tests 'com.resilientpos.foundation.MoneyTest'`, 멤버를 두고 통과 | `./gradlew test` 통과 |
 | 클래스에 트랜잭션을 선언하지 않는다 | `./gradlew test --tests 'com.resilientpos.TransactionDeclarationTest'`, `FulfillmentCommandFacade` 클래스에 `@Transactional`을 임시로 붙여 규칙 위반으로 실패 | 같은 명령, 되돌린 뒤 통과 | `./gradlew test` 통과 |
 
 ## 결과
@@ -182,8 +170,7 @@
 - publisher는 이벤트 타입마다 `publish`를 따로 두고 `when`이 없다. Facade는 `transition.events.forEach(eventPublisher::publish)`로 부르고, 전이마다 `Transition`의 이벤트 타입이 하나다.
 - `applyAuthorization`을 `approve`·`decline`·`markUnknown`으로 나눴고 `PaymentManagement`가 `when (outcome)`으로 고른다. 0원 시도는 `create` 뒤 `approveIfFree`로 승인해 지금과 같은 행과 이벤트 순서를 남긴다(`PaymentManagementTest`의 0원 발행 순서 검증이 그대로 통과).
 - multi-review(Claude 84점, Codex 76점, Gemini는 CLI가 없어 미실행)를 반영했다. 두 리뷰가 모두 짚은 wiki §4.5의 옛 서술(`Transition`이 `DomainEvent`까지 넓어진다)과 승인 결과를 저장보다 먼저 발행하던 순서를 고쳤다. 그 밖에 미확인 발행·0원 단일 저장·재결제 따로 커밋 테스트, 공개 `approve`의 참조 non-null, `RedisCheckoutLock`·wiki·`current-state` 문구, sync intake 안에서 부르지 않는다는 문서를 반영했다.
-- 확장 함수 정리: 테스트 대기 루프 9벌과 인라인 2곳을 `awaitUntil` 하나로, `JdbcTemplate` 조회를 spring-jdbc reified 확장과 `orderStatus`·`checkoutRowCount` 테스트 확장으로, checkout 헬퍼 4벌과 준비 코드를 `OrderCommandFacade.checkout` 테스트 확장과 `OrderFixtures.line`으로, `Order.restore` 사본 4곳을 `Order.restored` 테스트 확장으로, 직접 만든 `DomainException` 단언을 `assertFailsWith`로, `ApplicationEvents`·`MeterRegistry` 조회를 테스트 확장으로 바꿨다. 운영 코드는 `Money.isZero`·`isNegative` 멤버(0 비교 3곳)와 `findByIdOrNull`(2곳)이다. 검사 방식이 다른 `MeterRegistry.get` 한 곳과, checkout 요청 자체를 검증하는 주문 모듈 테스트의 인라인 호출은 그대로 뒀다.
 - 남은 리뷰 지적: 이미 승인된 0원 시도의 `approveIfFree` 거절 테스트, `RedisCheckoutLock`이 잠금을 얻으면 해제 동기화를 등록하는지 보는 단위 테스트, `authorize` 문서의 0원 전제, `Order.kt` import 순서를 반영했다.
 - `PaymentManagement`의 `TransactionOperations` 주입을 없앴다. 승인 결과 적용과 재결제 시도 생성은 `PaymentAttemptTransitions`의 `@Transactional` 메서드로 옮겼고, 두 트랜잭션 경계 테스트(트랜잭션 안의 `authorize`·`retryAuthorization`, 바깥 롤백 뒤 결과 유지)가 그대로 통과한다. main 코드에서 `TransactionOperations`·`TransactionTemplate`·`PlatformTransactionManager`를 찾으면 없다. `inTransaction` 확장은 테스트 소스로 옮겼다.
-- `./gradlew test`: 253개 통과, 실패 0.
-- `python3 scripts/check_pr.py --base 5eece85 --worktree`: PASS, 일반 48개/1300줄. 900줄 경고가 났고 실패 한도(1400줄) 안이다.
+- 확장 함수·테스트 헬퍼 정리는 되돌림 커밋으로 빼고 후속 PR에서 다시 적용한다.
+- `./gradlew test`: 250개 통과, 실패 0.
