@@ -3,6 +3,8 @@ package com.resilientpos.fulfillment.internal.application
 import com.resilientpos.foundation.UuidV7IdentifierGenerator
 import com.resilientpos.fulfillment.internal.domain.Fulfillment
 import com.resilientpos.fulfillment.internal.domain.FulfillmentRepository
+import com.resilientpos.platform.Tx
+import com.resilientpos.platform.TxRunner
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -13,6 +15,11 @@ import kotlin.test.assertEquals
  * `FulfillmentUniqueOrderIntegrationTest`가 실제 PostgreSQL로 확인한다.
  */
 class FulfillmentCommandFacadeTest {
+
+    init {
+        // 프록시가 아닌 러너라 블록을 그대로 부른다. 저장소가 가짜라 트랜잭션이 필요 없다.
+        Tx.initialize(TxRunner())
+    }
 
     private class RecordingRepository : FulfillmentRepository {
         val saved = mutableListOf<Fulfillment>()

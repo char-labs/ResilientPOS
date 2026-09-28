@@ -6,7 +6,6 @@ import com.resilientpos.foundation.DomainErrorKind
 import com.resilientpos.foundation.DomainException
 import com.resilientpos.foundation.Money
 import com.resilientpos.foundation.UuidV7IdentifierGenerator
-import com.resilientpos.payment.internal.application.PaymentAttemptTransitions
 import com.resilientpos.payment.internal.application.PaymentEventPublisher
 import com.resilientpos.payment.internal.domain.PaymentAttempt
 import com.resilientpos.payment.internal.domain.AuthorizationOutcome
@@ -14,6 +13,8 @@ import com.resilientpos.payment.internal.domain.AuthorizationRequest
 import com.resilientpos.payment.internal.domain.CheckoutLock
 import com.resilientpos.payment.internal.domain.PaymentAttemptRepository
 import com.resilientpos.payment.internal.domain.PaymentGateway
+import com.resilientpos.platform.Tx
+import com.resilientpos.platform.TxRunner
 import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.TerminalId
 import java.time.Clock
@@ -35,6 +36,11 @@ import org.springframework.context.ApplicationEventPublisher
  * 저장소는 가짜를 쓴다. DB 없이 값 비교로 끝나는 검사다.
  */
 class PaymentManagementTest {
+
+    init {
+        // 프록시가 아닌 러너라 블록을 그대로 부른다. 저장소가 가짜라 트랜잭션이 필요 없다.
+        Tx.initialize(TxRunner())
+    }
 
     private val krw: Currency = Currency.getInstance("KRW")
     private val orderId: UUID = UUID.randomUUID()
@@ -100,7 +106,6 @@ class PaymentManagementTest {
             ids,
             clock,
             events,
-            PaymentAttemptTransitions(repository, ids, clock, events),
             // 잠금은 인스턴스 사이의 동시성만 다룬다. 단위 테스트의 판단에는 끼지 않는다.
             object : CheckoutLock {
                 override fun lockUntilTransactionEnds(orderId: UUID, checkoutNo: Int) = Unit
