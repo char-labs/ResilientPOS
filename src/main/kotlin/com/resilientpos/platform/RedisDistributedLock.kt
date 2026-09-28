@@ -12,6 +12,9 @@ import org.springframework.stereotype.Component
  *
  * 토큰을 확인하는 이유: TTL이 먼저 만료되어 다른 요청이 같은 키를 얻었으면 그 잠금을 지우면 안 된다.
  * TTL은 해제가 불리지 않은 경우(프로세스가 죽음)의 상한이다. 락 블록은 외부 호출 없는 짧은 트랜잭션이다.
+ *
+ * Redis 오류로 보는 예외는 `DataAccessException`과 `IllegalStateException`(종료 중이라 닫힌 커넥션 팩토리)뿐이다.
+ * 그 밖의 예외는 프로그래밍 오류라 삼키지 않는다.
  */
 @Component
 class RedisDistributedLock(
@@ -24,8 +27,9 @@ class RedisDistributedLock(
         val acquired = try {
             acquire(key, token)
         } catch (e: DataAccessException) {
-            log.warn(e) { "잠금 없이 진행한다(Redis 오류) key=$key" }
-            return null
+            return proceedWithoutLock(key, e)
+        } catch (e: IllegalStateException) {
+            return proceedWithoutLock(key, e)
         }
         if (!acquired) {
             log.warn { "잠금 없이 진행한다(대기 ${WAIT.toMillis()}ms 초과) key=$key" }
@@ -35,12 +39,23 @@ class RedisDistributedLock(
     }
 
     override fun release(key: String, token: String) {
-        try {
+        val released = try {
             redis.execute(RELEASE, listOf(key), token)
         } catch (e: DataAccessException) {
-            log.warn(e) { "잠금을 풀지 못했다. TTL ${TTL.toSeconds()}초 뒤 사라진다 key=$key" }
+            return releaseFailed(key, e)
+        } catch (e: IllegalStateException) {
+            return releaseFailed(key, e)
         }
+        if (released == 0L) log.warn { "잠금이 풀기 전에 만료됐다(블록이 TTL ${TTL.toSeconds()}초를 넘김) key=$key" }
     }
+
+    private fun proceedWithoutLock(key: String, e: RuntimeException): String? {
+        log.warn(e) { "잠금 없이 진행한다(Redis 오류) key=$key" }
+        return null
+    }
+
+    private fun releaseFailed(key: String, e: RuntimeException) =
+        log.warn(e) { "잠금을 풀지 못했다. TTL ${TTL.toSeconds()}초 뒤 사라진다 key=$key" }
 
     private fun acquire(key: String, token: String): Boolean {
         val deadline = System.nanoTime() + WAIT.toNanos()
