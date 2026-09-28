@@ -35,6 +35,8 @@ dependencies {
     implementation("org.springframework.boot:spring-boot-starter-kafka")
     implementation("com.github.f4b6a3:uuid-creator:6.1.1")
     implementation("io.github.oshai:kotlin-logging-jvm:8.0.4")
+    implementation("com.linecorp.kotlin-jdsl:jpql-dsl:3.9.0")
+    implementation("com.linecorp.kotlin-jdsl:jpql-render:3.9.0")
     implementation("org.springframework.boot:spring-boot-flyway")
     runtimeOnly("io.micrometer:micrometer-registry-prometheus")
     runtimeOnly("org.flywaydb:flyway-database-postgresql")

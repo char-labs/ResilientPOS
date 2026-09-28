@@ -4,8 +4,6 @@ import java.util.UUID
 import org.springframework.data.jpa.repository.JpaRepository
 
 /**
- * `t_order_checkout`용 Spring Data repository. `OrderPersistenceAdapter`만 사용한다.
+ * `t_order_checkout`용 Spring Data repository. 지금 조회는 `OrderPersistenceAdapter`가 `JdslQueryExecutor`로 한다.
  */
-interface OrderCheckoutJpaRepository : JpaRepository<OrderCheckoutEntity, UUID> {
-    fun findAllByOrderIdOrderByCheckoutNo(orderId: UUID): List<OrderCheckoutEntity>
-}
+interface OrderCheckoutJpaRepository : JpaRepository<OrderCheckoutEntity, UUID>

@@ -1,8 +1,11 @@
 package com.resilientpos
 
+import com.tngtech.archunit.base.DescribedPredicate
+import com.tngtech.archunit.core.domain.JavaAnnotation
 import com.tngtech.archunit.core.importer.ClassFileImporter
 import com.tngtech.archunit.core.importer.ImportOption
 import com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses
+import com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noMethods
 import kotlin.test.Test
 
 class TransactionDeclarationTest {
@@ -24,8 +27,23 @@ class TransactionDeclarationTest {
             .check(productionClasses)
     }
 
+    /**
+     * 읽기 전용은 `@ReadOnlyTransactional`(`readOnly = true`, `SUPPORTS`) 하나로 쓴다. `@Transactional(readOnly = true)`를
+     * 직접 붙이면 전파가 `REQUIRED`라 호출자에 트랜잭션이 없을 때 새로 연다. 같은 "읽기 전용"이 두 가지 의미가 된다.
+     */
+    @Test
+    fun `메서드에 읽기 전용 트랜잭션을 직접 선언하지 않는다`() {
+        noMethods()
+            .should().beAnnotatedWith(readOnlyTransactional)
+            .check(productionClasses)
+    }
+
     companion object {
         private const val TRANSACTIONAL = "org.springframework.transaction.annotation.Transactional"
         private const val JAKARTA_TRANSACTIONAL = "jakarta.transaction.Transactional"
+
+        private val readOnlyTransactional = DescribedPredicate.describe("@Transactional(readOnly = true)") { annotation: JavaAnnotation<*> ->
+            annotation.rawType.name == TRANSACTIONAL && annotation.get("readOnly").orElse(false) == true
+        }
     }
 }
