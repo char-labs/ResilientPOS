@@ -1,10 +1,13 @@
 package com.resilientpos.payment.internal.application
 
 import com.resilientpos.PostgresIntegrationTest
+import com.resilientpos.awaitUntil
 import com.resilientpos.foundation.Money
 import com.resilientpos.order.OrderCommand
 import com.resilientpos.order.OrderCommandFacade
 import com.resilientpos.order.OrderFixtures
+import com.resilientpos.order.checkout
+import com.resilientpos.order.orderStatus
 import com.resilientpos.payment.PaymentAttemptStatus
 import com.resilientpos.payment.PaymentCommand
 import com.resilientpos.payment.PaymentId
@@ -20,7 +23,6 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.fail
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.TestConfiguration
 import org.springframework.context.annotation.Bean
@@ -59,31 +61,13 @@ class PaymentRetryIntegrationTest(
         fun declineFirstGateway() = DeclineFirstGateway()
     }
 
-    private fun checkoutOrder(unitPrice: String): UUID {
-        val created = orderFacade.create(
-            OrderFixtures.createOrderCommand(
-                lines = listOf(OrderCommand.Create.Line("SKU-1", "아메리카노", Money.of(unitPrice, OrderFixtures.krw), 1)),
-            ),
-        )
-        orderFacade.requestCheckout(OrderCommand.RequestCheckout(created.orderId))
-        return created.orderId.value
-    }
+    private fun checkoutOrder(unitPrice: String): UUID =
+        orderFacade.checkout(OrderFixtures.createOrderCommand(lines = listOf(OrderFixtures.line(unitPrice)))).value
 
     private fun attempts(orderId: UUID): List<Map<String, Any?>> = jdbcTemplate.queryForList(
         "select id, checkout_no, status from t_payment_attempt where order_id = ? order by id",
         orderId,
     )
-
-    private fun orderStatus(orderId: UUID): String =
-        jdbcTemplate.queryForObject("select status from t_order where id = ?", String::class.java, orderId)!!
-
-    private fun awaitUntil(description: String, condition: () -> Boolean) {
-        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
-        while (!condition()) {
-            if (System.nanoTime() >= deadline) fail("10초 안에 충족되지 않았다: $description")
-            Thread.sleep(20)
-        }
-    }
 
     private fun awaitDeclined(orderId: UUID): PaymentId {
         awaitUntil("첫 시도가 거절된다. 현재: ${attempts(orderId)}") {
@@ -99,7 +83,9 @@ class PaymentRetryIntegrationTest(
 
         val retried = paymentManagement.retryAuthorization(PaymentCommand.RetryAuthorization(declined))
 
-        awaitUntil("주문이 PAID가 된다. 현재: ${orderStatus(orderId)} ${attempts(orderId)}") { orderStatus(orderId) == "PAID" }
+        awaitUntil("주문이 PAID가 된다. 현재: ${jdbcTemplate.orderStatus(orderId)} ${attempts(orderId)}") {
+            jdbcTemplate.orderStatus(orderId) == "PAID"
+        }
         val rows = attempts(orderId)
         assertEquals(listOf(declined.value, retried.paymentId.value), rows.map { it["id"] })
         assertEquals(listOf(1, 1), rows.map { it["checkout_no"] })

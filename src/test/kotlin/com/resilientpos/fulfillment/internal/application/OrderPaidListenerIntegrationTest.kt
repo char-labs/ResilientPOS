@@ -1,6 +1,7 @@
 package com.resilientpos.fulfillment.internal.application
 
 import com.resilientpos.PostgresIntegrationTest
+import com.resilientpos.awaitUntil
 import com.resilientpos.contract.OrderPaid
 import com.resilientpos.foundation.Money
 import com.resilientpos.store.StoreId
@@ -8,11 +9,9 @@ import com.resilientpos.terminal.TerminalId
 import java.time.Instant
 import java.util.Currency
 import java.util.UUID
-import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
-import kotlin.test.fail
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.context.ApplicationEventPublisher
 import org.springframework.jdbc.core.JdbcTemplate
@@ -49,14 +48,6 @@ class OrderPaidListenerIntegrationTest(
         "select event_type, listener_id, serialized_event, status from event_publication where listener_id = ? and serialized_event like ?",
         LISTENER_ID, "%$orderId%",
     )
-
-    private fun awaitUntil(description: String, condition: () -> Boolean) {
-        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
-        while (!condition()) {
-            if (System.nanoTime() >= deadline) fail("10초 안에 충족되지 않았다: $description")
-            Thread.sleep(20)
-        }
-    }
 
     @Test
     fun `OrderPaid를 받으면 그 주문의 Fulfillment가 하나 생긴다`() {
