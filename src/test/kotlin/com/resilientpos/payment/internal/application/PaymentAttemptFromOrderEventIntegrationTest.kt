@@ -7,7 +7,7 @@ import com.resilientpos.order.OrderCommand
 import com.resilientpos.order.OrderCommandFacade
 import com.resilientpos.order.OrderFixtures
 import com.resilientpos.contract.PaymentAttemptKind
-import com.resilientpos.order.checkout
+import com.resilientpos.order.createAndRequestCheckout
 import com.resilientpos.payment.PaymentAttemptStatus
 import com.resilientpos.payment.PaymentCommand
 import com.resilientpos.payment.PaymentManagement
@@ -36,7 +36,7 @@ class PaymentAttemptFromOrderEventIntegrationTest(
     )
 
     private fun checkoutOrder(lines: List<OrderCommand.Create.Line>): UUID =
-        orderFacade.checkout(OrderFixtures.createOrderCommand(lines = lines)).value
+        orderFacade.createAndRequestCheckout(OrderFixtures.createOrderCommand(lines = lines)).value
 
     @Test
     fun `checkout을 요청하면 결제 시도가 하나 기록된다`() {

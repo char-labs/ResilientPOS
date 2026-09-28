@@ -7,7 +7,7 @@ import com.resilientpos.foundation.Money
 import com.resilientpos.order.OrderCommand
 import com.resilientpos.order.OrderCommandFacade
 import com.resilientpos.order.OrderFixtures
-import com.resilientpos.order.checkout
+import com.resilientpos.order.createAndRequestCheckout
 import com.resilientpos.payment.PaymentAttemptStatus
 import com.resilientpos.payment.PaymentCommand
 import com.resilientpos.payment.PaymentEvent
@@ -84,7 +84,7 @@ class PaymentAuthorizationIntegrationTest(
     }
 
     private fun checkoutOrder(unitPrice: String): UUID =
-        orderFacade.checkout(OrderFixtures.createOrderCommand(lines = listOf(OrderFixtures.line(unitPrice)))).value
+        orderFacade.createAndRequestCheckout(OrderFixtures.createOrderCommand(lines = listOf(OrderFixtures.line(unitPrice)))).value
 
     private fun attempt(orderId: UUID): Map<String, Any?>? = jdbcTemplate.queryForList(
         "select id, status, provider_reference from t_payment_attempt where order_id = ?",
@@ -94,7 +94,7 @@ class PaymentAuthorizationIntegrationTest(
     private fun paymentId(row: Map<String, Any?>) = PaymentId(row["id"] as UUID)
 
     private fun awaitStatus(orderId: UUID, expected: PaymentAttemptStatus): Map<String, Any?> {
-        awaitUntil("시도가 $expected 가 된다. 현재: ${attempt(orderId)}") { attempt(orderId)?.get("status") == expected.name }
+        awaitUntil("시도가 $expected 가 된다", { ". 현재: ${attempt(orderId)}" }) { attempt(orderId)?.get("status") == expected.name }
         return requireNotNull(attempt(orderId))
     }
 

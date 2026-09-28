@@ -11,7 +11,6 @@ import com.resilientpos.order.OrderFixtures
 import com.resilientpos.order.OrderId
 import com.resilientpos.contract.OrderPaymentRequested
 import com.resilientpos.order.OrderStatus
-import com.resilientpos.order.checkout
 import com.resilientpos.order.orderStatus
 import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.TerminalId
@@ -92,14 +91,15 @@ class OrderEventPublicationIntegrationTest(
 
     private fun received(orderId: OrderId) = listener.received.filter { it.orderId == orderId.value }
 
-    /** 리스너는 요청 스레드 밖에서 돌므로 결과가 기록될 때까지 기다린다. */
+    /** 대기가 실패할 때 메시지에 붙일 발행 기록 전체. 리스너는 요청 스레드 밖에서 돌아 결과를 기다려야 한다. */
     private val publicationDump: () -> String = {
         ". 발행 기록: " + jdbcTemplate.queryForList("select listener_id, status, completion_date from event_publication")
     }
 
     @Test
     fun `리스너가 성공하면 발행 기록이 완료로 표시된다`() {
-        val orderId = facade.checkout(OrderFixtures.createOrderCommand())
+        val orderId = facade.create(OrderFixtures.createOrderCommand()).orderId
+        facade.requestCheckout(OrderCommand.RequestCheckout(orderId))
 
         awaitUntil("발행 기록에 완료 시각이 찍힌다", publicationDump) { publications(orderId).singleOrNull()?.get("completion_date") != null }
         val publication = publications(orderId).single()
@@ -138,7 +138,8 @@ class OrderEventPublicationIntegrationTest(
         assertEquals(emptyList(), publications(orderId))
 
         // 시간에 기대지 않으려고 다른 주문의 이벤트가 끝까지 처리되는 것을 기다린다. 롤백된 이벤트가 전달됐다면 그 전에 도착했다.
-        val otherOrderId = facade.checkout(OrderFixtures.createOrderCommand())
+        val otherOrderId = facade.create(OrderFixtures.createOrderCommand()).orderId
+        facade.requestCheckout(OrderCommand.RequestCheckout(otherOrderId))
         awaitUntil("뒤에 발행한 이벤트가 완료된다", publicationDump) { publications(otherOrderId).singleOrNull()?.get("completion_date") != null }
         assertEquals(emptyList(), received(orderId))
         assertEquals("OPEN", jdbcTemplate.orderStatus(orderId.value))
@@ -146,7 +147,8 @@ class OrderEventPublicationIntegrationTest(
 
     @Test
     fun `저장된 이벤트를 복원하면 발행한 값과 같다`(events: ApplicationEvents) {
-        val orderId = facade.checkout(OrderFixtures.createOrderCommand())
+        val orderId = facade.create(OrderFixtures.createOrderCommand()).orderId
+        facade.requestCheckout(OrderCommand.RequestCheckout(orderId))
         awaitUntil("리스너가 이벤트를 받는다", publicationDump) { received(orderId).size == 1 }
         val published = received(orderId).single()
 

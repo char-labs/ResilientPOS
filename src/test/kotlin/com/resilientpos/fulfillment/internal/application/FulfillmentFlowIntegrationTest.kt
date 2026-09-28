@@ -5,7 +5,7 @@ import com.resilientpos.awaitUntil
 import com.resilientpos.order.OrderCommand
 import com.resilientpos.order.OrderCommandFacade
 import com.resilientpos.order.OrderFixtures
-import com.resilientpos.order.checkout
+import com.resilientpos.order.createAndRequestCheckout
 import java.util.UUID
 import kotlin.test.Test
 import org.springframework.beans.factory.annotation.Autowired
@@ -23,7 +23,7 @@ class FulfillmentFlowIntegrationTest(
     @Test
     fun `checkout부터 fulfillment 생성까지 한 흐름이 돈다`() {
         // 4500원은 끝자리가 0이라 FakePaymentGateway가 승인한다.
-        val orderId = orderFacade.checkout(OrderFixtures.createOrderCommand(lines = listOf(OrderFixtures.line("4500"))))
+        val orderId = orderFacade.createAndRequestCheckout(OrderFixtures.createOrderCommand(lines = listOf(OrderFixtures.line("4500"))))
 
         awaitUntil("fulfillment가 생긴다") { fulfillments(orderId.value).size == 1 }
     }

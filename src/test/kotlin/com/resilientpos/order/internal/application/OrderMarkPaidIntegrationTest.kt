@@ -10,7 +10,7 @@ import com.resilientpos.order.OrderCommand
 import com.resilientpos.order.OrderCommandFacade
 import com.resilientpos.order.OrderFixtures
 import com.resilientpos.order.OrderId
-import com.resilientpos.order.checkout
+import com.resilientpos.order.createAndRequestCheckout
 import com.resilientpos.order.orderStatus
 import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.TerminalId
@@ -58,7 +58,7 @@ class OrderMarkPaidIntegrationTest(
     @Test
     fun `결제가 승인되면 주문이 PAID가 된다`() {
         // 4500원은 끝자리가 0이라 FakePaymentGateway가 승인한다.
-        val orderId = orderFacade.checkout(
+        val orderId = orderFacade.createAndRequestCheckout(
             OrderFixtures.createOrderCommand(lines = listOf(OrderFixtures.line("4500"))),
         )
 
@@ -67,7 +67,7 @@ class OrderMarkPaidIntegrationTest(
 
     @Test
     fun `확정값과 다른 승인이면 주문은 그대로이고 승인 메시지가 DLT로 간다`() {
-        val orderId = orderFacade.checkout()
+        val orderId = orderFacade.createAndRequestCheckout()
 
         approve(orderId, PaymentAttemptKind.AUTHORIZATION, Money.of("9999", OrderFixtures.krw))
 
@@ -77,7 +77,7 @@ class OrderMarkPaidIntegrationTest(
 
     @Test
     fun `취소 승인은 확정값과 같아도 주문을 바꾸지 않는다`() {
-        val orderId = orderFacade.checkout()
+        val orderId = orderFacade.createAndRequestCheckout()
 
         approve(orderId, PaymentAttemptKind.CANCELLATION, Money.of("3502", OrderFixtures.krw))
 

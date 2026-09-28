@@ -6,7 +6,7 @@ import com.resilientpos.foundation.Money
 import com.resilientpos.order.OrderCommand
 import com.resilientpos.order.OrderCommandFacade
 import com.resilientpos.order.OrderFixtures
-import com.resilientpos.order.checkout
+import com.resilientpos.order.createAndRequestCheckout
 import com.resilientpos.order.orderStatus
 import com.resilientpos.payment.PaymentAttemptStatus
 import com.resilientpos.payment.PaymentCommand
@@ -62,7 +62,7 @@ class PaymentRetryIntegrationTest(
     }
 
     private fun checkoutOrder(unitPrice: String): UUID =
-        orderFacade.checkout(OrderFixtures.createOrderCommand(lines = listOf(OrderFixtures.line(unitPrice)))).value
+        orderFacade.createAndRequestCheckout(OrderFixtures.createOrderCommand(lines = listOf(OrderFixtures.line(unitPrice)))).value
 
     private fun attempts(orderId: UUID): List<Map<String, Any?>> = jdbcTemplate.queryForList(
         "select id, checkout_no, status from t_payment_attempt where order_id = ? order by id",

@@ -12,7 +12,6 @@ import com.resilientpos.order.OrderFixtures
 import com.resilientpos.order.OrderId
 import com.resilientpos.contract.OrderPaymentRequested
 import com.resilientpos.order.OrderStatus
-import com.resilientpos.order.checkout
 import com.resilientpos.order.checkoutRowCount
 import com.resilientpos.order.internal.domain.Order
 import com.resilientpos.order.internal.domain.OrderRepository
@@ -53,7 +52,7 @@ class OrderRequestCheckoutIntegrationTest(
     private val fixtureTotal = Money.of("3502", OrderFixtures.krw)
 
     private fun checkoutRowCount(orderId: OrderId): Long =
-        jdbcTemplate.checkoutRowCount(orderId.value) ?: 0L
+        jdbcTemplate.checkoutRowCount(orderId.value)
 
     private fun storedStatus(orderId: OrderId): String? =
         jdbcTemplate.orderStatus(orderId.value)
@@ -107,7 +106,8 @@ class OrderRequestCheckoutIntegrationTest(
 
     @Test
     fun `checkout을 요청한 주문을 다시 읽으면 checkouts가 그대로 복원된다`() {
-        val orderId = facade.checkout(OrderFixtures.createOrderCommand())
+        val orderId = facade.create(OrderFixtures.createOrderCommand()).orderId
+        facade.requestCheckout(OrderCommand.RequestCheckout(orderId))
 
         val checkout = assertNotNull(repository.findById(orderId)).checkouts.single()
 
@@ -222,7 +222,8 @@ class OrderRequestCheckoutIntegrationTest(
     @Test
     fun `checkout을 요청한 주문의 생성 재시도는 CHECKOUT_REQUESTED를 돌려준다`() {
         val createCommand = OrderFixtures.createOrderCommand()
-        val orderId = facade.checkout(createCommand)
+        val orderId = facade.create(createCommand).orderId
+        facade.requestCheckout(OrderCommand.RequestCheckout(orderId))
 
         val retried = facade.create(createCommand)
 
