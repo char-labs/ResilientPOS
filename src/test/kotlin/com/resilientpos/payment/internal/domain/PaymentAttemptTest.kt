@@ -4,8 +4,6 @@ import com.resilientpos.foundation.DomainErrorKind
 import com.resilientpos.foundation.DomainException
 import com.resilientpos.foundation.IdentifierGenerator
 import com.resilientpos.foundation.Money
-import com.resilientpos.contract.PaymentApproved
-import com.resilientpos.payment.PaymentEvent
 import com.resilientpos.contract.PaymentAttemptKind
 import com.resilientpos.payment.PaymentAttemptStatus
 import com.resilientpos.payment.PaymentCommand
@@ -48,6 +46,12 @@ class PaymentAttemptTest {
         ids: FixedIdentifierGenerator = ids(),
     ) = PaymentAttempt.create(command(amount, checkoutNo), ids, now)
 
+    /** 0원 시도를 만들고 이어서 승인한다. `createAttempt`가 두 전이를 잇는 순서와 같고 식별자 묶음도 함께 쓴다. */
+    private fun createFree(checkoutNo: Int = 1) = ids().let { ids ->
+        val created = create(amount = "0", checkoutNo = checkoutNo, ids = ids)
+        created to requireNotNull(created.aggregate.approveIfFree(ids, now)) { "0원 시도는 승인돼야 한다" }
+    }
+
     /** `seed`가 다르면 서로 다른 식별자 묶음을 준다. 같은 묶음을 두 번 쓰면 별개 시도가 같은 ID를 받는다. */
     private fun ids(seed: Int = 0) =
         FixedIdentifierGenerator(List(4) { UUID.fromString("00000000-0000-0000-0000-0000000${seed}000$it") })
@@ -60,7 +64,7 @@ class PaymentAttemptTest {
         assertEquals(Money.of("4500", krw), transition.aggregate.amount)
         assertEquals(orderId, transition.aggregate.orderId)
 
-        val created = transition.events.single() as PaymentEvent.AttemptCreated
+        val created = transition.events.single()
         assertEquals(transition.aggregate.id, created.paymentId)
         assertEquals(orderId, created.orderId)
         assertEquals(now, created.occurredAt)
@@ -70,25 +74,32 @@ class PaymentAttemptTest {
     fun `0원 시도는 provider를 부르지 않고 APPROVED이며 승인 사실까지 낸다`() {
         // order가 0원 주문도 똑같이 checkout을 확정하므로, payment가 여기서 거절하면
         // 전액 할인·프로모션 주문이 결제 단계에서 막힌다.
-        val transition = create(amount = "0", ids = ids())
+        val (created, approval) = createFree()
 
-        assertEquals(PaymentAttemptStatus.APPROVED, transition.aggregate.status)
-        assertEquals(2, transition.events.size)
-        assertTrue(transition.events[0] is PaymentEvent.AttemptCreated)
+        assertEquals(PaymentAttemptStatus.REQUESTED, created.aggregate.status)
+        assertEquals(PaymentAttemptStatus.APPROVED, approval.aggregate.status)
+        assertEquals(created.aggregate.id, approval.aggregate.id)
 
-        val approved = transition.events[1] as PaymentApproved
-        assertEquals(transition.aggregate.id.value, approved.paymentId)
+        val approved = approval.events.single()
+        assertEquals(created.aggregate.id.value, approved.paymentId)
         assertEquals(orderId, approved.orderId)
         assertEquals(Money.of("0", krw), approved.amount)
     }
 
     @Test
+    fun `양수 금액 시도는 provider 없이 승인하지 않는다`() {
+        val transition = create(ids = ids())
+
+        assertNull(transition.aggregate.approveIfFree(ids(1), now))
+    }
+
+    @Test
     fun `0원 승인에는 provider 참조가 없다`() {
         // provider를 부르지 않았으므로 참조가 있으면 그것이 거짓이다.
-        val transition = create(amount = "0", ids = ids())
+        val (_, approval) = createFree()
 
-        assertEquals(null, transition.aggregate.providerReference)
-        assertEquals(null, (transition.events[1] as PaymentApproved).providerReference)
+        assertEquals(null, approval.aggregate.providerReference)
+        assertEquals(null, approval.events.single().providerReference)
     }
 
     @Test
@@ -113,32 +124,32 @@ class PaymentAttemptTest {
     fun `이벤트마다 서로 다른 eventId를 쓴다`() {
         // eventId는 소비자 멱등성 기록 (consumer, eventId)의 키다. 두 이벤트가 같은 값을 쓰면
         // 0원 주문에서 소비자가 둘 중 하나를 중복으로 보고 버려 승인 사실이 조용히 사라진다.
-        val transition = create(amount = "0", ids = ids())
+        val (creation, approval) = createFree()
 
-        val created = transition.events[0]
-        val approved = transition.events[1]
+        val created = creation.events.single()
+        val approved = approval.events.single()
         assertNotEquals(created.eventId, approved.eventId)
-        assertNotEquals(transition.aggregate.id.value, created.eventId)
-        assertNotEquals(transition.aggregate.id.value, approved.eventId)
+        assertNotEquals(creation.aggregate.id.value, created.eventId)
+        assertNotEquals(creation.aggregate.id.value, approved.eventId)
     }
 
     @Test
     fun `checkoutNo를 aggregate와 두 이벤트에 그대로 옮긴다`() {
         // checkoutNo는 시도를 order의 checkout에 잇는 유일한 값이고 금액 대조의 근거다.
-        val transition = create(amount = "0", checkoutNo = 7, ids = ids())
+        val (created, approval) = createFree(checkoutNo = 7)
 
-        assertEquals(7, transition.aggregate.checkoutNo)
-        assertEquals(7, (transition.events[0] as PaymentEvent.AttemptCreated).checkoutNo)
-        assertEquals(7, (transition.events[1] as PaymentApproved).checkoutNo)
+        assertEquals(7, approval.aggregate.checkoutNo)
+        assertEquals(7, created.events.single().checkoutNo)
+        assertEquals(7, approval.events.single().checkoutNo)
     }
 
 
     @Test
     fun `매장과 단말을 두 이벤트에 그대로 옮긴다`() {
-        val transition = create(amount = "0", ids = ids())
+        val (creation, approval) = createFree()
 
-        val created = transition.events[0] as PaymentEvent.AttemptCreated
-        val approved = transition.events[1] as PaymentApproved
+        val created = creation.events.single()
+        val approved = approval.events.single()
         assertEquals(storeId, created.storeId)
         assertEquals(terminalId, created.terminalId)
         assertEquals(storeId, approved.storeId)
@@ -161,11 +172,11 @@ class PaymentAttemptTest {
     @Test
     fun `생성되는 시도는 승인 시도이고 그 사실이 이벤트에도 실린다`() {
         // kind가 없으면 PaymentApproved를 받는 order가 환불 승인을 결제 승인으로 읽는다.
-        val transition = create(amount = "0", ids = ids())
+        val (created, approval) = createFree()
 
-        assertEquals(PaymentAttemptKind.AUTHORIZATION, transition.aggregate.kind)
-        assertEquals(PaymentAttemptKind.AUTHORIZATION, (transition.events[0] as PaymentEvent.AttemptCreated).kind)
-        assertEquals(PaymentAttemptKind.AUTHORIZATION, (transition.events[1] as PaymentApproved).kind)
+        assertEquals(PaymentAttemptKind.AUTHORIZATION, approval.aggregate.kind)
+        assertEquals(PaymentAttemptKind.AUTHORIZATION, created.events.single().kind)
+        assertEquals(PaymentAttemptKind.AUTHORIZATION, approval.events.single().kind)
     }
 
     private fun assertFailsWithDomain(block: () -> Unit): DomainException =

@@ -158,7 +158,8 @@ class PaymentAttemptPersistenceIntegrationTest(
     fun `0원 시도도 승인 상태 그대로 저장되고 복원된다`() {
         val orderId = UUID.randomUUID()
 
-        save(authorization(orderId, amount = "0"))
+        // createAttempt와 같은 순서다. 0원 시도는 만든 뒤 provider 없이 승인한다.
+        save(requireNotNull(authorization(orderId, amount = "0").approveIfFree(ids, now)).aggregate)
 
         val restored = repository.findAllByOrderIdOrderById(orderId).single().toDomain()
         assertEquals(PaymentAttemptStatus.APPROVED, restored.status)

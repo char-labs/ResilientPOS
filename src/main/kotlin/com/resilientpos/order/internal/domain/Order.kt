@@ -9,7 +9,6 @@ import com.resilientpos.order.CheckoutId
 import com.resilientpos.order.ClientOrderId
 import com.resilientpos.order.OrderCommand
 import com.resilientpos.order.OrderEvent
-import com.resilientpos.foundation.DomainEvent
 import com.resilientpos.order.OrderId
 import com.resilientpos.order.OrderLineId
 import com.resilientpos.contract.OrderPaid
@@ -71,7 +70,7 @@ class Order private constructor(
      * 결제를 요청하는 시점의 금액을 다음 회차 checkout으로 확정한다.
      * 이미 요청된 주문이면 같은 주문과 빈 이벤트를 돌려줘서 재시도가 이벤트를 두 번 내지 않게 한다.
      */
-    fun requestCheckout(ids: IdentifierGenerator, now: Instant): Transition<Order, DomainEvent> =
+    fun requestCheckout(ids: IdentifierGenerator, now: Instant): Transition<Order, OrderPaymentRequested> =
         when (status) {
             OrderStatus.OPEN -> {
                 val checkout = Checkout(CheckoutId(ids.next()), checkouts.size + 1, total)
@@ -104,7 +103,7 @@ class Order private constructor(
      * 다르면 전이하지 않고 거절한다 — 리스너의 실패 기록이 reconciliation이 옮길 흔적이 된다.
      * 이미 `PAID`인 주문에 같은 승인이 다시 오면 아무것도 하지 않는다.
      */
-    fun markPaid(checkoutNo: Int, amount: Money, ids: IdentifierGenerator, now: Instant): Transition<Order, DomainEvent> {
+    fun markPaid(checkoutNo: Int, amount: Money, ids: IdentifierGenerator, now: Instant): Transition<Order, OrderPaid> {
         // ponytail: 같은 회차의 두 번째 승인은 payment의 partial unique가 막아 PAID 뒤의 같은 승인은 재배달뿐이다.
         // 거절 뒤 재결제도 같은 회차에 새 시도를 넣을 뿐이고 DECLINED는 다시 승인되지 않으며 UNKNOWN은 재결제를 막는다.
         // UNKNOWN 재결제를 허용하거나 결말이 난 시도를 바꾸는 경로(reconciliation)가 생기면 checkout에 승인 paymentId를 두고 대조한다.
@@ -177,7 +176,7 @@ class Order private constructor(
             checkouts: List<Checkout>,
         ): Order = Order(id, storeId, terminalId, clientOrderId, currency, status, lines, checkouts)
 
-        fun create(command: OrderCommand.Create, ids: IdentifierGenerator, now: Instant): Transition<Order, DomainEvent> {
+        fun create(command: OrderCommand.Create, ids: IdentifierGenerator, now: Instant): Transition<Order, OrderEvent.Created> {
             if (command.lines.isEmpty()) {
                 throw DomainException(EMPTY_ORDER, "주문에는 line이 1개 이상 필요합니다")
             }
