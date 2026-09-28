@@ -37,7 +37,7 @@ class OrderCommandFacade(
 
         val transition = Order.create(command, identifierGenerator, clock.instant())
         val saved = repository.save(transition.aggregate)
-        eventPublisher.publishAll(transition.events)
+        transition.events.forEach(eventPublisher::publish)
         return OrderCommand.Create.Result(saved.id, saved.status)
     }
 
@@ -52,7 +52,7 @@ class OrderCommandFacade(
 
         val transition = order.requestCheckout(identifierGenerator, clock.instant())
         val saved = repository.save(transition.aggregate)
-        eventPublisher.publishAll(transition.events)
+        transition.events.forEach(eventPublisher::publish)
         val checkout = saved.checkouts.last()
         return OrderCommand.RequestCheckout.Result(saved.id, saved.status, checkout.checkoutNo, checkout.amount)
     }
@@ -65,7 +65,7 @@ class OrderCommandFacade(
 
         val transition = order.markPaid(command.checkoutNo, command.amount, identifierGenerator, clock.instant())
         val saved = repository.save(transition.aggregate)
-        eventPublisher.publishAll(transition.events)
+        transition.events.forEach(eventPublisher::publish)
         return OrderCommand.MarkPaid.Result(saved.id, saved.status)
     }
 }

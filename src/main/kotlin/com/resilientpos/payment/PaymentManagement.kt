@@ -58,7 +58,8 @@ class PaymentManagement(
         val created = PaymentAttempt.create(command, identifierGenerator, now)
         val freeApproval = created.aggregate.approveIfFree(identifierGenerator, now)
         val saved = repository.save(freeApproval?.aggregate ?: created.aggregate)
-        eventPublisher.publishAll(created.events + freeApproval?.events.orEmpty())
+        created.events.forEach(eventPublisher::publish)
+        freeApproval?.events?.forEach(eventPublisher::publish)
         return PaymentCommand.CreateAttempt.Result(saved.id, saved.status)
     }
 
@@ -115,7 +116,7 @@ class PaymentManagement(
 
         val transition = target.retry(identifierGenerator, clock.instant())
         val saved = repository.save(transition.aggregate)
-        eventPublisher.publishAll(transition.events)
+        transition.events.forEach(eventPublisher::publish)
         return PaymentCommand.RetryAuthorization.Result(saved.id, saved.status) to true
     }
 
@@ -130,11 +131,11 @@ class PaymentManagement(
         // 발행 기록이 결과와 같은 커밋에 들어가야 하므로 이 트랜잭션 안에서 발행한다(도메인 모델 §4.3).
         val result = when (outcome) {
             is AuthorizationOutcome.Approved -> current.approve(outcome.providerReference, identifierGenerator, now)
-                .also { eventPublisher.publishAll(it.events) }
+                .also { it.events.forEach(eventPublisher::publish) }
             is AuthorizationOutcome.Declined -> current.decline(outcome.providerReference, identifierGenerator, now)
-                .also { eventPublisher.publishAll(it.events) }
+                .also { it.events.forEach(eventPublisher::publish) }
             AuthorizationOutcome.Unknown -> current.markUnknown(identifierGenerator, now)
-                .also { eventPublisher.publishAll(it.events) }
+                .also { it.events.forEach(eventPublisher::publish) }
         }
         val applied = repository.update(result.aggregate)
         return PaymentCommand.Authorize.Result(applied.id, applied.status)
