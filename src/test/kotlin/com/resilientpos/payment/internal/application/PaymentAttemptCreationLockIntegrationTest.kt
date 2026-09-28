@@ -6,6 +6,7 @@ import com.resilientpos.order.OrderFixtures
 import com.resilientpos.payment.PaymentCommand
 import com.resilientpos.payment.PaymentManagement
 import com.resilientpos.payment.internal.domain.CheckoutLock
+import com.resilientpos.platform.inTransaction
 import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.TerminalId
 import java.util.UUID
@@ -51,14 +52,12 @@ class PaymentAttemptCreationLockIntegrationTest(
         val executor = Executors.newSingleThreadExecutor()
 
         try {
-            val (first, late) = requireNotNull(
-                transactions.execute {
-                    val first = paymentManagement.createAttempt(command)
-                    val late = executor.submit<PaymentCommand.CreateAttempt.Result> { paymentManagement.createAttempt(command) }
-                    runCatching { late.get(500, TimeUnit.MILLISECONDS) }
-                    first to late
-                },
-            )
+            val (first, late) = transactions.inTransaction {
+                val first = paymentManagement.createAttempt(command)
+                val late = executor.submit<PaymentCommand.CreateAttempt.Result> { paymentManagement.createAttempt(command) }
+                runCatching { late.get(500, TimeUnit.MILLISECONDS) }
+                first to late
+            }
 
             assertEquals(first.paymentId, late.get(5, TimeUnit.SECONDS).paymentId)
             assertEquals(1, attempts(orderId).size)

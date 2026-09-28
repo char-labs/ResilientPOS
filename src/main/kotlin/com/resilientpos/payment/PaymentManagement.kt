@@ -10,6 +10,7 @@ import com.resilientpos.payment.internal.domain.CheckoutLock
 import com.resilientpos.payment.internal.domain.PaymentAttempt
 import com.resilientpos.payment.internal.domain.PaymentAttemptRepository
 import com.resilientpos.payment.internal.domain.PaymentGateway
+import com.resilientpos.platform.inTransaction
 import com.resilientpos.platform.logger
 import java.time.Clock
 import org.springframework.stereotype.Service
@@ -85,7 +86,7 @@ class PaymentManagement(
 
         val outcome = gateway.authorize(AuthorizationRequest(attempt.id, attempt.amount))
 
-        return requireNotNull(transactions.execute { applyOutcome(command.paymentId, outcome) })
+        return transactions.inTransaction { applyOutcome(command.paymentId, outcome) }
     }
 
     /**
@@ -100,7 +101,7 @@ class PaymentManagement(
      */
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
     fun retryAuthorization(command: PaymentCommand.RetryAuthorization): PaymentCommand.RetryAuthorization.Result {
-        val (result, retried) = requireNotNull(transactions.execute { retry(command.paymentId) })
+        val (result, retried) = transactions.inTransaction { retry(command.paymentId) }
         if (retried) {
             log.info { "결제를 다시 시도한다 declinedPaymentId=${command.paymentId.value} paymentId=${result.paymentId.value}" }
         }
