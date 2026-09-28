@@ -18,9 +18,6 @@ import org.springframework.stereotype.Component
  * 새 행을 `EntityManager.persist`로 넣는다. `PaymentAttemptEntity`는 할당식 `@Id`에 `@Version`이 없어서
  * Spring Data의 `save`가 새 행인지 알 수 없고 `merge`로 가 SELECT가 한 번 더 나간다.
  *
- * Spring Data repository를 두지 않는다. `JpaRepository`를 쓰면 `deleteAllInBatch` 같은 메서드가 공개 빈에 딸려 오는데,
- * `BaseEntity`의 soft delete 때문에 그 한 번이 모든 결제 시도를 조용히 조회에서 지운다. 결제 원장에서 그런 메서드가 열려 있을 이유가 없다.
- *
  * 한 주문의 시도는 여럿이다(승인 뒤 취소, 거절 뒤 재시도). `id`가 UUID v7이라 `id` 정렬이 곧 생성 순서다.
  * `deleted_at is null`은 조회마다 적지 않아도 `BaseEntity`의 `@SoftDelete`가 붙여 준다.
  */
