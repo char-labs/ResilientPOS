@@ -8,6 +8,7 @@ import com.resilientpos.order.OrderCommand
 import com.resilientpos.order.CheckoutId
 import com.resilientpos.order.ClientOrderId
 import com.resilientpos.contract.OrderPaid
+import com.resilientpos.order.OrderFixtures
 import com.resilientpos.order.OrderStatus
 import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.TerminalId
@@ -35,7 +36,7 @@ class OrderMarkPaidTest {
             TerminalId(UUID.randomUUID()),
             ClientOrderId(UUID.randomUUID()),
             krw,
-            listOf(OrderCommand.Create.Line("SKU-1", "아메리카노", Money.of("3500", krw), 1)),
+            listOf(OrderFixtures.line("3500")),
         )
         return Order.create(command, ids, now).aggregate.requestCheckout(ids, now).aggregate
     }
@@ -79,10 +80,7 @@ class OrderMarkPaidTest {
     @Test
     fun `이전 회차의 승인은 금액이 같아도 거절한다`() {
         val order = checkoutRequested()
-        val reopened = Order.restore(
-            order.id, order.storeId, order.terminalId, order.clientOrderId, order.currency, order.status, order.lines,
-            order.checkouts + Checkout(CheckoutId(UUID.randomUUID()), 2, Money.of("3500", krw)),
-        )
+        val reopened = order.restored(checkouts = order.checkouts + Checkout(CheckoutId(UUID.randomUUID()), 2, Money.of("3500", krw)))
 
         assertMismatch { reopened.markPaid(1, Money.of("3500", krw), ids, now) }
     }
@@ -92,7 +90,7 @@ class OrderMarkPaidTest {
         val open = Order.create(
             OrderCommand.Create(
                 StoreId(UUID.randomUUID()), TerminalId(UUID.randomUUID()), ClientOrderId(UUID.randomUUID()), krw,
-                listOf(OrderCommand.Create.Line("SKU-1", "아메리카노", Money.of("3500", krw), 1)),
+                listOf(OrderFixtures.line("3500")),
             ),
             ids,
             now,

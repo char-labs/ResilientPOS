@@ -13,6 +13,7 @@ import java.util.Currency
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import org.mockito.Mockito.mock
 import org.mockito.Mockito.verifyNoInteractions
 import org.springframework.context.ApplicationEventPublisher
@@ -30,16 +31,12 @@ class OrderCommandFacadeLineLimitTest {
 
     @Test
     fun `line 개수가 상한을 넘으면 저장소를 부르기 전에 거절한다`() {
-        val failure = assertFailsWithDomain { facade.create(command(Order.MAX_LINES + 1)) }
+        val failure = assertFailsWith<DomainException> { facade.create(command(Order.MAX_LINES + 1)) }
 
         assertEquals(Order.TOO_MANY_ORDER_LINES, failure.code)
         verifyNoInteractions(repository)
         verifyNoInteractions(eventPublisher)
     }
-
-    private fun assertFailsWithDomain(block: () -> Unit): DomainException =
-        runCatching(block).exceptionOrNull() as? DomainException
-            ?: error("DomainException이 나지 않았다")
 
     private fun command(lineCount: Int): OrderCommand.Create {
         val krw = Currency.getInstance("KRW")

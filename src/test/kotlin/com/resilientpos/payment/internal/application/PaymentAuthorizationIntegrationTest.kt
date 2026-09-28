@@ -2,11 +2,11 @@ package com.resilientpos.payment.internal.application
 
 import com.resilientpos.KafkaTestSupport
 import com.resilientpos.PostgresIntegrationTest
-import com.resilientpos.PostgresIntegrationTest.Companion.awaitUntil
-import com.resilientpos.foundation.Money
+import com.resilientpos.awaitUntil
 import com.resilientpos.order.OrderCommand
 import com.resilientpos.order.OrderCommandFacade
 import com.resilientpos.order.OrderFixtures
+import com.resilientpos.order.createAndRequestCheckout
 import com.resilientpos.payment.PaymentAttemptStatus
 import com.resilientpos.payment.PaymentCommand
 import com.resilientpos.payment.PaymentEvent
@@ -32,6 +32,8 @@ import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Primary
 import javax.sql.DataSource
 import org.springframework.jdbc.core.JdbcTemplate
+import org.springframework.jdbc.core.queryForList
+import org.springframework.jdbc.core.queryForObject
 import org.springframework.transaction.support.TransactionOperations
 import org.springframework.transaction.support.TransactionSynchronizationManager
 
@@ -80,15 +82,8 @@ class PaymentAuthorizationIntegrationTest(
         fun probingGateway(emf: EntityManagerFactory, dataSource: DataSource) = ProbingGateway(emf, dataSource)
     }
 
-    private fun checkoutOrder(unitPrice: String): UUID {
-        val created = orderFacade.create(
-            OrderFixtures.createOrderCommand(
-                lines = listOf(OrderCommand.Create.Line("SKU-1", "아메리카노", Money.of(unitPrice, OrderFixtures.krw), 1)),
-            ),
-        )
-        orderFacade.requestCheckout(OrderCommand.RequestCheckout(created.orderId))
-        return created.orderId.value
-    }
+    private fun checkoutOrder(unitPrice: String): UUID =
+        orderFacade.createAndRequestCheckout(OrderFixtures.createOrderCommand(lines = listOf(OrderFixtures.line(unitPrice)))).value
 
     private fun attempt(orderId: UUID): Map<String, Any?>? = jdbcTemplate.queryForList(
         "select id, status, provider_reference from t_payment_attempt where order_id = ?",
@@ -98,7 +93,7 @@ class PaymentAuthorizationIntegrationTest(
     private fun paymentId(row: Map<String, Any?>) = PaymentId(row["id"] as UUID)
 
     private fun awaitStatus(orderId: UUID, expected: PaymentAttemptStatus): Map<String, Any?> {
-        awaitUntil("시도가 $expected 가 된다. 현재: ${attempt(orderId)}") { attempt(orderId)?.get("status") == expected.name }
+        awaitUntil("시도가 $expected 가 된다", { ". 현재: ${attempt(orderId)}" }) { attempt(orderId)?.get("status") == expected.name }
         return requireNotNull(attempt(orderId))
     }
 
@@ -187,7 +182,7 @@ class PaymentAuthorizationIntegrationTest(
         assertEquals(false, gateway.resourceBoundDuringCall(paymentId))
         assertEquals(
             PaymentAttemptStatus.APPROVED.name,
-            jdbcTemplate.queryForObject("select status from t_payment_attempt where id = ?", String::class.java, paymentId.value),
+            jdbcTemplate.queryForObject<String>("select status from t_payment_attempt where id = ?", paymentId.value),
         )
     }
 

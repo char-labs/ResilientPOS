@@ -1,6 +1,7 @@
 package com.resilientpos.payment.internal.application
 
 import com.resilientpos.PostgresIntegrationTest
+import com.resilientpos.awaitUntil
 import com.resilientpos.foundation.Money
 import com.resilientpos.order.OrderFixtures
 import com.resilientpos.payment.PaymentCommand
@@ -15,7 +16,6 @@ import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
-import kotlin.test.fail
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.TestConfiguration
 import org.springframework.context.annotation.Bean
@@ -55,14 +55,6 @@ class PaymentAttemptCreationConcurrencyIntegrationTest(
         "select id, status from t_payment_attempt where order_id = ? and kind = 'AUTHORIZATION' order by id",
         orderId,
     )
-
-    private fun awaitUntil(description: String, condition: () -> Boolean) {
-        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
-        while (!condition()) {
-            if (System.nanoTime() >= deadline) fail("10초 안에 충족되지 않았다: $description")
-            Thread.sleep(20)
-        }
-    }
 
     @Test
     fun `같은 checkout의 생성이 겹쳐 앞 시도가 거절되어도 시도는 하나다`() {

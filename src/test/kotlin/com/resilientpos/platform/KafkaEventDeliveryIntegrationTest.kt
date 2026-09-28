@@ -1,13 +1,14 @@
 package com.resilientpos.platform
 
 import com.resilientpos.KafkaTestSupport
-import com.resilientpos.PostgresIntegrationTest.Companion.awaitUntil
+import com.resilientpos.awaitUntil
 import com.resilientpos.PostgresIntegrationTest
 import com.resilientpos.contract.OrderPaid
 import com.resilientpos.foundation.Money
 import com.resilientpos.order.OrderCommand
 import com.resilientpos.order.OrderCommandFacade
 import com.resilientpos.order.OrderFixtures
+import com.resilientpos.order.orderStatus
 import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.TerminalId
 import java.time.Instant
@@ -19,6 +20,7 @@ import org.springframework.beans.factory.annotation.Autowired
 import org.apache.kafka.clients.producer.ProducerRecord
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.beans.factory.annotation.Value
+import org.springframework.jdbc.core.queryForObject
 import org.springframework.kafka.config.KafkaListenerEndpointRegistry
 import org.springframework.kafka.core.KafkaTemplate
 import tools.jackson.databind.json.JsonMapper
@@ -44,7 +46,7 @@ class KafkaEventDeliveryIntegrationTest(
     )
     private val topics = groups.keys
 
-    private fun count(sql: String, orderId: UUID) = jdbcTemplate.queryForObject(sql, Long::class.java, orderId)
+    private fun count(sql: String, orderId: UUID) = jdbcTemplate.queryForObject<Long>(sql, orderId)
 
     /** 4500원은 끝자리가 0이라 FakePaymentGateway가 승인한다. */
     private fun checkoutApproved(): UUID {
@@ -68,9 +70,9 @@ class KafkaEventDeliveryIntegrationTest(
         val orderId = checkoutApproved()
 
         awaitUntil("fulfillment가 생긴다") {
-            jdbcTemplate.queryForObject("select count(*) from t_fulfillment where order_id = ?", Long::class.java, orderId) == 1L
+            jdbcTemplate.queryForObject<Long>("select count(*) from t_fulfillment where order_id = ?", orderId) == 1L
         }
-        assertEquals("PAID", jdbcTemplate.queryForObject("select status from t_order where id = ?", String::class.java, orderId))
+        assertEquals("PAID", jdbcTemplate.orderStatus(orderId))
         topics.forEach { topic -> assertEquals(1, KafkaTestSupport.records(topic, orderId).size, "$topic 에 key가 orderId인 메시지 하나") }
     }
 
@@ -120,7 +122,7 @@ class KafkaEventDeliveryIntegrationTest(
 
         assertEquals(1L, count("select count(*) from t_payment_attempt where order_id = ?", orderId))
         assertEquals(1L, count("select count(*) from t_fulfillment where order_id = ?", orderId))
-        assertEquals("PAID", jdbcTemplate.queryForObject("select status from t_order where id = ?", String::class.java, orderId))
+        assertEquals("PAID", jdbcTemplate.orderStatus(orderId))
     }
 
     @Test

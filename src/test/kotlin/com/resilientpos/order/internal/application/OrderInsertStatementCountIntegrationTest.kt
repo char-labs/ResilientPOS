@@ -9,6 +9,7 @@ import com.resilientpos.order.OrderLineId
 import com.resilientpos.order.internal.domain.Order
 import com.resilientpos.order.internal.domain.OrderLine
 import com.resilientpos.order.internal.domain.OrderRepository
+import com.resilientpos.order.internal.domain.restored
 import jakarta.persistence.EntityManagerFactory
 import java.time.Clock
 import java.util.UUID
@@ -87,9 +88,7 @@ class OrderInsertStatementCountIntegrationTest(
         val statements = statementsOfSave {
             val stored = assertNotNull(repository.findById(orderId))
             val lines = listOf(stored.lines[0].copy(quantity = 5), stored.lines[1], added)
-            Order.restore(
-                stored.id, stored.storeId, stored.terminalId, stored.clientOrderId, stored.currency, stored.status, lines, stored.checkouts,
-            )
+            stored.restored(lines = lines)
         }
 
         // 주문은 같은 트랜잭션에서 이미 읽은 관리 엔티티라 다시 조회하지 않고, 값이 같아서 UPDATE도 없다.

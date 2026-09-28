@@ -2,6 +2,7 @@ package com.resilientpos.order.internal.domain
 
 import com.resilientpos.foundation.DomainException
 import com.resilientpos.foundation.Money
+import com.resilientpos.foundation.isNegative
 import com.resilientpos.order.OrderLineId
 
 /**
@@ -24,7 +25,7 @@ data class OrderLine(
         if (quantity < 1) {
             throw DomainException(INVALID_QUANTITY, "수량은 1 이상이어야 합니다")
         }
-        if (unitPrice < Money.zero(unitPrice.currency)) {
+        if (unitPrice.isNegative) {
             throw DomainException(NEGATIVE_UNIT_PRICE, "단가는 음수일 수 없습니다")
         }
     }

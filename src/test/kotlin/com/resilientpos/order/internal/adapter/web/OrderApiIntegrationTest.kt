@@ -1,7 +1,9 @@
 package com.resilientpos.order.internal.adapter.web
 
+import com.resilientpos.order.checkoutRowCount
 import com.resilientpos.order.internal.domain.Order
 import com.resilientpos.PostgresIntegrationTest
+import com.resilientpos.order.orderStatus
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -9,6 +11,7 @@ import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc
 import org.springframework.http.MediaType
 import org.springframework.jdbc.core.JdbcTemplate
+import org.springframework.jdbc.core.queryForObject
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.post
 import tools.jackson.databind.ObjectMapper
@@ -24,9 +27,8 @@ class OrderApiIntegrationTest(
 ) : PostgresIntegrationTest() {
 
     private fun orderRowCount(clientOrderId: UUID): Long =
-        jdbcTemplate.queryForObject(
+        jdbcTemplate.queryForObject<Long>(
             "select count(*) from t_order where client_order_id = ?",
-            Long::class.java,
             clientOrderId,
         ) ?: 0L
 
@@ -79,9 +81,8 @@ class OrderApiIntegrationTest(
         assertEquals(1L, orderRowCount(clientOrderId))
         assertEquals(
             Order.MAX_LINES.toLong(),
-            jdbcTemplate.queryForObject(
+            jdbcTemplate.queryForObject<Long>(
                 "select count(*) from t_order_line l join t_order o on o.id = l.order_id where o.client_order_id = ?",
-                Long::class.java,
                 clientOrderId,
             ),
         )
@@ -181,11 +182,11 @@ class OrderApiIntegrationTest(
         assertEquals(objectMapper.readTree(first), objectMapper.readTree(second))
         assertEquals(
             "CHECKOUT_REQUESTED",
-            jdbcTemplate.queryForObject("select status from t_order where id = ?", String::class.java, UUID.fromString(orderId)),
+            jdbcTemplate.orderStatus(UUID.fromString(orderId)),
         )
         assertEquals(
             1L,
-            jdbcTemplate.queryForObject("select count(*) from t_order_checkout where order_id = ?", Long::class.java, UUID.fromString(orderId)),
+            jdbcTemplate.checkoutRowCount(UUID.fromString(orderId)),
         )
     }
 

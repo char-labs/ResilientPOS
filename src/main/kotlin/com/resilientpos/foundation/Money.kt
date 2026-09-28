@@ -127,3 +127,11 @@ data class Money(val amount: BigDecimal, val currency: Currency) {
         }
     }
 }
+
+/**
+ * 금액이 0인지, 음수인지. 멤버로 두면 `isZero()` getter가 생겨 Jackson이 금액 JSON에 필드를 더한다.
+ * 이벤트 `serialized_event`와 API 응답의 모양이 바뀌므로 확장 프로퍼티로 둔다.
+ */
+val Money.isZero: Boolean get() = amount.signum() == 0
+
+val Money.isNegative: Boolean get() = amount.signum() < 0

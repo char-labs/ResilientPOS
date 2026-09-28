@@ -1,7 +1,5 @@
 package com.resilientpos
 
-import java.util.concurrent.TimeUnit
-import kotlin.test.fail
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection
 import org.testcontainers.containers.GenericContainer
@@ -42,14 +40,5 @@ abstract class PostgresIntegrationTest {
         val kafka: KafkaContainer = KafkaContainer(KAFKA_IMAGE)
             .withEnv("KAFKA_AUTO_CREATE_TOPICS_ENABLE", "false")
             .apply { start() }
-
-        /** 커밋 뒤 이벤트는 Kafka를 거쳐 다른 스레드에서 처리되므로 결과가 보일 때까지 기다린다. */
-        fun awaitUntil(description: String, condition: () -> Boolean) {
-            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(20)
-            while (!condition()) {
-                if (System.nanoTime() >= deadline) fail("20초 안에 충족되지 않았다: $description")
-                Thread.sleep(20)
-            }
-        }
     }
 }

@@ -14,7 +14,7 @@ import java.util.Currency
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertIs
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -109,9 +109,7 @@ class PaymentAttemptAuthorizationTest {
         )
 
         for ((name, apply) in applications) {
-            val thrown = kotlin.runCatching { apply(approved) }.exceptionOrNull()
-
-            val domain = assertIs<DomainException>(thrown, name)
+            val domain = assertFailsWith<DomainException>(name) { apply(approved) }
             assertEquals(PaymentAttempt.PAYMENT_RESULT_ALREADY_APPLIED, domain.code, name)
             assertEquals(DomainErrorKind.CONFLICT, domain.kind, name)
         }

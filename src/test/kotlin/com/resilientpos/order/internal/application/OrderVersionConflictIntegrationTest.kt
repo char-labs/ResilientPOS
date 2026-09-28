@@ -5,8 +5,9 @@ import com.resilientpos.order.OrderCommand
 import com.resilientpos.order.OrderCommandFacade
 import com.resilientpos.order.OrderFixtures
 import com.resilientpos.order.OrderStatus
-import com.resilientpos.order.internal.domain.Order
+import com.resilientpos.order.checkoutRowCount
 import com.resilientpos.order.internal.domain.OrderRepository
+import com.resilientpos.order.internal.domain.restored
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import kotlin.test.Test
@@ -44,16 +45,7 @@ class OrderVersionConflictIntegrationTest(
 
                     // checkout 행 없이 루트 status만 바꾼다. INSERT가 있으면 Hibernate가 INSERT를 먼저 flush해서 unique 위반이 먼저 걸린다.
                     repository.save(
-                        Order.restore(
-                            id = stale.id,
-                            storeId = stale.storeId,
-                            terminalId = stale.terminalId,
-                            clientOrderId = stale.clientOrderId,
-                            currency = stale.currency,
-                            status = OrderStatus.CHECKOUT_REQUESTED,
-                            lines = stale.lines,
-                            checkouts = emptyList(),
-                        ),
+                        stale.restored(status = OrderStatus.CHECKOUT_REQUESTED, checkouts = emptyList()),
                     )
                     savedBeforeCommit = true
                 }
@@ -69,7 +61,7 @@ class OrderVersionConflictIntegrationTest(
         assertEquals("CHECKOUT_REQUESTED", row["status"])
         assertEquals(
             1L,
-            jdbcTemplate.queryForObject("select count(*) from t_order_checkout where order_id = ?", Long::class.java, orderId.value),
+            jdbcTemplate.checkoutRowCount(orderId.value),
         )
     }
 }
