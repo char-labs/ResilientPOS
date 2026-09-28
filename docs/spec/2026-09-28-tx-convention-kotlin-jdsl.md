@@ -1,0 +1,104 @@
+# PR spec: 트랜잭션 선언을 Tx로 모으고 조회를 Kotlin JDSL로 옮긴다
+
+## 목적
+조회 API와 정적 페이지를 만들기 전에 읽기 트랜잭션 규칙과 조회 구현 방식을 정해 둔다. 지금은 쓰기 경계가 메서드 `@Transactional`로만 선언되고, 한 메서드 안에서 트랜잭션을 나누려면 보조 빈(`PaymentAttemptTransitions`)을 따로 둬야 한다. 읽기 전용 트랜잭션 규칙은 없고, 조회는 Spring Data 파생 쿼리와 기본 `findById`가 숨은 읽기 전용 트랜잭션을 여는 동작에 기대고 있다.
+
+기대 결과
+- 쓰기 경계는 `Tx.masterTx { }`, 읽기 전용은 `Tx.readOnlyTx { }` 또는 `@ReadOnlyTransactional`(`readOnly = true`, `SUPPORTS`)로 선언한다. 비즈니스 코드는 `@Transactional(readOnly = true)`를 직접 쓰지 않는다.
+- 모든 조회가 Kotlin JDSL로 만든 JPQL이다. 비관적 잠금 조회의 의미(`PESSIMISTIC_WRITE`, 대기 3초)는 그대로다.
+- 업무 동작, 이벤트, 오류 code, 스키마는 바뀌지 않는다.
+
+## 범위
+소유 모듈은 `platform`(트랜잭션·조회 도구), `order`·`payment`·`fulfillment`(Facade와 persistence adapter)다.
+
+사용자 결정
+1. 읽기 전용 트랜잭션은 `@Transactional(readOnly = true, propagation = Propagation.SUPPORTS)`로 통일하고 메타 애너테이션 `@ReadOnlyTransactional`로 제공한다.
+2. `Tx` 전역 object를 둔다. `Tx.masterTx { }`·`Tx.readOnlyTx { }`는 `private lateinit var` 러너에 위임한다. 러너는 `@Component class TxRunner`의 `@Transactional fun runTx`와 `@ReadOnlyTransactional fun runReadOnly`다. `@Configuration`의 `InitializingBean` 빈이 `Tx.initialize(txRunner)`를 부른다. 한 JVM에 ApplicationContext가 여럿 뜨면 마지막으로 초기화된 컨텍스트의 러너가 전역을 덮는다는 위험을 알고 받아들인다. 선제 방어는 넣지 않고 전체 테스트 결과를 보고 판단한다.
+3. 자주 읽는 aggregate의 `findById`는 `@ReadOnlyTransactional`로 선언한다(`Order`, `PaymentAttempt`). 조회는 QueryDSL이 아니라 Kotlin JDSL이다. 기존 파생 쿼리와 `findById`·`findByIdOrNull`도 옮긴다.
+4. `NOT_SUPPORTED`는 "외부 호출을 트랜잭션 밖에서 하고 결과는 따로 커밋한다"는 목적일 때만 쓴다. `authorize`·`retryAuthorization`은 그대로다. 읽기 전용 목적이면 `SUPPORTS`다.
+5. 쓰기 경로의 트랜잭션은 빼지 않는다. Modulith 발행(트랜잭션이 없으면 `@TransactionalEventListener`가 건너뛴다), checkout 잠금의 `registerSynchronization`, 여러 문장 저장이 트랜잭션을 필요로 한다. "단건 수정은 트랜잭션 없이" 규칙은 두지 않는다.
+
+트랜잭션 컨벤션
+- `platform`에 `ReadOnlyTransactional`, `Tx`, `TxRunner`를 두고 `PlatformConfiguration`에 `Tx.initialize`를 부르는 `InitializingBean` 빈을 둔다.
+- `OrderCommandFacade`(3곳), `PaymentManagement.createAttempt`, `FulfillmentCommandFacade.createFulfillment`의 `@Transactional` 본문을 `Tx.masterTx { }`로 옮긴다. `create`의 line 개수 검사는 트랜잭션을 열기 전에 둔다.
+- `PaymentAttemptTransitions`를 지우고 두 메서드를 `PaymentManagement` 안의 `Tx.masterTx` 블록으로 흡수한다. `Tx`는 프록시를 거친 `TxRunner`를 부르므로 같은 클래스 안이어도 트랜잭션이 열린다. `authorize`·`retryAuthorization`은 `NOT_SUPPORTED`를 유지한다.
+- `OrderPersistenceAdapter.save`의 안전망 `@Transactional`은 어댑터라 그대로 둔다.
+- 모듈 publisher의 타입별 `publish`를 메서드 참조로 부르는 형태(`transition.events.forEach(eventPublisher::publish)`)는 그대로 둔다. IntelliJ가 발행 지점을 잇는 근거다.
+- `TransactionDeclarationTest`에 규칙을 더한다. 메서드에 `@Transactional(readOnly = true)`를 직접 붙이지 않는다. 읽기 전용은 `@ReadOnlyTransactional`만 쓴다.
+
+Kotlin JDSL
+- `com.linecorp.kotlin-jdsl`의 `jpql-dsl`·`jpql-render` 3.9.0을 더한다(maven-metadata의 release가 3.9.0).
+- `platform`에 `JdslQueryExecutor`를 둔다. JDSL로 만든 JPQL을 `JpqlRenderer`로 렌더링해 `EntityManager.createQuery`에 올리고 `findAll`·`findFirst`·`findFirstForUpdate`를 준다. `findFirstForUpdate`는 `LockModeType.PESSIMISTIC_WRITE`와 힌트 `jakarta.persistence.lock.timeout = 3000`을 건다. 실행기는 트랜잭션을 선언하지 않고 호출자의 것을 따른다.
+- 옮길 조회: `OrderJpaRepository.findByTerminalIdAndClientOrderId`·`findWithLockById`, `OrderLineJpaRepository.findAllByOrderIdOrderByLineNo`, `OrderCheckoutJpaRepository.findAllByOrderIdOrderByCheckoutNo`, `PaymentAttemptJpaRepository`의 `findById`·`findAllByOrderIdOrderById`·`findFirstByOrderIdAndCheckoutNoAndKindOrderById`·`findFirstByOrderIdAndCheckoutNoAndKindOrderByIdDesc`·`findWithLockById`, `FulfillmentJpaRepository.findByOrderId`, `OrderPersistenceAdapter.findById`의 `findByIdOrNull`.
+- 쓰기 메서드 안에서 관리 엔티티를 찾는 PK 조회(`OrderPersistenceAdapter.save`의 `findByIdOrNull`, `PaymentAttemptPersistenceAdapter.update`의 `findById`)는 `EntityManager.find`로 바꾼다. 둘 다 Spring Data 내부에서 이미 `EntityManager.find`였다. JPQL로 바꾸면 같은 트랜잭션에서 잠금 조회로 읽은 엔티티도 SELECT를 다시 보내므로 영속성 컨텍스트를 먼저 보는 `find`를 유지한다.
+- 조회 메서드가 사라져 쓰임이 없어지는 `OrderCheckoutJpaRepository`·`PaymentAttemptJpaRepository`·`FulfillmentJpaRepository`는 지운다. 대량 삭제 메서드가 공개 빈에 딸려 오지 않게 하려던 이유는 repository 자체가 없어져 그대로 지켜진다. 쓰기에 쓰는 `OrderJpaRepository`(`save`)와 `OrderLineJpaRepository`(`deleteAll`)는 남긴다.
+- 호환 근거(2026-09-28 확인)
+  - [GitHub README](https://github.com/line/kotlin-jdsl#requirements): 사용자 요구 사항은 Java 8 이상, Kotlin 1.7 이상이다. 이 저장소는 Java 25, Kotlin 2.4.10이다. `jpql-render` 3.9.0 pom은 Kotlin stdlib 1.9.22를 runtime으로 선언한다. Kotlin은 이전 버전으로 컴파일된 라이브러리를 읽으므로 2.4.10에서 쓸 수 있다.
+  - [Spring supports 문서](https://kotlin-jdsl.gitbook.io/docs/jpql-with-kotlin-jdsl/spring-supports): Spring Boot 4용 모듈은 `spring-data-jpa-boot4-support`이고(pom이 `spring-boot-dependencies` 4.0.0을 import한다), Spring Data JPA 4에서 `EntityManager` 빈이 자동 등록되지 않으니 `SharedEntityManagerCreator`로 직접 등록하라고 안내한다. 이 PR은 지원 모듈을 쓰지 않는다(검토한 대안). 실행기는 이미 adapter들이 주입받아 쓰는 `EntityManager` 빈을 그대로 받는다.
+  - DSL·렌더러는 JPA 구현에 묶이지 않고 JPQL 문자열과 파라미터를 만든다. 실행은 Hibernate 7(Boot 4.1.1 관리)의 `EntityManager.createQuery`다. 렌더링한 파라미터 중 쿼리에 없는 이름은 건너뛴다. 지원 모듈의 `JpqlEntityManagerUtils.setParams`와 같은 처리다.
+- `PaymentAttempt.findById`를 `@ReadOnlyTransactional`로 옮긴 뒤 `ProbingGateway`의 자원 미결속 검사가 빨강이 되면 `authorize`의 첫 조회를 짧은 트랜잭션(`Tx.masterTx`)으로 감싼다. 검사는 약하게 바꾸지 않는다.
+
+문서
+- `docs/wiki/domain-model.md` §4.3의 트랜잭션 규칙 문단을 최종 규칙으로 고치고, §4.2의 Spring Data repository 서술을 조회 방식에 맞춘다.
+- `docs/wiki/current-state.md`에 Kotlin JDSL 의존성과 바뀐 `authorize` 트랜잭션 서술을 반영한다.
+- 볼트 rules `domain-modeling-kotlin.md`의 트랜잭션 절을 같은 규칙으로 고치고 `make bootstrap`을 다시 돌린다(저장소 커밋 대상 아님).
+
+## 제외
+- 조회 API·정적 페이지 자체. 이 PR은 규칙과 도구만 둔다.
+- 다중 컨텍스트 덮어쓰기의 선제 방어(테스트 실행 리스너로 컨텍스트마다 다시 묶기 등). 테스트 결과를 본 뒤 필요하면 사용자와 정한다.
+- 조회 결과를 DTO로 바로 받는 projection, 페이지네이션. 쓰는 조회가 생길 때 더한다.
+- `OrderJpaRepository`·`OrderLineJpaRepository`의 쓰기(`save`, `deleteAll`)를 `EntityManager`로 옮기는 것. 조회가 아니다.
+
+## 검토한 대안
+- **Spring Data 지원 모듈 `spring-data-jpa-boot4-support`의 `KotlinJdslJpqlExecutor`를 repository에 붙이기**: 소스(3.9.0)를 보면 구현 `KotlinJdslJpqlExecutorImpl`이 클래스 레벨 `@Transactional(readOnly = true)`(전파 `REQUIRED`)라 읽기 전용은 `SUPPORTS`라는 결정과 어긋난다. 인터페이스가 `update`·`delete` 대량 변경 메서드를 함께 열어 결제 원장·fulfillment repository가 `JpaRepository`를 상속하지 않던 이유를 되돌린다. 잠금은 호출된 repository 메서드의 `CrudMethodMetadata`로만 걸리는데 `findAll`을 부르면 그 메서드에는 `@Lock`이 없다. 그래서 DSL과 렌더러만 쓰고 실행은 `EntityManager`에 직접 올린다.
+- **잠금 조회만 `EntityManager`, 나머지는 executor**: 조회 경로가 둘이 되고 위의 트랜잭션·대량 변경 문제가 그대로 남는다.
+- **`Tx`에 진짜 읽기 전용 트랜잭션(`REQUIRED`, `readOnly = true`)을 하나 더 두기**: 쓰는 곳이 `authorize`의 첫 조회 하나라 `masterTx`로 충분하다. 더 필요해지면 그때 더한다.
+
+## 관련 문서
+없음
+
+## 변경 경로
+- build.gradle.kts
+- src/main/kotlin/com/resilientpos/platform/**
+- src/main/kotlin/com/resilientpos/order/**
+- src/main/kotlin/com/resilientpos/payment/**
+- src/main/kotlin/com/resilientpos/fulfillment/**
+- src/test/kotlin/com/resilientpos/**
+- docs/spec/2026-09-28-tx-convention-kotlin-jdsl.md
+- docs/wiki/domain-model.md
+- docs/wiki/current-state.md
+
+## 인수 조건
+1. main 코드에 `@Transactional(readOnly = true)`를 직접 붙인 메서드가 없고 `TransactionDeclarationTest`가 이를 막는다. 위반을 넣으면 실패한다.
+2. main 코드의 `@Transactional`은 `TxRunner.runTx`, `OrderPersistenceAdapter.save`, `authorize`·`retryAuthorization`의 `NOT_SUPPORTED`, `@ReadOnlyTransactional` 정의뿐이다.
+3. `PaymentAttemptTransitions`가 없고, 기존 통합 테스트가 그대로 초록이다: 바깥 트랜잭션을 롤백해도 적용이 커밋됨, 갱신 뒤 발행 순서, 잠금 재조회, provider 호출 중 DB 자원 미결속.
+4. main 코드에 Spring Data 파생 조회 메서드와 `findByIdOrNull`이 없다. 조회는 `JdslQueryExecutor`를 거친다.
+5. 잠금 조회는 PostgreSQL에서 `for no key update`이고 대기 3초 초과 시 `PessimisticLockingFailureException` 계열로 실패한다. 기존 잠금 테스트가 통과한다.
+6. 컨텍스트 없이 `Tx`를 부르면 어떻게 실패하는지 확인해 결과 절에 적는다.
+
+## 검증
+- `./gradlew test` 전체. Docker(OrbStack)가 필요하다.
+- 인수 조건 2·4는 `grep`으로 확인한다.
+- `python3 scripts/check_pr.py --base origin/main --worktree`, 제출 전 `--worktree` 없이 한 번 더.
+- 실패 시나리오: 다중 컨텍스트에서 `Tx`가 다른 컨텍스트의 러너를 가리키면 `EntityManager.persist`가 트랜잭션 없음으로 실패하거나 발행이 건너뛰어진다. 전체 테스트에서 나타나면 원인과 증상을 결과 절에 적고 사용자에게 보고한다.
+
+## Wiki 영향
+- [도메인 모델](../wiki/domain-model.md) §4.3 트랜잭션 규칙: `Tx.masterTx`·`readOnlyTx`와 `@ReadOnlyTransactional`, `SUPPORTS`의 한계(단독 호출이면 트랜잭션이 없어 여러 쿼리가 서로 다른 시점을 보고 readOnly 힌트가 적용되지 않는다), `NOT_SUPPORTED` 허용 조건, 쓰기 경로에 트랜잭션이 필요한 이유, `findById` 선언 기준, 조회는 Kotlin JDSL. §4.2는 자식 엔티티의 조회를 adapter가 JDSL로 한다는 것으로 고친다.
+- [현재 상태](../wiki/current-state.md): 의존성 표에 Kotlin JDSL, "현재 빌드 의존성에는 없다" 문장, `authorize` 트랜잭션 서술.
+- 요구사항 변화는 없다. 업무 동작이 같다.
+
+## 분할 계획
+한 개발 컨텍스트(트랜잭션 선언과 조회 구현 규칙)라 나누지 않는다. 작업 시작 시점(origin/main 424caff)에 열린 PR은 없어 변경 경로 겹침이 없다.
+
+## TDD 검증 기록
+동작은 바뀌지 않는 리팩터링이다. 새 규칙(ArchUnit)과 자원 미결속 검사처럼 깨질 수 있는 지점만 RED를 먼저 본다.
+
+| 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
+|---|---|---|---|
+| 메서드에 읽기 전용 트랜잭션을 직접 선언하지 않는다 | 미실행 | 미실행 | 미실행 |
+| 컨텍스트 없이 Facade를 부르면 Tx 미초기화로 실패한다(단위 테스트) | 미실행 | 미실행 | 미실행 |
+| provider를 부르는 동안 DB 자원을 쥐지 않는다(findById를 SUPPORTS로 옮긴 뒤) | 미실행 | 미실행 | 미실행 |
+| 잠금 조회·버전 충돌·발행 순서 기존 통합 테스트 | 해당 없음(기존 테스트) | 미실행 | 미실행 |
+
+## 결과
+개발 전 작성. 개발 후 실행 결과와 변경 이유를 추가한다.
