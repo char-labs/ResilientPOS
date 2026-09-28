@@ -26,10 +26,14 @@
 
 **이벤트 발행을 모듈별 publisher로 옮긴다.**
 - `order.internal.application.OrderEventPublisher`와 `payment.internal.application.PaymentEventPublisher`를 둔다. 둘 다 `ApplicationEventPublisher`를 생성자로 주입받는다.
-- 이벤트 타입마다 구체 타입 파라미터를 받아 `publishEvent`에 넘기는 private 메서드를 둔다. IDE가 이 호출의 인자를 구체 타입으로 읽는다(`OrderPaidListenerIntegrationTest`의 같은 형태로 확인).
-- 공개 메서드 `publishAll`은 `Transition`의 이벤트 목록을 받아 타입별로 그 메서드에 나눠 준다. 모듈이 내지 않는 타입이 오면 `IllegalArgumentException`으로 거절한다. 조용히 버리면 발행 기록 없이 사실이 사라진다.
+- 이벤트 타입마다 구체 타입 파라미터를 받아 `publishEvent`에 넘기는 `publish` 메서드를 따로 둔다. 타입별 분기(`when`)는 두지 않는다. IDE가 이 호출의 인자를 구체 타입으로 읽는다(`OrderPaidListenerIntegrationTest`의 같은 형태로 확인).
 - `order`: `OrderEvent.Created`, `OrderPaymentRequested`, `OrderPaid`. `payment`: `PaymentEvent.AttemptCreated`, `PaymentEvent.Declined`, `PaymentEvent.Unknown`, `PaymentApproved`.
-- `OrderCommandFacade`와 `PaymentManagement`는 `ApplicationEventPublisher` 대신 자기 모듈 publisher를 주입받아 `publishAll(transition.events)`를 부른다. 발행은 지금처럼 Facade 트랜잭션 안이다.
+- `OrderCommandFacade`와 `PaymentManagement`는 `ApplicationEventPublisher` 대신 자기 모듈 publisher를 주입받아 `transition.events.forEach(eventPublisher::publish)`로 발행한다. 어느 `publish`가 불릴지는 전이의 이벤트 타입으로 컴파일러가 정한다. 발행은 지금처럼 Facade 트랜잭션 안이다.
+
+**전이마다 이벤트 타입을 하나로 좁힌다.**
+- `Order.create`는 `OrderEvent.Created`, `requestCheckout`은 `OrderPaymentRequested`, `markPaid`는 `OrderPaid`, `PaymentAttempt.retry`는 `PaymentEvent.AttemptCreated`로 `Transition`의 이벤트 타입을 좁힌다.
+- `PaymentAttempt.applyAuthorization(outcome)`를 `approve(providerReference)`·`decline(providerReference)`·`markUnknown()`으로 나눈다. 셋 다 `REQUESTED`가 아니면 지금과 같은 `PAYMENT_RESULT_ALREADY_APPLIED`로 거절하고, 상태와 사실은 각 메서드 안에서 함께 정한다. provider 결과(`AuthorizationOutcome`)를 어느 전이로 옮길지는 `PaymentManagement`가 `when (outcome)`으로 고른다. sealed 타입이라 `else`가 없다.
+- `PaymentAttempt.create`는 금액과 무관하게 `REQUESTED` 시도와 `AttemptCreated`만 낸다. 0원 승인은 새 도메인 메서드 `approveIfFree()`가 맡는다. 0원이면 provider 참조 없는 `approve` 결과를, 아니면 `null`을 돌려준다. 0원이면 provider를 부르지 않고 승인한다는 판단은 도메인에 남는다. `createAttempt`는 두 전이를 이어 최종 시도(0원이면 `APPROVED`)를 저장하고 생성·승인 사실을 그 순서로 발행한다. 저장되는 행과 이벤트 순서·내용은 지금과 같다.
 
 **트랜잭션 선언 규칙을 테스트로 고정한다.**
 - 클래스에 `@Transactional`을 붙이지 않는다. 클래스에 붙이면 이후에 더한 조회 메서드까지 트랜잭션이 걸린다. `TransactionDeclarationTest`(ArchUnit)가 main 코드의 클래스 선언을 검사한다. 지금 위반은 없다.
@@ -43,7 +47,6 @@
 
 ## 제외
 - `acquire` 대기 루프의 `System.nanoTime()`·`Thread.sleep`.
-- 도메인 전이(`Order`, `PaymentAttempt`)의 `Transition` 이벤트 타입. 결제 전이는 서로 다른 타입을 함께 내므로 좁혀도 publisher의 타입별 분기가 필요하다.
 - `fulfillment` 모듈. 이벤트를 발행하지 않는다.
 - 리스너 선언(`@ApplicationModuleListener`)을 다른 애너테이션으로 바꾸는 것.
 - `FulfillmentCommandFacade`의 `@Transactional`. 이벤트를 발행하지 않는다.
@@ -57,8 +60,9 @@
 - **`registerSynchronization`을 획득 전에 불러 잘못된 호출에서 키를 남기지 않기**: 잠그지 못한 경우에도 해제가 불려 획득 여부를 담을 가변 변수나 헛된 해제 호출이 생긴다.
 - **`authorize`에 `NEVER`를 유지**: 트랜잭션 안의 호출을 막아 주지만 전파 설정이 한 종류 늘고, 메서드가 트랜잭션 밖에서 돈다는 사실을 호출자 쪽 조건으로 적는다. `NOT_SUPPORTED`는 같은 사실을 메서드 쪽에서 보장한다.
 - **적용 트랜잭션을 `REQUIRES_NEW`로 열기**: 적용이 호출자 트랜잭션과 갈리지만 provider 호출은 호출자 트랜잭션 안에 남아 §4.6을 지키지 못한다.
-- **발행 지점을 람다(`forEach { publishEvent(it) }`)로 바꾸고 `Transition` 타입을 좁히기**: 주문 전이는 타입 하나라 풀리지만 결제 전이(생성과 0원 승인, 승인·거절·미확인)는 섞여 있어 `PaymentApprovedListener`가 계속 발행 지점을 못 찾는다.
-- **publisher 안에서 스마트 캐스트한 값을 바로 `publishEvent`에 넘기기**: IDE가 스마트 캐스트 타입을 읽는지 확인하지 못했다. 선언된 파라미터 타입은 실제 파일에서 확인했다.
+- **publisher가 이벤트 목록을 받아 `when`으로 타입별 메서드에 나눠 주기**: 도메인을 건드리지 않지만 모든 분기가 같은 발행이라 같은 말을 되풀이하고, 모르는 타입을 위한 `else`가 필요하다. 사용자 결정으로 기각했다.
+- **결제 전이는 그대로 두고 주문 전이와 `retry`만 좁히기**: 도메인 변경이 작지만 `PaymentApproved`를 구체 타입으로 발행하는 곳이 없어 `PaymentApprovedListener`가 계속 발행 지점을 못 찾는다.
+- **`applyAuthorization`이 결과별 sealed 타입을 돌려주기**: 도메인 메서드는 하나로 남지만 결과 타입이 새로 생기고, 호출부가 결국 그 타입으로 다시 분기한다.
 
 - **트랜잭션이 필요 없는 단건 조회·단건 쓰기에서 `@Transactional`을 빼기**: 트랜잭션을 여는 쿼리 비용을 줄이지만, 이 저장소의 쓰기는 발행 기록을 같은 커밋에 넣어야 해서 한 행이어도 트랜잭션이 필요하다. 트랜잭션을 거는 조회 서비스는 아직 없다.
 - **읽기 전용 조회에 `readOnly = true`와 `SUPPORTS`를 함께 선언**: 단독 호출에서 트랜잭션을 만들지 않지만 지금 그런 조회가 없고, 전파 설정 종류를 늘린다.
@@ -77,6 +81,8 @@
 - src/main/kotlin/com/resilientpos/payment/PaymentManagement.kt
 - src/main/kotlin/com/resilientpos/payment/internal/application/PaymentEventPublisher.kt
 - src/main/kotlin/com/resilientpos/order/OrderCommandFacade.kt
+- src/main/kotlin/com/resilientpos/order/internal/domain/Order.kt
+- src/main/kotlin/com/resilientpos/payment/internal/domain/PaymentAttempt.kt
 - src/main/kotlin/com/resilientpos/order/internal/application/OrderEventPublisher.kt
 - src/test/kotlin/com/resilientpos/payment/internal/adapter/lock/RedisCheckoutLockTest.kt
 - src/test/kotlin/com/resilientpos/payment/internal/application/PaymentAttemptCreationLockIntegrationTest.kt
@@ -84,6 +90,8 @@
 - src/test/kotlin/com/resilientpos/payment/PaymentManagementTest.kt
 - src/test/kotlin/com/resilientpos/order/OrderCommandFacadeLineLimitTest.kt
 - src/test/kotlin/com/resilientpos/TransactionDeclarationTest.kt
+- src/test/kotlin/com/resilientpos/payment/internal/domain/PaymentAttemptAuthorizationTest.kt
+- src/test/kotlin/com/resilientpos/payment/internal/domain/PaymentAttemptTest.kt
 - docs/wiki/domain-model.md
 - docs/spec/2026-09-28-checkout-lock-static-calls.md
 
@@ -91,7 +99,8 @@
 1. 트랜잭션 밖에서 `CheckoutLock` 빈의 `lockUntilTransactionEnds`를 부르면 `IllegalStateException`이 난다.
 2. 트랜잭션 안에서 `authorize`를 부르면 provider를 한 번 부르고, 그동안 DB 자원을 쥐지 않으며, 바깥 트랜잭션을 롤백해도 적용 결과(`APPROVED`)가 남는다.
 3. main 코드의 명시적 전파 설정은 `NOT_SUPPORTED`뿐이다. `RedisCheckoutLock.kt`에는 `isSynchronizationActive`·`UUID.randomUUID` 호출과 `@Transactional`이 없다.
-4. main 코드에서 `ApplicationEventPublisher.publishEvent`를 부르는 곳은 두 publisher뿐이고, 모든 호출의 인자가 구체 이벤트 타입으로 선언된 파라미터다.
+4. main 코드에서 `ApplicationEventPublisher.publishEvent`를 부르는 곳은 두 publisher뿐이고, 모든 호출의 인자가 구체 이벤트 타입으로 선언된 파라미터다. publisher에 `when`이 없다.
+4-1. 모든 전이의 `Transition` 이벤트 타입이 구체 이벤트 하나다. `applyAuthorization`은 없고, 0원 시도는 `create`와 `approveIfFree`로 지금과 같은 행(`APPROVED`, 참조 없음)과 이벤트(생성 뒤 승인)를 남긴다.
 5. 기존 테스트(이벤트 발행 순서와 내용, 발행 기록, 잠금, 동시성)가 깨지지 않는다.
 6. main 코드의 클래스에 `@Transactional`이 붙으면 `TransactionDeclarationTest`가 실패한다.
 7. `authorize` 문서가 `findById`의 읽기 전용 트랜잭션에 기대는 이유를 적는다.
@@ -110,7 +119,7 @@
 - 요구사항 변화: 없다. 업무 동작과 이벤트 계약이 그대로이고, 트랜잭션 안에서 부른 승인·재결제가 거절 대신 따로 실행되는 것은 지금 호출자가 없는 경로다.
 
 ## 분할 계획
-13개 파일, 추가와 삭제 합계 500줄 안쪽이다. 경고선(20개 파일/600줄)에 이르지 않는다.
+17개 파일, 추가와 삭제 합계 600줄 안쪽이다. 경고선(20개 파일/600줄)에 이르지 않는다.
 
 ## TDD 검증 기록
 업무 동작은 바뀌지 않는 리팩터링이다. 바뀌는 두 경계(트랜잭션 밖 잠금 호출, 트랜잭션 안 승인 호출)는 통합 테스트로 RED→GREEN을 본다. publisher의 타입별 분기는 기존 Facade 테스트의 발행 검증이 덮는다. 클래스 선언 규칙은 위반을 넣어 실패를 본다.
