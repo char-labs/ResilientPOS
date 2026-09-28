@@ -62,7 +62,13 @@
 
 | 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
 |---|---|---|---|
-| 트랜잭션 밖에서 잠그면 거절한다 | 미실행 | 미실행 | 미실행 |
+| 트랜잭션 밖에서 잠그면 거절한다 | `./gradlew test --tests 'com.resilientpos.payment.internal.application.PaymentAttemptCreationLockIntegrationTest'`, 전파 설정 구현이 `IllegalTransactionStateException`을 던져 실패 | 같은 명령, 설정을 지운 뒤 통과 | `./gradlew test`, 246개 통과 |
 
 ## 결과
-개발 전 작성. 개발 후 실행 결과와 변경 이유를 추가한다.
+개발 전 spec을 독립 커밋으로 작성했다. 구현 후 아래를 확인했다.
+
+- `RedisCheckoutLock`에서 `check`를 지우고 어노테이션은 붙이지 않았다. 트랜잭션 밖 호출은 `registerSynchronization`이 `IllegalStateException`으로 거절한다.
+- 토큰은 생성자로 주입한 `IdentifierGenerator.next()`로 만든다. `RedisCheckoutLockTest`는 생성자에 `UuidV7IdentifierGenerator`를 넘기도록만 고쳤다.
+- `PaymentAttemptCreationLockIntegrationTest`에 트랜잭션 밖 호출 거절 검증을 더했다. 실제 Redis에서 잠금을 얻은 뒤 해제 등록에서 거절되는 경로다.
+- `./gradlew test`: 246개 통과, 실패 0.
+- `python3 scripts/check_pr.py --base 5eece85 --worktree`: PASS, 일반 4개/90줄.
