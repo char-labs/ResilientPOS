@@ -132,7 +132,7 @@
 - 요구사항 변화: 없다. 업무 동작과 이벤트 계약이 그대로이고, 트랜잭션 안에서 부른 승인·재결제가 거절 대신 따로 실행되는 것은 지금 호출자가 없는 경로다.
 
 ## 분할 계획
-19개 파일, 추가와 삭제 합계 610줄 안쪽이다. 경고선(추가와 삭제 900줄, 파일 수는 판정하지 않음)에 이르지 않는다.
+21개 파일, 추가와 삭제 합계 730줄 안쪽이다. 경고선(추가와 삭제 900줄, 파일 수는 판정하지 않음)에 이르지 않는다.
 
 ## TDD 검증 기록
 업무 동작은 바뀌지 않는 리팩터링이다. 바뀌는 두 경계(트랜잭션 밖 잠금 호출, 트랜잭션 안 승인 호출)는 통합 테스트로 RED→GREEN을 본다. publisher의 타입별 분기는 기존 Facade 테스트의 발행 검증이 덮는다. 클래스 선언 규칙은 위반을 넣어 실패를 본다.
@@ -142,6 +142,8 @@
 | 트랜잭션 밖에서 잠그면 거절한다 | 기준 코드와 최종 코드에서 모두 통과하는 회귀 방어 테스트다. RED는 되돌린 전파 설정 변형(`MANDATORY`)에서 `IllegalTransactionStateException`으로 관찰했다(`./gradlew test --tests 'com.resilientpos.payment.internal.application.PaymentAttemptCreationLockIntegrationTest'`) | 같은 명령, 설정을 지운 뒤 통과 | `./gradlew test` 통과 |
 | 트랜잭션 안에서 승인을 요청해도 바깥 트랜잭션과 따로 적용한다 | `./gradlew test --tests 'com.resilientpos.payment.internal.application.PaymentAuthorizationIntegrationTest'`, `NEVER`가 `IllegalTransactionStateException`으로 거절해 실패 | `./gradlew test --tests 'com.resilientpos.payment.*' --tests 'com.resilientpos.order.*'`, `NOT_SUPPORTED`로 바꾸고 publisher를 옮긴 뒤 통과 | `./gradlew test` 통과 |
 | 결말별 전이(`approve`·`decline`·`markUnknown`)와 `approveIfFree`, 이미 결말이 난 시도에 세 전이 모두 거절 | `./gradlew compileTestKotlin`, 새 메서드가 없어 테스트 컴파일 실패 | `./gradlew test`, 도메인을 나누고 0원 persistence 테스트를 `approveIfFree`로 이은 뒤 통과 | `./gradlew test` 통과 |
+| 승인을 적용하면 저장한 뒤 승인 사실을 발행한다 | `./gradlew test --tests 'com.resilientpos.payment.PaymentManagementTest'`, 발행 시점 갱신 횟수가 0이라 실패(발행이 저장보다 먼저) | 같은 명령, `updateAndPublish`로 저장 뒤 발행해 통과 | `./gradlew test` 통과 |
+| 트랜잭션 안에서 재결제를 요청해도 바깥 트랜잭션과 따로 커밋한다 | `./gradlew test --tests 'com.resilientpos.payment.internal.application.PaymentRetryIntegrationTest'`, `retryAuthorization`을 잠시 `NEVER`로 되돌리자 `IllegalTransactionStateException`으로 실패 | 같은 명령, `NOT_SUPPORTED`로 원복해 통과 | `./gradlew test` 통과 |
 | 클래스에 트랜잭션을 선언하지 않는다 | `./gradlew test --tests 'com.resilientpos.TransactionDeclarationTest'`, `FulfillmentCommandFacade` 클래스에 `@Transactional`을 임시로 붙여 규칙 위반으로 실패 | 같은 명령, 되돌린 뒤 통과 | `./gradlew test` 통과 |
 
 ## 결과
@@ -157,4 +159,6 @@
 - 트랜잭션 증거(`TransactionStatus`)를 발행에 넘기던 변경은 되돌렸다. Facade는 `@Transactional`로 트랜잭션을 연다.
 - publisher는 이벤트 타입마다 `publish`를 따로 두고 `when`이 없다. Facade는 `transition.events.forEach(eventPublisher::publish)`로 부르고, 전이마다 `Transition`의 이벤트 타입이 하나다.
 - `applyAuthorization`을 `approve`·`decline`·`markUnknown`으로 나눴고 `PaymentManagement`가 `when (outcome)`으로 고른다. 0원 시도는 `create` 뒤 `approveIfFree`로 승인해 지금과 같은 행과 이벤트 순서를 남긴다(`PaymentManagementTest`의 0원 발행 순서 검증이 그대로 통과).
-- `./gradlew test`: 248개 통과, 실패 0.
+- multi-review(Claude 84점, Codex 76점, Gemini는 CLI가 없어 미실행)를 반영했다. 두 리뷰가 모두 짚은 wiki §4.5의 옛 서술(`Transition`이 `DomainEvent`까지 넓어진다)과 승인 결과를 저장보다 먼저 발행하던 순서를 고쳤다. 그 밖에 미확인 발행·0원 단일 저장·재결제 따로 커밋 테스트, 공개 `approve`의 참조 non-null, `RedisCheckoutLock`·wiki·`current-state` 문구, sync intake 안에서 부르지 않는다는 문서를 반영했다.
+- `TransactionOperations.inTransaction` 확장을 `platform`에 두고 `requireNotNull(transactions.execute` 호출을 없앴다.
+- `./gradlew test`: 250개 통과, 실패 0.
