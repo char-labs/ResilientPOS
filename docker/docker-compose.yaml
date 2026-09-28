@@ -1,6 +1,6 @@
-# 로컬 개발 전용. 테스트는 이 파일을 쓰지 않고 Testcontainers로 PostgreSQL과 Redis를 띄운다.
+# 로컬 개발 전용. 테스트는 이 파일을 쓰지 않고 Testcontainers로 PostgreSQL·Redis·Kafka를 띄운다.
 # 저장소 루트에서 실행한다. 상대 경로는 이 파일의 디렉터리(docker/) 기준이다.
-#   docker compose -f docker/docker-compose.yaml up -d                                  PostgreSQL·Redis만 (앱은 IDE·bootRun으로)
+#   docker compose -f docker/docker-compose.yaml up -d                                  PostgreSQL·Redis·Kafka만 (앱은 IDE·bootRun으로)
 #   docker compose -f docker/docker-compose.yaml --profile app up -d --build            + 앱 컨테이너
 #   docker compose -f docker/docker-compose.yaml --profile app --profile obs up -d      + Alloy·Grafana LGTM (Grafana: localhost:3000)
 # Alloy가 이 프로젝트 이름으로 앱 컨테이너를 고르므로 이름을 고정한다.
@@ -36,6 +36,37 @@ services:
       timeout: 3s
       retries: 15
 
+  # 모듈 사이 이벤트가 Kafka를 거치므로 앱은 이것 없이 이벤트를 전달하지 못한다. KRaft 단일 노드다.
+  kafka:
+    # 테스트(PostgresIntegrationTest)와 같은 버전이다.
+    image: apache/kafka:4.1.0
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      # 앱 컨테이너는 kafka:19092, 호스트(IDE)는 localhost:9092로 붙는다.
+      KAFKA_LISTENERS: INTERNAL://:19092,EXTERNAL://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:19092,EXTERNAL://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      # 앱이 만든 토픽만 둔다. 이름이 틀린 발행이 조용히 새 토픽을 만들지 않고 실패한다.
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+    ports:
+      - "9092:9092"
+    volumes:
+      # PostgreSQL 볼륨과 함께 남아야 커밋된 offset과 발행 기록이 어긋나지 않는다.
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD", "/opt/kafka/bin/kafka-broker-api-versions.sh", "--bootstrap-server", "localhost:9092"]
+      interval: 5s
+      timeout: 10s
+      retries: 20
+
   app:
     profiles: [app]
     build:
@@ -49,8 +80,11 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      kafka:
+        condition: service_healthy
     environment:
       POSTGRES_URL: jdbc:postgresql://postgres:5432/resilientpos
+      KAFKA_BOOTSTRAP_SERVERS: kafka:19092
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-resilientpos}
       REDIS_HOST: redis
       # stdout을 ECS JSON으로 내보내 Alloy가 필드로 읽게 한다.
@@ -76,3 +110,4 @@ services:
 
 volumes:
   postgres-data:
+  kafka-data:

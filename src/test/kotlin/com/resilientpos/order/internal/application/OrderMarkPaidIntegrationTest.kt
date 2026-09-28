@@ -1,6 +1,8 @@
 package com.resilientpos.order.internal.application
 
+import com.resilientpos.KafkaTestSupport
 import com.resilientpos.PostgresIntegrationTest
+import com.resilientpos.PostgresIntegrationTest.Companion.awaitUntil
 import com.resilientpos.contract.PaymentApproved
 import com.resilientpos.contract.PaymentAttemptKind
 import com.resilientpos.foundation.Money
@@ -12,10 +14,8 @@ import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.TerminalId
 import java.time.Instant
 import java.util.UUID
-import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.fail
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.context.ApplicationEventPublisher
 import org.springframework.jdbc.core.JdbcTemplate
@@ -56,19 +56,7 @@ class OrderMarkPaidIntegrationTest(
         )
     }
 
-    private fun approvalPublicationStatus(orderId: OrderId) =
-        jdbcTemplate.queryForList(
-            "select status from event_publication where listener_id like '%PaymentApprovedListener%' and serialized_event like ?",
-            String::class.java, "%${orderId.value}%",
-        ).singleOrNull()
-
-    private fun awaitUntil(description: String, condition: () -> Boolean) {
-        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
-        while (!condition()) {
-            if (System.nanoTime() >= deadline) fail("10초 안에 충족되지 않았다: $description")
-            Thread.sleep(20)
-        }
-    }
+    private fun deadLetters(orderId: OrderId) = KafkaTestSupport.records(PaymentApproved.TOPIC + ".DLT", orderId.value)
 
     @Test
     fun `결제가 승인되면 주문이 PAID가 된다`() {
@@ -81,12 +69,12 @@ class OrderMarkPaidIntegrationTest(
     }
 
     @Test
-    fun `확정값과 다른 승인이면 주문은 그대로이고 발행 기록이 실패로 남는다`() {
+    fun `확정값과 다른 승인이면 주문은 그대로이고 승인 메시지가 DLT로 간다`() {
         val orderId = checkout()
 
         approve(orderId, PaymentAttemptKind.AUTHORIZATION, Money.of("9999", OrderFixtures.krw))
 
-        awaitUntil("승인 리스너의 발행 기록이 실패로 남는다") { approvalPublicationStatus(orderId) == "FAILED" }
+        awaitUntil("승인 메시지가 DLT로 간다") { deadLetters(orderId).size == 1 }
         assertEquals("CHECKOUT_REQUESTED", status(orderId))
     }
 
@@ -96,7 +84,8 @@ class OrderMarkPaidIntegrationTest(
 
         approve(orderId, PaymentAttemptKind.CANCELLATION, Money.of("3502", OrderFixtures.krw))
 
-        awaitUntil("승인 리스너의 발행 기록이 완료된다") { approvalPublicationStatus(orderId) == "COMPLETED" }
+        KafkaTestSupport.awaitConsumed("order.payment-approved", PaymentApproved.TOPIC)
+        assertEquals(emptyList(), deadLetters(orderId))
         assertEquals("CHECKOUT_REQUESTED", status(orderId))
     }
 }
