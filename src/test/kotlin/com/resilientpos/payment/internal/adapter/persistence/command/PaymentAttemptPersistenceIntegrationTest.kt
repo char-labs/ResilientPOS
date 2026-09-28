@@ -17,12 +17,17 @@ import com.resilientpos.terminal.TerminalId
 import java.time.Instant
 import java.util.Currency
 import java.util.UUID
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.dao.DataIntegrityViolationException
+import org.springframework.dao.PessimisticLockingFailureException
 import org.springframework.transaction.support.TransactionOperations
 
 /**
@@ -191,5 +196,36 @@ class PaymentAttemptPersistenceIntegrationTest(
         save(stored(orderId, amount = max))
 
         assertEquals(max, findAllByOrderId(orderId).single().toDomain().amount)
+    }
+
+    @Test
+    fun `잠금을 3초 넘게 기다린 조회는 Spring의 잠금 실패 예외로 끝난다`() {
+        // Kafka 재시도 허용 목록이 Spring 예외 타입으로 판정한다. JPA 예외가 그대로 올라오면 재시도 없이 DLT로 간다.
+        val attempt = authorization(UUID.randomUUID())
+        save(attempt)
+        val locked = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val executor = Executors.newSingleThreadExecutor()
+        try {
+            val holder = executor.submit {
+                transactions.executeWithoutResult {
+                    repository.findByIdForUpdate(attempt.id)
+                    locked.countDown()
+                    check(release.await(30, TimeUnit.SECONDS)) { "앞 트랜잭션을 풀어 주는 신호가 오지 않았다" }
+                }
+            }
+            assertTrue(locked.await(10, TimeUnit.SECONDS), "앞 트랜잭션이 잠금을 쥔 상태에 도달해야 한다")
+
+            assertFailsWith<PessimisticLockingFailureException> {
+                transactions.executeWithoutResult { repository.findByIdForUpdate(attempt.id) }
+            }
+
+            release.countDown()
+            holder.get(10, TimeUnit.SECONDS)
+        } finally {
+            release.countDown()
+            executor.shutdown()
+            executor.awaitTermination(10, TimeUnit.SECONDS)
+        }
     }
 }
