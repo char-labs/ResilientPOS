@@ -8,14 +8,14 @@
 - 발행 지점 6곳이 모두 `transition.events.forEach(eventPublisher::publishEvent)`다. IntelliJ Spring 플러그인은 `publishEvent` 호출의 첫 인자 정적 타입이 리스너 파라미터 타입에 대입될 때만 발행 지점으로 잇는데, 메서드 참조라 인자가 `forEach`의 함수 타입(`KFunction`)으로 읽히고 요소 타입도 `DomainEvent`다. 그래서 리스너 4개 모두 "이벤트 퍼블리셔를 찾을 수 없습니다"가 뜬다.
 - `authorize`가 provider를 부르는 동안 DB 자원을 쥐지 않는 것은, 시도를 읽는 `findById`에 Spring Data가 붙인 읽기 전용 트랜잭션이 끝나며 EntityManager를 놓기 때문이다. 이 의존이 코드 어디에도 적혀 있지 않다.
 
-기대 결과: 명시적 전파 설정은 `NOT_SUPPORTED` 하나만 쓴다. 트랜잭션 밖이어야 하는 메서드는 호출자 트랜잭션을 거절하지 않고 멈춘다. 이벤트는 모듈마다 둔 publisher가 구체 타입으로 발행해 IDE가 리스너와 발행 지점을 잇는다. 업무 동작(결제 시도 생성·승인·재결제, 주문 전이, 잠금)은 바뀌지 않는다.
+기대 결과: 명시적 전파 설정은 `NOT_SUPPORTED`와 `REQUIRES_NEW`로 한정하고, 지금 쓰는 것은 `NOT_SUPPORTED`뿐이다. 트랜잭션 밖이어야 하는 메서드는 호출자 트랜잭션을 거절하지 않고 멈춘다. 이벤트는 모듈마다 둔 publisher가 구체 타입으로 발행해 IDE가 리스너와 발행 지점을 잇는다. 업무 동작(결제 시도 생성·승인·재결제, 주문 전이, 잠금)은 바뀌지 않는다.
 
 ## 범위
 소유 모듈은 `payment`와 `order`다.
 
 **전파 설정을 `NOT_SUPPORTED`로 모은다.**
 - `PaymentManagement.authorize`와 `retryAuthorization`의 `@Transactional(propagation = Propagation.NEVER)`를 `NOT_SUPPORTED`로 바꾼다. 트랜잭션 안에서 불리면 거절하던 것을, 호출자 트랜잭션을 멈추고 트랜잭션 없이 도는 것으로 바꾼다. provider 호출은 어느 경우에도 트랜잭션 밖이고(§4.6), 적용 트랜잭션은 지금처럼 `TransactionOperations`가 새로 열어 반환 전에 커밋한다. 호출자 트랜잭션이 나중에 롤백돼도 적용 결과는 남는다.
-- 한계: 멈춘 호출자 트랜잭션이 커밋하지 않은 행은 보이지 않고, 호출자가 그 시도 행을 잠그고 있으면 적용 트랜잭션이 행 잠금 대기 한도(3초)까지 기다린 뒤 실패한다. 지금 호출자는 트랜잭션이 없는 리스너뿐이라 해당하지 않는다.
+- 한계: 멈춘 호출자 트랜잭션이 커밋하지 않은 행은 보이지 않고, 호출자가 그 시도 행을 잠그고 있으면 적용 트랜잭션이 행 잠금 대기 한도(3초)까지 기다린 뒤 실패한다. 지금 호출자는 트랜잭션이 없는 리스너뿐이라 해당하지 않는다. 호출자 트랜잭션에 합류하지 않으므로 §4.6 sync intake처럼 한 커밋으로 묶어야 하는 흐름 안에서 부르지 않는다. 그 안에서 부르면 바깥이 롤백돼도 승인 적용과 재결제 시도가 따로 커밋된다. 두 메서드 문서와 wiki에 적는다.
 - 리스너 4개의 `@ApplicationModuleListener(propagation = NOT_SUPPORTED)`는 그대로 둔다. 기본값 `REQUIRES_NEW`를 쓰면 Facade가 리스너 트랜잭션에 합류해 provider 호출이 트랜잭션 안에 들어간다.
 - Facade의 `@Transactional`(기본값 `REQUIRED`)은 그대로 둔다. §4.6 sync intake가 바깥 트랜잭션에 합류하는 계약이다.
 
@@ -32,8 +32,13 @@
 
 **전이마다 이벤트 타입을 하나로 좁힌다.**
 - `Order.create`는 `OrderEvent.Created`, `requestCheckout`은 `OrderPaymentRequested`, `markPaid`는 `OrderPaid`, `PaymentAttempt.retry`는 `PaymentEvent.AttemptCreated`로 `Transition`의 이벤트 타입을 좁힌다.
-- `PaymentAttempt.applyAuthorization(outcome)`를 `approve(providerReference)`·`decline(providerReference)`·`markUnknown()`으로 나눈다. 셋 다 `REQUESTED`가 아니면 지금과 같은 `PAYMENT_RESULT_ALREADY_APPLIED`로 거절하고, 상태와 사실은 각 메서드 안에서 함께 정한다. provider 결과(`AuthorizationOutcome`)를 어느 전이로 옮길지는 `PaymentManagement`가 `when (outcome)`으로 고른다. sealed 타입이라 `else`가 없다.
+- `PaymentAttempt.applyAuthorization(outcome)`를 `approve(providerReference)`·`decline(providerReference)`·`markUnknown()`으로 나눈다. provider 승인에는 참조가 늘 있으므로 공개 `approve`는 null이 아닌 참조만 받고, 참조 없는 승인은 `approveIfFree`만 낸다. 셋 다 `REQUESTED`가 아니면 지금과 같은 `PAYMENT_RESULT_ALREADY_APPLIED`로 거절하고, 상태와 사실은 각 메서드 안에서 함께 정한다. provider 결과(`AuthorizationOutcome`)를 어느 전이로 옮길지는 `PaymentManagement`가 `when (outcome)`으로 고른다. sealed 타입이라 `else`가 없다. 세 분기는 같은 private 함수로 저장한 뒤 발행한다(Facade 순서: 저장 → 발행). 발행 메서드는 그 함수에 넘긴 메서드 참조(`eventPublisher::publish`)의 기대 타입으로 정해진다.
 - `PaymentAttempt.create`는 금액과 무관하게 `REQUESTED` 시도와 `AttemptCreated`만 낸다. 0원 승인은 새 도메인 메서드 `approveIfFree()`가 맡는다. 0원이면 provider 참조 없는 `approve` 결과를, 아니면 `null`을 돌려준다. 0원이면 provider를 부르지 않고 승인한다는 판단은 도메인에 남는다. `createAttempt`는 두 전이를 이어 최종 시도(0원이면 `APPROVED`)를 저장하고 생성·승인 사실을 그 순서로 발행한다. 저장되는 행과 이벤트 순서·내용은 지금과 같다.
+
+**트랜잭션 블록 결과를 non-null로 받는 확장 함수를 둔다.**
+- `platform`에 확장 함수 `TransactionOperations.inTransaction(action)`을 둔다. 블록의 결과 타입은 null이 될 수 없고, 반환값도 null이 아니다. `execute`가 nullable을 돌려줘 호출부마다 `requireNotNull(transactions.execute { ... })`를 쓰던 것을 `transactions.inTransaction { ... }`으로 줄인다. 블록은 `TransactionStatus`를 받지 않는다.
+- spring-tx 7.0.9에는 `TransactionOperations`용 Kotlin 확장이 없다(반응형 `TransactionalOperatorExtensions`만 있다). Spring 타입이라 `foundation`·`internal.domain`이 아닌 `platform`에 둔다(`DependencyDirectionTest`).
+- 쓰는 곳: `PaymentManagement.authorize`·`retryAuthorization`, `PaymentAttemptCreationLockIntegrationTest`.
 
 **트랜잭션 선언 규칙을 테스트로 고정한다.**
 - 클래스에 `@Transactional`을 붙이지 않는다. 클래스에 붙이면 이후에 더한 조회 메서드까지 트랜잭션이 걸린다. `TransactionDeclarationTest`(ArchUnit)가 main 코드의 클래스 선언을 검사한다. 지금 위반은 없다.
@@ -69,6 +74,8 @@
 - **Spring Data `findById`를 트랜잭션 없는 쿼리로 덮어 숨은 트랜잭션을 없애기**: 쿼리는 줄지만 `authorize`에서는 그 트랜잭션이 EntityManager를 놓아 주는 장치라 없애면 provider 호출 내내 DB 자원을 쥔다.
 - **publisher가 `TransactionStatus`를 트랜잭션 증거로 받기**: 트랜잭션 밖 발행이 컴파일되지 않지만, Spring 트랜잭션 타입이 쓰지 않는 인자로 발행 API에 드러나고 Facade가 `@Transactional` 대신 `TransactionOperations` 블록으로 트랜잭션을 열어야 한다. 사용자 결정으로 기각했다.
 
+- **트랜잭션 실행기를 정적 객체로 두고 `readOnlyTx { }`처럼 어디서나 부르기**: 호출부가 짧아지지만 주입 대신 정적 접근이 생기고, 트랜잭션을 여는 곳이 Facade 밖으로 퍼진다. 주입받은 `TransactionOperations`의 확장으로 둔다.
+
 ## 관련 문서
 [도메인 모델](../wiki/domain-model.md) §4.3·§4.6, [Modulith·Kafka 키워드](../wiki/modulith-kafka-keywords.md). 잠금은 [payment-advisory-lock](2026-09-26-payment-advisory-lock.md), 승인의 트랜잭션 경계는 [payment-gateway-authorization](2026-09-23-payment-gateway-authorization.md)이 정했다.
 
@@ -79,6 +86,7 @@
 ## 변경 경로
 - src/main/kotlin/com/resilientpos/payment/internal/adapter/lock/RedisCheckoutLock.kt
 - src/main/kotlin/com/resilientpos/payment/PaymentManagement.kt
+- src/main/kotlin/com/resilientpos/platform/TransactionOperationsExtensions.kt
 - src/main/kotlin/com/resilientpos/payment/internal/application/PaymentEventPublisher.kt
 - src/main/kotlin/com/resilientpos/order/OrderCommandFacade.kt
 - src/main/kotlin/com/resilientpos/order/internal/domain/Order.kt
@@ -91,6 +99,7 @@
 - src/test/kotlin/com/resilientpos/payment/PaymentManagementTest.kt
 - src/test/kotlin/com/resilientpos/order/OrderCommandFacadeLineLimitTest.kt
 - src/test/kotlin/com/resilientpos/TransactionDeclarationTest.kt
+- src/test/kotlin/com/resilientpos/payment/internal/application/PaymentRetryIntegrationTest.kt
 - src/test/kotlin/com/resilientpos/payment/internal/domain/PaymentAttemptAuthorizationTest.kt
 - src/test/kotlin/com/resilientpos/payment/internal/domain/PaymentAttemptTest.kt
 - src/test/kotlin/com/resilientpos/payment/internal/adapter/persistence/command/PaymentAttemptPersistenceIntegrationTest.kt
@@ -100,10 +109,12 @@
 ## 인수 조건
 1. 트랜잭션 밖에서 `CheckoutLock` 빈의 `lockUntilTransactionEnds`를 부르면 `IllegalStateException`이 난다.
 2. 트랜잭션 안에서 `authorize`를 부르면 provider를 한 번 부르고, 그동안 DB 자원을 쥐지 않으며, 바깥 트랜잭션을 롤백해도 적용 결과(`APPROVED`)가 남는다.
-3. main 코드의 명시적 전파 설정은 `NOT_SUPPORTED`뿐이다. `RedisCheckoutLock.kt`에는 `isSynchronizationActive`·`UUID.randomUUID` 호출과 `@Transactional`이 없다.
-4. main 코드에서 `ApplicationEventPublisher.publishEvent`를 부르는 곳은 두 publisher뿐이고, 모든 호출의 인자가 구체 이벤트 타입으로 선언된 파라미터다. publisher에 `when`이 없다.
+3. main 코드의 명시적 전파 설정은 `NOT_SUPPORTED`뿐이다(허용 목록은 `NOT_SUPPORTED`·`REQUIRES_NEW`). `RedisCheckoutLock.kt`에는 `isSynchronizationActive`·`UUID.randomUUID` 호출과 `@Transactional`이 없다.
+4. main 코드에서 `ApplicationEventPublisher.publishEvent`를 부르는 곳은 두 publisher뿐이고, 모든 호출의 인자가 구체 이벤트 타입으로 선언된 파라미터다. publisher에 `when`이 없다. 이 규칙과 인수 조건 3·5-2는 `grep`으로만 확인한다.
 4-1. 모든 전이의 `Transition` 이벤트 타입이 구체 이벤트 하나다. `applyAuthorization`은 없고, 0원 시도는 `create`와 `approveIfFree`로 지금과 같은 행(`APPROVED`, 참조 없음)과 이벤트(생성 뒤 승인)를 남긴다.
 5. 기존 테스트(이벤트 발행 순서와 내용, 발행 기록, 잠금, 동시성)가 깨지지 않는다.
+5-1. 트랜잭션 안에서 `retryAuthorization`을 불러도 바깥을 롤백하면 새 시도가 남는다(따로 커밋). `authorize`가 미확인 결말을 적용하면 `PaymentEvent.Unknown`을 발행한다. 0원 시도는 최종 상태(`APPROVED`)로 한 번만 저장된다.
+5-2. main 코드에 `requireNotNull(transactions.execute` 호출이 없다.
 6. main 코드의 클래스에 `@Transactional`이 붙으면 `TransactionDeclarationTest`가 실패한다.
 7. `authorize` 문서가 `findById`의 읽기 전용 트랜잭션에 기대는 이유를 적는다.
 
@@ -128,10 +139,10 @@
 
 | 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
 |---|---|---|---|
-| 트랜잭션 밖에서 잠그면 거절한다 | `./gradlew test --tests 'com.resilientpos.payment.internal.application.PaymentAttemptCreationLockIntegrationTest'`, 전파 설정 구현이 `IllegalTransactionStateException`을 던져 실패 | 같은 명령, 설정을 지운 뒤 통과 | `./gradlew test`, 246개 통과 |
-| 트랜잭션 안에서 승인을 요청해도 바깥 트랜잭션과 따로 적용한다 | `./gradlew test --tests 'com.resilientpos.payment.internal.application.PaymentAuthorizationIntegrationTest'`, `NEVER`가 `IllegalTransactionStateException`으로 거절해 실패 | `./gradlew test --tests 'com.resilientpos.payment.*' --tests 'com.resilientpos.order.*'`, `NOT_SUPPORTED`로 바꾸고 publisher를 옮긴 뒤 통과 | `./gradlew test`, 246개 통과 |
-| 결말별 전이(`approve`·`decline`·`markUnknown`)와 `approveIfFree`, 이미 결말이 난 시도에 세 전이 모두 거절 | `./gradlew compileTestKotlin`, 새 메서드가 없어 테스트 컴파일 실패 | `./gradlew test`, 도메인을 나누고 0원 persistence 테스트를 `approveIfFree`로 이은 뒤 통과 | `./gradlew test`, 248개 통과 |
-| 클래스에 트랜잭션을 선언하지 않는다 | `./gradlew test --tests 'com.resilientpos.TransactionDeclarationTest'`, `FulfillmentCommandFacade` 클래스에 `@Transactional`을 임시로 붙여 규칙 위반으로 실패 | 같은 명령, 되돌린 뒤 통과 | `./gradlew test`, 247개 통과 |
+| 트랜잭션 밖에서 잠그면 거절한다 | 기준 코드와 최종 코드에서 모두 통과하는 회귀 방어 테스트다. RED는 되돌린 전파 설정 변형(`MANDATORY`)에서 `IllegalTransactionStateException`으로 관찰했다(`./gradlew test --tests 'com.resilientpos.payment.internal.application.PaymentAttemptCreationLockIntegrationTest'`) | 같은 명령, 설정을 지운 뒤 통과 | `./gradlew test` 통과 |
+| 트랜잭션 안에서 승인을 요청해도 바깥 트랜잭션과 따로 적용한다 | `./gradlew test --tests 'com.resilientpos.payment.internal.application.PaymentAuthorizationIntegrationTest'`, `NEVER`가 `IllegalTransactionStateException`으로 거절해 실패 | `./gradlew test --tests 'com.resilientpos.payment.*' --tests 'com.resilientpos.order.*'`, `NOT_SUPPORTED`로 바꾸고 publisher를 옮긴 뒤 통과 | `./gradlew test` 통과 |
+| 결말별 전이(`approve`·`decline`·`markUnknown`)와 `approveIfFree`, 이미 결말이 난 시도에 세 전이 모두 거절 | `./gradlew compileTestKotlin`, 새 메서드가 없어 테스트 컴파일 실패 | `./gradlew test`, 도메인을 나누고 0원 persistence 테스트를 `approveIfFree`로 이은 뒤 통과 | `./gradlew test` 통과 |
+| 클래스에 트랜잭션을 선언하지 않는다 | `./gradlew test --tests 'com.resilientpos.TransactionDeclarationTest'`, `FulfillmentCommandFacade` 클래스에 `@Transactional`을 임시로 붙여 규칙 위반으로 실패 | 같은 명령, 되돌린 뒤 통과 | `./gradlew test` 통과 |
 
 ## 결과
 개발 전 spec을 독립 커밋으로 작성하고, 범위를 넓힐 때마다 구현 전에 spec만 다시 커밋했다. 구현 후 아래를 확인했다.
@@ -139,7 +150,7 @@
 - `RedisCheckoutLock`에서 `check`를 지우고 어노테이션은 붙이지 않았다. 트랜잭션 밖 호출은 `registerSynchronization`이 `IllegalStateException`으로 거절한다. 토큰은 주입한 `IdentifierGenerator.next()`로 만든다.
 - `PaymentManagement.authorize`·`retryAuthorization`을 `NOT_SUPPORTED`로 바꿨다. 트랜잭션 안에서 부른 `authorize`는 provider를 한 번 부르고, 호출 중 DB 자원을 쥐지 않으며, 바깥을 롤백해도 `APPROVED`가 남는다.
 - `OrderEventPublisher`·`PaymentEventPublisher`를 더하고 두 Facade가 이를 거쳐 발행한다. 발행 순서·내용과 발행 기록 테스트는 고치지 않고 통과했다. Facade를 직접 만드는 단위 테스트 두 곳만 생성자 인자를 맞췄다.
-- 명시적 전파 설정은 `NOT_SUPPORTED` 6곳(리스너 4, `PaymentManagement` 2)뿐이다. main 코드의 `publishEvent` 호출은 두 publisher의 private 메서드 7곳뿐이고 인자는 모두 구체 타입 파라미터다.
+- 명시적 전파 설정은 `NOT_SUPPORTED` 6곳(리스너 4, `PaymentManagement` 2)뿐이다. main 코드의 `publishEvent` 호출은 두 publisher의 공개 `publish` 메서드 7곳뿐이고 인자는 모두 구체 타입 파라미터다.
 - IDE: 플러그인 판정을 흉내 낸 inspection 스크립트로, 이전 발행 지점은 `forEach`·`KFunction`으로 읽히고 구체 타입 파라미터(`OrderPaidListenerIntegrationTest`)는 `com.resilientpos.contract.OrderPaid`로 읽히는 것을 확인했다. IDE가 연 프로젝트가 main checkout이라 이 브랜치의 거터는 머지 뒤 확인한다.
 - `NOT_SUPPORTED` 구간에서 `findById`는 EntityManager를 놓고(바인딩 없음) 파생 쿼리는 묶는(바인딩 있음) 것을 임시 통합 테스트로 확인하고 지웠다. 이 사실을 `authorize` 문서와 wiki에 적었다.
 - `TransactionDeclarationTest`는 클래스에 붙인 `@Transactional`을 잡는다(임시 위반으로 확인).
