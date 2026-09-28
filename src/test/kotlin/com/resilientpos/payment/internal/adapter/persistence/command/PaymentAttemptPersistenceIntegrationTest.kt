@@ -1,6 +1,7 @@
 package com.resilientpos.payment.internal.adapter.persistence.command
 
 import com.resilientpos.PostgresIntegrationTest
+import com.resilientpos.inTransaction
 import com.resilientpos.foundation.Money
 import com.resilientpos.foundation.UuidV7IdentifierGenerator
 import com.resilientpos.contract.PaymentAttemptKind
@@ -8,17 +9,26 @@ import com.resilientpos.payment.PaymentAttemptStatus
 import com.resilientpos.payment.PaymentCommand
 import com.resilientpos.payment.PaymentId
 import com.resilientpos.payment.internal.domain.PaymentAttempt
+import com.resilientpos.payment.internal.domain.PaymentAttemptRepository
+import com.resilientpos.platform.JdslQueryExecutor
+import com.resilientpos.platform.selectFrom
 import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.TerminalId
 import java.time.Instant
 import java.util.Currency
 import java.util.UUID
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.dao.DataIntegrityViolationException
+import org.springframework.dao.PessimisticLockingFailureException
+import org.springframework.transaction.support.TransactionOperations
 
 /**
  * 한 주문에 결제 시도가 여러 건 달리는지, 그러면서도 같은 checkout의 승인이 중복되지 않는지 실제 PostgreSQL에서 확인한다.
@@ -29,10 +39,13 @@ import org.springframework.dao.DataIntegrityViolationException
  *
  * **`@Transactional`을 붙이지 않는다.** 붙이면 저장 직후의 조회가 같은 영속성 컨텍스트의 관리 엔티티를 돌려줘
  * DB를 한 번도 읽지 않고 통과한다. 통화 왕복도 금액 scale도 검증되지 않는다.
+ * 저장은 테스트가 연 트랜잭션에서 하고 커밋한 뒤 다시 읽는다.
  * 격리는 테스트마다 다른 `orderId`를 쓰는 것으로 한다. 행은 JVM 수명 동안 남으므로 전체 개수를 세는 단언을 두지 않는다.
  */
 class PaymentAttemptPersistenceIntegrationTest(
-    @Autowired private val repository: PaymentAttemptJpaRepository,
+    @Autowired private val repository: PaymentAttemptRepository,
+    @Autowired private val queries: JdslQueryExecutor,
+    @Autowired private val transactions: TransactionOperations,
 ) : PostgresIntegrationTest() {
 
     private val krw: Currency = Currency.getInstance("KRW")
@@ -74,7 +87,14 @@ class PaymentAttemptPersistenceIntegrationTest(
     )
 
     private fun save(vararg attempts: PaymentAttempt) =
-        attempts.forEach { repository.save(PaymentAttemptEntity.from(it)) }
+        attempts.forEach { attempt -> transactions.inTransaction { repository.save(attempt) } }
+
+    private fun findAllByOrderId(orderId: UUID): List<PaymentAttemptEntity> =
+        queries.findAll {
+            selectFrom(PaymentAttemptEntity::class)
+                .where(path(PaymentAttemptEntity::orderId).eq(orderId))
+                .orderBy(path(PaymentAttemptEntity::id).asc())
+        }
 
     @Test
     fun `거절 뒤 재시도와 취소가 같은 주문에 나란히 쌓인다`() {
@@ -92,7 +112,7 @@ class PaymentAttemptPersistenceIntegrationTest(
             stored(orderId, checkoutNo = 2),
         )
 
-        val rows = repository.findAllByOrderIdOrderById(orderId)
+        val rows = findAllByOrderId(orderId)
         assertEquals(5, rows.size)
         assertEquals(first.id, rows[1].toDomain().retriedFrom)
     }
@@ -114,7 +134,7 @@ class PaymentAttemptPersistenceIntegrationTest(
 
         save(saved)
 
-        val restored = repository.findAllByOrderIdOrderById(orderId).single().toDomain()
+        val restored = findAllByOrderId(orderId).single().toDomain()
         assertEquals(saved.id, restored.id)
         assertEquals(saved.orderId, restored.orderId)
         assertEquals(saved.storeId, restored.storeId)
@@ -143,7 +163,7 @@ class PaymentAttemptPersistenceIntegrationTest(
 
         save(attempt)
 
-        val restored = repository.findAllByOrderIdOrderById(orderId).single().toDomain()
+        val restored = findAllByOrderId(orderId).single().toDomain()
         assertEquals(PaymentAttemptKind.CANCELLATION, restored.kind)
         assertEquals(PaymentAttemptStatus.UNKNOWN, restored.status)
         assertEquals("fake-order-1", restored.providerReference)
@@ -161,7 +181,7 @@ class PaymentAttemptPersistenceIntegrationTest(
         // createAttempt와 같은 순서다. 0원 시도는 만든 뒤 provider 없이 승인한다.
         save(requireNotNull(authorization(orderId, amount = "0").approveIfFree(ids, now)).aggregate)
 
-        val restored = repository.findAllByOrderIdOrderById(orderId).single().toDomain()
+        val restored = findAllByOrderId(orderId).single().toDomain()
         assertEquals(PaymentAttemptStatus.APPROVED, restored.status)
         assertEquals(Money.of("0", krw), restored.amount)
         assertNull(restored.providerReference)
@@ -175,6 +195,37 @@ class PaymentAttemptPersistenceIntegrationTest(
 
         save(stored(orderId, amount = max))
 
-        assertEquals(max, repository.findAllByOrderIdOrderById(orderId).single().toDomain().amount)
+        assertEquals(max, findAllByOrderId(orderId).single().toDomain().amount)
+    }
+
+    @Test
+    fun `잠금을 3초 넘게 기다린 조회는 Spring의 잠금 실패 예외로 끝난다`() {
+        // Kafka 재시도 허용 목록이 Spring 예외 타입으로 판정한다. JPA 예외가 그대로 올라오면 재시도 없이 DLT로 간다.
+        val attempt = authorization(UUID.randomUUID())
+        save(attempt)
+        val locked = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val executor = Executors.newSingleThreadExecutor()
+        try {
+            val holder = executor.submit {
+                transactions.executeWithoutResult {
+                    repository.findByIdForUpdate(attempt.id)
+                    locked.countDown()
+                    check(release.await(30, TimeUnit.SECONDS)) { "앞 트랜잭션을 풀어 주는 신호가 오지 않았다" }
+                }
+            }
+            assertTrue(locked.await(10, TimeUnit.SECONDS), "앞 트랜잭션이 잠금을 쥔 상태에 도달해야 한다")
+
+            assertFailsWith<PessimisticLockingFailureException> {
+                transactions.executeWithoutResult { repository.findByIdForUpdate(attempt.id) }
+            }
+
+            release.countDown()
+            holder.get(10, TimeUnit.SECONDS)
+        } finally {
+            release.countDown()
+            executor.shutdown()
+            executor.awaitTermination(10, TimeUnit.SECONDS)
+        }
     }
 }

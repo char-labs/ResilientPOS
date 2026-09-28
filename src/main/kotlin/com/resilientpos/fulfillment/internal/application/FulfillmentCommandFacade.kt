@@ -3,8 +3,8 @@ package com.resilientpos.fulfillment.internal.application
 import com.resilientpos.foundation.IdentifierGenerator
 import com.resilientpos.fulfillment.internal.domain.Fulfillment
 import com.resilientpos.fulfillment.internal.domain.FulfillmentRepository
+import com.resilientpos.platform.Tx
 import org.springframework.stereotype.Service
-import org.springframework.transaction.annotation.Transactional
 
 /**
  * fulfillment를 만드는 일은 전부 여기를 거친다. 인터페이스를 따로 두지 않는 구체 클래스다. 구현이 둘이 될 때 뽑는다.
@@ -25,17 +25,16 @@ class FulfillmentCommandFacade(
      * 읽은 뒤 넣기 전의 창은 `t_fulfillment`의 unique `(order_id)`가 닫는다. 동시 배달에서
      * 진 쪽은 커밋에서 unique 위반으로 실패한다.
      */
-    @Transactional
-    fun createFulfillment(command: FulfillmentCommand.Create): FulfillmentCommand.Create.Result {
+    fun createFulfillment(command: FulfillmentCommand.Create): FulfillmentCommand.Create.Result = Tx.masterTx {
         // ponytail: 같은 주문이 동시에 두 번 오면(리밸런스 순간) 진 쪽이 unique 위반으로 실패한다(fulfillment는 이미 있다).
         // Kafka 재시도가 다시 읽어 기존 것을 돌려받으므로 해소된다. 재시도 없는 진입점이 생기면 insert ... on conflict (order_id) do nothing 뒤 조회로 바꾼다.
         val existing = repository.findByOrderId(command.orderId)
         if (existing != null) {
-            return FulfillmentCommand.Create.Result(existing.id, created = false)
+            return@masterTx FulfillmentCommand.Create.Result(existing.id, created = false)
         }
 
         val fulfillment = Fulfillment.create(command.orderId, identifierGenerator)
         val saved = repository.save(fulfillment)
-        return FulfillmentCommand.Create.Result(saved.id, created = true)
+        FulfillmentCommand.Create.Result(saved.id, created = true)
     }
 }
