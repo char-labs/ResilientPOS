@@ -5,11 +5,7 @@ import subprocess
 import tempfile
 import unittest
 
-from check_pr import check, SECTIONS, WARN_LINES, FAIL_LINES
-
-# setUp이 임시 저장소로 chdir하므로 저장소 경로는 그 전에 잡아 둔다.
-REPO_ROOT = Path(__file__).resolve().parent.parent
-
+from check_pr import check, SECTIONS
 
 class HarnessTest(unittest.TestCase):
     def setUp(self):
@@ -107,37 +103,15 @@ class HarnessTest(unittest.TestCase):
             self.fail(f'통계 줄에서 일반 줄 수를 읽지 못했다: {stats}')
         return int(matched.group(1))
 
-    def size_case(self, total):
-        """일반 변경 합계가 정확히 total줄이 되도록 맞추고 (오류, 경고)를 돌려준다."""
-        self.write('src/large.txt', '')
-        filler = total - self.counted_lines()
-        self.write('src/large.txt', 'line\n' * filler)
-        errors, warnings, _ = check(self.base, worktree=True)
-        self.assertEqual(total, self.counted_lines())
-        return errors, warnings
-
-    def test_size_boundaries(self):
-        """경계의 양쪽을 실제 합계로 찍는다.
-
-        spec과 구현 파일이 고정 오버헤드라, 파일 하나에 임계값만큼 써 넣으면 검사기가 보는 값은
-        그보다 크다. 그 차이만큼 경계에서 떨어진 곳을 찍게 되므로 합계를 직접 맞춘다.
-        단언 대상은 메시지의 숫자가 아니라 오류·경고 목록이다. 숫자를 보면 조건이 아니라
-        메시지 문자열을 검사하게 되어 조건만 바뀐 회귀를 놓친다.
-        """
+    def test_size_is_not_judged(self):
+        """PR 단위는 개발 컨텍스트다. 줄 수가 아무리 커도 크기로는 오류·경고를 내지 않고 통계로만 보여 준다."""
         self.start()
         self.implementation()
-
-        errors, warnings = self.size_case(WARN_LINES - 1)
+        self.write('src/large.txt', 'line\n' * 10000)
+        errors, warnings, _ = check(self.base, worktree=True)
         self.assertEqual([], errors)
         self.assertEqual([], warnings)
-
-        for total in (WARN_LINES, FAIL_LINES):
-            errors, warnings = self.size_case(total)
-            self.assertEqual([], errors)
-            self.assertEqual(1, len(warnings), f'{total}줄에서 크기 경고 하나만 나와야 한다')
-
-        errors, warnings = self.size_case(FAIL_LINES + 1)
-        self.assertEqual(1, len(errors), f'{FAIL_LINES + 1}줄에서 크기 오류가 나와야 한다')
+        self.assertGreaterEqual(self.counted_lines(), 10000)
 
     def test_file_count_does_not_fail(self):
         """파일 수는 판정하지 않는다. 패키지 이동처럼 파일만 많은 변경을 막지 않기 위해서다."""
@@ -148,17 +122,6 @@ class HarnessTest(unittest.TestCase):
         errors, warnings, _ = check(self.base, worktree=True)
         self.assertEqual([], errors)
         self.assertEqual([], warnings)
-
-    def test_limits_match_the_wiki(self):
-        """한도의 정본은 개발 워크플로 wiki다. 검사기와 wiki가 갈라지면 둘 중 하나가 거짓말을 한다.
-
-        경계 테스트는 상수를 읽으므로 상수를 바꾸면 양쪽이 같이 움직여 값 자체는 고정되지 않는다.
-        값을 붙잡는 것은 이 대조뿐이다.
-        """
-        workflow = (REPO_ROOT / 'docs/wiki/development-workflow.md').read_text()
-        size_section = workflow.split('## 크기와 분할', 1)[1].split('\n## ', 1)[0]
-        self.assertIn(f'{WARN_LINES}줄', size_section)
-        self.assertIn(f'{FAIL_LINES}줄', size_section)
 
     def test_stats_report_file_count(self):
         """파일 수를 판정에서 뺀 대신 통계로 내보낸다. 사람이 보는 유일한 신호라 사라지면 안 된다."""
@@ -296,8 +259,8 @@ class MigrationsOnlyModeTest(HarnessTest):
         self.assertEqual(1, len(errors), errors)
         self.assertIn('Flyway 버전 2', errors[0])
 
-    def test_ignores_missing_spec_and_size_rules(self):
-        self.write('src/example.txt', 'spec 없이 큰 변경\n')
+    def test_ignores_missing_spec_rules(self):
+        self.write('src/example.txt', 'spec 없는 변경\n')
         self.migration('V002__order_create_orders.sql')
         self.commit()
         errors, _, _ = check(self.base, migrations_only=True)
