@@ -10,7 +10,6 @@ import org.springframework.transaction.annotation.Transactional
  * 한 시점이 필요한 조회는 한 쿼리로 읽거나 루트를 잠그고 읽는다(도메인 모델 §4.3).
  */
 @Target(AnnotationTarget.FUNCTION)
-@Retention(AnnotationRetention.RUNTIME)
 @Transactional(readOnly = true, propagation = Propagation.SUPPORTS)
 annotation class ReadOnlyTransactional
 

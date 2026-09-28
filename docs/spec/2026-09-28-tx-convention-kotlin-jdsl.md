@@ -35,7 +35,7 @@ Kotlin JDSL
 - 호환 근거(2026-09-28 확인)
   - [GitHub README](https://github.com/line/kotlin-jdsl#requirements): 사용자 요구 사항은 Java 8 이상, Kotlin 1.7 이상이다. 이 저장소는 Java 25, Kotlin 2.4.10이다. `jpql-render` 3.9.0 pom은 Kotlin stdlib 1.9.22를 runtime으로 선언한다. Kotlin은 이전 버전으로 컴파일된 라이브러리를 읽으므로 2.4.10에서 쓸 수 있다.
   - [Spring supports 문서](https://kotlin-jdsl.gitbook.io/docs/jpql-with-kotlin-jdsl/spring-supports): Spring Boot 4용 모듈은 `spring-data-jpa-boot4-support`이고(pom이 `spring-boot-dependencies` 4.0.0을 import한다), Spring Data JPA 4에서 `EntityManager` 빈이 자동 등록되지 않으니 `SharedEntityManagerCreator`로 직접 등록하라고 안내한다. 이 PR은 지원 모듈을 쓰지 않는다(검토한 대안). 실행기는 이미 adapter들이 주입받아 쓰는 `EntityManager` 빈을 그대로 받는다.
-  - DSL·렌더러는 JPA 구현에 묶이지 않고 JPQL 문자열과 파라미터를 만든다. 실행은 Hibernate 7(Boot 4.1.1 관리)의 `EntityManager.createQuery`다. 렌더링한 파라미터 중 쿼리에 없는 이름은 건너뛴다. 지원 모듈의 `JpqlEntityManagerUtils.setParams`와 같은 처리다.
+  - DSL·렌더러는 JPA 구현에 묶이지 않고 JPQL 문자열과 파라미터를 만든다. 실행은 Hibernate 7(Boot 4.1.1 관리)의 `EntityManager.createQuery`다. 렌더링한 파라미터를 그대로 바인딩한다. 지원 모듈의 `JpqlEntityManagerUtils.setParams`는 쿼리에 없는 이름을 건너뛰지만, 여기서는 그런 이름이 오면 `setParameter`가 실패해 드러나게 둔다.
 - `PaymentAttempt.findById`를 `@ReadOnlyTransactional`로 옮긴 뒤 `ProbingGateway`의 자원 미결속 검사가 빨강이 되면 `authorize`의 첫 조회를 짧은 트랜잭션(`Tx.masterTx`)으로 감싼다. 검사는 약하게 바꾸지 않는다.
 
 문서
@@ -118,4 +118,6 @@ Kotlin JDSL
 - 한 시점이 필요한 조회를 "`masterTx`로 감싼다"고 적지 않았다. PostgreSQL 기본 격리(READ COMMITTED, `application.yaml`에 격리 설정 없음)에서는 트랜잭션 안에서도 문장마다 스냅샷을 새로 잡는다. 한 쿼리로 읽거나 루트를 잠그고 읽는다고 적었다.
 - multi-review: Claude 80점, Codex 76점, Gemini는 CLI가 없어 미실행. 두 리뷰가 모두 지적한 실행기의 예외 번역(HIGH)과 spec 제외 절을 반영했다. Codex만 지적한 것 중 README의 "Kotlin JDSL은 의존성에 없다"·"JDSL은 DTO projection read" 두 문장을 고쳤고 `findFirstForUpdate`에 `setMaxResults(1)`을 걸었다. Claude만 지적한 것 중 반영: 실행기의 예외 번역(HIGH, 위 TDD 행), 한 시점 조회 문구, readOnly 효과 실측, `TransactionDeclarationTest`가 막는 범위를 wiki에 정확히 적기, 제외 절 정리, `findById` 문구, `findFirst`·`findFirstForUpdate`를 PK·unique 조건에만 쓴다는 KDoc. 반영하지 않음: `Tx.runner`의 `@Volatile`(운영은 기동 중 한 번 넣고 요청·consumer 스레드가 그 뒤에 시작해 가시성이 보장된다. 테스트의 다른 스레드 문제는 가시성이 아니라 어느 러너를 보느냐라 남은 위험으로 둔다), `TxRunner.runTx`의 `rollbackFor = Exception`(checked 예외에서 커밋하는 것은 기존 `@Transactional`과 같은 동작이라 이 PR의 범위 밖이다), `@Transactional` 허용 목록 ArchUnit 규칙(클래스 이름을 규칙에 박게 되어 wiki 문장을 테스트가 막는 두 규칙으로 좁혔다), 지연 초기화 대비, `lock_timeout`을 0으로 되돌리는 Hibernate 동작(기존과 같다), `selectFrom`의 `inline reified`(JDSL `entity`가 reified라 필요하다).
 - 남은 위험: 캐시된 컨텍스트의 Kafka consumer 스레드가 컨텍스트 없는 단위 테스트(`Tx.initialize(TxRunner())`) 도중에 Facade를 부르면 트랜잭션 없이 돌 수 있다. 전체 테스트에서 나타나지 않았다. 사용자 결정대로 나타나면 그때 정한다.
+- 최소 해법으로 다시 줄였다: 실행기의 파라미터 이름 필터를 빼고(어긋나면 조용히 넘기지 않고 실패한다), 잠금 힌트 이름은 Hibernate의 `SpecHints.HINT_SPEC_LOCK_TIMEOUT`을 쓰고, Kotlin 기본값인 `@Retention(RUNTIME)`을 뺐다.
+- 간헐 실패 1건: 정리 뒤 첫 전체 실행에서 `OrderInsertStatementCountIntegrationTest`의 "기존 주문에 line을 바꾸고 더해 저장하면 새 line은 SELECT 없이 INSERT 한 번이다"가 SELECT 4 기대에 6으로 실패했다. 단독 실행과 다음 전체 실행은 통과했다. 이 테스트가 세는 Hibernate 통계는 SessionFactory 전체 값이라, 앞 테스트가 남긴 Kafka consumer의 조회가 측정 구간에 섞이면 늘어난다. 이 PR의 변경과 무관한 측정 방식의 문제로 보고 여기서 고치지 않는다.
 - `./gradlew test`: 270개 통과, 실패 0.

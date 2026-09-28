@@ -11,6 +11,7 @@ import jakarta.persistence.EntityManager
 import jakarta.persistence.LockModeType
 import jakarta.persistence.TypedQuery
 import kotlin.reflect.KClass
+import org.hibernate.jpa.SpecHints
 import org.springframework.stereotype.Repository
 
 /**
@@ -39,7 +40,7 @@ class JdslQueryExecutor(private val entityManager: EntityManager) {
     fun <T : Any> findFirstForUpdate(query: Jpql.() -> JpqlQueryable<SelectQuery<T>>): T? =
         createQuery(query)
             .setLockMode(LockModeType.PESSIMISTIC_WRITE)
-            .setHint(LOCK_TIMEOUT_HINT, LOCK_TIMEOUT_MILLIS)
+            .setHint(SpecHints.HINT_SPEC_LOCK_TIMEOUT, LOCK_TIMEOUT_MILLIS)
             .setMaxResults(1)
             .resultList
             .firstOrNull()
@@ -48,14 +49,11 @@ class JdslQueryExecutor(private val entityManager: EntityManager) {
         val query = jpql(init)
         val rendered = renderer.render(query, renderContext)
         return entityManager.createQuery(rendered.query, query.returnType.java).apply {
-            // 지원 모듈의 JpqlEntityManagerUtils처럼 쿼리에 없는 이름은 건너뛴다.
-            val names = parameters.mapNotNull { it.name }.toSet()
-            rendered.params.filterKeys { it in names }.forEach { (name, value) -> setParameter(name, value) }
+            rendered.params.forEach { (name, value) -> setParameter(name, value) }
         }
     }
 
     companion object {
-        private const val LOCK_TIMEOUT_HINT = "jakarta.persistence.lock.timeout"
         private const val LOCK_TIMEOUT_MILLIS = 3000
         private val renderer = JpqlRenderer()
         private val renderContext = JpqlRenderContext()
