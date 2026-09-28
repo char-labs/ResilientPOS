@@ -68,9 +68,14 @@ class PaymentManagementTest {
         }
     }
 
-    private class RecordingPublisher : ApplicationEventPublisher {
+    /** `repository`를 주면 발행하는 순간까지 몇 번 갱신했는지도 적는다. 저장 → 발행 순서를 본다. */
+    private class RecordingPublisher(private val repository: RecordingRepository? = null) : ApplicationEventPublisher {
         val published = mutableListOf<Any>()
-        override fun publishEvent(event: Any) { published += event }
+        val updatedBeforePublish = mutableListOf<Int>()
+        override fun publishEvent(event: Any) {
+            published += event
+            repository?.let { updatedBeforePublish += it.updated.size }
+        }
     }
 
     private fun command(amount: String) = PaymentCommand.CreateAttempt(
@@ -115,10 +120,13 @@ class PaymentManagementTest {
 
     @Test
     fun `0원 시도는 생성과 승인 사실을 순서대로 발행한다`() {
+        val repository = RecordingRepository()
         val publisher = RecordingPublisher()
 
-        val result = management(RecordingRepository(), publisher).createAttempt(command("0"))
+        val result = management(repository, publisher).createAttempt(command("0"))
 
+        // 중간 상태(REQUESTED)를 저장하지 않고 최종 상태로 한 번만 넣는다.
+        assertEquals(PaymentAttemptStatus.APPROVED, repository.saved.single().status)
         assertEquals(2, publisher.published.size)
         assertTrue(publisher.published[0] is PaymentEvent.AttemptCreated)
         val approved = publisher.published[1] as PaymentApproved
@@ -143,13 +151,14 @@ class PaymentManagementTest {
     }
 
     @Test
-    fun `승인을 적용하면 승인 사실을 발행한다`() {
+    fun `승인을 적용하면 저장한 뒤 승인 사실을 발행한다`() {
         val repository = RecordingRepository()
-        val publisher = RecordingPublisher()
+        val publisher = RecordingPublisher(repository)
         val gateway = StubGateway(AuthorizationOutcome.Approved("PROVIDER-REF"))
         val management = management(repository, publisher, gateway)
         val created = management.createAttempt(command("4500"))
         publisher.published.clear()
+        publisher.updatedBeforePublish.clear()
 
         val result = management.authorize(PaymentCommand.Authorize(created.paymentId))
 
@@ -158,6 +167,7 @@ class PaymentManagementTest {
         assertEquals(created.paymentId.value, approved.paymentId)
         assertEquals("PROVIDER-REF", approved.providerReference)
         assertEquals(1, gateway.calls)
+        assertEquals(listOf(1), publisher.updatedBeforePublish)
     }
 
     @Test
@@ -173,6 +183,21 @@ class PaymentManagementTest {
         assertEquals(PaymentAttemptStatus.DECLINED, result.status)
         val declined = publisher.published.single() as PaymentEvent.Declined
         assertEquals(created.paymentId, declined.paymentId)
+    }
+
+    @Test
+    fun `미확인을 적용하면 미확인 사실을 발행한다`() {
+        val repository = RecordingRepository()
+        val publisher = RecordingPublisher()
+        val management = management(repository, publisher, StubGateway(AuthorizationOutcome.Unknown))
+        val created = management.createAttempt(command("4500"))
+        publisher.published.clear()
+
+        val result = management.authorize(PaymentCommand.Authorize(created.paymentId))
+
+        assertEquals(PaymentAttemptStatus.UNKNOWN, result.status)
+        val unknown = publisher.published.single() as PaymentEvent.Unknown
+        assertEquals(created.paymentId, unknown.paymentId)
     }
 
     @Test

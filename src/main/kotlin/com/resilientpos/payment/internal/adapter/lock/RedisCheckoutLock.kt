@@ -20,7 +20,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
  *
  * Redis 오류나 대기 초과면 경고만 남기고 잠그지 않는다(fail-open). DB unique가 방어선이라 결제를 멈출 이유가 없다.
  *
- * 트랜잭션 밖 호출은 해제를 거는 `registerSynchronization`이 `IllegalStateException`으로 거절한다.
+ * 트랜잭션 동기화가 없는 호출은 해제를 거는 `registerSynchronization`이 `IllegalStateException`으로 거절한다.
  * 잠금을 얻은 뒤라 그 키는 TTL까지 남는다. 프로그래밍 오류에서만 생긴다.
  */
 @Component

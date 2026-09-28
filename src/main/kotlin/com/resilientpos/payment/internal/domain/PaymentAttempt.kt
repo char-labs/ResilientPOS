@@ -51,7 +51,18 @@ class PaymentAttempt private constructor(
      * `PaymentManagement`가 결말이 난 시도면 provider를 부르지 않고 돌아선다.
      * 그 조기 반환을 건너뛴 호출만 이 예외를 본다.
      */
-    fun approve(providerReference: String?, ids: IdentifierGenerator, now: Instant): Transition<PaymentAttempt, PaymentApproved> {
+    fun approve(providerReference: String, ids: IdentifierGenerator, now: Instant): Transition<PaymentAttempt, PaymentApproved> =
+        approved(providerReference, ids, now)
+
+    /**
+     * 0원 시도는 provider를 부를 것이 없어 바로 승인한다. 0원이 아니면 `null`이다.
+     * 여기서 거절하면 전액 할인·프로모션 주문이 결제 단계에서 막힌다. provider를 부르지 않았으므로 참조가 없다.
+     */
+    fun approveIfFree(ids: IdentifierGenerator, now: Instant): Transition<PaymentAttempt, PaymentApproved>? =
+        if (amount == Money.zero(amount.currency)) approved(null, ids, now) else null
+
+    /** 참조가 없는 승인은 [approveIfFree]만 만든다. provider가 승인했다면 참조가 늘 있다. */
+    private fun approved(providerReference: String?, ids: IdentifierGenerator, now: Instant): Transition<PaymentAttempt, PaymentApproved> {
         requireRequested()
         val approved = PaymentApproved(
             eventId = ids.next(),
@@ -101,13 +112,6 @@ class PaymentAttempt private constructor(
         )
         return Transition(copy(PaymentAttemptStatus.UNKNOWN, null), listOf(unknown))
     }
-
-    /**
-     * 0원 시도는 provider를 부를 것이 없어 바로 승인한다. 0원이 아니면 `null`이다.
-     * 여기서 거절하면 전액 할인·프로모션 주문이 결제 단계에서 막힌다. provider를 부르지 않았으므로 참조가 없다.
-     */
-    fun approveIfFree(ids: IdentifierGenerator, now: Instant): Transition<PaymentAttempt, PaymentApproved>? =
-        if (amount == Money.zero(amount.currency)) approve(null, ids, now) else null
 
     private fun requireRequested() {
         if (status != PaymentAttemptStatus.REQUESTED) {
