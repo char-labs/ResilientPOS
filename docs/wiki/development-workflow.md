@@ -39,7 +39,7 @@ PR spec(`docs/spec/yyyy-mm-dd-slug.md`)은 PR 한 개의 계약이다. 여러 PR
 - **스택 PR(다른 PR 브랜치를 base로 삼는 PR)을 만들지 않는다.** 앞 작업에 의존하면 앞 PR이 머지되길 기다렸다
   `main`에서 시작하거나, 같은 컨텍스트면 한 PR로 합친다. 앞 PR이 squash 머지되면 뒤 PR의 base가 사라져
   `rebase --onto`와 충돌 해결이 따라온다.
-- 바이너리는 일반 PR에서 거절한다. 원문 보관을 위한 `docs/references/*.md` 신규 파일만 별도 한도 10개/5000줄을 적용한다.
+- 바이너리는 일반 PR에서 거절한다. 원문 보관(`docs/references/**`의 신규 Markdown)에는 10개/5000줄 한도가 있다.
   기존 원문 변경/삭제는 거절한다. 수정된 해석은 wiki에 작성한다.
 
 ### 충돌 방지: 가장 먼저 지킨다
@@ -72,18 +72,19 @@ gh pr list --state open --json number,headRefName,files     # 열린 PR과 변�
 
 ### epic 브랜치와 PR 단위
 [orchestrator 스킬](../../.claude/skills/resilientpos-orchestrator/SKILL.md)과 [git 스킬](../../.claude/skills/resilientpos-git/SKILL.md)은
-"사용자 요청 1건 = 외부로 나가는 PR 1개" 원칙으로 동작한다.
+"개발 컨텍스트 1개 = 외부로 나가는 PR 1개" 원칙으로 동작한다. 요청 하나가 한 컨텍스트면 크기와 상관없이 PR 하나다.
 
 ```
 main
-  └─ epic/<name>              ← 요청 1건의 수렴점. PR은 여기서만 만든다
+  └─ epic/<name>              ← 컨텍스트 1개의 수렴점. PR은 여기서만 만든다
        ├─ worktree 브랜치 A   (sub-agent 격리 작업, epic으로 머지 후 삭제, PR 없음)
        └─ worktree 브랜치 B
 ```
 
-- 내부 분해 단위(worktree 브랜치, Task)는 PR을 만들지 않는다. PR 권한은 요청 단위 한 곳에만 있다.
-- epic 브랜치의 PR도 위 "PR 단위와 충돌 방지"를 그대로 따른다. 요청 하나가 한 컨텍스트면 크기와 상관없이 PR 하나다.
-  서로 다른 컨텍스트가 섞였으면 컨텍스트마다 `main` 기준 PR로 나누고 날짜형 spec을 하나씩 둔다. 다른 PR 브랜치를 `--base`로 삼지 않는다.
+- 내부 분해 단위(worktree 브랜치, Task)는 PR을 만들지 않는다. PR 권한은 컨텍스트 단위 브랜치 한 곳에만 있다.
+- epic 브랜치의 PR도 위 "PR 단위와 충돌 방지"를 그대로 따른다. 요청 안에 서로 다른 컨텍스트가 섞였으면
+  컨텍스트마다 epic(또는 feature) 브랜치를 `main`에서 따로 따고 날짜형 spec을 하나씩 둔다.
+  뒤 컨텍스트가 앞 컨텍스트에 의존하면 앞 PR이 머지된 뒤 `main`에서 딴다. 다른 PR 브랜치를 `--base`로 삼지 않는다.
 - 한 사람이 직접 작업하는 작은 변경은 epic 없이 feature 브랜치 하나로 진행해도 된다. epic은 위임·병렬이 있을 때 쓴다.
 
 ## Wiki 유지
