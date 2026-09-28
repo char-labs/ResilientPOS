@@ -7,6 +7,7 @@ import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.TerminalId
 import java.time.Instant
 import java.util.UUID
+import org.springframework.modulith.events.Externalized
 
 /**
  * `payment` 모듈 안에 머무는 도메인 이벤트의 닫힌 집합. 모듈을 건너가는 `PaymentApproved`는 `contract`에 있다.
@@ -18,6 +19,7 @@ sealed interface PaymentEvent : DomainEvent {
     /**
      * 한 주문의 결제 시도를 만들었다는 사실. 한 주문에 여러 번 날 수 있고 `paymentId`가 그것을 가른다.
      */
+    @Externalized(AttemptCreated.TOPIC + "::#{#this.orderId}")
     data class AttemptCreated(
         override val eventId: UUID,
         override val occurredAt: Instant,
@@ -28,7 +30,12 @@ sealed interface PaymentEvent : DomainEvent {
         val checkoutNo: Int,
         val kind: PaymentAttemptKind,
         val amount: Money,
-    ) : PaymentEvent
+    ) : PaymentEvent {
+        companion object {
+            /** 토픽 이름은 저장 형식이다. 받는 쪽이 같은 모듈이어도 재시도·DLT를 같은 경로로 받으려고 Kafka를 거친다. */
+            const val TOPIC = "payment.attempt-created"
+        }
+    }
 
     /**
      * provider가 시도를 거절했다는 사실. 받을 쪽이 아직 없어 `payment`에 남는다.

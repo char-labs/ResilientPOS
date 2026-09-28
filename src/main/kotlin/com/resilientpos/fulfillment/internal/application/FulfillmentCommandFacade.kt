@@ -27,8 +27,8 @@ class FulfillmentCommandFacade(
      */
     @Transactional
     fun createFulfillment(command: FulfillmentCommand.Create): FulfillmentCommand.Create.Result {
-        // ponytail: 같은 주문이 동시에 두 번 오면 진 쪽이 unique 위반으로 FAILED를 남긴다(fulfillment는 이미 있다).
-        // 지금 그 창은 처리 중인 기록의 resubmit뿐이다. 재발행·Kafka가 생기면 insert ... on conflict (order_id) do nothing 뒤 조회로 바꾼다.
+        // ponytail: 같은 주문이 동시에 두 번 오면(리밸런스 순간) 진 쪽이 unique 위반으로 실패한다(fulfillment는 이미 있다).
+        // Kafka 재시도가 다시 읽어 기존 것을 돌려받으므로 해소된다. 재시도 없는 진입점이 생기면 insert ... on conflict (order_id) do nothing 뒤 조회로 바꾼다.
         val existing = repository.findByOrderId(command.orderId)
         if (existing != null) {
             return FulfillmentCommand.Create.Result(existing.id, created = false)

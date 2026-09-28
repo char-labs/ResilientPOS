@@ -31,6 +31,8 @@ dependencies {
     implementation("tools.jackson.module:jackson-module-kotlin")
     implementation("org.springframework.modulith:spring-modulith-starter-core")
     implementation("org.springframework.modulith:spring-modulith-starter-jpa")
+    implementation("org.springframework.modulith:spring-modulith-events-kafka")
+    implementation("org.springframework.boot:spring-boot-starter-kafka")
     implementation("com.github.f4b6a3:uuid-creator:6.1.1")
     implementation("io.github.oshai:kotlin-logging-jvm:8.0.4")
     implementation("org.springframework.boot:spring-boot-flyway")
@@ -49,6 +51,7 @@ dependencies {
     testImplementation("com.navercorp.fixturemonkey:fixture-monkey-starter-kotlin:1.2.3")
     testImplementation("org.springframework.boot:spring-boot-testcontainers")
     testImplementation("org.testcontainers:testcontainers-postgresql")
+    testImplementation("org.testcontainers:testcontainers-kafka")
     testImplementation("org.testcontainers:testcontainers-junit-jupiter")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
