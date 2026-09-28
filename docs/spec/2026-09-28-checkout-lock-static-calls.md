@@ -69,7 +69,6 @@
 - src/test/kotlin/com/resilientpos/payment/PaymentManagementTest.kt
 - src/test/kotlin/com/resilientpos/order/OrderCommandFacadeLineLimitTest.kt
 - docs/wiki/domain-model.md
-- docs/wiki/modulith-kafka-keywords.md
 - docs/spec/2026-09-28-checkout-lock-static-calls.md
 
 ## 인수 조건
@@ -88,11 +87,11 @@
 
 ## Wiki 영향
 - [도메인 모델](../wiki/domain-model.md): 트랜잭션 밖이어야 하는 메서드는 `NOT_SUPPORTED`로 호출자 트랜잭션을 멈추고 거절하지 않는다는 규칙, 이벤트는 모듈 publisher가 구체 타입으로 발행한다는 규칙을 이벤트 발행 규칙 옆에 적는다.
-- [Modulith·Kafka 키워드](../wiki/modulith-kafka-keywords.md): `ApplicationEventPublisher` 항목의 "이 프로젝트에서"에 모듈 publisher를 적고, 8절에 결정을 [합의]로 더한다.
+- [Modulith·Kafka 키워드](../wiki/modulith-kafka-keywords.md): `ApplicationEventPublisher` 항목의 "이 프로젝트에서"에 모듈 publisher를 적고, 8절에 결정을 [합의]로 더한다. 이 문서는 Obsidian 볼트 원본을 가리키는 링크라 저장소 커밋에 들어가지 않는다.
 - 요구사항 변화: 없다. 업무 동작과 이벤트 계약이 그대로이고, 트랜잭션 안에서 부른 승인·재결제가 거절 대신 따로 실행되는 것은 지금 호출자가 없는 경로다.
 
 ## 분할 계획
-13개 파일, 추가와 삭제 합계 350줄 안쪽이다. 경고선(20개 파일/600줄)에 이르지 않는다.
+12개 파일, 추가와 삭제 합계 350줄 안쪽이다. 경고선(20개 파일/600줄)에 이르지 않는다.
 
 ## TDD 검증 기록
 업무 동작은 바뀌지 않는 리팩터링이다. 바뀌는 두 경계(트랜잭션 밖 잠금 호출, 트랜잭션 안 승인 호출)는 통합 테스트로 RED→GREEN을 본다. publisher의 타입별 분기는 기존 Facade 테스트의 발행 검증이 덮는다.
@@ -100,7 +99,14 @@
 | 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
 |---|---|---|---|
 | 트랜잭션 밖에서 잠그면 거절한다 | `./gradlew test --tests 'com.resilientpos.payment.internal.application.PaymentAttemptCreationLockIntegrationTest'`, 전파 설정 구현이 `IllegalTransactionStateException`을 던져 실패 | 같은 명령, 설정을 지운 뒤 통과 | `./gradlew test`, 246개 통과 |
-| 트랜잭션 안에서 승인을 요청해도 바깥 트랜잭션과 따로 적용한다 | 미실행 | 미실행 | 미실행 |
+| 트랜잭션 안에서 승인을 요청해도 바깥 트랜잭션과 따로 적용한다 | `./gradlew test --tests 'com.resilientpos.payment.internal.application.PaymentAuthorizationIntegrationTest'`, `NEVER`가 `IllegalTransactionStateException`으로 거절해 실패 | `./gradlew test --tests 'com.resilientpos.payment.*' --tests 'com.resilientpos.order.*'`, `NOT_SUPPORTED`로 바꾸고 publisher를 옮긴 뒤 통과 | `./gradlew test`, 246개 통과 |
 
 ## 결과
-개발 전 작성. 개발 후 실행 결과와 변경 이유를 추가한다.
+개발 전 spec을 독립 커밋으로 작성하고, 범위를 넓힐 때마다 구현 전에 spec만 다시 커밋했다. 구현 후 아래를 확인했다.
+
+- `RedisCheckoutLock`에서 `check`를 지우고 어노테이션은 붙이지 않았다. 트랜잭션 밖 호출은 `registerSynchronization`이 `IllegalStateException`으로 거절한다. 토큰은 주입한 `IdentifierGenerator.next()`로 만든다.
+- `PaymentManagement.authorize`·`retryAuthorization`을 `NOT_SUPPORTED`로 바꿨다. 트랜잭션 안에서 부른 `authorize`는 provider를 한 번 부르고, 호출 중 DB 자원을 쥐지 않으며, 바깥을 롤백해도 `APPROVED`가 남는다.
+- `OrderEventPublisher`·`PaymentEventPublisher`를 더하고 두 Facade가 이를 거쳐 발행한다. 발행 순서·내용과 발행 기록 테스트는 고치지 않고 통과했다. Facade를 직접 만드는 단위 테스트 두 곳만 생성자 인자를 맞췄다.
+- 명시적 전파 설정은 `NOT_SUPPORTED` 6곳(리스너 4, `PaymentManagement` 2)뿐이다. main 코드의 `publishEvent` 호출은 두 publisher의 private 메서드 7곳뿐이고 인자는 모두 구체 타입 파라미터다.
+- IDE: 플러그인 판정을 흉내 낸 inspection 스크립트로, 이전 발행 지점은 `forEach`·`KFunction`으로 읽히고 구체 타입 파라미터(`OrderPaidListenerIntegrationTest`)는 `com.resilientpos.contract.OrderPaid`로 읽히는 것을 확인했다. IDE가 연 프로젝트가 main checkout이라 이 브랜치의 거터는 머지 뒤 확인한다.
+- `./gradlew test`: 246개 통과, 실패 0.
