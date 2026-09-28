@@ -8,7 +8,7 @@ import org.testcontainers.postgresql.PostgreSQLContainer
 
 /**
  * 정합성 정본이 PostgreSQL이므로 통합 테스트도 같은 엔진에서 돈다. Docker가 필요하다.
- * 결제 시도 생성의 중복 완화 잠금이 Redis를 쓰고, 모듈 사이 이벤트가 Kafka를 거치므로 둘도 함께 띄운다.
+ * 결제 시도 생성·주문 생성의 중복 완화 잠금이 Redis를 쓰고, 모듈 사이 이벤트가 Kafka를 거치므로 둘도 함께 띄운다.
  *
  * 컨테이너는 JVM 전체에서 한 번만 뜬다. JUnit의 컨테이너 생명주기를 쓰면 첫 테스트 클래스가 끝날 때
  * 컨테이너가 내려가는데 Spring은 캐시된 컨텍스트를 그대로 재사용해서 다음 클래스가 연결에 실패한다.

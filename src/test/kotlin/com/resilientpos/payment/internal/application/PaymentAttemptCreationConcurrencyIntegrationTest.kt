@@ -6,9 +6,13 @@ import com.resilientpos.foundation.Money
 import com.resilientpos.order.OrderFixtures
 import com.resilientpos.payment.PaymentCommand
 import com.resilientpos.payment.PaymentManagement
-import com.resilientpos.payment.internal.domain.CheckoutLock
+import com.resilientpos.foundation.IdentifierGenerator
+import com.resilientpos.payment.internal.domain.PaymentAttempt
+import com.resilientpos.payment.internal.domain.PaymentAttemptRepository
+import com.resilientpos.platform.DistributedLock
 import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.TerminalId
+import java.time.Clock
 import java.util.UUID
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -27,27 +31,32 @@ import org.springframework.transaction.support.TransactionOperations
 /**
  * 같은 checkout의 `createAttempt`가 겹칠 때 앞 시도가 거절까지 가도 시도가 하나인지 본다.
  *
- * 뒤쪽(B)을 바깥 트랜잭션에 넣어 조회를 마친 채 커밋을 붙잡고, 그동안 앞쪽(A)을 다른 스레드에서 끝까지 커밋시킨다.
+ * 뒤쪽(B)은 조회를 마치고 넣기만 남은 요청이다. 바깥 트랜잭션에서 repository로 직접 넣어 커밋을 붙잡고, 그동안 앞쪽(A)을 다른 스레드에서 끝까지 커밋시킨다.
+ * B를 Facade로 부르지 않는 이유: `createAttempt`는 락 블록의 새 트랜잭션에서 곧바로 커밋하므로 커밋을 붙잡을 수 없다.
  * A가 거절된 뒤 B를 커밋한다. 진행 중인 승인만 보는 partial unique는 DECLINED를 빼고 봐서 B를 막지 못한다.
  * B의 삽입은 커밋에서 flush되므로 A는 B를 기다리지 않는다 — 순서가 결정적이다. B 트랜잭션 안에 JPQL을 두면 auto-flush로
  * 이 전제가 깨진다. B 안의 폴링이 A의 커밋을 보는 것은 READ COMMITTED 전제다.
  *
- * 시도는 Facade로 직접 만든다. 주문 이벤트로 만들면 리스너가 세 번째 호출자로 끼어든다.
+ * A는 Facade로 직접 만든다. 주문 이벤트로 만들면 리스너가 세 번째 호출자로 끼어든다.
  *
- * Redis 잠금은 빈 구현으로 바꾼다. 이 테스트는 잠금이 통하지 않을 때(Redis 장애·대기 초과) DB 방어선만 보는 것이다.
+ * 분산 락은 빈 구현으로 바꾼다. 이 테스트는 잠금이 통하지 않을 때(Redis 장애·대기 초과) DB 방어선만 보는 것이다.
  */
 class PaymentAttemptCreationConcurrencyIntegrationTest(
     @Autowired private val paymentManagement: PaymentManagement,
     @Autowired private val transactions: TransactionOperations,
     @Autowired private val jdbcTemplate: JdbcTemplate,
+    @Autowired private val repository: PaymentAttemptRepository,
+    @Autowired private val identifierGenerator: IdentifierGenerator,
+    @Autowired private val clock: Clock,
 ) : PostgresIntegrationTest() {
 
     @TestConfiguration
-    class NoCheckoutLockConfiguration {
+    class NoDistributedLockConfiguration {
         @Bean
         @Primary
-        fun noCheckoutLock() = object : CheckoutLock {
-            override fun lockUntilTransactionEnds(orderId: UUID, checkoutNo: Int) = Unit
+        fun noDistributedLock() = object : DistributedLock {
+            override fun tryAcquire(key: String): String? = null
+            override fun release(key: String, token: String) = Unit
         }
     }
 
@@ -72,7 +81,7 @@ class PaymentAttemptCreationConcurrencyIntegrationTest(
         try {
             val lost = assertFailsWith<DataIntegrityViolationException> {
                 transactions.executeWithoutResult {
-                    paymentManagement.createAttempt(command)
+                    repository.save(PaymentAttempt.create(command, identifierGenerator, clock.instant()).aggregate)
                     executor.submit { paymentManagement.createAttempt(command) }.get(10, TimeUnit.SECONDS)
                     awaitUntil("A가 거절까지 간다. 현재: ${attempts(orderId)}") {
                         attempts(orderId).singleOrNull()?.get("status") == "DECLINED"

@@ -30,6 +30,9 @@ object Tx {
     fun <T> masterTx(action: () -> T): T = runner.runTx(action)
 
     fun <T> readOnlyTx(action: () -> T): T = runner.runReadOnly(action)
+
+    /** 바깥 트랜잭션과 따로 커밋한다(`REQUIRES_NEW`). [Lock]이 락을 풀기 전에 커밋하려고 쓴다. */
+    fun <T> newTx(action: () -> T): T = runner.runNewTx(action)
 }
 
 /** [Tx]가 부르는 트랜잭션 프록시. 직접 주입해 쓰지 않는다. */
@@ -41,4 +44,7 @@ class TxRunner {
 
     @ReadOnlyTransactional
     fun <T> runReadOnly(action: () -> T): T = action()
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    fun <T> runNewTx(action: () -> T): T = action()
 }
