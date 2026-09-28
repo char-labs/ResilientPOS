@@ -6,7 +6,10 @@ import kotlin.system.measureTimeMillis
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import tools.jackson.databind.json.JsonMapper
+import tools.jackson.module.kotlin.KotlinModule
 
 class MoneyTest {
 
@@ -107,6 +110,28 @@ class MoneyTest {
         assertFailsWith<DomainException>("minus") { large - Money.of("-1", krw) }
         assertFailsWith<DomainException>("생성자") { Money(BigDecimal("1000000000000000"), krw) }
         assertFailsWith<DomainException>("copy") { large.copy(amount = BigDecimal("1000000000000000")) }
+    }
+
+    @Test
+    fun `0인지와 음수인지를 부호로 판정한다`() {
+        assertTrue(Money.zero(usd).isZero)
+        assertTrue(Money.of("0.00", usd).isZero)
+        assertFalse(Money.of("0.01", usd).isZero)
+        assertFalse(Money.of("-0.01", usd).isZero)
+        assertTrue(Money.of("-0.01", usd).isNegative)
+        assertTrue(Money.of("-1", krw).isNegative)
+        assertFalse(Money.zero(krw).isNegative)
+        assertFalse(Money.of("1", krw).isNegative)
+    }
+
+    @Test
+    fun `JSON에는 금액과 통화만 나간다`() {
+        // 이벤트 serialized_event와 API 응답의 계약이다. is·get으로 시작하는 멤버를 더하면 Jackson이 필드로 내보낸다.
+        val mapper = JsonMapper.builder().addModule(KotlinModule.Builder().build()).build()
+
+        val json = mapper.readTree(mapper.writeValueAsString(Money.of("3500", krw)))
+
+        assertEquals(setOf("amount", "currency"), json.properties().map { it.key }.toSet())
     }
 
     @Test

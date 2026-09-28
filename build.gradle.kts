@@ -47,6 +47,7 @@ dependencies {
     testImplementation("org.jetbrains.kotlin:kotlin-test-junit5")
     testImplementation("org.springframework.modulith:spring-modulith-starter-test")
     testImplementation("org.springframework.modulith:spring-modulith-events-core")
+    testImplementation("org.awaitility:awaitility")
     testImplementation("com.tngtech.archunit:archunit:1.4.2")
     testImplementation("com.navercorp.fixturemonkey:fixture-monkey-starter-kotlin:1.2.3")
     testImplementation("org.springframework.boot:spring-boot-testcontainers")

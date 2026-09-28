@@ -2,7 +2,7 @@ package com.resilientpos.fulfillment.internal.application
 
 import com.resilientpos.KafkaTestSupport
 import com.resilientpos.PostgresIntegrationTest
-import com.resilientpos.PostgresIntegrationTest.Companion.awaitUntil
+import com.resilientpos.awaitUntil
 import com.resilientpos.contract.OrderPaid
 import com.resilientpos.foundation.Money
 import com.resilientpos.store.StoreId

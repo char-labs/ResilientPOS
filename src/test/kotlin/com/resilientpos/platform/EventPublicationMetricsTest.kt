@@ -1,6 +1,7 @@
 package com.resilientpos.platform
 
 import com.resilientpos.PostgresIntegrationTest
+import com.resilientpos.awaitUntil
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry
 import java.sql.Connection
 import java.sql.SQLException
@@ -20,13 +21,13 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
-import kotlin.test.fail
 import org.springframework.beans.factory.ObjectProvider
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.TestConfiguration
 import org.springframework.context.ApplicationEventPublisher
 import org.springframework.context.annotation.Import
 import org.springframework.jdbc.core.JdbcTemplate
+import org.springframework.jdbc.core.queryForObject
 import org.springframework.modulith.events.ApplicationModuleListener
 import org.springframework.scheduling.config.ScheduledTaskHolder
 import org.springframework.transaction.support.TransactionOperations
@@ -82,16 +83,8 @@ class EventPublicationMetricsTest(
     }
 
     private fun gauges(listener: String): Map<String, Double> =
-        registry.find("event.publication.incomplete").tag("listener", listener).gauges()
+        registry.incomplete(listener).gauges()
             .associate { it.id.getTag("status")!! to it.value() }
-
-    private fun awaitUntil(description: String, condition: () -> Boolean) {
-        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
-        while (!condition()) {
-            if (System.nanoTime() >= deadline) fail("10초 안에 충족되지 않았다: $description")
-            Thread.sleep(20)
-        }
-    }
 
     @Test
     fun `리스너별로 실패한 기록과 기준 시간이 지난 미완료 기록을 센다`() {
@@ -152,12 +145,12 @@ class EventPublicationMetricsTest(
         val a = uniqueListener("ProbeGrow")
         insert(a, "FAILED", Duration.ofMinutes(10))
         metrics.refresh()
-        val before = registry.find("event.publication.incomplete").tag("listener", a).gauge()!!
+        val before = registry.incomplete(a).gauge()!!
 
         insert(a, "FAILED", Duration.ofMinutes(10))
         metrics.refresh()
 
-        val after = registry.find("event.publication.incomplete").tag("listener", a).gauge()!!
+        val after = registry.incomplete(a).gauge()!!
         assertTrue(before === after, "같은 조합은 다시 등록하지 않는다")
         assertEquals(2.0, after.value())
     }
@@ -190,9 +183,8 @@ class EventPublicationMetricsTest(
         transactions.executeWithoutResult { eventPublisher.publishEvent(FailingProbe(UUID.randomUUID())) }
 
         awaitUntil("실패 기록이 남는다") {
-            jdbcTemplate.queryForObject(
-                "select count(*) from event_publication where listener_id like ? and status = 'FAILED'",
-                Int::class.java, "%FailingProbeListener%",
+            jdbcTemplate.queryForObject<Int>(
+                "select count(*) from event_publication where listener_id like ? and status = 'FAILED'", "%FailingProbeListener%",
             ) == 1
         }
         metrics.refresh()
@@ -201,7 +193,7 @@ class EventPublicationMetricsTest(
         // 테스트 리스너는 com.resilientpos.platform 아래라 실제 Modulith 행의 모듈 값까지 고정된다.
         assertEquals(
             listOf("platform"),
-            registry.find("event.publication.incomplete").tag("listener", "FailingProbeListener").gauges()
+            registry.incomplete("FailingProbeListener").gauges()
                 .map { it.id.getTag("module") },
         )
     }
@@ -219,7 +211,7 @@ class EventPublicationMetricsTest(
         val a = uniqueListener("ProbeFlaky")
         insert(a, "FAILED", Duration.ofMinutes(10))
         subject.refresh()
-        val refreshed = own.get("event.publication.incomplete.refreshed").gauge()
+        val refreshed = own.refreshedGauge()
         assertEquals(clock.instant().epochSecond.toDouble(), refreshed.value())
 
         flaky.failing = true
@@ -228,7 +220,7 @@ class EventPublicationMetricsTest(
         clock.now = before.plus(Duration.ofMinutes(1))
         subject.refresh()
 
-        assertTrue(own.find("event.publication.incomplete").tag("listener", a).gauges().isEmpty(), "개수가 남아 있다")
+        assertTrue(own.incomplete(a).gauges().isEmpty(), "개수가 남아 있다")
         assertEquals(before.epochSecond.toDouble(), refreshed.value())
 
         // 다음 조회가 성공하면 실패 중에 더해진 행까지 세고 갱신 시각도 돌아온다.
@@ -261,7 +253,7 @@ class EventPublicationMetricsTest(
     fun `멈추면 갱신이 멈추고 다시 시작하면 센다`() {
         val own = SimpleMeterRegistry()
         val subject = EventPublicationMetrics(dataSource, Clock.systemUTC(), own, Duration.ofMinutes(5))
-        val refreshed = own.get("event.publication.incomplete.refreshed").gauge()
+        val refreshed = own.refreshedGauge()
         val a = uniqueListener("ProbeStopped")
         try {
             subject.start()
@@ -276,11 +268,11 @@ class EventPublicationMetricsTest(
             stopped.join(TimeUnit.SECONDS.toMillis(10))
             assertTrue(!stopped.isAlive, "갱신 스레드가 남아 있다")
             insert(a, "FAILED", Duration.ofMinutes(10))
-            assertTrue(own.find("event.publication.incomplete").tag("listener", a).gauges().isEmpty(), "멈춘 동안 셌다")
+            assertTrue(own.incomplete(a).gauges().isEmpty(), "멈춘 동안 셌다")
 
             subject.start()
             awaitUntil("다시 시작한 뒤 센다") {
-                own.find("event.publication.incomplete").tag("listener", a).gauge()?.value() == 1.0
+                own.incomplete(a).gauge()?.value() == 1.0
             }
         } finally {
             subject.stop()
@@ -297,7 +289,7 @@ class EventPublicationMetricsTest(
         val own = SimpleMeterRegistry()
         val subject = EventPublicationMetrics(blocking, Clock.systemUTC(), own, Duration.ofMinutes(5))
         subject.stopTimeout = Duration.ofMillis(100)
-        val refreshed = own.get("event.publication.incomplete.refreshed").gauge()
+        val refreshed = own.refreshedGauge()
         val a = uniqueListener("ProbeLate")
         insert(a, "FAILED", Duration.ofMinutes(10))
         try {
@@ -310,7 +302,7 @@ class EventPublicationMetricsTest(
             old.join(TimeUnit.SECONDS.toMillis(10))
 
             assertTrue(!old.isAlive, "옛 갱신이 끝나지 않았다")
-            assertTrue(own.find("event.publication.incomplete").tag("listener", a).gauges().isEmpty(), "옛 갱신의 결과가 적용됐다")
+            assertTrue(own.incomplete(a).gauges().isEmpty(), "옛 갱신의 결과가 적용됐다")
             assertEquals(0.0, refreshed.value())
         } finally {
             blocking.release()
@@ -328,7 +320,7 @@ class EventPublicationMetricsTest(
         val own = SimpleMeterRegistry()
         val subject = EventPublicationMetrics(blocking, Clock.systemUTC(), own, Duration.ofMinutes(5))
         subject.stopTimeout = Duration.ofMillis(100)
-        val refreshed = own.get("event.publication.incomplete.refreshed").gauge()
+        val refreshed = own.refreshedGauge()
         val late = uniqueListener("ProbeAfterRestart")
         try {
             subject.start()
@@ -343,7 +335,7 @@ class EventPublicationMetricsTest(
             old.join(TimeUnit.SECONDS.toMillis(10))
 
             assertTrue(!old.isAlive, "옛 갱신이 끝나지 않았다")
-            assertTrue(own.find("event.publication.incomplete").tag("listener", late).gauges().isEmpty(), "옛 갱신의 결과가 적용됐다")
+            assertTrue(own.incomplete(late).gauges().isEmpty(), "옛 갱신의 결과가 적용됐다")
         } finally {
             blocking.release()
             subject.stop()
