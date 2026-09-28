@@ -5,6 +5,7 @@ import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -18,7 +19,8 @@ import org.springframework.transaction.support.TransactionOperations
 
 /**
  * [Lock] 블록이 같은 키끼리 줄 서고, 블록의 트랜잭션을 커밋한 뒤에 풀리는지 본다. 실제 Redis와 PostgreSQL을 쓴다.
- * 블록이 쓰는 표는 이 테스트만 쓰는 탐침이다.
+ * 블록이 쓰는 표는 이 테스트만 쓰는 탐침이다. 컨테이너를 다른 테스트와 함께 쓰므로 끝나면 지운다 —
+ * 남기면 `SchemaMigrationTest`의 테이블 목록 검사가 실행 순서에 따라 깨진다.
  */
 class LockIntegrationTest(
     @Autowired private val jdbcTemplate: JdbcTemplate,
@@ -30,6 +32,11 @@ class LockIntegrationTest(
     @BeforeTest
     fun createProbe() {
         jdbcTemplate.execute("create table if not exists t_lock_probe (id uuid primary key)")
+    }
+
+    @AfterTest
+    fun dropProbe() {
+        jdbcTemplate.execute("drop table if exists t_lock_probe")
     }
 
     private fun probes(id: UUID): Long =
