@@ -9,7 +9,7 @@
 
 ## 이 저장소에 적용한 판단
 - 사용자 홈의 전역 설정과 저장소 루트 지침을 구분한다. 이번 변경은 저장소 내부에만 적용한다.
-- 공통 정본은 루트 `AGENTS.md` 하나다. Claude Code는 2.1.277부터 `CLAUDE.md`가 없으면 `AGENTS.md`를 프로젝트 지침으로 읽으므로 import 스텁을 두지 않는다. Gemini는 같은 파일을 명시적으로 읽는다. 그보다 낮은 버전이나 `/config`의 Project instructions를 CLAUDE.md 전용으로 바꾼 환경에서는 지침이 실리지 않는다. [Claude Code의 AGENTS.md 지원](https://news.hada.io/topic?id=33925)
+- 공통 정본은 루트 `AGENTS.md` 하나다. 루트 `CLAUDE.md`는 `@AGENTS.md` import 한 줄만 두고 다른 내용을 적지 않는다. Claude Code가 `CLAUDE.md` 없이 `AGENTS.md`를 대신 읽는 동작은 버전과 `/config`의 Project instructions 설정에 따라 달라진다. 2026-09-29 2.1.284 세션에서 `AGENTS.md`가 실리지 않아 worktree 규칙을 놓친 사고가 있었다. 그래서 문서화된 `CLAUDE.md` import로 로딩을 보장한다([claude-md-import-agents](../spec/2026-09-29-claude-md-import-agents.md)). Gemini는 루트 `GEMINI.md`가 같은 파일을 가리킨다.
 - 루트에는 사용자가 요청한 현재 스택, spec/wiki 계약, 작업별 읽기 조건과 검증 명령만 둔다. 상세 개발 절차와 조사 내용은 wiki에 둔다.
 - 의존성 버전은 빌드 파일을 기준으로 관리한다. 계획만 있는 기술을 이미 사용 중인 기술로 적지 않는다.
 - 전체 wiki를 import하거나 항상 읽게 하지 않는다. Markdown 링크는 자동 import가 아니므로 읽어야 하는 시점을 함께 적는다.
