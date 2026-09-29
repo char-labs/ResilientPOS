@@ -8,7 +8,7 @@ import org.testcontainers.postgresql.PostgreSQLContainer
 
 /**
  * 정합성 정본이 PostgreSQL이므로 통합 테스트도 같은 엔진에서 돈다. Docker가 필요하다.
- * 결제 시도 생성·주문 생성의 중복 완화 잠금이 Redis를 쓰고, 모듈 사이 이벤트가 Kafka를 거치므로 둘도 함께 띄운다.
+ * 분산 락(`platform.Lock`)이 Redis를 쓰고, 모듈 사이 이벤트가 Kafka를 거치므로 둘도 함께 띄운다.
  *
  * 컨테이너는 JVM 전체에서 한 번만 뜬다. JUnit의 컨테이너 생명주기를 쓰면 첫 테스트 클래스가 끝날 때
  * 컨테이너가 내려가는데 Spring은 캐시된 컨텍스트를 그대로 재사용해서 다음 클래스가 연결에 실패한다.
@@ -19,7 +19,14 @@ import org.testcontainers.postgresql.PostgreSQLContainer
  * `src/test/resources/spring.properties`가 컨텍스트 캐시를 하나로 제한한다.
  */
 // 재시도 간격을 줄인다. 운영값(1초에서 2배씩 5회, 약 31초)이면 실패를 다루는 테스트가 그동안 파티션을 붙잡아 뒤 테스트가 시간을 넘긴다.
-@SpringBootTest(properties = ["resilientpos.kafka.partitions=1", "resilientpos.kafka.retry.initial-interval=PT0.02S"])
+// 발행 기록 재전송·정리는 하루 뒤로 미룬다. 테스트가 DB를 함께 쓰며 넣은 FAILED·완료 행을 작업이 건드리면 결과가 실행 순서에 따라 바뀐다.
+@SpringBootTest(
+    properties = [
+        "resilientpos.kafka.partitions=1",
+        "resilientpos.kafka.retry.initial-interval=PT0.02S",
+        "resilientpos.event-publication.resubmit-interval=P1D",
+    ],
+)
 abstract class PostgresIntegrationTest {
 
     companion object {
