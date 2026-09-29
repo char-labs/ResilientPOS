@@ -57,4 +57,5 @@ python3 scripts/check_pr.py --base origin/main --worktree
 - `docs/wiki/agent-instructions.md`의 폴백 의존 서술을 import 결정과 2.1.284 사고 근거로 바꿨다. `.gitignore`는 루트 `CLAUDE.md`를 제외하지 않아 그대로 추적된다.
 - grep 대상에서 `README.md`를 뺐다. `README.md:72`의 "폴백"은 Makefile 자동완성 설명이라 이번 결정과 무관하다.
 - `grep -rn "폴백\|2\.1\.277\|스텁을 두지" AGENTS.md docs/wiki` 결과 없음. `check_pr.py --base origin/main --worktree` PASS.
-- 새 Claude 세션에서 `/context`로 `AGENTS.md`가 Memory files에 실리는지는 이 세션에서 확인하지 않았다.
+- 로딩 확인(2.1.284, `claude -p`, 파일 도구 차단, 컨텍스트만으로 답하게 함): 이 worktree에서는 `CLAUDE.md`와 `AGENTS.md`가 함께 실렸고, `AGENTS.md`의 orca worktree 명령을 원문 그대로 답했다. 같은 지침이 두 번 실리지 않았다.
+- 대조 실행: `AGENTS.md`만 둔 임시 디렉터리에서도 같은 버전의 폴백으로 `AGENTS.md`가 실렸다. 사고 세션에서 실리지 않은 원인(대화형 세션, 시작 디렉터리, `/config` 설정 등)은 재현하지 못했다. 이 변경은 폴백 동작 여부와 상관없이 import로 싣는다.
