@@ -30,12 +30,12 @@ Claude Code가 어느 버전·설정에서든 `AGENTS.md`를 프로젝트 지침
 ## 인수 조건
 - 루트 `CLAUDE.md`의 내용이 `@AGENTS.md` 한 줄뿐이다.
 - `AGENTS.md`와 `docs/wiki/agent-instructions.md`에 `CLAUDE.md`를 두지 않는다거나 `AGENTS.md` 폴백에 기댄다는 문장이 없다.
-- `grep -rn "폴백\|2\.1\.277\|스텁을 두지" AGENTS.md README.md docs/wiki`가 아무것도 찾지 않는다.
+- `grep -rn "폴백\|2\.1\.277\|스텁을 두지" AGENTS.md docs/wiki`가 아무것도 찾지 않는다.
 
 ## 검증
 ```sh
 cat CLAUDE.md
-grep -rn "폴백\|2\.1\.277\|스텁을 두지" AGENTS.md README.md docs/wiki
+grep -rn "폴백\|2\.1\.277\|스텁을 두지" AGENTS.md docs/wiki
 python3 scripts/check_pr.py --base origin/main --worktree
 ```
 - 정상: `CLAUDE.md`가 `@AGENTS.md` 한 줄, grep 결과 없음, `check_pr.py` PASS.
@@ -52,3 +52,9 @@ python3 scripts/check_pr.py --base origin/main --worktree
 
 ## 결과
 개발 전 작성. 개발 후 실행 결과를 추가한다.
+
+- 루트 `CLAUDE.md`를 `@AGENTS.md` 한 줄로 만들었다. `AGENTS.md` 개발 계약의 정본 문장을 "정본은 이 파일 하나, `CLAUDE.md`는 import 한 줄만"으로 고쳤다.
+- `docs/wiki/agent-instructions.md`의 폴백 의존 서술을 import 결정과 2.1.284 사고 근거로 바꿨다. `.gitignore`는 루트 `CLAUDE.md`를 제외하지 않아 그대로 추적된다.
+- grep 대상에서 `README.md`를 뺐다. `README.md:72`의 "폴백"은 Makefile 자동완성 설명이라 이번 결정과 무관하다.
+- `grep -rn "폴백\|2\.1\.277\|스텁을 두지" AGENTS.md docs/wiki` 결과 없음. `check_pr.py --base origin/main --worktree` PASS.
+- 새 Claude 세션에서 `/context`로 `AGENTS.md`가 Memory files에 실리는지는 이 세션에서 확인하지 않았다.
