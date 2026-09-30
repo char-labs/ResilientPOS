@@ -59,7 +59,38 @@
 - `sync_gap_total`·수렴 시간 metric. 수집기와 알림 규칙이 아직 없다.
 - 항목별 `RETRY`·`BLOCKED_BY_GAP` 상태, 누락 구간 필드. `lastAckedSequence` 하나로 단말이 재전송 범위를 안다.
 - chunk 단위 커밋. 항목 단위가 가장 작은 단위이고 가이드 §4.3이 허용한다.
-- `Lock`의 바깥 트랜잭션 거절 검사(M-1b). 결정 2. 다시 볼 조건: `Lock` 블록을 트랜잭션 안에서 부르는 호출처가 생기거나, Spring API 없이 검사할 수단이 생길 때.
+- `Lock`의 바깥 트랜잭션 거절 검사(M-1b). 결정 2. 다시 볼 조건: `Lock` 블록을 트랜잭션 안에서 부르는 호출처가 생기거나, 아래 전파 속성 안을 사용자가 검토해 채택할 때.
+  - **검토용으로 남기는 안: 전파 속성 `MANDATORY`·`NEVER`로 검사한다.** 사용자가 "나중에 검토한다"고 해서 스케치를 그대로 둔다. 개발 중 실제로 구현해 테스트까지 통과했다가 결정 2로 뺐다(커밋 adb6bdc에 있다).
+
+    ```kotlin
+    // platform/Tx.kt — TxRunner(프록시 빈)에 본문 없는 메서드 둘
+    @Transactional(propagation = Propagation.MANDATORY)
+    fun requireCaller() {
+    }
+
+    @Transactional(propagation = Propagation.NEVER)
+    fun requireNoCaller() {
+    }
+
+    // Tx(전역 object)가 위임. 호출부는 이름으로 읽는다
+    fun requireCaller() = runner.requireCaller()      // 호출자 트랜잭션이 없으면 IllegalTransactionStateException
+    fun requireNoCaller() = runner.requireNoCaller()  // 호출자 트랜잭션이 있으면 IllegalTransactionStateException
+
+    // 쓰는 자리
+    fun executeWithLock(key: String, action: () -> T): T {   // Lock. 첫 줄
+        Tx.requireNoCaller()
+        return locked(key) { Tx.newTx(action) }
+    }
+    fun createInCallerTransaction(command: OrderCommand.Create): OrderCommand.Create.Result {   // OrderCommandFacade. 첫 줄
+        Tx.requireCaller()
+        ...
+    }
+    ```
+
+    - 왜 이 둘인가: 전파 속성 일곱 개 중 "트랜잭션을 열지 않고 존재만 판정해 거절"하는 것은 `MANDATORY`(없으면 거절, 있으면 합류)와 `NEVER`(있으면 거절, 없으면 비트랜잭션 실행)뿐이다. `REQUIRED`·`REQUIRES_NEW`·`NESTED`는 없을 때 열어 버리고, `SUPPORTS`·`NOT_SUPPORTED`는 아무것도 거절하지 않는다.
+    - 얻는 것: 판정을 Spring 프록시가 `getTransaction` 단계에서 하므로 우리 코드가 `TransactionSynchronizationManager`를 부르지 않는다(`org.springframework.transaction`에서 애너테이션만 쓴다는 조건을 지킨다). 빈 메서드라 커넥션을 잡지 않는다. 바깥 트랜잭션 안에서 부르는 실수가 조용한 커밋 분리 대신 즉시 예외로 드러난다(#68 리뷰 M-1b).
+    - 치르는 것: 예외가 `IllegalStateException`이 아니라 Spring의 `IllegalTransactionStateException`이다(HTTP는 둘 다 500). 프록시를 거쳐야 검사가 되므로 Spring 없는 단위 테스트로는 볼 수 없고, 업무 클래스에 애너테이션을 직접 붙이면 같은 클래스 안 호출이 프록시를 건너뛰므로 `TxRunner`에만 둬야 한다. 검사가 있으면 `Lock` 블록의 `REQUIRES_NEW`는 사실상 `REQUIRED`와 같아진다(바깥이 없으니).
+    - 당시 테스트: `LockIntegrationTest`의 `바깥 트랜잭션 안에서 부르면 잠그기 전에 거절한다`(키를 다른 토큰으로 먼저 잡고 1초 안에 거절되는지), `OrderCreateInCallerTransactionIntegrationTest`의 `트랜잭션 밖에서 부르면 저장소를 건드리기 전에 거절한다`. 둘 다 통과했다.
 - `Tx.newTx`·`REQUIRES_NEW` 제거. 사용자가 유지하기로 했다. 바깥이 있어도 커밋 뒤 해제를 보장하는 것이 이 속성의 몫이다.
 - **REJECTED 두 번째 트랜잭션 사이의 창.** 주문 생성이 거절된 뒤 접수 기록 전에 죽으면 기록이 없다. 재전송이 같은 거절을 다시 받으므로 복구 절차가 없다.
 - 응답에서 `DUPLICATE`가 원래 판정(`APPLIED`였는지 `REJECTED`였는지)을 상태로 구분하지 않는다. `orderId`가 있으면 적용, `errorCode`가 있으면 거절이다.
