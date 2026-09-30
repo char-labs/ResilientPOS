@@ -21,7 +21,7 @@ Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰�
 | 유비쿼터스 언어 (Ubiquitous Language) | 기획·개발·문서·코드·스키마가 같은 뜻으로 쓰는 단어 집합 | 한 단어가 두 뜻이면 둘 중 하나를 바꾼다 | §3 용어집. `terminal`(단말)을 코드·테이블·spec이 모두 쓰고 `pos`는 쓰지 않는다 |
 | 바운디드 컨텍스트 (Bounded Context) | 한 모델과 그 용어가 유효한 명시적 경계. 경계 밖과는 공개 계약(Facade·이벤트)으로만 통한다 | 같은 단어가 다른 뜻이거나 데이터 소유자가 다르면 경계가 다르다 | Spring Modulith application module 7개 `com.resilientpos.{store,terminal,order,payment,sync,reconciliation,fulfillment}`. `ModuleStructureTest`가 경계를 검사한다. Gradle 모듈이 아니다 |
 | 애그리거트 (Aggregate) / 루트 | 한 트랜잭션에서 함께 일관성을 지켜야 하는 객체 묶음. 루트 하나만 외부에 노출되고 루트가 불변식을 소유한다 | "이 둘이 한 트랜잭션에서 반드시 함께 맞아야 하는가?" 예면 같은 aggregate, 아니면 별도 aggregate이고 ID로만 참조한다 | `Order`(루트) + `OrderLine` + checkout 금액. `OrderLine`을 밖에서 바꾸지 않고 `order.changeLine(...)`으로 바꾼다. `Order`와 `PaymentAttempt`는 별개 aggregate라 `orderId`로 참조하고 이벤트로 연결한다 |
-| 엔티티 (Entity) | 식별자로 구별되고 생명주기가 있는 객체 | 속성이 모두 같아도 식별자가 다르면 다른 것 | `Order`, `PaymentAttempt`, `TerminalSyncState`, `ReconciliationCase`, `Fulfillment`. 식별자는 UUID v7을 애플리케이션이 저장 전에 만든다 |
+| 엔티티 (Entity) | 식별자로 구별되고 생명주기가 있는 객체 | 속성이 모두 같아도 식별자가 다르면 다른 것 | `Order`, `PaymentAttempt`, `Watermark`, `ReconciliationCase`, `Fulfillment`. 식별자는 UUID v7을 애플리케이션이 저장 전에 만든다 |
 | 값 객체 (Value Object) | 식별자가 없고 속성이 같으면 같은 것. 불변 | "두 인스턴스의 모든 속성이 같으면 같은 것인가?" 예면 값 객체 | `Money`, `OrderId`, `TerminalCode`, checkout 확정 금액. Kotlin `data class` + `of`/`from` 팩토리 |
 | 정책 (`*Policy`) | 어느 한 aggregate에 자연스럽게 속하지 않는 계산·판정을 가진 불변 값 객체. 상태가 없고 입력 → 출력만 있다 | 규칙이 두 aggregate 사이에 있거나 매장·버전별로 바뀌면 Policy | `CheckoutPolicy`(통화 scale·반올림·합계), store가 소유하는 판매 정책. DDD 표준 용어로는 도메인 서비스의 한 형태다 |
 | 도메인 서비스 (`*Service`) | 한 bounded context 안의 비즈니스 행위를 표현하는 객체 | 규칙이 어느 aggregate에도 자연스럽게 속하지 않을 때만 만든다. 책임 경계는 [README](../../README.md#engineering-principles) | `CheckoutService.request(order, policy)` |
@@ -41,7 +41,7 @@ Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰�
 | `terminal` | `Terminal` | 단말 코드, 활성화, credential rotation 이력 | 매장 안에서 코드 유일. 비활성 단말은 인증 불가. 이력 삭제 금지 | `TerminalManagement` |
 | `order` | `Order` | line, 할인, checkout 금액·통화, lifecycle | `OPEN`에서만 금액·line 변경. checkout 이후 금액·통화 불변. 결제 승인 금액은 checkout과 일치해야 한다 | `OrderManagement` |
 | `payment` | `PaymentAttempt` | provider 참조, provider idempotency, 승인·취소 시도, 결제 정본 상태 | 같은 checkout에 진행 중인 승인 시도는 하나. `UNKNOWN`은 실패가 아니다. provider 결과는 한 번만 적용한다 | `PaymentManagement` |
-| `sync` | `TerminalSyncState` | 단말 watermark, operation 접수·중복 제거, gap·conflict | `lastAckedSequence`는 단조 증가. gap을 건너뛰어 전진하지 않는다 | `SyncManagement` |
+| `sync` | `Watermark` | 단말 watermark, operation 접수·중복 제거, gap·conflict | `lastAckedSequence`는 단조 증가. gap을 건너뛰어 전진하지 않는다 | 공개 Facade 없음(`internal`의 `SyncCommandFacade`, HTTP만 부른다) |
 | `reconciliation` | `ReconciliationCase` | 불일치 case의 근거, 규칙 버전, 승인·조치 감사 기록 | 근거·규칙·감사 없이 해결하지 않는다. 결제 상태를 직접 고치지 않는다 | `ReconciliationManagement` |
 | `fulfillment` | `Fulfillment`, `ReceiptDelivery` | 주문 이후의 이행과 영수증 전달 | 원본 주문당 natural key로 한 번만 생성. 재시도 side effect는 멱등 | 소비 이벤트만 |
 
@@ -62,7 +62,7 @@ Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰�
 | `Order` | `OrderLine`(판매 시점 상품 코드·이름·단가·수량), checkout(회차별 확정 금액. 통화는 주문의 것이다. 정책 버전은 store 정책이 생길 때 더한다. `Checkout`은 `OrderLine`처럼 도메인 ID `CheckoutId`를 갖고 `t_order_checkout`의 PK는 `id` 하나다. 회차 중복은 unique `(order_id, checkout_no)`가 막는다) | line 변경과 금액, checkout 확정과 상태 전이가 한 커밋으로 맞아야 한다 |
 | `PaymentAttempt` | provider 요청·응답 결과. provider idempotency 기록이 attempt의 자식인지 컨텍스트 공용 테이블인지는 payment PR spec에서 정한다 | "provider 결과를 한 번만 적용했다"를 같은 트랜잭션의 기록이 증명한다. 취소는 별도 attempt다([외부 연동 전략](../references/04_External_Integration_Strategy.md)) |
 | `Terminal` | credential rotation 이력 | 회전과 이력이 따로 커밋되면 어느 자격증명이 유효한지 알 수 없다 |
-| `TerminalSyncState` | operation 접수 기록(`t_sync_operation`) | watermark 전진과 접수 기록이 함께 커밋돼야 gap을 건너뛰지 않는다 |
+| `Watermark` | operation 접수 기록(`SyncOperation`, `t_sync_operation`). 수가 한정되지 않아 루트가 목록으로 들지 않고 같은 트랜잭션에서 함께 쓴다 | watermark 전진과 접수 기록이 함께 커밋돼야 gap을 건너뛰지 않는다 |
 | `ReconciliationCase` | evidence, 조치·승인 감사 기록 | "근거·감사 없이 해결하지 않는다"는 불변식이 자식과 루트를 묶는다 |
 | `Store` | policy 버전 | 정책을 바꿀 때 새 버전 행이 함께 커밋되지 않으면 이미 발행된 checkout이 가리키는 버전이 없어진다 |
 | `Fulfillment`, `ReceiptDelivery` | 없음(단독 루트) | natural key 한 건이면 충분하다 |
