@@ -19,25 +19,19 @@ object Lock {
     }
 
     /**
-     * 블록은 새 트랜잭션([Tx.newTx], `REQUIRES_NEW`)에서 돌고, 커밋한 뒤에 락을 푼다.
-     * 바깥 트랜잭션 안에서는 `IllegalTransactionStateException`으로 거절한다. 합류하면 바깥이 커밋하기 전에 락이 풀려 뒤 요청이 커밋되지 않은 상태를 읽고,
-     * 따로 커밋하면 바깥이 롤백돼도 블록의 커밋이 남아 한 커밋으로 묶으려던 흐름이 갈라진다. 한 커밋으로 묶어야 하는 흐름
-     * (§4.6 sync intake)은 락 없는 합류 경로(`OrderCommandFacade.createInCallerTransaction`)를 부른다.
+     * 블록은 새 트랜잭션([Tx.newTx], `REQUIRES_NEW`)에서 돌고, 커밋한 뒤에 락을 푼다. 바깥 트랜잭션에 합류하면
+     * 바깥이 커밋하기 전에 락이 풀려 뒤 요청이 커밋되지 않은 상태를 읽는다. 그래서 바깥이 있어도 따로 커밋한다.
+     * 바깥이 롤백돼도 블록의 커밋은 남고, 바깥이 있으면 커넥션을 둘 쓴다. 한 커밋으로 묶어야 하는 흐름(§4.6 sync intake) 안에서 부르지 않고,
+     * 그 흐름은 락 없는 합류 경로(`OrderCommandFacade.createInCallerTransaction`)를 부른다. 바깥 트랜잭션을 거절하는 검사는 두지 않는다(계약은 이 KDoc이다).
      */
-    fun <T> executeWithLock(key: String, action: () -> T): T {
-        Tx.requireNoCaller()
-        return locked(key) { Tx.newTx(action) }
-    }
+    fun <T> executeWithLock(key: String, action: () -> T): T = locked(key) { Tx.newTx(action) }
 
     /**
      * 트랜잭션 없이 줄만 세운다. 블록 안의 쓰기는 각자 자기 트랜잭션에서 곧바로 커밋한다.
      * 한 커밋으로 묶을 쓰기가 없고, 블록 동안 행 잠금을 쥐면 안 되는 주기 작업([EventPublicationResubmitter])에 쓴다.
-     * 바깥 트랜잭션 안에서는 거절한다. 합류하면 바깥이 커밋하기 전에 락이 풀린다. Facade는 쓰지 않는다.
+     * 바깥 트랜잭션 안에서 부르지 않는다. 합류하면 바깥이 커밋하기 전에 락이 풀린다. Facade는 쓰지 않는다. 검사는 두지 않는다(계약은 이 KDoc이다).
      */
-    fun <T> executeWithLockNoTx(key: String, action: () -> T): T {
-        Tx.requireNoCaller()
-        return locked(key, action)
-    }
+    fun <T> executeWithLockNoTx(key: String, action: () -> T): T = locked(key, action)
 
     private fun <T> locked(key: String, action: () -> T): T {
         val token = distributedLock.tryAcquire(key)

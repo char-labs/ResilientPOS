@@ -31,7 +31,6 @@ class SyncCommandFacade(
 ) {
 
     fun receiveBatch(command: SyncCommand.ReceiveBatch): SyncCommand.ReceiveBatch.Result {
-        Tx.requireNoCaller()
         // 가장 싼 거절을 가장 먼저 한다. 상한을 넘는 배치는 Redis도 커넥션도 건드리지 않는다.
         if (command.operations.size > MAX_OPERATIONS) {
             throw DomainException(SYNC_BATCH_TOO_LARGE, "한 배치의 operation은 ${MAX_OPERATIONS}개를 넘을 수 없습니다")

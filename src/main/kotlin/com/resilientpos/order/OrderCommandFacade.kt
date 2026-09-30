@@ -43,10 +43,9 @@ class OrderCommandFacade(
     /**
      * 호출자 트랜잭션에 합류하는 생성. 잠그지 않는다 — 같은 키의 경합을 호출자가 스스로 줄 세우고 한 커밋으로 묶어야 할 때
      * (sync intake, watermark 행 잠금 아래) 부른다. 방어선은 [create]와 같은 unique `(terminal_id, client_order_id)`다.
-     * 트랜잭션 밖에서는 `IllegalTransactionStateException`으로 거절한다. 그냥 돌면 주문 행만 자기 트랜잭션으로 커밋되어 호출자가 묶으려던 커밋이 조용히 갈라진다.
+     * 트랜잭션 안에서만 부른다. 밖에서 부르면 주문 행만 어댑터의 안전망 트랜잭션으로 커밋되어 호출자가 묶으려던 커밋이 갈라진다. 검사는 두지 않는다(계약은 이 KDoc이다).
      */
     fun createInCallerTransaction(command: OrderCommand.Create): OrderCommand.Create.Result {
-        Tx.requireCaller()
         val existing = repository.findByClientOrderId(command.terminalId, command.clientOrderId)
         if (existing != null) {
             existing.verifySamePayload(command)

@@ -7,25 +7,25 @@
 - `POST /v1/terminals/{terminalId}/sync`가 `CREATE_ORDER` operation 배치를 받아 항목별 결과와 `lastAckedSequence`를 돌려준다.
 - 항목 하나가 로컬 트랜잭션 하나다. 판정, 주문 생성(`order` Facade 합류 호출), 접수 기록, watermark 전진이 한 커밋이다(도메인 모델 §4.6).
 - 같은 배치를 다시 보내면 새 주문 없이 `DUPLICATE`를 받고, 순번이 비면 그 뒤 항목은 적용되지 않는다.
-- `OrderCommandFacade.create`와 `PaymentManagement.createAttempt`가 쓰는 `Lock` 블록은 바깥 트랜잭션 안에서 부르면 거절한다([shared-distributed-lock](2026-09-28-shared-distributed-lock.md) 제외 절의 M-1b).
+- `Lock` 블록의 바깥 트랜잭션 거절 검사(M-1b, [shared-distributed-lock](2026-09-28-shared-distributed-lock.md) 제외 절)는 넣지 않기로 정한다. `REQUIRES_NEW`는 그대로 둔다.
 
 ## 범위
-소유 모듈은 `sync`(새 코드), `order`(합류 진입점 하나), `platform`(`Tx.requireCaller`·`requireNoCaller`와 `Lock`의 거절 한 줄)이다.
+소유 모듈은 `sync`(새 코드), `order`(합류 진입점 하나), `platform`(`Lock`·`Tx` KDoc과 `executeWithLockNoTx`의 검사 제거)이다.
 
-**결정 1: `order.create`는 락 없는 합류 경로로 부른다.** `OrderCommandFacade`에 `createInCallerTransaction(command)`를 더한다. 지금의 `create`는 `Lock.executeWithLock` 블록이 이 메서드를 감싸는 모양이 된다. 새 메서드는 호출자 트랜잭션에 합류(`REQUIRED`)하고 첫 줄의 `Tx.requireCaller`가 활성 트랜잭션이 없으면 거절한다. 어느 쪽이 잠그는지가 호출부 이름과 첫 줄에서 읽힌다.
+**결정 1: `order.create`는 락 없는 합류 경로로 부른다.** `OrderCommandFacade`에 `createInCallerTransaction(command)`를 더한다. 지금의 `create`는 `Lock.executeWithLock` 블록이 이 메서드를 감싸는 모양이 된다. 새 메서드는 호출자 트랜잭션에 합류(`REQUIRED`)한다. "트랜잭션 안에서만 부른다"는 KDoc 계약이고 검사 코드는 없다(결정 2). 어느 쪽이 잠그는지가 호출부 이름에서 읽힌다.
 - 문제: `create`가 `REQUIRES_NEW`로 스스로 커밋해 §4.6의 "항목 하나 = 커밋 하나"가 깨진다.
 - 제약: sync는 단말별 `t_sync_watermark` 행을 잠그고 항목을 처리한다. 순번 판정과 전진이 같은 잠금 아래서 직렬화돼야 하기 때문이다. "한 경로에서 기다리는 수단은 하나"(도메인 모델 §4.7 질문 6) 규칙상 그 안에서 Redis 락을 또 기다릴 수 없다.
 - 수단: sync 경로의 줄 세우기는 watermark 행 잠금이 맡는다. 같은 단말의 두 배치는 항목 단위로 직렬화되고 뒤 배치는 `DUPLICATE`를 받는다. HTTP `create`와 sync가 같은 `(terminalId, clientOrderId)`로 겹치는 경합은 unique `(terminal_id, client_order_id)`가 막는다. 진 쪽이 sync 항목이면 그 항목 트랜잭션이 롤백되고 배치가 오류 응답을 받으며, 재전송 때 `create`의 멱등 조회가 기존 주문을 돌려준다.
 - `PaymentManagement.createAttempt`는 sync의 동기 경로에 없다. 단말의 결제 요청은 `order.requestCheckout`이고 시도 생성은 `OrderPaymentRequested` 이벤트가 잇는다. 이 PR은 결제 쪽 코드를 바꾸지 않는다.
 
-**결정 2: `Lock.executeWithLock` 첫 줄에 바깥 트랜잭션 거절을 넣는다.** `executeWithLockNoTx`와 같은 한 줄이다. 검사는 `TxRunner`의 빈 메서드에 건 전파 속성(`MANDATORY`·`NEVER`)이 하고 호출부는 `Tx.requireCaller()`·`Tx.requireNoCaller()`로 읽는다(개발 중 사용자 요청 둘: Spring 트랜잭션 API를 직접 선언하지 않는다, `org.springframework.transaction`에서는 애너테이션만 쓴다). 거절 예외는 Spring의 `IllegalTransactionStateException`이다. `executeWithLockNoTx`의 기존 `TransactionSynchronizationManager` 직접 호출도 같은 헬퍼로 옮긴다. 지금 호출처 둘(HTTP `create`, Kafka 리스너의 `createAttempt`)은 모두 트랜잭션 밖이라 깨지지 않는다. `REQUIRES_NEW`와 `Tx.newTx`는 그대로 둔다. 바깥이 없으니 `REQUIRED`와 같지만 지우는 일은 이 PR의 목표가 아니다.
+**결정 2: 바깥 트랜잭션 거절 검사(M-1b)를 넣지 않는다. `REQUIRES_NEW`·`Tx.newTx`는 그대로다.** 개발 중 세 번 바뀐 끝의 사용자 결정이다. 처음에는 `Lock.executeWithLock` 첫 줄에 `TransactionSynchronizationManager` 검사를 넣었고, 사용자가 Spring 트랜잭션 API를 직접 선언하지 말라고 해서 `Tx.requireCaller`·`requireNoCaller`로 모았으며, 다시 `org.springframework.transaction`에서는 애너테이션만 쓰라고 해서 `TxRunner`의 빈 메서드에 전파 속성 `MANDATORY`·`NEVER`를 거는 방식으로 바꿨다. 마지막으로 사용자가 검사 자체를 두지 않기로 정했다. 근거: sync는 락 없는 합류 경로를 부르므로 지금 `Lock` 호출처 둘(HTTP `create`, Kafka 리스너의 `createAttempt`)에 바깥 트랜잭션이 없고, `REQUIRES_NEW`가 바깥이 있어도 커밋 뒤 해제를 보장하며, 검사 수단이 Spring 내부 API나 전파 속성 우회라 코드에 남길 값이 없다. "바깥 트랜잭션 안에서 부르지 않는다"는 `Lock` 두 블록과 `createInCallerTransaction`의 KDoc 계약이다. 이 과정에서 `executeWithLockNoTx`에 #70이 넣었던 `TransactionSynchronizationManager` 직접 검사도 같은 이유로 지웠다. 운영 코드가 Spring 트랜잭션에서 쓰는 것은 `@Transactional` 애너테이션뿐이고 `org.springframework.transaction.support`는 어디서도 부르지 않는다.
 
 **결정 3: 이 PR의 operation 종류는 `CREATE_ORDER` 하나다.** 종류 필드와 컬럼을 두지 않는다. `REQUEST_CHECKOUT`은 단말이 아는 `clientOrderId`로 checkout을 요청하는 `order` 공개 계약이 먼저 필요해서 다음 PR이 종류를 하나 늘리며 함께 정한다.
 
 **sync: 공개 계약 없음.** 다른 모듈이 sync를 부르지 않으므로 Facade·커맨드·결과는 `sync.internal`에 둔다(fulfillment와 같은 선례).
 - `SyncCommandFacade.receiveBatch(SyncCommand.ReceiveBatch(terminalId, operations))`. `Operation(operationId: UUID, sequence: Long, order: OrderCommand.Create)`. 결과 `ReceiveBatch.Result(lastAckedSequence, items)`, `Item(operationId, status, orderId?, errorCode?)`.
 - 배치 상한 500개. 넘으면 저장소를 건드리기 전에 `DomainException(SYNC_BATCH_TOO_LARGE, INVALID)`로 배치 전체를 거절한다. 항목의 line 개수는 `order`가 거절한다.
-- 항목은 `sequence` 오름차순으로 처리한다. 배치를 시작할 때 watermark 행이 없으면(새 단말) 짧은 트랜잭션으로 `lastAckedSequence = 0` 행을 먼저 넣는다. 같은 단말의 첫 배치가 동시에 둘 오면 진 쪽의 PK 위반은 "이미 있다"는 뜻이라 삼킨다. 그다음 항목마다 `Tx.masterTx` 하나이며 그 안에서 watermark 행을 잠그고(`findForUpdate`, 대기 3초) 판정한다. 한 번 `GAP`이면 뒤 항목은 트랜잭션 없이 `GAP`으로 채운다(오름차순이라 모두 gap이다). `receiveBatch` 첫 줄은 `Tx.requireNoCaller`다 — 바깥 트랜잭션에 합류하면 항목별 커밋이 깨진다.
+- 항목은 `sequence` 오름차순으로 처리한다. 배치를 시작할 때 watermark 행이 없으면(새 단말) 짧은 트랜잭션으로 `lastAckedSequence = 0` 행을 먼저 넣는다. 같은 단말의 첫 배치가 동시에 둘 오면 진 쪽의 PK 위반은 "이미 있다"는 뜻이라 삼킨다. 그다음 항목마다 `Tx.masterTx` 하나이며 그 안에서 watermark 행을 잠그고(`findForUpdate`, 대기 3초) 판정한다. 한 번 `GAP`이면 뒤 항목은 트랜잭션 없이 `GAP`으로 채운다(오름차순이라 모두 gap이다). `receiveBatch`는 트랜잭션 밖에서 부른다(KDoc 계약, 검사 없음) — 바깥 트랜잭션에 합류하면 항목별 커밋이 깨진다.
 - 판정은 `Watermark` 도메인 객체가 한다.
   - `sequence == lastAckedSequence + 1` → 다음 항목이다. payload를 `order` 명령으로 바꾸고(`Money.of`가 여기서 돈다) `createInCallerTransaction`을 부르고 접수 기록(`APPLIED`, `orderId`)을 넣고 watermark를 전진시킨다. 한 커밋이다.
   - `sequence` 가 `lastAckedSequence` 이하 → 이미 확정한 순번이다. `(terminalId, operationId)` 접수 기록을 찾는다. 있고 payload hash와 기록된 순번이 모두 같으면 `DUPLICATE`(기록된 `orderId`·`errorCode`를 그대로 실어 준다). hash나 순번이 다르거나, 기록이 없으면(다른 operation이 그 순번을 썼다) `CONFLICT`. 아무것도 쓰지 않는다.
@@ -59,7 +59,8 @@
 - `sync_gap_total`·수렴 시간 metric. 수집기와 알림 규칙이 아직 없다.
 - 항목별 `RETRY`·`BLOCKED_BY_GAP` 상태, 누락 구간 필드. `lastAckedSequence` 하나로 단말이 재전송 범위를 안다.
 - chunk 단위 커밋. 항목 단위가 가장 작은 단위이고 가이드 §4.3이 허용한다.
-- `Tx.newTx`·`REQUIRES_NEW` 제거. 결정 2로 바깥이 없어져 `REQUIRED`와 같아졌지만 이 PR의 목표가 아니다.
+- `Lock`의 바깥 트랜잭션 거절 검사(M-1b). 결정 2. 다시 볼 조건: `Lock` 블록을 트랜잭션 안에서 부르는 호출처가 생기거나, Spring API 없이 검사할 수단이 생길 때.
+- `Tx.newTx`·`REQUIRES_NEW` 제거. 사용자가 유지하기로 했다. 바깥이 있어도 커밋 뒤 해제를 보장하는 것이 이 속성의 몫이다.
 - **REJECTED 두 번째 트랜잭션 사이의 창.** 주문 생성이 거절된 뒤 접수 기록 전에 죽으면 기록이 없다. 재전송이 같은 거절을 다시 받으므로 복구 절차가 없다.
 - 응답에서 `DUPLICATE`가 원래 판정(`APPLIED`였는지 `REJECTED`였는지)을 상태로 구분하지 않는다. `orderId`가 있으면 적용, `errorCode`가 있으면 거절이다.
 - `error_code varchar(64)`보다 긴 `DomainException.code`가 생기면 `REJECTED` 기록이 "value too long"으로 결정적으로 실패해 그 단말의 배치가 계속 오류다. 지금 가장 긴 code는 30자이고 code는 상수라 PR 리뷰에서 길이를 본다. 다른 모듈의 code 이름이 이 표에 저장되고 `DUPLICATE` 응답으로 다시 나가므로, `order`가 code 이름을 바꾸면 옛 이름이 계속 나간다.
@@ -94,8 +95,8 @@
 4. 순번 1, 2, 4를 보내면 1·2는 `APPLIED`, 4는 `GAP`이고 `lastAckedSequence`는 2다. 이어서 3, 4를 보내면 둘 다 `APPLIED`다.
 5. `order`가 거절하는 항목(빈 상품명)은 `REJECTED`와 `errorCode`(`BLANK_PRODUCT_NAME`)를 받고 `t_order`에 행이 없으며 watermark는 그 순번으로 전진한다. 같은 항목을 다시 보내면 `DUPLICATE`와 같은 `errorCode`다. 그 뒤 순번은 정상 적용된다. 금액 규칙 위반(KRW `4500.5`)은 `INVALID_MONEY_SCALE`로, 같은 `clientOrderId`의 다른 내용은 `IDEMPOTENCY_CONFLICT`로 같은 `REJECTED` 경로다.
 6. 항목 트랜잭션은 하나다. `createInCallerTransaction`이 주문을 넣은 뒤 접수 기록 저장이 unique `(terminal_id, sequence)`로 실패하면 주문 행도 남지 않는다. 같은 단말의 같은 배치가 두 스레드에서 동시에 와도 주문·기록은 항목 수만큼이고 항목은 `APPLIED` 아니면 `DUPLICATE`다.
-7. `createInCallerTransaction`을 트랜잭션 밖에서 부르면 저장소를 건드리기 전에 `IllegalTransactionStateException`으로 실패한다.
-8. `Lock.executeWithLock`을 바깥 트랜잭션 안에서 부르면 잠그기 전에 `IllegalTransactionStateException`으로 실패한다. #68 인수 조건 2의 테스트를 이것으로 바꾼다. HTTP `create`와 Kafka `createAttempt`는 지금처럼 동작한다.
+7. `createInCallerTransaction`은 트랜잭션 안에서 부른다는 계약을 KDoc으로 둔다. 검사 코드와 테스트는 없다(결정 2). sync 통합 테스트(인수 1~6)가 실제 호출 경로를 덮는다.
+8. `Lock`의 두 블록은 바깥 트랜잭션을 검사하지 않는다. #68 인수 조건 2의 테스트(`바깥 트랜잭션이 롤백돼도 블록의 쓰기는 남는다`)를 그대로 두고, #70의 `트랜잭션 없는 블록을 트랜잭션 안에서 부르면 잠그기 전에 거절한다` 테스트는 검사와 함께 지운다. HTTP `create`와 Kafka `createAttempt`는 지금처럼 동작한다.
 9. 501개 배치는 `400 SYNC_BATCH_TOO_LARGE`이고 저장소를 건드리지 않는다.
 10. `POST /v1/terminals/{terminalId}/sync`가 `SyncCommand.ReceiveBatch`로 옮겨 Facade를 부르고 200과 `data{lastAckedSequence, items}`를 돌려준다. 성공 응답과 `SYNC_BATCH_TOO_LARGE` 응답을 REST Docs로 문서화한다. HTTP부터 PostgreSQL까지 이어지는 통합 테스트 하나가 인수 1·2를 HTTP로 확인한다.
 11. `Watermark`의 판정(다음·확정됨·gap)과 전진은 Spring 없는 단위 테스트로 고정한다.
@@ -105,8 +106,8 @@
 ### Checkpoint와 검증 명령
 | Checkpoint | 검증 명령 | 의존 |
 |---|---|---|
-| lock-check (8) | `./gradlew test --tests 'com.resilientpos.platform.Lock*'` | 없음 |
-| order-join (7) | `./gradlew test --tests 'com.resilientpos.order.*'` | 없음 |
+| lock-unchanged (8) | `./gradlew test --tests 'com.resilientpos.platform.Lock*'` | 없음 |
+| order-join (7) | `./gradlew test --tests 'com.resilientpos.order.*'` (계약만, 회귀 확인) | 없음 |
 | sync-domain (11) | `./gradlew test --tests 'com.resilientpos.sync.internal.domain.*'` | 없음 |
 | sync-facade (1~6, 9) | `./gradlew test --tests 'com.resilientpos.sync.internal.application.*'` | order-join, sync-domain |
 | sync-api (10) | `./gradlew test --tests 'com.resilientpos.sync.internal.adapter.web.*'` | sync-facade |
@@ -166,9 +167,9 @@ create table t_sync_operation (
 - [domain-model](../wiki/domain-model.md)
   - §1 엔티티 예시와 §2 표·"aggregate 안의 구성"의 옛 이름 `TerminalSyncState`·`SyncManagement`를 `Watermark`·`SyncCommandFacade`(공개 Facade 없음)로 바꾼다.
   - §3 용어집의 `gap / duplicate / conflict` 줄에 `rejected`(소유 컨텍스트가 도메인 규칙으로 거절한 operation, 순번은 확정된다)를 더한다.
-  - §4.6의 "sync intake PR이 먼저 정한다"를 결정 1·2로 바꾼다. sync는 `createInCallerTransaction`을 부르고, `Lock` 블록은 바깥 트랜잭션을 거절한다.
+  - §4.6의 "sync intake PR이 먼저 정한다"를 결정 1·2로 바꾼다. sync는 `createInCallerTransaction`을 부르고, `Lock` 블록은 바깥 트랜잭션을 검사하지 않는다(KDoc 계약).
   - §4.7 사례에 `t_sync_watermark`·`t_sync_operation`의 판단(질문 1·4·6)을 더한다.
-- current-state는 볼트 파일이라 저장소 커밋 없이 볼트에서 고친다. `sync` 모듈이 비어 있다는 문장, `Lock` 블록의 바깥 트랜잭션 거절, sync intake API를 적는다.
+- current-state는 볼트 파일이라 저장소 커밋 없이 볼트에서 고친다. `sync` 모듈이 비어 있다는 문장과 sync intake API를 적는다.
 - README·`modulith-kafka-keywords`는 무영향이다. Kafka·이벤트 계약이 바뀌지 않는다.
 
 ## 분할 계획
@@ -177,8 +178,8 @@ create table t_sync_operation (
 ## TDD 검증 기록
 | 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
 |---|---|---|---|
-| 인수 8, `LockIntegrationTest`의 `바깥 트랜잭션 안에서 부르면 잠그기 전에 거절한다`(#68 인수 2 테스트를 대체) | `./gradlew test --tests 'com.resilientpos.platform.LockIntegrationTest' --tests 'com.resilientpos.order.OrderCommandFacadeCallerTransactionTest'`. 거절 없이 성공해 `AssertionFailedError`("Expected IllegalStateException ... completed successfully") | 같은 명령. `Lock.executeWithLock` 첫 줄에 거절을 넣은 뒤 통과 | 거절을 `Tx.requireNoCaller`로 옮긴 뒤 `./gradlew test --tests 'com.resilientpos.platform.Lock*' --tests 'com.resilientpos.order.OrderCommandFacade*'` 통과 |
-| 인수 7, `OrderCommandFacadeCallerTransactionTest`의 `트랜잭션 밖에서 부르면 저장소를 건드리기 전에 거절한다` | 같은 명령. 검사 없는 최소 선언으로 실행. 저장소 mock까지 진행해 `NullPointerException`(saved가 null)으로 `AssertionFailedError` | 같은 명령. 첫 줄에 거절을 넣은 뒤 통과 | 위와 같은 회귀 통과. `./gradlew test --tests 'com.resilientpos.order.*'`에서 `OrderRequestCheckoutIntegrationTest`의 잠금 대기 테스트가 한 번 `Transaction timeout expired`로 실패했으나(Docker 첫 기동 직후 5분 20초 실행) 단독 재실행에서 통과했다. 변경과 무관한 경로다 |
+| 인수 8, `LockIntegrationTest`의 `바깥 트랜잭션 안에서 부르면 잠그기 전에 거절한다`(#68 인수 2 테스트를 대체) | `./gradlew test --tests 'com.resilientpos.platform.LockIntegrationTest' --tests 'com.resilientpos.order.OrderCommandFacadeCallerTransactionTest'`. 거절 없이 성공해 `AssertionFailedError`("Expected IllegalStateException ... completed successfully") | 같은 명령. `Lock.executeWithLock` 첫 줄에 거절을 넣은 뒤 통과 | 거절을 `Tx.requireNoCaller`로 옮긴 뒤 통과. **결정 2로 검사를 지우고 #68의 원래 테스트로 되돌렸다.** `./gradlew test --tests 'com.resilientpos.platform.Lock*'` 통과 |
+| 인수 7, `OrderCommandFacadeCallerTransactionTest`의 `트랜잭션 밖에서 부르면 저장소를 건드리기 전에 거절한다` | 같은 명령. 검사 없는 최소 선언으로 실행. 저장소 mock까지 진행해 `NullPointerException`(saved가 null)으로 `AssertionFailedError` | 같은 명령. 첫 줄에 거절을 넣은 뒤 통과 | 위와 같은 회귀 통과. `./gradlew test --tests 'com.resilientpos.order.*'`에서 `OrderRequestCheckoutIntegrationTest`의 잠금 대기 테스트가 한 번 `Transaction timeout expired`로 실패했으나(Docker 첫 기동 직후 5분 20초 실행) 단독 재실행에서 통과했다. 변경과 무관한 경로다. **결정 2로 검사와 테스트를 지웠다**(단위 테스트를 통합 테스트로 옮겼다가 함께 삭제). |
 | 인수 11, `WatermarkTest` 5개 | `./gradlew test --tests 'com.resilientpos.sync.*'`. 판정이 늘 `NEXT`, 전진이 `this`인 최소 선언으로 실행. 4개가 `AssertionFailedError`(expected GAP/ACKED but was NEXT, expected 3 but was 2) | 같은 명령. `judge`·`advance`를 채운 뒤 통과 | `./gradlew test --tests 'com.resilientpos.sync.*'` 통과 |
 | 인수 1~6·9, `SyncCommandFacadeIntegrationTest` 7개 | `./gradlew test --tests 'com.resilientpos.sync.*' --tests 'com.resilientpos.SchemaMigrationTest'`. 영속화·마이그레이션은 갖추고 Facade만 모든 항목을 `GAP`으로 돌려주는 최소 선언으로 실행. 7개 모두 `AssertionFailedError`(expected APPLIED/DUPLICATE/CONFLICT/REJECTED but was GAP, 예외 기대 실패). 컨텍스트는 떠서 V010과 `validate`는 통과했다 | 같은 명령. 판정·적용·기록·전진과 상한을 채운 뒤 7개 통과. `SchemaMigrationTest`는 테이블·버전 목록에 010을 더한 뒤 통과 | `./gradlew test --tests 'com.resilientpos.sync.*'` 통과(16개) |
 | 인수 6(항목 트랜잭션 하나), `접수 기록 저장이 실패하면 그 항목의 주문 행도 남지 않는다` | 위와 같은 RED. 처음에는 같은 `operationId`를 다른 순번으로 두 번 보내 unique `(terminal_id, operation_id)`에 걸리게 했다. 최소 선언은 예외를 내지 않아 실패 | `DataIntegrityViolationException`이 나고 둘째 주문 행이 0건, watermark가 1로 통과 | 리뷰 반영으로 그 시나리오가 `CONFLICT`가 되어, 순번 2의 접수 기록을 잠금 밖에서 미리 넣고 새 unique `(terminal_id, sequence)`에 걸리게 바꿨다. `./gradlew test --tests 'com.resilientpos.sync.*'` 통과 |
@@ -189,7 +190,7 @@ create table t_sync_operation (
 
 ## 결과
 - `./gradlew test` 전체 통과(307개), `python3 scripts/check_pr.py --base origin/main`을 `--worktree` 있이·없이 모두 PASS, 하네스 테스트 OK.
-- `platform`에 `Tx.requireCaller`·`Tx.requireNoCaller`를 더하고 `Lock`의 두 블록이 바깥 트랜잭션을 거절한다. 검사는 `TxRunner`의 전파 속성(`MANDATORY`·`NEVER`)이라 운영 코드는 `org.springframework.transaction.support`를 부르지 않는다(개발 중 사용자 요청). 인수 7 테스트는 프록시가 필요해져 단위 테스트에서 통합 테스트(`OrderCreateInCallerTransactionIntegrationTest`)로 옮겼다.
+- `platform`: 바깥 트랜잭션 거절 검사를 넣지 않기로 했다(결정 2). `Lock`·`Tx`는 KDoc 계약만 바뀌었고 `executeWithLockNoTx`의 `TransactionSynchronizationManager` 직접 검사를 지웠다. 운영 코드는 `org.springframework.transaction.support`를 부르지 않는다.
 - `order`에 `OrderCommandFacade.createInCallerTransaction`(락 없는 합류 경로)을 더했다. `create`는 그것을 `Lock` 블록으로 감싼다.
 - `sync`에 `Watermark`·`SyncOperation`·`OrderPayload`(도메인), `SyncCommandFacade`·`SyncCommand`·`SyncItemStatus`(application), JPA 영속화, `POST /v1/terminals/{terminalId}/sync`와 REST Docs 스니펫 둘, V010(`t_sync_watermark`·`t_sync_operation`)을 더했다.
-- 제출 전 리뷰(스키마 대조 code-reviewer, 코드 리뷰 Claude 78점·Codex 72점, Gemini는 CLI 없음)를 반영했다. 셋이 함께 지적한 것: 같은 operationId가 새 순번으로 오면 unique 위반이 재전송마다 되풀이돼 단말이 영구히 막힌다 → `CONFLICT`로 판정. Claude만 지적한 Critical: `Money.of` 거절이 Controller에서 나 배치 전체가 400이 되어 같은 봉투를 영원히 다시 보낸다 → payload 변환을 항목 트랜잭션 안으로 옮겨 `REJECTED`. 그 밖에 hash 길이·종류 접두어, 순번을 포함한 `DUPLICATE` 판정, `(terminal_id, sequence)` unique, 새 단말 첫 배치 경합의 watermark 선삽입, GAP 뒤 빈 트랜잭션 생략, `receiveBatch`의 `Tx.requireNoCaller`, Lock 거절 테스트의 판별력, wiki 옛 이름, REST Docs의 본문 상한·정렬 설명을 반영했다. 미룬 지적은 제외 절에 적었다.
+- 제출 전 리뷰(스키마 대조 code-reviewer, 코드 리뷰 Claude 78점·Codex 72점, Gemini는 CLI 없음)를 반영했다. 셋이 함께 지적한 것: 같은 operationId가 새 순번으로 오면 unique 위반이 재전송마다 되풀이돼 단말이 영구히 막힌다 → `CONFLICT`로 판정. Claude만 지적한 Critical: `Money.of` 거절이 Controller에서 나 배치 전체가 400이 되어 같은 봉투를 영원히 다시 보낸다 → payload 변환을 항목 트랜잭션 안으로 옮겨 `REJECTED`. 그 밖에 hash 길이·종류 접두어, 순번을 포함한 `DUPLICATE` 판정, `(terminal_id, sequence)` unique, 새 단말 첫 배치 경합의 watermark 선삽입, GAP 뒤 빈 트랜잭션 생략, `receiveBatch`의 트랜잭션 밖 호출 계약(검사는 결정 2로 뺐다), Lock 거절 테스트의 판별력, wiki 옛 이름, REST Docs의 본문 상한·정렬 설명을 반영했다. 미룬 지적은 제외 절에 적었다.

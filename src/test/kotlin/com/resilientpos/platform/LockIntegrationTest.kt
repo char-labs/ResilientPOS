@@ -16,7 +16,6 @@ import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.data.redis.core.StringRedisTemplate
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.jdbc.core.queryForObject
-import org.springframework.transaction.IllegalTransactionStateException
 import org.springframework.transaction.PlatformTransactionManager
 import org.springframework.transaction.TransactionDefinition
 import org.springframework.transaction.support.TransactionOperations
@@ -83,22 +82,15 @@ class LockIntegrationTest(
     }
 
     @Test
-    fun `바깥 트랜잭션 안에서 부르면 잠그기 전에 거절한다`() {
-        // 키를 다른 토큰으로 먼저 잡아 둔다. 거절이 잠금 뒤에 있었다면 3초를 기다렸을 것이다.
-        val key = "test:lock:${UUID.randomUUID()}"
+    fun `바깥 트랜잭션이 롤백돼도 블록의 쓰기는 남는다`() {
         val id = UUID.randomUUID()
-        val held = checkNotNull(distributedLock.tryAcquire(key))
 
-        try {
-            val started = System.nanoTime()
-            assertFailsWith<IllegalTransactionStateException> {
-                transactions.executeWithoutResult { Lock.executeWithLock(key) { insertProbe(id) } }
-            }
-            assertTrue(System.nanoTime() - started < TimeUnit.SECONDS.toNanos(1), "잠금을 기다린 뒤 거절했다")
-            assertEquals(0, probes(id))
-        } finally {
-            distributedLock.release(key, held)
+        transactions.executeWithoutResult { status ->
+            Lock.executeWithLock("test:lock:${UUID.randomUUID()}") { insertProbe(id) }
+            status.setRollbackOnly()
         }
+
+        assertEquals(1, probes(id))
     }
 
     @Test
@@ -130,16 +122,6 @@ class LockIntegrationTest(
         }
 
         assertEquals(1, seenFromAnotherConnection)
-        assertFalse(redis.hasKey(key))
-    }
-
-    @Test
-    fun `트랜잭션 없는 블록을 트랜잭션 안에서 부르면 잠그기 전에 거절한다`() {
-        val key = "test:lock:${UUID.randomUUID()}"
-
-        assertFailsWith<IllegalTransactionStateException> {
-            transactions.executeWithoutResult { Lock.executeWithLockNoTx(key) { } }
-        }
         assertFalse(redis.hasKey(key))
     }
 
