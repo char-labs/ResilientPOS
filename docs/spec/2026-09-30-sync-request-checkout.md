@@ -61,7 +61,7 @@
 - 새로 확정하는 경로의 자식 재조회 2문장은 그대로 둔다. 없애려면 persistence adapter가 읽은 자식을 기억해야 하고 `markPaid`와 주문 생성도 같은 `save`를 쓴다. 제외 절에 있다.
 - 주문 잠금 조회의 조건 `(terminal_id, client_order_id)`는 V002의 unique 제약이 만든 인덱스가 받친다. 잠그는 것은 루트 행뿐이다.
 - 교착 순환은 없다. watermark 잠금은 항목 트랜잭션의 첫 문장 한 곳뿐이고, 주문을 잠그는 세 경로는 트랜잭션마다 주문 하나만 잡는다. 항목마다 커밋하므로 주문 잠금이 항목 사이에 이어지지 않는다.
-- 문장 수는 `SyncStatementCountIntegrationTest`가 고정한다. 항목당 한 문장이 늘면 500개 배치에서 500문장이다.
+- 문장 수는 `SyncStatementCountIntegrationTest`가 멱등 재요청(9문장)과 재전송(4문장)을 고정한다. Hibernate 통계 기준이고 `lock_timeout` 문장은 통계에 잡히지 않는다. 항목당 한 문장이 늘면 500개 배치에서 500문장이다. 새로 확정하는 적용 경로는 고정하지 않는다. 커밋 직후 externalizer와 `payment` consumer가 같은 SessionFactory로 문장을 내 측정값이 실행마다 달랐다(14와 16).
 
 **이벤트.** `OrderPaymentRequested`는 합류한 항목 트랜잭션에서 발행되어 발행 기록이 접수 기록과 같은 커밋에 들어간다. 이벤트 모양·토픽·consumer는 바뀌지 않는다. 결제 시도 생성은 지금처럼 `payment`의 consumer가 잇는다.
 
@@ -124,7 +124,7 @@
 14. 서버에 같은 `(terminalId, clientOrderId)`의 주문이 다른 내용·다른 합계로 이미 있을 때 순번 1 `CREATE_ORDER`(다른 내용), 순번 2 `REQUEST_CHECKOUT`(단말의 합계)을 보내면 순번 1은 `REJECTED`(`IDEMPOTENCY_CONFLICT`), 순번 2는 `REJECTED`(`CHECKOUT_AMOUNT_MISMATCH`)이고 기존 주문은 `OPEN`으로 남으며 checkout 행이 없고 watermark는 2다.
 15. `CheckoutPayload.hash()`는 `amount`가 다르면 다른 값이다. 확정된 `REQUEST_CHECKOUT`의 `operationId`에 다른 `amount`가 오면 `CONFLICT`다. HTTP 요청의 `amount`가 없으면 `400 BAD_REQUEST`이고 REST Docs 요청 필드에 `amount`가 있다.
 16. 같은 주문에 다른 `operationId`의 `REQUEST_CHECKOUT`이 두 번 오면 둘 다 `APPLIED`이고 checkout 행과 발행 기록은 하나다.
-17. 이미 요청된 주문의 checkout은 `save`를 부르지 않는다. 결제 요청 항목의 문장 수(적용, 멱등 재요청, 재전송)를 Hibernate 통계로 고정한다. 금액 불일치로 거절된 operation의 재전송은 같은 `errorCode`의 `DUPLICATE`이고, 그 뒤 올바른 금액의 새 `operationId`는 `APPLIED`다. `amount`가 `1E+3`인 `CheckoutPayload`의 hash가 고정 hex와 같고 `1E+999999999`의 hash가 끝난다.
+17. 이미 요청된 주문의 checkout은 `save`를 부르지 않는다. 결제 요청 항목의 문장 수(멱등 재요청 9, 재전송 4)를 Hibernate 통계로 고정한다. 적용 경로의 문장 수는 비동기 문장이 섞여 고정하지 않는다. 금액 불일치로 거절된 operation의 재전송은 같은 `errorCode`의 `DUPLICATE`이고, 그 뒤 올바른 금액의 새 `operationId`는 `APPLIED`다. `amount`가 `1E+3`인 `CheckoutPayload`의 hash가 고정 hex와 같고 `1E+999999999`의 hash가 끝난다.
 
 ### Checkpoint와 검증 명령
 | Checkpoint | 검증 명령 | 의존 |
@@ -196,12 +196,16 @@ alter table t_sync_operation
 | 리뷰 반영, `SyncControllerTest`의 `kind가 없거나 모르는 값이면 400 BAD_REQUEST이고 Facade를 부르지 않는다`(`kind`만 뺀 유효한 `CREATE_ORDER` 본문과 `kind`가 `REFUND`인 본문을 더함) | 요청 DTO의 `@JsonTypeInfo`에 `defaultImpl`을 넣은 변형으로 `./gradlew test --tests 'com.resilientpos.sync.*' --tests 'com.resilientpos.order.*'` 실행. `AssertionError`(Status expected 400)로 실패 | 변형을 되돌린 뒤 같은 명령 통과 | 같은 명령 통과 |
 | 리뷰 반영, `OrderRequestCheckoutIntegrationTest`의 `커밋 전인 clientOrderId 경로 요청과 orderId 경로 요청이 겹치면 뒤 요청은 기다렸다가 같은 결과를 받는다` | `findByClientOrderIdForUpdate`를 잠금 없는 조회로 바꾼 변형으로 같은 명령 실행. 뒤 요청이 잠금을 기다리는 단계에서 `ConditionTimeoutException`으로 실패 | 변형을 되돌린 뒤 통과 | 같은 명령 통과 |
 | 인수 16과 리뷰 반영, `SyncCommandFacadeIntegrationTest`의 `같은 clientOrderId의 결제 요청이 새 operationId로 다시 오면 적용되고 주문 행 checkout 행 발행 기록은 그대로다`, 성공 경로 테스트의 발행 기록 1건 단언 | RED 미관측(characterization). 지금 구현에서 통과한다. 발행 기록 1건 단언은 롤백 테스트의 0건 단언과 같은 조회를 쓰는 대조군이다 | 같은 명령 통과 | 같은 명령 통과 |
-| 인수 17, 멱등 checkout의 저장 생략과 문장 수, 재리뷰 반영 테스트 | 미실행 | 미실행 | 미실행 |
+| 인수 17, `SyncStatementCountIntegrationTest`의 `이미 요청된 주문의 멱등 checkout 요청은 9문장이고 재전송은 4문장이다` | `./gradlew test --tests '*SyncStatementCountIntegrationTest'`. 수정 전 코드에서 `멱등 요청은 주문을 저장하지 않는다 expected 9 but was 11` | 같은 명령. `confirmCheckout`이 이벤트 없는 전이의 `save`를 건너뛴 뒤 통과. 전체 실행에서 다른 클래스의 비동기 문장이 섞여 한 번 10이 나와, 같은 요청을 다섯 번 재고 최솟값을 비교하게 했다(섞임은 수를 늘리기만 한다). 그 뒤 다섯 번 연속 통과 | `./gradlew test` 통과 |
+| 인수 17, `PayloadHashTest`의 `CheckoutPayload의 hash는 지수 표기 amount를 toString 그대로 넣는다` | hash를 `toPlainString()`으로 되돌린 변형에서 기대 hex 불일치로 실패 | 되돌린 뒤 통과. 기대 hex는 Python `hashlib`으로 따로 계산했다 | 위와 같은 회귀 통과 |
+| 인수 17, `PayloadHashTest`의 `CheckoutPayload의 hash는 극단적인 지수의 amount도 지수를 펴지 않고 끝난다`, `SyncCommandFacadeIntegrationTest`의 `금액 불일치로 거절된 결제 요청을 재전송하면 같은 거절의 중복이고 올바른 금액의 새 operation은 적용된다`, `SyncControllerTest`의 `amount` 입력 변형 둘 | RED 미관측(characterization). 앞의 것은 변형 상태로 돌리면 테스트 JVM이 죽어 관측하지 않았다 | 통과. `amount`가 null·빈 문자열·숫자가 아닌 문자열이면 400, JSON 숫자는 받아들인다 | 위와 같은 회귀 통과 |
+| 인수 13 보강, `OrderTest`의 `verifyCheckoutAmount는 주문의 통화로 대조한다`·`…0원 주문을 0과 대조한다`·`…PAID 주문도 최신 회차의 확정 금액과 대조한다`·`…checkout이 없는 주문을 거절한다` | 통화를 KRW로 고정한 변형에서 `./gradlew test --tests 'com.resilientpos.order.internal.domain.OrderTest'` 실행. 통화 테스트가 실패. 나머지 셋은 변형을 넣지 않았다 | 되돌린 뒤 통과 | 위와 같은 회귀 통과 |
 
 ## 결과
-- `./gradlew test` 전체 통과(330개), 하네스 테스트 OK(132개), `python3 scripts/check_pr.py --base origin/main` PASS(`--worktree` 있이·없이).
+- `./gradlew test` 전체 통과(340개), 하네스 테스트 OK(132개), `python3 scripts/check_pr.py --base origin/main` PASS(`--worktree` 있이·없이).
 - `order`에 `OrderCommand.RequestCheckoutByClientOrderId`와 `OrderCommandFacade.requestCheckout` 오버로드, `OrderRepository.findByClientOrderIdForUpdate`를 더했다. 두 `requestCheckout`은 전이·저장·발행을 private 함수 하나로 함께 쓴다.
 - `sync`에 `SyncOperationKind`, `OperationPayload`(구현 `OrderPayload`·`CheckoutPayload`), 접수 기록의 `kind`, Facade의 종류 분기, `kind`로 갈리는 요청 DTO를 더했다. V011이 `t_sync_operation.kind`를 더한다. `OrderPayload`의 hash 공식과 결과는 그대로다.
 - 스키마 대조(code-reviewer)에서 불일치는 없었고 누락 6건을 위 대조 기록대로 반영했다.
 - 제출 전 리뷰는 Claude(84점)와 Codex(점수 없음, 지적 1건)가 했고 Gemini는 CLI가 없어 실행하지 않았다. Claude가 찾은 HIGH 1건이 결정 4가 됐다. 다른 내용의 기존 주문에 결제 요청이 적용되는 경로다. 그 밖에 판별력 없는 테스트 3곳(`kind` 기본 종류, 잠금 조회, 발행 기록 대조군)을 변형으로 실패를 관측하며 보강했고, 멱등 재요청 테스트, REST Docs 예시, private 함수 이름, KDoc, wiki §4.6의 옛 문장, 롤링 배포 설명을 고쳤다. Codex의 지적(watermark 잠금 대기 초과의 409를 HTTP로 잇는 테스트)은 [sync-intake](2026-09-30-sync-intake.md)가 제외로 둔 기존 빈틈이라 제외 절에 남겼다.
+- PR을 연 뒤 병목 점검(spring-backend-specialist)과 금액 대조 코드의 재리뷰(Claude 87점, Codex 점수 없음)를 했다. 둘 다 CRITICAL·HIGH는 없었다. 병목에서는 멱등 checkout의 불필요한 `save`를 없애고 문장 수 테스트를 뒀다. 재리뷰에서는 hash의 `toString()` 선택, 금액 불일치 뒤 복구 경로, 통화·0원·`PAID` 대조, `amount` 입력 변형을 테스트로 고정하고 REST Docs·KDoc·wiki의 부정확한 문장을 고쳤다. 점검이 찾은 기존 결함 둘(길이 초과 입력이 단말 큐를 막는 것, `OrderPayload` hash의 지수 입력)은 HTTP로 재현했고 제외 절에 적었다. externalizer가 커넥션을 쥔 채 막힌다는 가설은 소스로 확인해 기각했다.
 - `order`에 `Order.verifyCheckoutAmount`와 오류 code `CHECKOUT_AMOUNT_MISMATCH`를 더했다. `RequestCheckoutByClientOrderId`가 `expectedAmount`를 받고, 전이한 뒤 저장 전에 대조한다. sync의 `CheckoutPayload`와 요청 항목에 `amount`가 생겼다.
