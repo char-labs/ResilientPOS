@@ -2,14 +2,14 @@ package com.resilientpos.sync.internal.adapter.web
 
 import com.resilientpos.foundation.DomainException
 import com.resilientpos.order.ClientOrderId
-import com.resilientpos.order.OrderCommand
-import com.resilientpos.order.OrderFixtures
 import com.resilientpos.order.OrderId
 import com.resilientpos.store.StoreId
 import com.resilientpos.sync.internal.application.SyncCommand
 import com.resilientpos.sync.internal.application.SyncCommandFacade
 import com.resilientpos.sync.internal.application.SyncItemStatus
+import com.resilientpos.sync.internal.domain.OrderPayload
 import com.resilientpos.terminal.TerminalId
+import java.math.BigDecimal
 import java.util.Currency
 import java.util.UUID
 import kotlin.test.Test
@@ -83,7 +83,7 @@ class SyncControllerTest(
                     responseFields(
                         fieldWithPath("result").type(JsonFieldType.STRING).description("SUCCESS 또는 FAIL"),
                         fieldWithPath("data.lastAckedSequence").type(JsonFieldType.NUMBER).description("배치가 끝난 시점에 서버가 확정한 마지막 순번. 단말은 이 다음 순번부터 다시 보낸다"),
-                        fieldWithPath("data.items[].operationId").type(JsonFieldType.STRING).description("요청 항목의 operationId"),
+                        fieldWithPath("data.items[].operationId").type(JsonFieldType.STRING).description("요청 항목의 operationId. items는 요청 순서가 아니라 sequence 오름차순이다"),
                         fieldWithPath("data.items[].status").type(JsonFieldType.STRING).description("APPLIED(적용)·DUPLICATE(확정된 operation의 재전송)·REJECTED(도메인 규칙 거절, 순번 확정)·GAP(앞 순번 미확정)·CONFLICT(확정된 순번에 다른 내용이나 모르는 operation)"),
                         fieldWithPath("data.items[].orderId").type(JsonFieldType.STRING).optional().description("적용됐거나 적용된 기록의 재전송이면 서버 주문 ID(UUID), 아니면 null"),
                         fieldWithPath("data.items[].errorCode").type(JsonFieldType.STRING).optional().description("거절됐거나 거절된 기록의 재전송이면 도메인 오류 코드, 아니면 null"),
@@ -122,7 +122,7 @@ class SyncControllerTest(
                 document(
                     "sync-receive-batch-too-large",
                     PATH_PARAMETERS,
-                    requestFields(subsectionWithPath("operations").description("operation 배열. 500개를 넘으면 SYNC_BATCH_TOO_LARGE")),
+                    requestFields(subsectionWithPath("operations").description("operation 배열. 500개를 넘으면 SYNC_BATCH_TOO_LARGE. 본문은 1 MiB 이하여야 하며 넘으면 BAD_REQUEST이므로 단말은 배치를 나눈다")),
                     responseFields(
                         fieldWithPath("result").type(JsonFieldType.STRING).description("SUCCESS 또는 FAIL"),
                         fieldWithPath("data").type(JsonFieldType.NULL).description("실패 응답에서는 null"),
@@ -141,15 +141,14 @@ class SyncControllerTest(
         private val OPERATION_ID_2: UUID = UUID.fromString("018f6b1a-0000-7000-8000-0000000000b2")
         private val krw: Currency = Currency.getInstance("KRW")
 
-        private val ORDER_COMMAND = OrderCommand.Create(
+        private val ORDER_COMMAND = OrderPayload(
             storeId = StoreId(UUID.fromString(STORE_ID)),
-            terminalId = TerminalId(UUID.fromString(TERMINAL_ID)),
             clientOrderId = ClientOrderId(UUID.fromString(CLIENT_ORDER_ID)),
             currency = krw,
-            lines = listOf(OrderFixtures.line("4500", 2)),
+            lines = listOf(OrderPayload.Line("SKU-1", "아메리카노", BigDecimal("4500"), 2)),
         )
 
-        private fun operation(sequence: Long, order: OrderCommand.Create) =
+        private fun operation(sequence: Long, order: OrderPayload) =
             SyncCommand.ReceiveBatch.Operation(if (sequence == 1L) OPERATION_ID_1 else OPERATION_ID_2, sequence, order)
 
         private fun command(vararg operations: SyncCommand.ReceiveBatch.Operation) =
@@ -180,7 +179,7 @@ class SyncControllerTest(
             fieldWithPath("operations[].order.currency").type(JsonFieldType.STRING).description("ISO 4217 통화 코드"),
             fieldWithPath("operations[].order.lines[].productCode").type(JsonFieldType.STRING).description("상품 코드"),
             fieldWithPath("operations[].order.lines[].productName").type(JsonFieldType.STRING).description("상품명. 비어 있으면 그 항목은 REJECTED(BLANK_PRODUCT_NAME)"),
-            fieldWithPath("operations[].order.lines[].unitPrice").type(JsonFieldType.STRING).description("단가. 주문 통화 기준 decimal string"),
+            fieldWithPath("operations[].order.lines[].unitPrice").type(JsonFieldType.STRING).description("단가. 주문 통화 기준 decimal string. 자릿수·범위·통화 규칙에 어긋나면 그 항목이 REJECTED(INVALID_MONEY_SCALE 등)"),
             fieldWithPath("operations[].order.lines[].quantity").type(JsonFieldType.NUMBER).description("수량"),
         )
     }

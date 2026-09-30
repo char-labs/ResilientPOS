@@ -40,11 +40,20 @@ class SyncPersistenceAdapter(
     @Transactional
     override fun saveWatermark(watermark: Watermark): Watermark {
         val existing: WatermarkEntity? = entityManager.find(WatermarkEntity::class.java, watermark.terminalId.value)
-        existing?.apply(watermark) ?: entityManager.persist(WatermarkEntity.from(watermark))
+        if (existing != null) {
+            existing.apply(watermark)
+        } else {
+            entityManager.persist(WatermarkEntity.from(watermark))
+        }
         return watermark
     }
 
-    /** unique `(terminal_id, operation_id)`라 한 건이다. `deleted_at is null`은 `BaseEntity`의 `@SoftDelete`가 붙여 준다. */
+    /**
+     * unique `(terminal_id, operation_id)`라 한 건이다. `deleted_at is null`은 `BaseEntity`의 `@SoftDelete`가 붙여 준다.
+     * 접수 기록은 멱등 키라 지우지 않는다. 지우는 명령이 생기면 이 조회가 삭제된 행도 보게 해야 한다 — 아니면 재전송이 `CONFLICT`가 되고
+     * 새 순번의 같은 operationId는 unique에 걸린다. watermark도 같다. 삭제된 watermark 행은 잠금 조회와 `find`가 보지 못해 새 단말로
+     * 시작하다가 PK에 걸린다.
+     */
     override fun findOperation(terminalId: TerminalId, operationId: UUID): SyncOperation? =
         queries.findFirst {
             selectFrom(SyncOperationEntity::class).where(

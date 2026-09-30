@@ -10,6 +10,7 @@ import com.resilientpos.sync.internal.domain.SyncOperationStatus
 import com.resilientpos.sync.internal.domain.SyncRepository
 import com.resilientpos.sync.internal.domain.Watermark
 import com.resilientpos.terminal.TerminalId
+import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.stereotype.Service
 
 /**
@@ -30,12 +31,23 @@ class SyncCommandFacade(
 ) {
 
     fun receiveBatch(command: SyncCommand.ReceiveBatch): SyncCommand.ReceiveBatch.Result {
+        Tx.requireNoCaller("receiveBatch")
         // 가장 싼 거절을 가장 먼저 한다. 상한을 넘는 배치는 Redis도 커넥션도 건드리지 않는다.
         if (command.operations.size > MAX_OPERATIONS) {
             throw DomainException(SYNC_BATCH_TOO_LARGE, "한 배치의 operation은 ${MAX_OPERATIONS}개를 넘을 수 없습니다")
         }
 
-        val items = command.operations.sortedBy { it.sequence }.map { applyOperation(command.terminalId, it) }
+        if (command.operations.isNotEmpty()) ensureWatermark(command.terminalId)
+
+        // 순번 오름차순이라 한 번 gap이면 뒤는 모두 gap이다. 트랜잭션과 행 잠금 없이 채운다.
+        var gapped = false
+        val items = command.operations.sortedBy { it.sequence }.map { operation ->
+            if (gapped) {
+                SyncCommand.ReceiveBatch.Item(operation.operationId, SyncItemStatus.GAP, null, null)
+            } else {
+                applyOperation(command.terminalId, operation).also { gapped = it.status == SyncItemStatus.GAP }
+            }
+        }
         val lastAckedSequence = Tx.readOnlyTx { repository.findWatermark(command.terminalId) }?.lastAckedSequence ?: 0
         log.info {
             val counts = items.groupingBy { it.status }.eachCount()
@@ -45,16 +57,31 @@ class SyncCommandFacade(
     }
 
     /**
-     * 주문 생성이 도메인 규칙으로 거절되면 그 트랜잭션은 롤백돼 주문 행이 남지 않는다. 같은 판정을 두 번째 트랜잭션으로 다시 돌려
+     * 잠글 watermark 행이 없는 새 단말이면 짧은 트랜잭션으로 먼저 넣는다. 행이 있어야 항목 잠금이 같은 단말의 배치를 직렬화한다.
+     * 같은 단말의 첫 배치가 동시에 둘 오면 한쪽만 넣고 진 쪽은 PK 위반을 받는데, 그것은 "이미 있다"는 뜻이라 삼키고 진행한다.
+     * 커밋 시점의 PK 위반은 `DuplicateKeyException`이 아니라 부모 `DataIntegrityViolationException`으로 번역된다(JpaTransactionManager). 이 트랜잭션은 INSERT 하나뿐이라 다른 제약이 없다.
+     */
+    private fun ensureWatermark(terminalId: TerminalId) {
+        try {
+            Tx.masterTx {
+                if (repository.findWatermark(terminalId) == null) repository.saveWatermark(Watermark.initial(terminalId))
+            }
+        } catch (raced: DataIntegrityViolationException) {
+            log.info { "watermark 행을 다른 배치가 먼저 넣었다 terminalId=${terminalId.value}" }
+        }
+    }
+
+    /**
+     * 주문 내용의 변환(`Money.of`)이나 주문 생성이 도메인 규칙으로 거절되면 그 트랜잭션은 롤백돼 주문 행이 남지 않는다. 같은 판정을 두 번째 트랜잭션으로 다시 돌려
      * `REJECTED`를 기록하고 순번을 확정한다. 거절은 결정적이라 두 트랜잭션 사이에 죽어도 재전송이 같은 결과를 낸다.
      * 두 번째 판정에서 순번을 다시 확인하므로 그 사이에 다른 배치가 같은 operation을 확정했으면 `DUPLICATE`·`CONFLICT`로 갈린다.
      */
     private fun applyOperation(terminalId: TerminalId, operation: SyncCommand.ReceiveBatch.Operation): SyncCommand.ReceiveBatch.Item {
-        val payloadHash = SyncOperation.payloadHashOf(operation.order)
+        val payloadHash = operation.order.hash()
         return try {
             Tx.masterTx {
                 judge(terminalId, operation, payloadHash) {
-                    val created = orders.createInCallerTransaction(operation.order)
+                    val created = orders.createInCallerTransaction(operation.order.toCommand(terminalId))
                     SyncOperation.applied(identifierGenerator, terminalId, operation.operationId, operation.sequence, payloadHash, created.orderId)
                 }
             }
@@ -67,36 +94,43 @@ class SyncCommandFacade(
         }
     }
 
-    /** watermark 행을 잠근 채 판정한다. 다음 항목이면 [record]가 만든 접수 기록을 넣고 전진한다. 그 밖은 아무것도 쓰지 않는다. */
+    /**
+     * watermark 행을 잠근 채 판정한다. 다음 항목이면 [record]가 만든 접수 기록을 넣고 전진한다. 그 밖은 아무것도 쓰지 않는다.
+     * 다음 순번인데 그 operationId가 이미 기록돼 있으면 `CONFLICT`다 — 단말이 operationId를 다른 순번에 다시 썼다. 그냥 넣으면
+     * unique 위반이 매 재전송마다 같은 배치 오류로 되풀이되어 단말이 영구히 막히고 로그로만 드러난다.
+     */
     private fun judge(
         terminalId: TerminalId,
         operation: SyncCommand.ReceiveBatch.Operation,
         payloadHash: String,
         record: () -> SyncOperation,
     ): SyncCommand.ReceiveBatch.Item {
-        // ponytail: 행이 없는 새 단말의 첫 배치가 동시에 둘 오면 둘 다 넣다가 진 쪽이 PK 위반으로 배치 오류를 받는다.
-        // 단말이 재전송하면 DUPLICATE다. 첫 배치가 겹치는 단말이 실제로 보이면 insert ... on conflict do nothing 뒤 잠금 조회로 바꾼다.
-        val watermark = repository.findWatermarkForUpdate(terminalId) ?: Watermark.initial(terminalId)
+        val watermark = checkNotNull(repository.findWatermarkForUpdate(terminalId)) { "watermark 행이 없다: ${terminalId.value}" }
         return when (watermark.judge(operation.sequence)) {
             Watermark.Position.NEXT -> {
+                if (repository.findOperation(terminalId, operation.operationId) != null) {
+                    return conflict(terminalId, operation, "이미 기록된 operation이 새 순번으로 왔다")
+                }
                 val recorded = repository.saveOperation(record())
                 repository.saveWatermark(watermark.advance())
                 SyncCommand.ReceiveBatch.Item(operation.operationId, recorded.status.toItemStatus(), recorded.orderId, recorded.errorCode)
             }
             Watermark.Position.ACKED -> {
                 val recorded = repository.findOperation(terminalId, operation.operationId)
-                if (recorded != null && recorded.matches(payloadHash)) {
-                    SyncCommand.ReceiveBatch.Item(operation.operationId, SyncItemStatus.DUPLICATE, recorded.orderId, recorded.errorCode)
-                } else {
-                    log.warn {
-                        val reason = if (recorded == null) "확정된 순번에 모르는 operation" else "확정된 operation에 다른 내용"
-                        "sync 충돌 terminalId=${terminalId.value} operationId=${operation.operationId} sequence=${operation.sequence} : $reason"
-                    }
-                    SyncCommand.ReceiveBatch.Item(operation.operationId, SyncItemStatus.CONFLICT, null, null)
+                when {
+                    recorded == null -> conflict(terminalId, operation, "확정된 순번에 모르는 operation")
+                    !recorded.matches(payloadHash, operation.sequence) -> conflict(terminalId, operation, "확정된 operation에 다른 내용이나 다른 순번")
+                    else -> SyncCommand.ReceiveBatch.Item(operation.operationId, SyncItemStatus.DUPLICATE, recorded.orderId, recorded.errorCode)
                 }
             }
             Watermark.Position.GAP -> SyncCommand.ReceiveBatch.Item(operation.operationId, SyncItemStatus.GAP, null, null)
         }
+    }
+
+    /** 단말과 서버의 상태가 갈라졌다는 신호라 항목마다 WARN을 남긴다. */
+    private fun conflict(terminalId: TerminalId, operation: SyncCommand.ReceiveBatch.Operation, reason: String): SyncCommand.ReceiveBatch.Item {
+        log.warn { "sync 충돌 terminalId=${terminalId.value} operationId=${operation.operationId} sequence=${operation.sequence} : $reason" }
+        return SyncCommand.ReceiveBatch.Item(operation.operationId, SyncItemStatus.CONFLICT, null, null)
     }
 
     private fun SyncOperationStatus.toItemStatus(): SyncItemStatus = when (this) {

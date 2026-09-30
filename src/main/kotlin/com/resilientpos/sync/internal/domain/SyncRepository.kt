@@ -14,7 +14,7 @@ interface SyncRepository {
 
     /**
      * watermark 행을 잠그고 읽는다. 항목마다 이 잠금 아래에서 판정하고 전진해 같은 단말의 배치가 직렬화된다.
-     * 트랜잭션 안에서만 부른다. 행이 없으면 null이고 호출자가 [Watermark.initial]로 시작해 [saveWatermark]로 넣는다.
+     * 트랜잭션 안에서만 부른다. 행이 없으면 null이다. Facade는 배치를 시작할 때 [Watermark.initial]을 먼저 넣어 두므로 항목 처리에서는 늘 있다.
      */
     fun findWatermarkForUpdate(terminalId: TerminalId): Watermark?
 

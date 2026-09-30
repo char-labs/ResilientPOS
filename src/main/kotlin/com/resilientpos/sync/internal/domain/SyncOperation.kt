@@ -1,11 +1,8 @@
 package com.resilientpos.sync.internal.domain
 
 import com.resilientpos.foundation.IdentifierGenerator
-import com.resilientpos.order.OrderCommand
 import com.resilientpos.order.OrderId
 import com.resilientpos.terminal.TerminalId
-import java.security.MessageDigest
-import java.util.HexFormat
 import java.util.UUID
 
 /**
@@ -23,7 +20,8 @@ class SyncOperation private constructor(
     val errorCode: String?,
 ) {
 
-    fun matches(payloadHash: String): Boolean = this.payloadHash == payloadHash
+    /** 같은 operation의 같은 내용 재전송인가. 순번까지 같아야 한다 — 다른 순번으로 온 같은 operation은 단말 상태가 갈라진 것이다. */
+    fun matches(payloadHash: String, sequence: Long): Boolean = this.payloadHash == payloadHash && this.sequence == sequence
 
     override fun equals(other: Any?) = other is SyncOperation && other.id == id
     override fun hashCode() = id.hashCode()
@@ -60,25 +58,5 @@ class SyncOperation private constructor(
             orderId: OrderId?,
             errorCode: String?,
         ): SyncOperation = SyncOperation(id, terminalId, operationId, sequence, payloadHash, status, orderId, errorCode)
-
-        /**
-         * 주문 생성 명령의 SHA-256 hex. 필드를 직접 이어 만든다 — `toString`에 기대면 `Money` 표현이 바뀔 때
-         * 이미 기록된 hash가 어긋나 재전송이 conflict가 된다. line 순서가 다르면 다른 hash다. 단말은 저장한 봉투를 그대로 다시 보낸다.
-         */
-        fun payloadHashOf(command: OrderCommand.Create): String {
-            val canonical = buildString {
-                append(command.storeId.value).append('|')
-                append(command.clientOrderId.value).append('|')
-                append(command.currency.currencyCode).append('|')
-                command.lines.forEach { line ->
-                    append(line.productCode).append('|')
-                    append(line.productName).append('|')
-                    append(line.unitPrice.amount.toPlainString()).append('|')
-                    append(line.quantity).append('|')
-                }
-            }
-            val digest = MessageDigest.getInstance("SHA-256").digest(canonical.toByteArray(Charsets.UTF_8))
-            return HexFormat.of().formatHex(digest)
-        }
     }
 }
