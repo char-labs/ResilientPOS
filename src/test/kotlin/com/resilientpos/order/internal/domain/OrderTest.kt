@@ -12,6 +12,7 @@ import com.resilientpos.contract.OrderPaymentRequested
 import com.resilientpos.order.OrderStatus
 import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.TerminalId
+import java.math.BigDecimal
 import java.time.Instant
 import java.util.Currency
 import java.util.UUID
@@ -397,5 +398,43 @@ class OrderTest {
         assertEquals(OrderStatus.CHECKOUT_REQUESTED, again.aggregate.status)
         assertEquals(requested.checkouts, again.aggregate.checkouts)
         assertEquals(emptyList(), again.events)
+    }
+
+    private fun requestedOrder(): Order {
+        val order = Order.create(
+            createOrderCommand(lines = listOf(orderLine(unitPrice = Money.of("1000", krw), quantity = 2))),
+            FixedIdentifierGenerator(emptyList()),
+            now,
+        ).aggregate
+        return order.requestCheckout(FixedIdentifierGenerator(emptyList()), now).aggregate
+    }
+
+    @Test
+    fun `verifyCheckoutAmount는 최신 회차의 확정 금액과 같으면 표기가 달라도 던지지 않는다`() {
+        val order = requestedOrder()
+
+        order.verifyCheckoutAmount(BigDecimal("2000"))
+        order.verifyCheckoutAmount(BigDecimal("2000.0"))
+    }
+
+    @Test
+    fun `verifyCheckoutAmount는 확정 금액과 다르면 CHECKOUT_AMOUNT_MISMATCH를 던지고 주문은 그대로다`() {
+        val order = requestedOrder()
+
+        val failure = assertFailsWith<DomainException> { order.verifyCheckoutAmount(BigDecimal("2001")) }
+
+        assertEquals(Order.CHECKOUT_AMOUNT_MISMATCH, failure.code)
+        assertEquals(DomainErrorKind.CONFLICT, failure.kind)
+        assertEquals(OrderStatus.CHECKOUT_REQUESTED, order.status)
+        assertEquals(listOf(Money.of("2000", krw)), order.checkouts.map { it.amount })
+    }
+
+    @Test
+    fun `verifyCheckoutAmount는 통화 자릿수에 맞지 않는 금액을 Money의 거절 code로 던진다`() {
+        val order = requestedOrder()
+
+        val failure = assertFailsWith<DomainException> { order.verifyCheckoutAmount(BigDecimal("2000.5")) }
+
+        assertEquals(Money.INVALID_MONEY_SCALE, failure.code)
     }
 }

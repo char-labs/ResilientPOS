@@ -69,16 +69,21 @@ class OrderCommandFacade(
     /**
      * 단말이 아는 `clientOrderId`로 주문 행을 잠그고 같은 결제 요청을 한다. `orderId`를 먼저 읽고 다시 잠그지 않으려고
      * 키로 바로 잠근다. 호출자 트랜잭션이 있으면 합류한다(sync 항목 트랜잭션).
+     * 단말이 본 합계(`expectedAmount`)가 확정 금액과 다르면 `CHECKOUT_AMOUNT_MISMATCH`로 거절한다. 이미 요청된 주문도 같다.
      */
     fun requestCheckout(command: OrderCommand.RequestCheckoutByClientOrderId): OrderCommand.RequestCheckout.Result =
         Tx.masterTx {
-            confirmCheckout(repository.findByClientOrderIdForUpdate(command.terminalId, command.clientOrderId))
+            confirmCheckout(repository.findByClientOrderIdForUpdate(command.terminalId, command.clientOrderId)) {
+                it.verifyCheckoutAmount(command.expectedAmount)
+            }
         }
 
-    private fun confirmCheckout(order: Order?): OrderCommand.RequestCheckout.Result {
+    /** `verifyBeforeSave`는 전이한 주문을 저장·발행하기 전에 검사한다. 던지면 아무것도 저장하지 않고 이벤트도 내지 않는다. */
+    private fun confirmCheckout(order: Order?, verifyBeforeSave: (Order) -> Unit = {}): OrderCommand.RequestCheckout.Result {
         order ?: throw DomainException(Order.ORDER_NOT_FOUND, "주문을 찾을 수 없습니다", DomainErrorKind.NOT_FOUND)
 
         val transition = order.requestCheckout(identifierGenerator, clock.instant())
+        verifyBeforeSave(transition.aggregate)
         val saved = repository.save(transition.aggregate)
         transition.events.forEach(eventPublisher::publish)
         val checkout = saved.checkouts.last()

@@ -13,6 +13,8 @@ class PayloadHashTest {
 
     private val clientOrderId = ClientOrderId(UUID.fromString("00000000-0000-0000-0000-000000000002"))
 
+    private val amount = BigDecimal("3502")
+
     private val order = OrderPayload(
         storeId = StoreId(UUID.fromString("00000000-0000-0000-0000-000000000001")),
         clientOrderId = clientOrderId,
@@ -30,23 +32,32 @@ class PayloadHashTest {
     fun `CheckoutPayload의 hash는 같은 clientOrderId에 같고 다른 clientOrderId에 다르다`() {
         val other = ClientOrderId(UUID.fromString("00000000-0000-0000-0000-000000000003"))
 
-        assertEquals(CheckoutPayload(clientOrderId).hash(), CheckoutPayload(clientOrderId).hash())
-        assertNotEquals(CheckoutPayload(clientOrderId).hash(), CheckoutPayload(other).hash())
+        assertEquals(CheckoutPayload(clientOrderId, amount).hash(), CheckoutPayload(clientOrderId, amount).hash())
+        assertNotEquals(CheckoutPayload(clientOrderId, amount).hash(), CheckoutPayload(other, amount).hash())
     }
 
     @Test
-    fun `CheckoutPayload의 hash는 종류와 clientOrderId를 길이 접두어로 이은 SHA-256 hex다`() {
-        assertEquals("791416dbf4adfa12700825a10494ed00f40765a3777d739a76d7a2ee989e7215", CheckoutPayload(clientOrderId).hash())
+    fun `CheckoutPayload의 hash는 amount가 다르면 다르고 같은 금액도 표기가 다르면 다르다`() {
+        val base = CheckoutPayload(clientOrderId, amount).hash()
+
+        assertNotEquals(base, CheckoutPayload(clientOrderId, BigDecimal("3501")).hash())
+        assertNotEquals(base, CheckoutPayload(clientOrderId, BigDecimal("3502.0")).hash())
+    }
+
+    @Test
+    fun `CheckoutPayload의 hash는 종류·clientOrderId·amount를 길이 접두어로 이은 SHA-256 hex다`() {
+        // python3 hashlib.sha256("16:REQUEST_CHECKOUT;36:00000000-0000-0000-0000-000000000002;4:3502;")로 따로 구한 값이다.
+        assertEquals("3594856e434dc1721f93ff233276691bc229fd57c91a2c978e4743d7435bc6b3", CheckoutPayload(clientOrderId, amount).hash())
     }
 
     @Test
     fun `같은 clientOrderId를 가진 OrderPayload와 CheckoutPayload의 hash는 다르다`() {
-        assertNotEquals(order.hash(), CheckoutPayload(clientOrderId).hash())
+        assertNotEquals(order.hash(), CheckoutPayload(clientOrderId, amount).hash())
     }
 
     @Test
     fun `payload는 자기 종류를 돌려준다`() {
         assertEquals(SyncOperationKind.CREATE_ORDER, order.kind)
-        assertEquals(SyncOperationKind.REQUEST_CHECKOUT, CheckoutPayload(clientOrderId).kind)
+        assertEquals(SyncOperationKind.REQUEST_CHECKOUT, CheckoutPayload(clientOrderId, amount).kind)
     }
 }

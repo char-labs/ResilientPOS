@@ -87,7 +87,7 @@ class SyncCommandFacade(
                     val payload = operation.payload
                     val orderId = when (payload) {
                         is OrderPayload -> orders.createInCallerTransaction(payload.toCommand(terminalId)).orderId
-                        is CheckoutPayload -> orders.requestCheckout(OrderCommand.RequestCheckoutByClientOrderId(terminalId, payload.clientOrderId)).orderId
+                        is CheckoutPayload -> orders.requestCheckout(OrderCommand.RequestCheckoutByClientOrderId(terminalId, payload.clientOrderId, payload.amount)).orderId
                     }
                     SyncOperation.applied(identifierGenerator, terminalId, operation.operationId, operation.sequence, payload.kind, payloadHash, orderId)
                 }

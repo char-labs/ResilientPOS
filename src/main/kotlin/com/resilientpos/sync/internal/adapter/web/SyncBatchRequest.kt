@@ -42,14 +42,18 @@ sealed interface SyncOperationRequest {
         override fun toCommand() = SyncCommand.ReceiveBatch.Operation(operationId, sequence, order.toPayload())
     }
 
-    /** 단말은 서버 `orderId`를 모르므로 앞선 `CREATE_ORDER`의 `clientOrderId`로 주문을 가리킨다. */
+    /**
+     * 단말은 서버 `orderId`를 모르므로 앞선 `CREATE_ORDER`의 `clientOrderId`로 주문을 가리키고, 단말이 본 합계를 `amount`(주문 통화의
+     * decimal string)로 싣는다. `amount`가 없으면 역직렬화가 거절해 배치 전체가 400이다.
+     */
     data class RequestCheckout(
         val operationId: UUID,
         val sequence: Long,
         val clientOrderId: UUID,
+        val amount: BigDecimal,
     ) : SyncOperationRequest {
         override fun toCommand() =
-            SyncCommand.ReceiveBatch.Operation(operationId, sequence, CheckoutPayload(ClientOrderId(clientOrderId)))
+            SyncCommand.ReceiveBatch.Operation(operationId, sequence, CheckoutPayload(ClientOrderId(clientOrderId), amount))
     }
 }
 

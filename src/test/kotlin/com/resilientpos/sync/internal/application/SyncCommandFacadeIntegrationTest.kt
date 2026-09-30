@@ -48,8 +48,13 @@ class SyncCommandFacadeIntegrationTest(
     private fun operation(sequence: Long, payload: OperationPayload = payload(), operationId: UUID = UUID.randomUUID()) =
         SyncCommand.ReceiveBatch.Operation(operationId, sequence, payload)
 
-    private fun checkout(sequence: Long, clientOrderId: ClientOrderId, operationId: UUID = UUID.randomUUID()) =
-        operation(sequence, CheckoutPayload(clientOrderId), operationId)
+    // OrderFixtures 기본 line의 합계(1001 x 2 + 500 x 3)다. 단말이 본 합계로 싣는다.
+    private fun checkout(
+        sequence: Long,
+        clientOrderId: ClientOrderId,
+        operationId: UUID = UUID.randomUUID(),
+        amount: BigDecimal = BigDecimal("3502"),
+    ) = operation(sequence, CheckoutPayload(clientOrderId, amount), operationId)
 
     private fun orderStatus(clientOrderId: ClientOrderId): String? =
         jdbcTemplate.query("select status from t_order where terminal_id = ? and client_order_id = ?", { rs, _ -> rs.getString(1) }, terminalId.value, clientOrderId.value).firstOrNull()
@@ -345,6 +350,41 @@ class SyncCommandFacadeIntegrationTest(
         assertEquals(1, orderRows())
         assertEquals(1, checkoutRows())
         assertEquals(listOf("CREATE_ORDER", "REQUEST_CHECKOUT"), kinds())
+    }
+
+    @Test
+    fun `서버에 같은 clientOrderId의 주문이 다른 합계로 있으면 주문 생성은 IDEMPOTENCY_CONFLICT 결제 요청은 CHECKOUT_AMOUNT_MISMATCH 거절이고 주문은 OPEN이다`() {
+        val command = OrderFixtures.createOrderCommand(terminalId = terminalId)
+        orders.create(command)
+        val differentContent = payload(command).let { it.copy(lines = listOf(it.lines.first().copy(quantity = 7))) }
+
+        // 단말의 합계는 자기가 보낸 내용의 합계(1001 x 7)다. 서버의 확정 금액 3502와 다르다.
+        val result = receive(
+            operation(1, differentContent),
+            checkout(2, command.clientOrderId, amount = BigDecimal("7007")),
+        )
+
+        assertEquals(listOf(SyncItemStatus.REJECTED, SyncItemStatus.REJECTED), result.items.map { it.status })
+        assertEquals(listOf(Order.IDEMPOTENCY_CONFLICT, Order.CHECKOUT_AMOUNT_MISMATCH), result.items.map { it.errorCode })
+        assertEquals("OPEN", orderStatus(command.clientOrderId))
+        assertEquals(0, checkoutRows())
+        assertEquals(0L, paymentRequestedPublications(command.clientOrderId))
+        assertEquals(2, result.lastAckedSequence)
+        assertEquals(2, storedWatermark())
+    }
+
+    @Test
+    fun `확정된 결제 요청 operationId에 다른 amount가 오면 충돌이고 아무것도 바뀌지 않는다`() {
+        val order = payload()
+        val applied = checkout(2, order.clientOrderId)
+        receive(operation(1, order), applied)
+
+        val result = receive(checkout(2, order.clientOrderId, operationId = applied.operationId, amount = BigDecimal("3501")))
+
+        assertEquals(SyncItemStatus.CONFLICT, result.items.single().status)
+        assertEquals(2, result.lastAckedSequence)
+        assertEquals(1, checkoutRows())
+        assertEquals(2, operationRows())
     }
 
     @Test

@@ -57,7 +57,7 @@ class SyncApiIntegrationTest(
               { "operationId": "$createOperationId", "sequence": 1, "kind": "CREATE_ORDER",
                 "order": { "storeId": "${UUID.randomUUID()}", "clientOrderId": "$clientOrderId", "currency": "KRW",
                            "lines": [{ "productCode": "SKU-1", "productName": "아메리카노", "unitPrice": "1751", "quantity": 2 }] } },
-              { "operationId": "$checkoutOperationId", "sequence": 2, "kind": "REQUEST_CHECKOUT", "clientOrderId": "$clientOrderId" }
+              { "operationId": "$checkoutOperationId", "sequence": 2, "kind": "REQUEST_CHECKOUT", "clientOrderId": "$clientOrderId", "amount": "3502" }
             ] }
         """.trimIndent()
 

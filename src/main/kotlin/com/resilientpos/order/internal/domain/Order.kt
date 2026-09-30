@@ -16,6 +16,7 @@ import com.resilientpos.order.OrderLineId
 import com.resilientpos.order.OrderStatus
 import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.TerminalId
+import java.math.BigDecimal
 import java.time.Instant
 import java.util.Currency
 
@@ -61,6 +62,20 @@ class Order private constructor(
             throw DomainException(
                 IDEMPOTENCY_CONFLICT,
                 "같은 clientOrderId로 내용이 다른 주문 생성 요청이 이미 처리되었습니다",
+                DomainErrorKind.CONFLICT,
+            )
+        }
+    }
+
+    /**
+     * 단말이 본 합계가 최신 checkout 회차의 확정 금액과 같은지 검증한다. 합계는 주문의 통화로 `Money`가 된다.
+     */
+    fun verifyCheckoutAmount(expectedAmount: BigDecimal) {
+        val expected = Money.of(expectedAmount, currency)
+        if (checkouts.lastOrNull()?.amount != expected) {
+            throw DomainException(
+                CHECKOUT_AMOUNT_MISMATCH,
+                "단말이 본 합계가 주문의 확정 금액과 다릅니다",
                 DomainErrorKind.CONFLICT,
             )
         }
@@ -156,6 +171,7 @@ class Order private constructor(
                 throw DomainException(TOO_MANY_ORDER_LINES, "주문 line은 ${'$'}{MAX_LINES}개를 넘을 수 없습니다")
             }
         }
+        const val CHECKOUT_AMOUNT_MISMATCH = "CHECKOUT_AMOUNT_MISMATCH"
         const val CURRENCY_MISMATCH = "CURRENCY_MISMATCH"
         const val IDEMPOTENCY_CONFLICT = "IDEMPOTENCY_CONFLICT"
         const val ORDER_NOT_FOUND = "ORDER_NOT_FOUND"

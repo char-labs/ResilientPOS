@@ -118,6 +118,19 @@ class SyncControllerTest(
     }
 
     @Test
+    fun `amount가 없는 REQUEST_CHECKOUT 항목은 400 BAD_REQUEST이고 Facade를 부르지 않는다`() {
+        val noAmount = checkoutJson(OPERATION_ID_1, 1).replace(""", "amount": "3502"""", "")
+        check(noAmount != checkoutJson(OPERATION_ID_1, 1))
+
+        postBatch(requestJson(noAmount))
+            .andExpect(status().isBadRequest)
+            .andExpect(jsonPath("$.result").value("FAIL"))
+            .andExpect(jsonPath("$.error.errorCode").value("BAD_REQUEST"))
+
+        verifyNoInteractions(facade)
+    }
+
+    @Test
     fun `빈 배치도 200이고 응답은 watermark 조회다`() {
         given(facade.receiveBatch(command())).willReturn(SyncCommand.ReceiveBatch.Result(7, emptyList()))
 
@@ -169,7 +182,7 @@ class SyncControllerTest(
             lines = listOf(OrderPayload.Line("SKU-1", "아메리카노", BigDecimal("4500"), 2)),
         )
 
-        private val CHECKOUT_COMMAND = CheckoutPayload(ClientOrderId(UUID.fromString(CLIENT_ORDER_ID)))
+        private val CHECKOUT_COMMAND = CheckoutPayload(ClientOrderId(UUID.fromString(CLIENT_ORDER_ID)), BigDecimal("3502"))
 
         private fun operation(sequence: Long, payload: OperationPayload) =
             SyncCommand.ReceiveBatch.Operation(if (sequence == 1L) OPERATION_ID_1 else OPERATION_ID_2, sequence, payload)
@@ -192,7 +205,7 @@ class SyncControllerTest(
         """.trimIndent()
 
         private fun checkoutJson(operationId: UUID, sequence: Long) = """
-            { "operationId": "$operationId", "sequence": $sequence, "kind": "REQUEST_CHECKOUT", "clientOrderId": "$CLIENT_ORDER_ID" }
+            { "operationId": "$operationId", "sequence": $sequence, "kind": "REQUEST_CHECKOUT", "clientOrderId": "$CLIENT_ORDER_ID", "amount": "3502" }
         """.trimIndent()
 
         private fun requestJson(vararg operations: String) = """{ "operations": [${operations.joinToString(",")}] }"""
@@ -204,6 +217,7 @@ class SyncControllerTest(
             fieldWithPath("operations[].sequence").type(JsonFieldType.NUMBER).description("단말 안에서 단조 증가하는 순번. 1부터 시작하고 서버는 watermark 다음 순번만 적용한다"),
             fieldWithPath("operations[].kind").type(JsonFieldType.STRING).description("operation 종류. 필수이며 CREATE_ORDER(주문 생성) 또는 REQUEST_CHECKOUT(결제 요청)만 받는다. 없거나 모르는 값이면 배치 전체가 400 BAD_REQUEST"),
             fieldWithPath("operations[].clientOrderId").type(JsonFieldType.STRING).optional().description("REQUEST_CHECKOUT일 때만 있다. 결제를 요청할 주문의 clientOrderId(UUID). 같은 단말의 앞선 CREATE_ORDER가 만든 주문을 가리킨다"),
+            fieldWithPath("operations[].amount").type(JsonFieldType.STRING).optional().description("REQUEST_CHECKOUT일 때만 있고 그 항목에서는 필수다. 단말이 본 주문 합계로 주문 통화 기준 decimal string이다. 서버의 확정 금액과 다르면 그 항목은 REJECTED(CHECKOUT_AMOUNT_MISMATCH)이고 주문은 그대로다. 없으면 배치 전체가 400 BAD_REQUEST"),
             fieldWithPath("operations[].order.storeId").type(JsonFieldType.STRING).optional().description("CREATE_ORDER일 때만 있는 order 객체의 매장 ID(UUID). order 아래 필드는 모두 CREATE_ORDER 항목에만 있다"),
             fieldWithPath("operations[].order.clientOrderId").type(JsonFieldType.STRING).optional().description("단말이 부여한 주문 생성 요청 ID(UUID). 주문 멱등 키"),
             fieldWithPath("operations[].order.currency").type(JsonFieldType.STRING).optional().description("ISO 4217 통화 코드"),
