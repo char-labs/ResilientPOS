@@ -16,6 +16,9 @@ annotation class ReadOnlyTransactional
 /**
  * 트랜잭션 경계를 블록으로 선언한다. `@Transactional` 메서드와 달리 같은 클래스 안에서도 트랜잭션이 열린다 —
  * 프록시를 거친 [TxRunner]를 부르기 때문이다. 러너는 `PlatformConfiguration`이 컨텍스트 기동 때 넣는다.
+ * Spring 트랜잭션에서 쓰는 것은 `@Transactional` 애너테이션의 전파 속성뿐이다. `org.springframework.transaction.support`의
+ * API(`TransactionSynchronizationManager`·`TransactionTemplate`)는 운영 코드 어디서도 부르지 않는다. 트랜잭션이 있는지 묻는 검사도 두지 않는다 —
+ * "안에서만·밖에서만 부른다"는 각 블록·메서드의 KDoc 계약이다. 나중에 트랜잭션 수단을 바꿀 때 [TxRunner] 하나만 고치면 된다.
  *
  * ponytail: 전역 러너라 한 JVM에 컨텍스트가 여럿 뜨면 마지막으로 초기화된 컨텍스트의 러너를 쓴다.
  * 운영은 컨텍스트가 하나다. 테스트는 `TxRebindingTestExecutionListener`가 테스트마다 그 컨텍스트의 러너로 다시 묶는다.
