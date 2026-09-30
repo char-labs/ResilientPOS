@@ -37,6 +37,8 @@
 - 응답의 `orderId`는 `create`의 결과에서 온다. 단말이 온라인 복구 뒤 `POST /v1/orders/{orderId}/checkout`을 부를 수 있어야 하므로 `t_sync_operation.order_id`에 남겨 `DUPLICATE`에도 같은 값을 준다.
 - 배치가 끝나면 처리 결과 개수(항목 수, APPLIED·DUPLICATE·REJECTED·GAP·CONFLICT)와 `terminalId`를 INFO 한 줄로 남긴다. `CONFLICT`는 항목마다 WARN(`terminalId`·`operationId`·`sequence`)이다. 단말 상태가 서버와 갈라졌다는 신호라서다.
 
+**엔티티 지도(범위 조정, PR 열린 뒤 추가).** 사용자 요청으로 JPA 엔티티 7개(`OrderEntity`·`OrderLineEntity`·`OrderCheckoutEntity`·`PaymentAttemptEntity`·`FulfillmentEntity`·`WatermarkEntity`·`SyncOperationEntity`)의 역할, 참조 관계(JPA 연관관계 매핑이 없어 ID 컬럼으로만 잇는다), 단말·운영자 UX 흐름별 생성·전이 순서를 `docs/wiki/entity-map.md`에 적고 각 엔티티 KDoc에 역할·관계·흐름 문단을 더한다. 코드 동작은 바꾸지 않는다. 컨텍스트가 sync intake와 다르지만 사용자가 이 PR에 얹기로 정했다.
+
 **HTTP.** `sync.internal.adapter.web.SyncController`, `POST /v1/terminals/{terminalId}/sync`.
 - 요청 본문: `operations` 배열. 항목은 `operationId`(UUID), `sequence`(정수), `order`(`storeId`·`clientOrderId`·`currency`·`lines[]`, `POST /v1/orders` 본문에서 `terminalId`를 뺀 모양). `terminalId`는 경로에서만 온다.
 - 응답: 200과 `data{lastAckedSequence, items[{operationId, status, orderId, errorCode}]}`. `orderId`·`errorCode`는 해당 없으면 null이다. 빈 `operations`도 200이고 그때 응답은 watermark 조회다.
@@ -79,6 +81,11 @@
 - docs/wiki/domain-model.md
 - docs/spec/2026-09-30-sync-intake.md
 - docs/wiki/domain-model.md
+- docs/wiki/entity-map.md
+- docs/wiki/README.md
+- src/main/kotlin/com/resilientpos/order/internal/adapter/persistence/command/*Entity.kt
+- src/main/kotlin/com/resilientpos/payment/internal/adapter/persistence/command/PaymentAttemptEntity.kt
+- src/main/kotlin/com/resilientpos/fulfillment/internal/adapter/persistence/command/FulfillmentEntity.kt
 
 ## 인수 조건
 1. 순번 1부터 이어지는 `CREATE_ORDER` 배치를 보내면 모든 항목이 `APPLIED`이고 `orderId`를 가지며, `t_order`에 항목 수만큼 행이 있고 `t_sync_watermark.last_acked_sequence`가 마지막 순번이다. 응답의 `lastAckedSequence`가 같다.
@@ -93,6 +100,7 @@
 10. `POST /v1/terminals/{terminalId}/sync`가 `SyncCommand.ReceiveBatch`로 옮겨 Facade를 부르고 200과 `data{lastAckedSequence, items}`를 돌려준다. 성공 응답과 `SYNC_BATCH_TOO_LARGE` 응답을 REST Docs로 문서화한다. HTTP부터 PostgreSQL까지 이어지는 통합 테스트 하나가 인수 1·2를 HTTP로 확인한다.
 11. `Watermark`의 판정(다음·확정됨·gap)과 전진은 Spring 없는 단위 테스트로 고정한다.
 12. `./gradlew test` 전체와 `python3 scripts/check_pr.py --base origin/main --worktree`가 통과한다.
+13. `docs/wiki/entity-map.md`가 엔티티 7개의 역할·참조 관계·UX 흐름을 담고 wiki 인덱스와 도메인 모델 §2에서 링크되며, 각 엔티티 KDoc 첫 문단에 역할·관계·흐름이 있다. 문서·주석만이라 테스트는 없고 컴파일과 `check_pr.py`로 확인한다.
 
 ### Checkpoint와 검증 명령
 | Checkpoint | 검증 명령 | 의존 |
@@ -154,6 +162,7 @@ create table t_sync_operation (
 - `python3 scripts/check_pr.py --base origin/main --worktree`, 제출 전 `--worktree` 없이 한 번 더.
 
 ## Wiki 영향
+- [entity-map](../wiki/entity-map.md)을 새로 둔다. wiki [README](../wiki/README.md)의 작업별 진입점과 [domain-model](../wiki/domain-model.md) §2 "aggregate 안의 구성"에서 링크한다.
 - [domain-model](../wiki/domain-model.md)
   - §1 엔티티 예시와 §2 표·"aggregate 안의 구성"의 옛 이름 `TerminalSyncState`·`SyncManagement`를 `Watermark`·`SyncCommandFacade`(공개 Facade 없음)로 바꾼다.
   - §3 용어집의 `gap / duplicate / conflict` 줄에 `rejected`(소유 컨텍스트가 도메인 규칙으로 거절한 operation, 순번은 확정된다)를 더한다.
