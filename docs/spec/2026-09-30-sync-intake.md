@@ -189,7 +189,7 @@ create table t_sync_operation (
 | 인수 10, `SyncControllerTest` 3개·`SyncApiIntegrationTest` 1개 | `./gradlew test --tests 'com.resilientpos.sync.internal.adapter.web.*'`. Facade를 부르지 않고 빈 응답을 돌려주는 최소 Controller로 실행. 4개 모두 실패(lastAckedSequence expected 1/7 but was 0, status expected 400 but was 200, expected APPLIED but was 빈 문자열) | 같은 명령. 커맨드 변환과 Facade 호출을 채운 뒤 통과. 스니펫 `sync-receive-batch`·`sync-receive-batch-too-large`가 `build/generated-snippets`에 생겼다 | `./gradlew test --tests 'com.resilientpos.sync.*'` 통과(16개) |
 
 ## 결과
-- `./gradlew test` 전체 통과(307개), `python3 scripts/check_pr.py --base origin/main`을 `--worktree` 있이·없이 모두 PASS, 하네스 테스트 OK.
+- `./gradlew test` 전체 통과(305개), `python3 scripts/check_pr.py --base origin/main`을 `--worktree` 있이·없이 모두 PASS, 하네스 테스트 OK.
 - `platform`: 바깥 트랜잭션 거절 검사를 넣지 않기로 했다(결정 2). `Lock`·`Tx`는 KDoc 계약만 바뀌었고 `executeWithLockNoTx`의 `TransactionSynchronizationManager` 직접 검사를 지웠다. 운영 코드는 `org.springframework.transaction.support`를 부르지 않는다.
 - `order`에 `OrderCommandFacade.createInCallerTransaction`(락 없는 합류 경로)을 더했다. `create`는 그것을 `Lock` 블록으로 감싼다.
 - `sync`에 `Watermark`·`SyncOperation`·`OrderPayload`(도메인), `SyncCommandFacade`·`SyncCommand`·`SyncItemStatus`(application), JPA 영속화, `POST /v1/terminals/{terminalId}/sync`와 REST Docs 스니펫 둘, V010(`t_sync_watermark`·`t_sync_operation`)을 더했다.
