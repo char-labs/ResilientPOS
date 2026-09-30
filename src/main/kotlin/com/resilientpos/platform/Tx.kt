@@ -3,6 +3,7 @@ package com.resilientpos.platform
 import org.springframework.stereotype.Component
 import org.springframework.transaction.annotation.Propagation
 import org.springframework.transaction.annotation.Transactional
+import org.springframework.transaction.support.TransactionSynchronizationManager
 
 /**
  * 읽기 전용 트랜잭션 선언. 호출자 트랜잭션이 있으면 합류하고 없으면 트랜잭션 없이 돈다(`SUPPORTS`).
@@ -33,6 +34,20 @@ object Tx {
 
     /** 바깥 트랜잭션과 따로 커밋한다(`REQUIRES_NEW`). [Lock]이 락을 풀기 전에 커밋하려고 쓴다. */
     fun <T> newTx(action: () -> T): T = runner.runNewTx(action)
+
+    /**
+     * 호출자 트랜잭션이 없으면 거절한다. 호출자 트랜잭션에 합류해 한 커밋으로 묶여야 하는 경로의 첫 줄에 둔다.
+     * 그냥 돌면 그 쓰기만 자기 트랜잭션으로 커밋되어 호출자가 묶으려던 커밋이 조용히 갈라진다.
+     * 트랜잭션 존재를 묻는 Spring API는 여기서만 부른다. 호출부는 "있어야 한다"를 이 이름으로 읽는다.
+     */
+    fun requireCaller(name: String) {
+        check(TransactionSynchronizationManager.isActualTransactionActive()) { "${name}은 트랜잭션 안에서만 부른다" }
+    }
+
+    /** 호출자 트랜잭션이 있으면 거절한다. 따로 커밋하거나 트랜잭션 없이 도는 블록([Lock])의 첫 줄에 둔다. */
+    fun requireNoCaller(name: String) {
+        check(!TransactionSynchronizationManager.isActualTransactionActive()) { "${name}은 트랜잭션 밖에서만 부른다" }
+    }
 }
 
 /** [Tx]가 부르는 트랜잭션 프록시. 직접 주입해 쓰지 않는다. */

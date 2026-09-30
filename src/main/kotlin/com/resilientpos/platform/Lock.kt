@@ -1,7 +1,5 @@
 package com.resilientpos.platform
 
-import org.springframework.transaction.support.TransactionSynchronizationManager
-
 /**
  * 여러 인스턴스 사이에서 같은 키의 일을 줄 세우는 블록. 블록이 곧 락 범위다.
  *
@@ -21,11 +19,15 @@ object Lock {
     }
 
     /**
-     * 블록은 새 트랜잭션([Tx.newTx], `REQUIRES_NEW`)에서 돌고, 커밋한 뒤에 락을 푼다. 바깥 트랜잭션에 합류하면
-     * 바깥이 커밋하기 전에 락이 풀려 뒤 요청이 커밋되지 않은 상태를 읽는다. 그래서 바깥이 있어도 따로 커밋한다.
-     * 바깥이 롤백돼도 블록의 커밋은 남고, 바깥이 있으면 커넥션을 둘 쓴다. 한 커밋으로 묶어야 하는 흐름(§4.6 sync intake) 안에서 부르지 않는다.
+     * 블록은 새 트랜잭션([Tx.newTx], `REQUIRES_NEW`)에서 돌고, 커밋한 뒤에 락을 푼다.
+     * 바깥 트랜잭션 안에서는 거절한다. 합류하면 바깥이 커밋하기 전에 락이 풀려 뒤 요청이 커밋되지 않은 상태를 읽고,
+     * 따로 커밋하면 바깥이 롤백돼도 블록의 커밋이 남아 한 커밋으로 묶으려던 흐름이 갈라진다. 한 커밋으로 묶어야 하는 흐름
+     * (§4.6 sync intake)은 락 없는 합류 경로(`OrderCommandFacade.createInCallerTransaction`)를 부른다.
      */
-    fun <T> executeWithLock(key: String, action: () -> T): T = locked(key) { Tx.newTx(action) }
+    fun <T> executeWithLock(key: String, action: () -> T): T {
+        Tx.requireNoCaller("executeWithLock($key)")
+        return locked(key) { Tx.newTx(action) }
+    }
 
     /**
      * 트랜잭션 없이 줄만 세운다. 블록 안의 쓰기는 각자 자기 트랜잭션에서 곧바로 커밋한다.
@@ -33,7 +35,7 @@ object Lock {
      * 바깥 트랜잭션 안에서는 거절한다. 합류하면 바깥이 커밋하기 전에 락이 풀린다. Facade는 쓰지 않는다.
      */
     fun <T> executeWithLockNoTx(key: String, action: () -> T): T {
-        check(!TransactionSynchronizationManager.isActualTransactionActive()) { "executeWithLockNoTx는 트랜잭션 밖에서만 부른다: $key" }
+        Tx.requireNoCaller("executeWithLockNoTx($key)")
         return locked(key, action)
     }
 

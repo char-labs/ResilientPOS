@@ -82,15 +82,15 @@ class LockIntegrationTest(
     }
 
     @Test
-    fun `바깥 트랜잭션이 롤백돼도 블록의 쓰기는 남는다`() {
+    fun `바깥 트랜잭션 안에서 부르면 잠그기 전에 거절한다`() {
+        val key = "test:lock:${UUID.randomUUID()}"
         val id = UUID.randomUUID()
 
-        transactions.executeWithoutResult { status ->
-            Lock.executeWithLock("test:lock:${UUID.randomUUID()}") { insertProbe(id) }
-            status.setRollbackOnly()
+        assertFailsWith<IllegalStateException> {
+            transactions.executeWithoutResult { Lock.executeWithLock(key) { insertProbe(id) } }
         }
-
-        assertEquals(1, probes(id))
+        assertFalse(redis.hasKey(key))
+        assertEquals(0, probes(id))
     }
 
     @Test
