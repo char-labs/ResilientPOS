@@ -67,7 +67,7 @@ Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰�
 | `Store` | policy 버전 | 정책을 바꿀 때 새 버전 행이 함께 커밋되지 않으면 이미 발행된 checkout이 가리키는 버전이 없어진다 |
 | `Fulfillment`, `ReceiptDelivery` | 없음(단독 루트) | natural key 한 건이면 충분하다 |
 
-자식 엔티티는 루트를 통해서만 만들고 바꾼다. 다른 aggregate의 사실(예: 결제 승인)이 필요하면 자식으로 끌어오지 않고 이벤트로 받는다. 한 컨텍스트에 루트가 여럿일 수 있다(`fulfillment`). 루트 하나가 곧 컨텍스트는 아니다.
+지금 있는 JPA 엔티티 7개의 역할·참조 관계·UX 흐름별 동작은 [엔티티 지도](entity-map.md)에 있다. 자식 엔티티는 루트를 통해서만 만들고 바꾼다. 다른 aggregate의 사실(예: 결제 승인)이 필요하면 자식으로 끌어오지 않고 이벤트로 받는다. 한 컨텍스트에 루트가 여럿일 수 있다(`fulfillment`). 루트 하나가 곧 컨텍스트는 아니다.
 
 ## 3. 유비쿼터스 언어 용어집
 
