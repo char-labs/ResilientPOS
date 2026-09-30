@@ -69,6 +69,7 @@ class Order private constructor(
 
     /**
      * 단말이 본 합계가 최신 checkout 회차의 확정 금액과 같은지 검증한다. 합계는 주문의 통화로 `Money`가 된다.
+     * checkout 요청으로 전이한 주문에 부른다. checkout이 없는 주문이면 같은 거절이다.
      */
     fun verifyCheckoutAmount(expectedAmount: BigDecimal) {
         val expected = Money.of(expectedAmount, currency)

@@ -374,6 +374,28 @@ class SyncCommandFacadeIntegrationTest(
     }
 
     @Test
+    fun `금액 불일치로 거절된 결제 요청을 재전송하면 같은 거절의 중복이고 올바른 금액의 새 operation은 적용된다`() {
+        val command = OrderFixtures.createOrderCommand(terminalId = terminalId)
+        orders.create(command)
+        val mismatched = checkout(1, command.clientOrderId, amount = BigDecimal("7007"))
+        receive(mismatched)
+
+        val resent = receive(mismatched)
+
+        assertEquals(SyncItemStatus.DUPLICATE, resent.items.single().status)
+        assertEquals(Order.CHECKOUT_AMOUNT_MISMATCH, resent.items.single().errorCode)
+        assertEquals("OPEN", orderStatus(command.clientOrderId))
+
+        // 단말이 서버 주문의 합계(3502)로 새 operationId·다음 순번을 보내면 적용된다.
+        val corrected = receive(checkout(2, command.clientOrderId, amount = BigDecimal("3502")))
+
+        assertEquals(SyncItemStatus.APPLIED, corrected.items.single().status)
+        assertEquals(2, corrected.lastAckedSequence)
+        assertEquals("CHECKOUT_REQUESTED", orderStatus(command.clientOrderId))
+        assertEquals(1, checkoutRows())
+    }
+
+    @Test
     fun `확정된 결제 요청 operationId에 다른 amount가 오면 충돌이고 아무것도 바뀌지 않는다`() {
         val order = payload()
         val applied = checkout(2, order.clientOrderId)

@@ -51,6 +51,19 @@ class PayloadHashTest {
     }
 
     @Test
+    fun `CheckoutPayload의 hash는 지수 표기 amount를 toString 그대로 넣는다`() {
+        // toPlainString이면 필드가 4:1000;이 되어 이 값과 다르다. python3 hashlib.sha256("16:REQUEST_CHECKOUT;36:00000000-0000-0000-0000-000000000002;4:1E+3;")로 따로 구한 값이다.
+        assertEquals("dd6c961e387c519a382cd653434ddb52c51ac5eed226733cab5a1631665c1fdf", CheckoutPayload(clientOrderId, BigDecimal("1E+3")).hash())
+    }
+
+    @Test
+    fun `CheckoutPayload의 hash는 극단적인 지수의 amount도 지수를 펴지 않고 끝난다`() {
+        // toPlainString이면 자릿수만큼 펴서 메모리를 다 쓴다.
+        assertEquals(64, CheckoutPayload(clientOrderId, BigDecimal("1E+999999999")).hash().length)
+        assertEquals(64, CheckoutPayload(clientOrderId, BigDecimal("1E-999999999")).hash().length)
+    }
+
+    @Test
     fun `같은 clientOrderId를 가진 OrderPayload와 CheckoutPayload의 hash는 다르다`() {
         assertNotEquals(order.hash(), CheckoutPayload(clientOrderId, amount).hash())
     }

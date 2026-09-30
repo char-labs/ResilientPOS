@@ -437,4 +437,50 @@ class OrderTest {
 
         assertEquals(Money.INVALID_MONEY_SCALE, failure.code)
     }
+
+    private fun assertAmountMismatch(order: Order, amount: String) {
+        val failure = assertFailsWith<DomainException> { order.verifyCheckoutAmount(BigDecimal(amount)) }
+        assertEquals(Order.CHECKOUT_AMOUNT_MISMATCH, failure.code)
+    }
+
+    @Test
+    fun `verifyCheckoutAmount는 주문의 통화로 대조한다`() {
+        // 통화를 KRW로 고정하면 30.3이 자릿수 위반으로 거절된다.
+        val order = Order.create(
+            createOrderCommand(currency = usd, lines = listOf(orderLine(unitPrice = Money.of("15.15", usd), quantity = 2))),
+            FixedIdentifierGenerator(emptyList()),
+            now,
+        ).aggregate.requestCheckout(FixedIdentifierGenerator(emptyList()), now).aggregate
+
+        order.verifyCheckoutAmount(BigDecimal("30.3"))
+        order.verifyCheckoutAmount(BigDecimal("30.30"))
+        assertAmountMismatch(order, "30.31")
+    }
+
+    @Test
+    fun `verifyCheckoutAmount는 0원 주문을 0과 대조한다`() {
+        val order = Order.create(
+            createOrderCommand(lines = listOf(orderLine(unitPrice = Money.of("0", krw)))),
+            FixedIdentifierGenerator(emptyList()),
+            now,
+        ).aggregate.requestCheckout(FixedIdentifierGenerator(emptyList()), now).aggregate
+
+        order.verifyCheckoutAmount(BigDecimal("0"))
+        assertAmountMismatch(order, "1")
+    }
+
+    @Test
+    fun `verifyCheckoutAmount는 PAID 주문도 최신 회차의 확정 금액과 대조한다`() {
+        val paid = requestedOrder().markPaid(1, Money.of("2000", krw), FixedIdentifierGenerator(emptyList()), now).aggregate
+
+        paid.verifyCheckoutAmount(BigDecimal("2000"))
+        assertAmountMismatch(paid, "2001")
+    }
+
+    @Test
+    fun `verifyCheckoutAmount는 checkout이 없는 주문을 거절한다`() {
+        val open = Order.create(createOrderCommand(), FixedIdentifierGenerator(emptyList()), now).aggregate
+
+        assertAmountMismatch(open, "1000")
+    }
 }

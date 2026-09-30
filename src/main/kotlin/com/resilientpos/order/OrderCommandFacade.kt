@@ -73,9 +73,10 @@ class OrderCommandFacade(
      */
     fun requestCheckout(command: OrderCommand.RequestCheckoutByClientOrderId): OrderCommand.RequestCheckout.Result =
         Tx.masterTx {
-            confirmCheckout(repository.findByClientOrderIdForUpdate(command.terminalId, command.clientOrderId)) {
-                it.verifyCheckoutAmount(command.expectedAmount)
-            }
+            confirmCheckout(
+                order = repository.findByClientOrderIdForUpdate(command.terminalId, command.clientOrderId),
+                verifyBeforeSave = { it.verifyCheckoutAmount(command.expectedAmount) },
+            )
         }
 
     /** `verifyBeforeSave`는 전이한 주문을 저장·발행하기 전에 검사한다. 던지면 아무것도 저장하지 않고 이벤트도 내지 않는다. */
@@ -84,7 +85,8 @@ class OrderCommandFacade(
 
         val transition = order.requestCheckout(identifierGenerator, clock.instant())
         verifyBeforeSave(transition.aggregate)
-        val saved = repository.save(transition.aggregate)
+        // 이벤트가 없는 전이는 바뀐 것이 없다(멱등). 저장하면 자식 SELECT 둘만 다시 나간다.
+        val saved = if (transition.events.isEmpty()) transition.aggregate else repository.save(transition.aggregate)
         transition.events.forEach(eventPublisher::publish)
         val checkout = saved.checkouts.last()
         return OrderCommand.RequestCheckout.Result(saved.id, saved.status, checkout.checkoutNo, checkout.amount)
