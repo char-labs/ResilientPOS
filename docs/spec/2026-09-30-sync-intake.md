@@ -18,7 +18,7 @@
 - 수단: sync 경로의 줄 세우기는 watermark 행 잠금이 맡는다. 같은 단말의 두 배치는 항목 단위로 직렬화되고 뒤 배치는 `DUPLICATE`를 받는다. HTTP `create`와 sync가 같은 `(terminalId, clientOrderId)`로 겹치는 경합은 unique `(terminal_id, client_order_id)`가 막는다. 진 쪽이 sync 항목이면 그 항목 트랜잭션이 롤백되고 배치가 오류 응답을 받으며, 재전송 때 `create`의 멱등 조회가 기존 주문을 돌려준다.
 - `PaymentManagement.createAttempt`는 sync의 동기 경로에 없다. 단말의 결제 요청은 `order.requestCheckout`이고 시도 생성은 `OrderPaymentRequested` 이벤트가 잇는다. 이 PR은 결제 쪽 코드를 바꾸지 않는다.
 
-**결정 2: `Lock.executeWithLock` 첫 줄에 바깥 트랜잭션 거절을 넣는다.** `executeWithLockNoTx`와 같은 한 줄이다. 트랜잭션 존재를 묻는 Spring API(`TransactionSynchronizationManager`)는 `platform.Tx`에만 두고 호출부는 `Tx.requireCaller(이름)`·`Tx.requireNoCaller(이름)`로 읽는다(개발 중 사용자 요청). `executeWithLockNoTx`의 기존 직접 호출도 같은 헬퍼로 옮긴다. 지금 호출처 둘(HTTP `create`, Kafka 리스너의 `createAttempt`)은 모두 트랜잭션 밖이라 깨지지 않는다. `REQUIRES_NEW`와 `Tx.newTx`는 그대로 둔다. 바깥이 없으니 `REQUIRED`와 같지만 지우는 일은 이 PR의 목표가 아니다.
+**결정 2: `Lock.executeWithLock` 첫 줄에 바깥 트랜잭션 거절을 넣는다.** `executeWithLockNoTx`와 같은 한 줄이다. 검사는 `TxRunner`의 빈 메서드에 건 전파 속성(`MANDATORY`·`NEVER`)이 하고 호출부는 `Tx.requireCaller()`·`Tx.requireNoCaller()`로 읽는다(개발 중 사용자 요청 둘: Spring 트랜잭션 API를 직접 선언하지 않는다, `org.springframework.transaction`에서는 애너테이션만 쓴다). 거절 예외는 Spring의 `IllegalTransactionStateException`이다. `executeWithLockNoTx`의 기존 `TransactionSynchronizationManager` 직접 호출도 같은 헬퍼로 옮긴다. 지금 호출처 둘(HTTP `create`, Kafka 리스너의 `createAttempt`)은 모두 트랜잭션 밖이라 깨지지 않는다. `REQUIRES_NEW`와 `Tx.newTx`는 그대로 둔다. 바깥이 없으니 `REQUIRED`와 같지만 지우는 일은 이 PR의 목표가 아니다.
 
 **결정 3: 이 PR의 operation 종류는 `CREATE_ORDER` 하나다.** 종류 필드와 컬럼을 두지 않는다. `REQUEST_CHECKOUT`은 단말이 아는 `clientOrderId`로 checkout을 요청하는 `order` 공개 계약이 먼저 필요해서 다음 PR이 종류를 하나 늘리며 함께 정한다.
 
@@ -94,8 +94,8 @@
 4. 순번 1, 2, 4를 보내면 1·2는 `APPLIED`, 4는 `GAP`이고 `lastAckedSequence`는 2다. 이어서 3, 4를 보내면 둘 다 `APPLIED`다.
 5. `order`가 거절하는 항목(빈 상품명)은 `REJECTED`와 `errorCode`(`BLANK_PRODUCT_NAME`)를 받고 `t_order`에 행이 없으며 watermark는 그 순번으로 전진한다. 같은 항목을 다시 보내면 `DUPLICATE`와 같은 `errorCode`다. 그 뒤 순번은 정상 적용된다. 금액 규칙 위반(KRW `4500.5`)은 `INVALID_MONEY_SCALE`로, 같은 `clientOrderId`의 다른 내용은 `IDEMPOTENCY_CONFLICT`로 같은 `REJECTED` 경로다.
 6. 항목 트랜잭션은 하나다. `createInCallerTransaction`이 주문을 넣은 뒤 접수 기록 저장이 unique `(terminal_id, sequence)`로 실패하면 주문 행도 남지 않는다. 같은 단말의 같은 배치가 두 스레드에서 동시에 와도 주문·기록은 항목 수만큼이고 항목은 `APPLIED` 아니면 `DUPLICATE`다.
-7. `createInCallerTransaction`을 트랜잭션 밖에서 부르면 저장소를 건드리기 전에 `IllegalStateException`으로 실패한다.
-8. `Lock.executeWithLock`을 바깥 트랜잭션 안에서 부르면 잠그기 전에 `IllegalStateException`으로 실패한다. #68 인수 조건 2의 테스트를 이것으로 바꾼다. HTTP `create`와 Kafka `createAttempt`는 지금처럼 동작한다.
+7. `createInCallerTransaction`을 트랜잭션 밖에서 부르면 저장소를 건드리기 전에 `IllegalTransactionStateException`으로 실패한다.
+8. `Lock.executeWithLock`을 바깥 트랜잭션 안에서 부르면 잠그기 전에 `IllegalTransactionStateException`으로 실패한다. #68 인수 조건 2의 테스트를 이것으로 바꾼다. HTTP `create`와 Kafka `createAttempt`는 지금처럼 동작한다.
 9. 501개 배치는 `400 SYNC_BATCH_TOO_LARGE`이고 저장소를 건드리지 않는다.
 10. `POST /v1/terminals/{terminalId}/sync`가 `SyncCommand.ReceiveBatch`로 옮겨 Facade를 부르고 200과 `data{lastAckedSequence, items}`를 돌려준다. 성공 응답과 `SYNC_BATCH_TOO_LARGE` 응답을 REST Docs로 문서화한다. HTTP부터 PostgreSQL까지 이어지는 통합 테스트 하나가 인수 1·2를 HTTP로 확인한다.
 11. `Watermark`의 판정(다음·확정됨·gap)과 전진은 Spring 없는 단위 테스트로 고정한다.
@@ -189,7 +189,7 @@ create table t_sync_operation (
 
 ## 결과
 - `./gradlew test` 전체 통과(307개), `python3 scripts/check_pr.py --base origin/main`을 `--worktree` 있이·없이 모두 PASS, 하네스 테스트 OK.
-- `platform`에 `Tx.requireCaller`·`Tx.requireNoCaller`를 더하고 `Lock`의 두 블록이 바깥 트랜잭션을 거절한다. 트랜잭션 존재를 묻는 Spring API는 `Tx`에만 있다(개발 중 사용자 요청).
+- `platform`에 `Tx.requireCaller`·`Tx.requireNoCaller`를 더하고 `Lock`의 두 블록이 바깥 트랜잭션을 거절한다. 검사는 `TxRunner`의 전파 속성(`MANDATORY`·`NEVER`)이라 운영 코드는 `org.springframework.transaction.support`를 부르지 않는다(개발 중 사용자 요청). 인수 7 테스트는 프록시가 필요해져 단위 테스트에서 통합 테스트(`OrderCreateInCallerTransactionIntegrationTest`)로 옮겼다.
 - `order`에 `OrderCommandFacade.createInCallerTransaction`(락 없는 합류 경로)을 더했다. `create`는 그것을 `Lock` 블록으로 감싼다.
 - `sync`에 `Watermark`·`SyncOperation`·`OrderPayload`(도메인), `SyncCommandFacade`·`SyncCommand`·`SyncItemStatus`(application), JPA 영속화, `POST /v1/terminals/{terminalId}/sync`와 REST Docs 스니펫 둘, V010(`t_sync_watermark`·`t_sync_operation`)을 더했다.
 - 제출 전 리뷰(스키마 대조 code-reviewer, 코드 리뷰 Claude 78점·Codex 72점, Gemini는 CLI 없음)를 반영했다. 셋이 함께 지적한 것: 같은 operationId가 새 순번으로 오면 unique 위반이 재전송마다 되풀이돼 단말이 영구히 막힌다 → `CONFLICT`로 판정. Claude만 지적한 Critical: `Money.of` 거절이 Controller에서 나 배치 전체가 400이 되어 같은 봉투를 영원히 다시 보낸다 → payload 변환을 항목 트랜잭션 안으로 옮겨 `REJECTED`. 그 밖에 hash 길이·종류 접두어, 순번을 포함한 `DUPLICATE` 판정, `(terminal_id, sequence)` unique, 새 단말 첫 배치 경합의 watermark 선삽입, GAP 뒤 빈 트랜잭션 생략, `receiveBatch`의 `Tx.requireNoCaller`, Lock 거절 테스트의 판별력, wiki 옛 이름, REST Docs의 본문 상한·정렬 설명을 반영했다. 미룬 지적은 제외 절에 적었다.
