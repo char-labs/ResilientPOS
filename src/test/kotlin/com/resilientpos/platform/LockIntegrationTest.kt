@@ -83,14 +83,21 @@ class LockIntegrationTest(
 
     @Test
     fun `바깥 트랜잭션 안에서 부르면 잠그기 전에 거절한다`() {
+        // 키를 다른 토큰으로 먼저 잡아 둔다. 거절이 잠금 뒤에 있었다면 3초를 기다렸을 것이다.
         val key = "test:lock:${UUID.randomUUID()}"
         val id = UUID.randomUUID()
+        val held = checkNotNull(distributedLock.tryAcquire(key))
 
-        assertFailsWith<IllegalStateException> {
-            transactions.executeWithoutResult { Lock.executeWithLock(key) { insertProbe(id) } }
+        try {
+            val started = System.nanoTime()
+            assertFailsWith<IllegalStateException> {
+                transactions.executeWithoutResult { Lock.executeWithLock(key) { insertProbe(id) } }
+            }
+            assertTrue(System.nanoTime() - started < TimeUnit.SECONDS.toNanos(1), "잠금을 기다린 뒤 거절했다")
+            assertEquals(0, probes(id))
+        } finally {
+            distributedLock.release(key, held)
         }
-        assertFalse(redis.hasKey(key))
-        assertEquals(0, probes(id))
     }
 
     @Test
