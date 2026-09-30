@@ -47,7 +47,7 @@ t_fulfillment.order_id ───────────────────
 - 역할: 주문 하나의 소유 단말·매장·통화·상태(`OPEN`→`CHECKOUT_REQUESTED`→`PAID`)를 든다. 금액 합계는 컬럼으로 두지 않는다(파생 값, line에서 접는다).
 - 관계: 자식 `OrderLineEntity`·`OrderCheckoutEntity`가 `order_id`로 가리킨다. 다른 모듈(`payment`·`fulfillment`·`sync`)도 `order_id`로 가리키지만 이 표를 읽지 않는다.
 - 방어선: unique `(terminal_id, client_order_id)`가 "같은 단말의 같은 주문 요청은 하나"의 마지막 방어선이다(멱등 키, 삭제 행에도 걸린다). `@Version`은 루트인 이 표에만 있다. 상태 전이는 행 잠금(`for no key update`, 대기 3초) 아래에서 한다.
-- 만드는 곳: `OrderCommandFacade.create`(HTTP, `Lock` 블록)와 `createInCallerTransaction`(sync 항목 트랜잭션). 바꾸는 곳: `requestCheckout`·`markPaid`.
+- 만드는 곳: `OrderCommandFacade.create`(HTTP, `Lock` 블록)와 `createInCallerTransaction`(sync 항목 트랜잭션). 바꾸는 곳: `requestCheckout`·`markPaid`. `requestCheckout`은 `orderId`로 찾는 것(HTTP)과 `(terminalId, clientOrderId)`로 찾는 것(sync 항목 트랜잭션에 합류) 둘이고 둘 다 주문 행을 잠근다.
 
 ### `OrderLineEntity` — 판매 시점의 품목 한 줄
 - 역할: 주문에 담긴 상품 코드·이름·단가·수량을 **그때 값 그대로** 남긴다. 상품 마스터 표가 없으므로 이 행이 "무엇을 얼마에 팔았는가"의 원본이다.
@@ -59,7 +59,7 @@ t_fulfillment.order_id ───────────────────
 - 역할: 단말이 결제를 요청한 순간의 합계를 회차(`checkout_no`)별로 고정한다. 그 뒤 line이 바뀌어도(지금은 바뀌지 않지만) 결제는 이 값으로 대조한다. 통화 컬럼은 없고 주문의 통화를 쓴다.
 - 관계: `order_id`로 주문을, `checkout_no`로 `t_payment_attempt`가 이 행을 가리킨다.
 - 방어선: unique `(order_id, checkout_no)`. 한 주문에 같은 회차는 하나다.
-- 만드는 곳: `OrderCommandFacade.requestCheckout`. 바꾸지도 지우지도 않는다.
+- 만드는 곳: `OrderCommandFacade.requestCheckout`(HTTP와 sync의 `REQUEST_CHECKOUT` 항목). 바꾸지도 지우지도 않는다.
 
 ### `PaymentAttemptEntity` — provider에게 보낸 요청 1회
 - 역할: 결제 승인(`AUTHORIZATION`)이나 취소·환불(`CANCELLATION`) 요청 한 번과 그 결말(`REQUESTED`→`APPROVED`/`DECLINED`/`UNKNOWN`)을 든다. 금액·통화를 직접 가진다. 결제 정본은 이 표이고 Redis·Kafka는 정본이 아니다.
@@ -80,8 +80,8 @@ t_fulfillment.order_id ───────────────────
 - 만드는 곳: 배치 시작 때 없으면 `SyncCommandFacade`가 0으로 넣는다. 바꾸는 곳: 항목이 `APPLIED`·`REJECTED`로 확정될 때 +1.
 
 ### `SyncOperationEntity` — operation 하나의 판정 기록
-- 역할: 단말이 만든 operation(`operation_id`)을 서버가 어떻게 판정했는지(`APPLIED`·`REJECTED`), 무엇을 받았는지(`payload_hash`), 결과가 무엇인지(`order_id`·`error_code`)를 남긴다. 재전송이 오면 이 행으로 `DUPLICATE`/`CONFLICT`를 가른다.
-- 관계: `terminal_id`·`operation_id`가 단말 쪽 키, `sequence`가 확정한 순번, `order_id`가 만들어진 주문이다.
+- 역할: 단말이 만든 operation(`operation_id`)이 어떤 종류였는지(`kind`, `CREATE_ORDER`·`REQUEST_CHECKOUT`), 서버가 어떻게 판정했는지(`APPLIED`·`REJECTED`), 무엇을 받았는지(`payload_hash`), 결과가 무엇인지(`order_id`·`error_code`)를 남긴다. 재전송이 오면 이 행으로 `DUPLICATE`/`CONFLICT`를 가른다. 판정은 `payload_hash`가 하고 `kind`는 업무 코드가 읽지 않는 기록이다.
+- 관계: `terminal_id`·`operation_id`가 단말 쪽 키, `sequence`가 확정한 순번, `order_id`가 만들어졌거나 결제를 요청한 주문이다.
 - 방어선: unique `(terminal_id, operation_id)`(같은 operation을 두 번 적용하지 않는다), unique `(terminal_id, sequence)`(순번 하나에 기록 하나).
 - 만드는 곳: `SyncCommandFacade`의 항목 트랜잭션. 바꾸지도 지우지도 않는다.
 
@@ -109,12 +109,13 @@ t_fulfillment.order_id ───────────────────
 |---|---|---|---|
 | 0. 오프라인에서 주문을 만들고 `operationId`·`sequence`를 붙여 로컬 큐에 저장 | 로컬 화면 | 서버에는 아무것도 없다 | — |
 | 1. 재연결 뒤 `POST /v1/terminals/{terminalId}/sync`에 배치 | — | 새 단말이면 `t_sync_watermark` 1행(0) | 짧은 커밋 하나 |
-| 2. 항목마다: watermark 잠금 → 순번 판정 → `order` 명령 변환 → `createInCallerTransaction` | 항목 `APPLIED`+`orderId` | `t_order`·`t_order_line` + `t_sync_operation`(`APPLIED`) + `t_sync_watermark.last_acked_sequence` +1 | **항목 하나가 한 커밋** |
-| 2'. 항목이 도메인 규칙에 걸림(빈 상품명, 금액 자릿수, 같은 `clientOrderId`에 다른 내용) | 항목 `REJECTED`+`errorCode` | 첫 트랜잭션은 롤백(주문 행 없음). 두 번째 트랜잭션이 `t_sync_operation`(`REJECTED`)과 watermark +1 | 두 커밋. 단말은 그 항목을 버린다 |
+| 2. `CREATE_ORDER` 항목: watermark 잠금 → 순번 판정 → `order` 명령 변환 → `createInCallerTransaction` | 항목 `APPLIED`+`orderId` | `t_order`·`t_order_line` + `t_sync_operation`(`APPLIED`) + `t_sync_watermark.last_acked_sequence` +1 | **항목 하나가 한 커밋** |
+| 2a. `REQUEST_CHECKOUT` 항목: watermark 잠금 → 순번 판정 → `clientOrderId`로 주문 행 잠금 → `requestCheckout` | 항목 `APPLIED`+`orderId` | `t_order.status`→`CHECKOUT_REQUESTED` + `t_order_checkout` 1행 + `event_publication`(`OrderPaymentRequested`) + `t_sync_operation`(`APPLIED`) + watermark +1. 이후는 4.1의 3단계부터 | **항목 하나가 한 커밋**. 행 잠금은 watermark 다음에 주문 순서다 |
+| 2'. 항목이 도메인 규칙에 걸림(빈 상품명, 금액 자릿수, 같은 `clientOrderId`에 다른 내용, 결제 요청의 주문 없음) | 항목 `REJECTED`+`errorCode` | 첫 트랜잭션은 롤백(그 항목이 쓴 행 없음). 두 번째 트랜잭션이 `t_sync_operation`(`REJECTED`)과 watermark +1 | 두 커밋. 단말은 그 항목을 버린다 |
 | 2''. 이미 확정된 순번 | 같은 내용이면 `DUPLICATE`(기록된 `orderId`), 다른 내용·다른 순번·모르는 operation이면 `CONFLICT` | 아무것도 쓰지 않는다 | 읽기만 |
 | 2'''. 순번이 비었다 | 그 항목부터 `GAP` | 아무것도 쓰지 않는다 | 첫 GAP 뒤는 트랜잭션도 열지 않는다 |
 | 3. 응답의 `lastAckedSequence` | 단말은 그 다음 순번부터 다시 보내고 `APPLIED`·`DUPLICATE`·`REJECTED`는 큐에서 지운다 | — | — |
-| 4. 이후 | 단말은 받은 `orderId`로 4.1의 2단계(checkout)부터 이어 간다 | 4.1과 같다 | — |
+| 4. 이후 | 결제 요청을 배치에 싣지 않았으면 단말은 받은 `orderId`로 4.1의 2단계(checkout)부터 이어 간다 | 4.1과 같다 | — |
 
 배치 전체가 409·500이면(잠금 대기 초과, DB 장애, unique 위반) 이미 커밋된 항목은 남고 재전송 때 `DUPLICATE`로 돌아온다.
 
@@ -158,4 +159,4 @@ provider 응답이 끊기면 `t_payment_attempt.status`가 `UNKNOWN`으로 남�
 - [도메인 모델](domain-model.md) — aggregate 경계(§2), 용어집(§3), 스키마 변경 검토(§4.7)
 - [현재 상태](current-state.md) — 모듈별 구현 상태와 알려진 빈틈
 - 볼트 규칙 `domain-modeling-kotlin.md` §5 — 엔티티 작성 규칙(`.claude/rules`로 복사된다)
-- 마이그레이션 `src/main/resources/db/migration/V002`·`V003`·`V005`~`V008`·`V010` — 각 표의 DDL과 주석
+- 마이그레이션 `src/main/resources/db/migration/V002`·`V003`·`V005`~`V008`·`V010`·`V011` — 각 표의 DDL과 주석
