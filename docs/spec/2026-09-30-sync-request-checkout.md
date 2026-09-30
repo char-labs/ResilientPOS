@@ -34,7 +34,7 @@
 - `adapter/web`: `SyncOperationRequest`를 `kind`로 갈리는 sealed 계층(`CreateOrder`, `RequestCheckout`)으로 바꾼다.
 - `domain`: `sealed interface OperationPayload`가 `kind`와 `hash()`를 가진다. 구현은 기존 `OrderPayload`와 새 `CheckoutPayload(clientOrderId)`다. `SyncOperationKind`(`CREATE_ORDER`·`REQUEST_CHECKOUT`)는 요청의 `kind` 값이자 DB 저장 값이다.
 - `SyncCommand.ReceiveBatch.Operation`의 `order`는 `payload`가 된다.
-- `SyncCommandFacade`는 항목 트랜잭션 안에서 else 없는 `when`으로 갈라 `createInCallerTransaction` 또는 `requestCheckout`을 부른다. 셋째 종류를 더하면 이 `when`이 컴파일되지 않는다. 분기가 한 곳이라 전략 클래스로 올리지 않는다.
+- `SyncCommandFacade`는 항목 트랜잭션 안에서 else 없는 `when`으로 갈라 `createInCallerTransaction` 또는 `requestCheckout`을 부른다. `when`은 payload 타입으로 갈리므로 `OperationPayload` 구현을 더하면 이 `when`이 컴파일되지 않는다. enum 상수나 요청 DTO의 하위 타입만 더하는 것은 컴파일러가 잡지 않는다. 분기가 한 곳이라 전략 클래스로 올리지 않는다.
 - `CheckoutPayload.hash()`는 `OrderPayload`와 같은 공식이다. `REQUEST_CHECKOUT`과 `clientOrderId`를 각각 `길이:값;`으로 이은 문자열의 SHA-256 hex다. `OrderPayload`의 공식과 접두어는 그대로라 이미 기록된 hash가 바뀌지 않는다.
 
 **결정 3: `t_sync_operation`에 `kind` 컬럼을 더한다.** 업무 코드가 읽지 않는 쓰기 전용 컬럼이다. 그래도 지금 더하는 이유는 나중에 채울 수 없어서다. 두 종류가 섞인 뒤에는 기존 행의 종류를 다른 컬럼에서 알아낼 수 없다(hash는 단방향이고 `order_id`는 두 종류 모두 가진다). 지금은 모든 행이 `CREATE_ORDER`라 상수 기본값이 정확한 값이다. 답은 아래 스키마 변경 검토 절에 있다.
@@ -51,7 +51,7 @@
 
 **HTTP.** endpoint와 응답 모양은 그대로다. `REQUEST_CHECKOUT` 항목의 응답도 `operationId`·`status`·`orderId`·`errorCode`다.
 
-**계약**: 새 `DomainException` code는 없다. 요청 항목의 `kind`가 필수가 되는 것이 단말 계약의 변화다. `SyncOperationKind`의 이름은 단말 계약이면서 DB 저장 값이라 바꾸면 둘 다 마이그레이션이 필요하다.
+**계약**: 새 `DomainException` code는 없다. 요청 항목의 `kind`가 필수가 되는 것이 단말 계약의 변화다. `SyncOperationKind`의 이름은 세 곳에 묶여 있다. 단말 요청의 `kind` 값, `t_sync_operation.kind`의 저장 값, `payload_hash` 공식의 접두어다. 앞의 둘은 바꾸면 단말 계약과 데이터 마이그레이션이 필요하고, 셋째는 되돌릴 수 없다. hash가 단방향이라 다시 계산할 수 없어서 이름을 바꾸면 확정된 operation의 재전송이 모두 `CONFLICT`가 된다. 그래서 이름을 바꾸지 않는다. `PayloadHashTest`의 고정 hex가 이것을 잡는다.
 
 **관측성**: 기존 배치 INFO 로그와 `CONFLICT` WARN 로그 그대로다. 더하는 것은 없다.
 
@@ -59,10 +59,11 @@
 - 응답 항목에 `checkoutNo`·확정 금액을 싣는 것. `DUPLICATE`에도 같은 값을 주려면 접수 기록에 컬럼이 더 필요하고 지금 읽는 단말이 없다. nullable 필드 추가라 나중에 넣어도 계약이 깨지지 않는다.
 - 단말이 계산한 합계와 서버 확정 금액의 대조. 합계는 단가 곱 수량의 합뿐이라 어긋날 계산이 없다. 할인·세금이 들어오는 PR이 본다.
 - 거절된 결제의 재결제 operation. 입구는 `PaymentManagement.retryAuthorization`뿐이고 단말이 거절 사실을 아는 조회도 아직 없다.
-- `kind` 컬럼의 기본값 제거. 새 코드는 늘 값을 적으므로 기본값은 이전 버전 인스턴스가 내려간 뒤에는 쓰이지 않는다. 남겨 둬도 해가 없고, 제거는 이 컬럼을 적는 코드만 배포에 남은 다음 PR의 일이다.
+- `kind` 컬럼의 기본값 제거. 새 코드는 늘 값을 적으므로 기본값은 이전 버전 인스턴스가 내려간 뒤에는 쓰이지 않는다. 앱 코드는 `kind` 없이 접수 기록을 만들 수 없으므로 기본값이 남아서 생기는 일은 `kind`를 빠뜨린 수동 SQL이 실패하지 않고 `CREATE_ORDER`로 기록되는 것 하나다. 제거는 이 컬럼을 적는 코드만 배포에 남은 다음 PR의 일이다.
 - 종류별 전략 클래스나 핸들러 레지스트리. 분기가 Facade의 `when` 한 곳이다. 같은 분기가 두 곳 이상에 생기면 다시 본다.
 - **`ORDER_NOT_FOUND` 거절은 다른 거절과 달리 시점에 따라 달라질 수 있다.** 거절이 기록된 뒤에 같은 `clientOrderId`의 주문이 HTTP로 만들어져도 그 operation은 `REJECTED`로 남고 단말은 이미 버렸다. 단말이 새 `operationId`로 다시 요청해야 한다.
 - 롤링 배포 중 이전 버전 인스턴스가 `REQUEST_CHECKOUT` 항목을 받으면 `order` 필드가 없어 배치가 `400`이다. 앞 항목의 커밋은 남고 단말의 재전송이 새 인스턴스에 닿으면 이어진다.
+- 셋째 종류를 더하는 롤링 배포에서 옛 인스턴스가 모르는 `kind` 값의 행을 `findOperation`으로 읽으면 enum 복원이 실패해 `CONFLICT`가 아니라 배치 오류가 된다. 그 operationId가 옛 인스턴스에 다시 와야 하는 드문 경로이고 `status`도 같은 성질이다. 셋째 종류를 더하는 PR이 다룬다.
 - 단말 인증·소유권 검사, `SyncOperationApplied` 이벤트, metric은 [sync-intake](2026-09-30-sync-intake.md)의 제외 그대로다.
 
 ## 관련 문서
@@ -107,7 +108,7 @@
 `V011__sync_operation_kind.sql`이 `t_sync_operation`에 컬럼 하나를 더한다.
 
 ```sql
-set local lock_timeout = '3s';
+set local lock_timeout = '5s';
 
 alter table t_sync_operation
     add column kind varchar(32) not null default 'CREATE_ORDER';
@@ -121,10 +122,10 @@ alter table t_sync_operation
 - 질문 4(마지막 방어선): 아니다. 제약이 없고 불변식을 지키지 않는다. "같은 operation을 두 번 적용하지 않는다"는 기존 unique 둘과 `payload_hash`가 지킨다.
 - 질문 5(정본): 종류라는 사실이 `payload_hash`의 접두어와 `kind` 두 곳에 있다. 둘 다 같은 `OperationPayload`에서 나와 같은 INSERT로 쓰이고, 접수 기록은 넣기만 하고 바꾸지 않아 어긋날 경로가 없다. 판정의 정본은 hash이고 `kind`는 사람이 읽는 사본이다.
 - 질문 6(check-then-act): `kind`를 읽고 판단하는 경로는 없다. 이 PR이 더하는 check-then-act는 주문 상태를 읽고 checkout을 확정하는 경로이고 주문 행 잠금(`findByClientOrderIdForUpdate`, `PESSIMISTIC_WRITE`, 대기 3초)이 막는다. 그 뒤의 방어선은 기존 unique `(order_id, checkout_no)`와 `t_order`의 `@Version`이다. 한 경로에 행 잠금이 둘(watermark, 주문)이고 순서가 고정이며 Redis `Lock`과 함께 기다리지 않는다.
-- 질문 7(락): 상수 기본값이 있는 컬럼 추가라 메타데이터 변경이고 재작성이 없다. `ACCESS EXCLUSIVE`를 잠깐 잡는다. 긴 트랜잭션 뒤에서 기다리며 뒤 쿼리를 세우지 않도록 `set local lock_timeout`을 둔다. Flyway가 이 마이그레이션을 한 트랜잭션으로 실행하므로 `set local`이 그 문장에 걸린다. 시간 초과로 실패하면 기동이 멈추고 다시 실행한다. 행 수는 접수한 operation 수이고 배포된 환경은 아직 없다.
+- 질문 7(락): 상수 기본값이 있는 컬럼 추가라 메타데이터 변경이고 재작성이 없다. `ACCESS EXCLUSIVE`를 잠깐 잡는다. 긴 트랜잭션 뒤에서 기다리며 뒤 쿼리를 세우지 않도록 `set local lock_timeout`을 둔다. 값은 V005·V008과 같은 5초다. 마이그레이션은 배포 중 한 번 돌고 재실행할 수 있어 요청 경로의 행 잠금(3초)보다 길게 잡는다. Flyway가 이 마이그레이션을 한 트랜잭션으로 실행하므로 `set local`이 그 문장에 걸린다. 시간 초과로 실패하면 기동이 멈추고 다시 실행한다. 행 수는 접수한 operation 수이고 배포된 환경은 아직 없다.
 - 질문 8(이전 버전): 호환된다. 이전 버전의 엔티티는 `kind`를 매핑하지 않아 `validate`가 통과하고, INSERT가 `kind`를 적지 않아도 기본값이 채운다. 이전 버전은 `CREATE_ORDER`만 만들므로 그 기본값이 옳은 값이다. SELECT는 매핑된 컬럼만 명시해 영향이 없다. 이전 버전 인스턴스는 요청의 `kind`를 모르는 필드로 무시하므로(이 앱의 Jackson은 모르는 필드를 거절하지 않는다. 이전 DTO에 `kind`를 넣은 요청이 200인 것을 관측했다) 새 형식의 `CREATE_ORDER` 항목은 그대로 적용한다. `REQUEST_CHECKOUT` 항목을 받는 경우는 제외 절에 있다.
-- 질문 9(payload): 이벤트 payload와 캐시되는 DTO에 실리지 않는다. 요청의 `kind` 값과 같은 이름이 저장되므로 `SyncOperationKind`의 이름을 바꾸면 단말 계약과 데이터가 함께 바뀐다.
-- 대조 기록: 미작성. 구현 뒤 구현자가 아닌 리뷰어가 채운다.
+- 질문 9(payload): 이벤트 payload와 캐시되는 DTO에 실리지 않는다. 요청의 `kind` 값과 같은 이름이 저장되고 같은 이름이 `payload_hash`의 접두어로 들어간다(범위 절의 계약 문단). 요청 DTO의 하위 타입 이름과 enum 이름은 따로 선언돼 있어 컴파일러가 묶지 않는다. 둘이 같다는 것은 HTTP로 보낸 값과 저장된 값을 두 종류 모두 비교하는 `SyncApiIntegrationTest`가 지킨다.
+- 대조 기록: code-reviewer(읽기 전용 에이전트), 2026-09-30. V011·V010, SyncOperationEntity, SyncPersistenceAdapter, sync.internal.domain의 SyncOperation·SyncOperationKind·payload 셋, SyncCommandFacade, SyncBatchRequest, OrderCommandFacade, OrderRepository·OrderPersistenceAdapter, platform JdslQueryExecutor, application.yaml을 질문 1~9의 답과 대조했다. 이전 버전 엔티티는 main 체크아웃(7712a45)의 파일로 확인했다. 불일치는 없었다. 누락 6건을 받았다. enum 이름이 hash 접두어로 들어가 이름을 바꾸면 되돌릴 수 없다는 결합, 요청 DTO의 종류 이름과 enum 이름이 따로 선언된 것, `lock_timeout`이 선례(5초)와 다른 3초였던 것, 기본값을 남기는 대가, 모르는 `kind` 값을 가진 행을 옛 인스턴스가 읽으면 복원에 실패한다는 것, `when`이 막는 범위다. DDL의 `lock_timeout`을 5초로 맞추고 `SyncOperationKind` KDoc에 hash 결합을 적었으며 나머지는 이 절과 범위·제외 절의 문장으로 반영했다. 리뷰어는 셸이 없어 테스트와 Flyway를 실행하지 않았다. 실행 확인은 구현 쪽의 `./gradlew test`(V011 적용, `validate`, `kind` 없는 INSERT)가 했다.
 
 ## 검증
 - 정상: 주문 생성과 결제 요청을 한 배치로 보내면 둘 다 `APPLIED`, 재전송은 둘 다 `DUPLICATE`.
@@ -156,4 +157,7 @@ alter table t_sync_operation
 | 인수 9, `SyncControllerTest`의 `kind가 없거나 모르는 값이면 400 BAD_REQUEST이고 Facade를 부르지 않는다` | RED 미관측. 본문에 `order`가 없어 기존 DTO도 400을 냈다 | 같은 명령 통과. 구현 뒤의 400은 Jackson이 하위 타입을 정하지 못해 나는 `HttpMessageNotReadableException`이고(`missing type id property 'kind'`, `Could not resolve type id`) 기존 `ApiControllerAdvice`가 `BAD_REQUEST`로 바꾼다 | 위와 같은 회귀 통과 |
 
 ## 결과
-개발 전 작성. 개발 후 실행 결과와 변경 이유를 추가한다.
+- `./gradlew test` 전체 통과(319개), 하네스 테스트 OK(132개), `python3 scripts/check_pr.py --base origin/main --worktree` PASS.
+- `order`에 `OrderCommand.RequestCheckoutByClientOrderId`와 `OrderCommandFacade.requestCheckout` 오버로드, `OrderRepository.findByClientOrderIdForUpdate`를 더했다. 두 `requestCheckout`은 전이·저장·발행을 private 함수 하나로 함께 쓴다.
+- `sync`에 `SyncOperationKind`, `OperationPayload`(구현 `OrderPayload`·`CheckoutPayload`), 접수 기록의 `kind`, Facade의 종류 분기, `kind`로 갈리는 요청 DTO를 더했다. V011이 `t_sync_operation.kind`를 더한다. `OrderPayload`의 hash 공식과 결과는 그대로다.
+- 스키마 대조(code-reviewer)에서 불일치는 없었고 누락 6건을 위 대조 기록대로 반영했다.
