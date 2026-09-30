@@ -172,7 +172,9 @@ alter table t_sync_operation
 | 인수 9, `SyncControllerTest`의 `배치를 커맨드로 옮겨 Facade를 부르고 200과 항목별 결과·watermark를 돌려준다`(두 종류를 싣도록 고침), `SyncApiIntegrationTest`의 `주문 생성 다음 순번의 결제 요청을 HTTP로 보내면 둘 다 APPLIED이고 같은 주문이 CHECKOUT_REQUESTED다` | `./gradlew test --tests 'com.resilientpos.sync.internal.adapter.web.*'`. 테스트만 고치고 요청 DTO는 그대로 둔 채 실행. 둘 다 `AssertionError`(Status expected 200 but was 400). 기존 DTO가 `kind`를 무시하고 `order`를 요구했다 | 같은 명령. 요청 DTO를 `kind`로 갈리는 sealed 계층으로 바꾼 뒤 통과(6개). 스니펫 `sync-receive-batch`의 요청 필드에 `operations[].kind`·`operations[].clientOrderId`가 생겼다 | `./gradlew test --tests 'com.resilientpos.sync.*'` 통과(32개) |
 | 인수 9, `SyncControllerTest`의 `kind가 없거나 모르는 값이면 400 BAD_REQUEST이고 Facade를 부르지 않는다` | RED 미관측. 본문에 `order`가 없어 기존 DTO도 400을 냈다 | 같은 명령 통과. 구현 뒤의 400은 Jackson이 하위 타입을 정하지 못해 나는 `HttpMessageNotReadableException`이고(`missing type id property 'kind'`, `Could not resolve type id`) 기존 `ApiControllerAdvice`가 `BAD_REQUEST`로 바꾼다 | 위와 같은 회귀 통과 |
 | 인수 13~15, 단말 합계 대조(결정 4) | 미실행 | 미실행 | 미실행 |
-| 인수 16과 리뷰 반영 테스트 보강 | 미실행 | 미실행 | 미실행 |
+| 리뷰 반영, `SyncControllerTest`의 `kind가 없거나 모르는 값이면 400 BAD_REQUEST이고 Facade를 부르지 않는다`(`kind`만 뺀 유효한 `CREATE_ORDER` 본문과 `kind`가 `REFUND`인 본문을 더함) | 요청 DTO의 `@JsonTypeInfo`에 `defaultImpl`을 넣은 변형으로 `./gradlew test --tests 'com.resilientpos.sync.*' --tests 'com.resilientpos.order.*'` 실행. `AssertionError`(Status expected 400)로 실패 | 변형을 되돌린 뒤 같은 명령 통과 | 같은 명령 통과 |
+| 리뷰 반영, `OrderRequestCheckoutIntegrationTest`의 `커밋 전인 clientOrderId 경로 요청과 orderId 경로 요청이 겹치면 뒤 요청은 기다렸다가 같은 결과를 받는다` | `findByClientOrderIdForUpdate`를 잠금 없는 조회로 바꾼 변형으로 같은 명령 실행. 뒤 요청이 잠금을 기다리는 단계에서 `ConditionTimeoutException`으로 실패 | 변형을 되돌린 뒤 통과 | 같은 명령 통과 |
+| 인수 16과 리뷰 반영, `SyncCommandFacadeIntegrationTest`의 `같은 clientOrderId의 결제 요청이 새 operationId로 다시 오면 적용되고 주문 행 checkout 행 발행 기록은 그대로다`, 성공 경로 테스트의 발행 기록 1건 단언 | RED 미관측(characterization). 지금 구현에서 통과한다. 발행 기록 1건 단언은 롤백 테스트의 0건 단언과 같은 조회를 쓰는 대조군이다 | 같은 명령 통과 | 같은 명령 통과 |
 
 ## 결과
 - `./gradlew test` 전체 통과(319개), 하네스 테스트 OK(132개), `python3 scripts/check_pr.py --base origin/main --worktree` PASS.

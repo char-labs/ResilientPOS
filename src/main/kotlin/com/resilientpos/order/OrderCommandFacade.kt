@@ -63,7 +63,7 @@ class OrderCommandFacade(
      * 이미 요청된 주문이면 도메인이 같은 주문과 빈 이벤트를 돌려주므로 같은 경로로 기존 결과를 돌려준다.
      */
     fun requestCheckout(command: OrderCommand.RequestCheckout): OrderCommand.RequestCheckout.Result = Tx.masterTx {
-        requestCheckout(repository.findByIdForUpdate(command.orderId))
+        confirmCheckout(repository.findByIdForUpdate(command.orderId))
     }
 
     /**
@@ -72,10 +72,10 @@ class OrderCommandFacade(
      */
     fun requestCheckout(command: OrderCommand.RequestCheckoutByClientOrderId): OrderCommand.RequestCheckout.Result =
         Tx.masterTx {
-            requestCheckout(repository.findByClientOrderIdForUpdate(command.terminalId, command.clientOrderId))
+            confirmCheckout(repository.findByClientOrderIdForUpdate(command.terminalId, command.clientOrderId))
         }
 
-    private fun requestCheckout(order: Order?): OrderCommand.RequestCheckout.Result {
+    private fun confirmCheckout(order: Order?): OrderCommand.RequestCheckout.Result {
         order ?: throw DomainException(Order.ORDER_NOT_FOUND, "주문을 찾을 수 없습니다", DomainErrorKind.NOT_FOUND)
 
         val transition = order.requestCheckout(identifierGenerator, clock.instant())

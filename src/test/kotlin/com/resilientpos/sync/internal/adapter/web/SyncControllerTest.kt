@@ -60,10 +60,10 @@ class SyncControllerTest(
         given(facade.receiveBatch(command(operation(1, ORDER_COMMAND), operation(2, CHECKOUT_COMMAND))))
             .willReturn(
                 SyncCommand.ReceiveBatch.Result(
-                    lastAckedSequence = 1,
+                    lastAckedSequence = 2,
                     items = listOf(
                         SyncCommand.ReceiveBatch.Item(OPERATION_ID_1, SyncItemStatus.APPLIED, orderId, null),
-                        SyncCommand.ReceiveBatch.Item(OPERATION_ID_2, SyncItemStatus.REJECTED, null, "BLANK_PRODUCT_NAME"),
+                        SyncCommand.ReceiveBatch.Item(OPERATION_ID_2, SyncItemStatus.REJECTED, null, "ORDER_NOT_FOUND"),
                     ),
                 ),
             )
@@ -71,12 +71,12 @@ class SyncControllerTest(
         postBatch(requestJson(operationJson(OPERATION_ID_1, 1), checkoutJson(OPERATION_ID_2, 2)))
             .andExpect(status().isOk)
             .andExpect(jsonPath("$.result").value("SUCCESS"))
-            .andExpect(jsonPath("$.data.lastAckedSequence").value(1))
+            .andExpect(jsonPath("$.data.lastAckedSequence").value(2))
             .andExpect(jsonPath("$.data.items[0].operationId").value(OPERATION_ID_1.toString()))
             .andExpect(jsonPath("$.data.items[0].status").value("APPLIED"))
             .andExpect(jsonPath("$.data.items[0].orderId").value(orderId.value.toString()))
             .andExpect(jsonPath("$.data.items[1].status").value("REJECTED"))
-            .andExpect(jsonPath("$.data.items[1].errorCode").value("BLANK_PRODUCT_NAME"))
+            .andExpect(jsonPath("$.data.items[1].errorCode").value("ORDER_NOT_FOUND"))
             .andExpect(jsonPath("$.error").value(null))
             .andDo(
                 document(
@@ -101,10 +101,13 @@ class SyncControllerTest(
 
     @Test
     fun `kind가 없거나 모르는 값이면 400 BAD_REQUEST이고 Facade를 부르지 않는다`() {
-        val noKind = """{ "operationId": "$OPERATION_ID_1", "sequence": 1, "clientOrderId": "$CLIENT_ORDER_ID" }"""
-        val unknownKind = """{ "operationId": "$OPERATION_ID_1", "sequence": 1, "kind": "REFUND", "clientOrderId": "$CLIENT_ORDER_ID" }"""
+        val noKindWithoutOrder = """{ "operationId": "$OPERATION_ID_1", "sequence": 1, "clientOrderId": "$CLIENT_ORDER_ID" }"""
+        val validCreateOrder = operationJson(OPERATION_ID_1, 1)
+        val noKind = validCreateOrder.replace(""""kind": "CREATE_ORDER",""", "")
+        val unknownKind = validCreateOrder.replace(""""kind": "CREATE_ORDER"""", """"kind": "REFUND"""")
+        check(noKind != validCreateOrder && unknownKind != validCreateOrder)
 
-        for (operation in listOf(noKind, unknownKind)) {
+        for (operation in listOf(noKindWithoutOrder, noKind, unknownKind)) {
             postBatch(requestJson(operation))
                 .andExpect(status().isBadRequest)
                 .andExpect(jsonPath("$.result").value("FAIL"))

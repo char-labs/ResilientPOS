@@ -76,7 +76,7 @@ class SyncCommandFacade(
 
     /**
      * 주문 내용의 변환(`Money.of`), 주문 생성, checkout 요청(주문 없음 등)이 도메인 규칙으로 거절되면 그 트랜잭션은 롤백돼 그 항목이 쓴 행이 남지 않는다. 같은 판정을 두 번째 트랜잭션으로 다시 돌려
-     * `REJECTED`를 기록하고 순번을 확정한다. 거절은 결정적이라 두 트랜잭션 사이에 죽어도 재전송이 같은 결과를 낸다.
+     * `REJECTED`를 기록하고 순번을 확정한다. 거절 판정은 대개 결정적이라 두 트랜잭션 사이에 죽어도 재전송이 같은 결과를 낸다. 단 주문 없음(`ORDER_NOT_FOUND`)은 시점에 따라 달라질 수 있어(그 사이 같은 clientOrderId의 주문이 HTTP로 커밋될 수 있다) 그때도 거절이 기록되고, 단말은 새 operationId로 다시 요청한다.
      * 두 번째 판정에서 순번을 다시 확인하므로 그 사이에 다른 배치가 같은 operation을 확정했으면 `DUPLICATE`·`CONFLICT`로 갈린다.
      */
     private fun applyOperation(terminalId: TerminalId, operation: SyncCommand.ReceiveBatch.Operation): SyncCommand.ReceiveBatch.Item {

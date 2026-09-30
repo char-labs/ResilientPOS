@@ -148,17 +148,19 @@ class OrderRequestCheckoutIntegrationTest(
     private fun sessionsWaitingForLock(): Long =
         jdbcTemplate.queryForObject<Long>("select count(*) from pg_stat_activity where wait_event_type = 'Lock'") ?: 0L
 
-    @Test
-    fun `커밋 전인 requestCheckout과 겹친 요청은 기다렸다가 같은 결과를 받는다`() {
-        val orderId = facade.create(OrderFixtures.createOrderCommand()).orderId
-        val command = OrderCommand.RequestCheckout(orderId)
+    /** 앞 요청이 커밋 전 잠금을 쥔 채 멈춘 사이 뒤 요청이 기다리고, 앞이 커밋하면 둘이 같은 결과를 받는지 본다. */
+    private fun assertOverlappingRequestsShareResult(
+        orderId: OrderId,
+        firstRequest: () -> OrderCommand.RequestCheckout.Result,
+        secondRequest: () -> OrderCommand.RequestCheckout.Result,
+    ) {
         val firstRequested = CountDownLatch(1)
         val releaseFirst = CountDownLatch(1)
         val executor = Executors.newFixedThreadPool(2)
         try {
             val first = executor.submit<OrderCommand.RequestCheckout.Result> {
                 transaction.execute {
-                    facade.requestCheckout(command).also {
+                    firstRequest().also {
                         firstRequested.countDown()
                         check(releaseFirst.await(30, TimeUnit.SECONDS)) { "앞 트랜잭션을 풀어 주는 신호가 오지 않았다" }
                     }
@@ -166,7 +168,7 @@ class OrderRequestCheckoutIntegrationTest(
             }
             assertTrue(firstRequested.await(10, TimeUnit.SECONDS), "앞 요청이 잠금을 쥔 채 커밋 전 상태에 도달해야 한다")
 
-            val second = executor.submit<OrderCommand.RequestCheckout.Result> { facade.requestCheckout(command) }
+            val second = executor.submit<OrderCommand.RequestCheckout.Result> { secondRequest() }
             awaitUntil("뒤 요청이 주문 행 잠금을 기다린다") { sessionsWaitingForLock() != 0L }
             assertEquals(1L, sessionsWaitingForLock(), "뒤 요청이 주문 행 잠금을 기다리고 있어야 한다")
             assertFalse(second.isDone, "앞 트랜잭션이 커밋하기 전에는 끝나지 않아야 한다")
@@ -183,6 +185,27 @@ class OrderRequestCheckoutIntegrationTest(
             executor.shutdown()
             executor.awaitTermination(10, TimeUnit.SECONDS)
         }
+    }
+
+    @Test
+    fun `커밋 전인 requestCheckout과 겹친 요청은 기다렸다가 같은 결과를 받는다`() {
+        val orderId = facade.create(OrderFixtures.createOrderCommand()).orderId
+        val command = OrderCommand.RequestCheckout(orderId)
+
+        assertOverlappingRequestsShareResult(orderId, { facade.requestCheckout(command) }, { facade.requestCheckout(command) })
+    }
+
+    @Test
+    fun `커밋 전인 clientOrderId 경로 요청과 orderId 경로 요청이 겹치면 뒤 요청은 기다렸다가 같은 결과를 받는다`() {
+        val createCommand = OrderFixtures.createOrderCommand()
+        val orderId = facade.create(createCommand).orderId
+        val byKey = OrderCommand.RequestCheckoutByClientOrderId(createCommand.terminalId, createCommand.clientOrderId)
+
+        assertOverlappingRequestsShareResult(
+            orderId,
+            { facade.requestCheckout(byKey) },
+            { facade.requestCheckout(OrderCommand.RequestCheckout(orderId)) },
+        )
     }
 
     @Test

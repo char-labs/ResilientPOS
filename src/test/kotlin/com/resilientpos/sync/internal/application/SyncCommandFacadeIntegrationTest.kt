@@ -64,6 +64,16 @@ class SyncCommandFacadeIntegrationTest(
     private fun kinds(): List<String> =
         jdbcTemplate.queryForList("select kind from t_sync_operation where terminal_id = ? order by sequence", String::class.java, terminalId.value).filterNotNull()
 
+    /** 주문의 `OrderPaymentRequested` 발행 기록 수. 완료된 기록도 행이 남으므로 발행됐는지를 센다. */
+    private fun paymentRequestedPublications(clientOrderId: ClientOrderId): Long {
+        val orderId = jdbcTemplate.queryForObject<UUID>("select id from t_order where client_order_id = ?", clientOrderId.value)
+        return checkNotNull(
+            jdbcTemplate.queryForObject<Long>(
+                "select count(*) from event_publication where serialized_event like ? and event_type like '%OrderPaymentRequested'", "%$orderId%",
+            ),
+        )
+    }
+
     private fun receive(vararg operations: SyncCommand.ReceiveBatch.Operation) =
         facade.receiveBatch(SyncCommand.ReceiveBatch(terminalId, operations.toList()))
 
@@ -268,6 +278,21 @@ class SyncCommandFacadeIntegrationTest(
         assertEquals(listOf("CREATE_ORDER", "REQUEST_CHECKOUT"), kinds())
         assertEquals(2, result.lastAckedSequence)
         assertEquals(2, storedWatermark())
+        assertEquals(1L, paymentRequestedPublications(order.clientOrderId))
+    }
+
+    @Test
+    fun `같은 clientOrderId의 결제 요청이 새 operationId로 다시 오면 적용되고 주문 행 checkout 행 발행 기록은 그대로다`() {
+        val order = payload()
+
+        val result = receive(operation(1, order), checkout(2, order.clientOrderId), checkout(3, order.clientOrderId))
+
+        assertEquals(listOf(SyncItemStatus.APPLIED, SyncItemStatus.APPLIED, SyncItemStatus.APPLIED), result.items.map { it.status })
+        assertEquals(1, result.items.map { it.orderId }.distinct().size)
+        assertEquals(1, orderRows())
+        assertEquals(1, checkoutRows())
+        assertEquals(3, storedWatermark())
+        assertEquals(1L, paymentRequestedPublications(order.clientOrderId))
     }
 
     @Test
@@ -340,13 +365,7 @@ class SyncCommandFacadeIntegrationTest(
 
         assertEquals("OPEN", orderStatus(order.clientOrderId))
         assertEquals(0, checkoutRows())
-        val orderId = jdbcTemplate.queryForObject<UUID>("select id from t_order where client_order_id = ?", order.clientOrderId.value)
-        assertEquals(
-            0L,
-            jdbcTemplate.queryForObject<Long>(
-                "select count(*) from event_publication where serialized_event like ? and event_type like '%OrderPaymentRequested'", "%$orderId%",
-            ),
-        )
+        assertEquals(0L, paymentRequestedPublications(order.clientOrderId))
     }
 
     @Test
