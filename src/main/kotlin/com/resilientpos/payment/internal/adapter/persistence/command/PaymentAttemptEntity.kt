@@ -21,6 +21,10 @@ import org.hibernate.annotations.JdbcTypeCode
 import org.hibernate.type.SqlTypes
 
 /**
+ * 역할: provider에게 보낸 요청 1회(승인 또는 취소·환불)와 그 결말(`REQUESTED`→`APPROVED`/`DECLINED`/`UNKNOWN`). 결제의 정본이다.
+ * 관계: `orderId`·`checkoutNo`로 어느 주문의 몇 회차인지, `retriedFrom`으로 재결제의 원래 시도(같은 표)를 가리킨다. `storeId`·`terminalId`는 이벤트에서 받아 복사한다.
+ * 흐름: `OrderPaymentRequested` consumer가 만들고(`REQUESTED`, 0원이면 바로 `APPROVED`), provider 호출은 트랜잭션 밖이며, 응답 뒤 행을 잠그고 결말을 적용하면 `PaymentApproved`가 주문을 `PAID`로 넘긴다. 거절 뒤 재결제는 새 행이다. 전체 지도는 `docs/wiki/entity-map.md`.
+ *
  * `PaymentAttempt`의 JPA 매핑. 연관관계 매핑 없이 `orderId` 컬럼만 가진 독립 엔티티다.
  * 한 주문에 이 행이 여럿 달린다. 식별은 `id` 하나가 하고 `orderId`는 참조라서 개수에 제약이 없다.
  *

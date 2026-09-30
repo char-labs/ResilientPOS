@@ -14,6 +14,10 @@ import jakarta.persistence.Table
 import java.util.UUID
 
 /**
+ * 역할: 단말이 만든 operation 하나를 서버가 어떻게 판정했는지(`APPLIED`·`REJECTED`), 무엇을 받았는지(`payloadHash`), 결과가 무엇인지(`orderId`·`errorCode`).
+ * 관계: `terminalId`·`operationId`가 단말 쪽 키, `sequence`가 확정한 순번, `orderId`가 만들어진 `OrderEntity`다.
+ * 흐름: sync 항목이 다음 순번으로 확정될 때 주문 행·watermark 전진과 한 커밋으로 생긴다. 같은 operation이 다시 오면 이 행으로 `DUPLICATE`/`CONFLICT`를 가른다. 전체 지도는 `docs/wiki/entity-map.md`.
+ *
  * `SyncOperation`의 JPA 매핑. 넣기만 하고 바꾸지 않아 `apply`가 없다. 생성은 `from`만 한다(도메인 규칙 §5).
  * 전 필드가 `var`에 `protected set`인 이유는 `OrderEntity`의 KDoc에 있다.
  */
