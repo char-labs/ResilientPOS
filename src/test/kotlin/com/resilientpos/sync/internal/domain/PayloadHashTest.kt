@@ -26,7 +26,7 @@ class PayloadHashTest {
         storeId = StoreId(UUID.fromString("00000000-0000-0000-0000-000000000001")),
         clientOrderId = clientOrderId,
         currency = "KRW",
-        lines = listOf(OrderPayload.Line("SKU-1", "아메리카노", BigDecimal("1001"), 2L)),
+        lines = listOf(OrderPayload.Line("SKU-1", "아메리카노", BigDecimal("1001"), BigDecimal(2))),
     )
 
     @Test
@@ -37,7 +37,7 @@ class PayloadHashTest {
 
     private fun orderWithUnitPrice(currency: String, unitPrice: String) = order.copy(
         currency = currency,
-        lines = listOf(OrderPayload.Line("SKU-1", "아메리카노", BigDecimal(unitPrice), 2L)),
+        lines = listOf(OrderPayload.Line("SKU-1", "아메리카노", BigDecimal(unitPrice), BigDecimal(2))),
     )
 
     @Test
@@ -120,18 +120,48 @@ class PayloadHashTest {
     }
 
     @Test
-    fun `toCommand는 Int 범위 밖의 수량을 INVALID_QUANTITY로 거절하고 범위 안의 값은 넘긴다`() {
-        listOf(2147483648L, -2147483649L).forEach { quantity ->
+    fun `toCommand는 소수나 Int 범위 밖의 수량을 INVALID_QUANTITY로 거절한다`() {
+        // 4294967297은 Int로 자르면 1이 되는 값이다.
+        listOf("1.5", "4294967297", "-2147483649", "2147483648").forEach { quantity ->
             val failure = assertFailsWith<DomainException> { orderWithQuantity(quantity).toCommand(terminalId) }
 
             assertEquals(OrderLine.INVALID_QUANTITY, failure.code)
             assertEquals(DomainErrorKind.INVALID, failure.kind)
         }
+    }
 
-        assertEquals(Int.MAX_VALUE, orderWithQuantity(2147483647L).toCommand(terminalId).lines.single().quantity)
+    @Test
+    fun `toCommand는 정수인 수량을 변환하고 소수부가 0인 표기도 같은 수량으로 본다`() {
+        assertEquals(2, orderWithQuantity("2.0").toCommand(terminalId).lines.single().quantity)
+        assertEquals(Int.MAX_VALUE, orderWithQuantity("2147483647").toCommand(terminalId).lines.single().quantity)
+        assertEquals(Int.MIN_VALUE, orderWithQuantity("-2147483648").toCommand(terminalId).lines.single().quantity)
         // 범위 안의 0과 음수는 order가 판정한다.
-        assertEquals(0, orderWithQuantity(0L).toCommand(terminalId).lines.single().quantity)
-        assertEquals(-1, orderWithQuantity(-1L).toCommand(terminalId).lines.single().quantity)
+        assertEquals(0, orderWithQuantity("0").toCommand(terminalId).lines.single().quantity)
+        assertEquals(-1, orderWithQuantity("-1").toCommand(terminalId).lines.single().quantity)
+    }
+
+    @Test
+    fun `toCommand는 극단적인 지수의 수량도 지수를 펴지 않고 거절하고 끝난다`() {
+        listOf("1E+999999999", "1E-999999999").forEach { quantity ->
+            val failure = assertFailsWith<DomainException> { orderWithQuantity(quantity).toCommand(terminalId) }
+
+            assertEquals(OrderLine.INVALID_QUANTITY, failure.code)
+        }
+    }
+
+    @Test
+    fun `OrderPayload의 hash는 같은 수량도 표기가 다르면 다르다`() {
+        assertNotEquals(orderWithQuantity("2").hash(), orderWithQuantity("2.0").hash())
+    }
+
+    @Test
+    fun `OrderPayload의 hash는 극단적인 지수의 수량도 지수를 펴지 않고 끝난다`() {
+        assertEquals(64, orderWithQuantity("1E+999999999").hash().length)
+    }
+
+    @Test
+    fun `OrderPayload의 hash는 통화를 raw로 넣어 소문자 통화는 대문자와 다르다`() {
+        assertNotEquals(order.hash(), order.copy(currency = "krw").hash())
     }
 
     @Test
@@ -139,7 +169,7 @@ class PayloadHashTest {
         assertEquals(OrderLine.INVALID_QUANTITY, OrderPayload.INVALID_QUANTITY)
     }
 
-    private fun orderWithQuantity(quantity: Long) = order.copy(lines = listOf(OrderPayload.Line("SKU-1", "아메리카노", BigDecimal("1001"), quantity)))
+    private fun orderWithQuantity(quantity: String) = order.copy(lines = listOf(OrderPayload.Line("SKU-1", "아메리카노", BigDecimal("1001"), BigDecimal(quantity))))
 
     @Test
     fun `payload는 자기 종류를 돌려준다`() {

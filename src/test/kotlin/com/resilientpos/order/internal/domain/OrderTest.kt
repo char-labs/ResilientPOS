@@ -253,6 +253,32 @@ class OrderTest {
     }
 
     @Test
+    fun `NUL만 든 상품 코드와 상품명은 BLANK가 아니라 INVALID로 거절한다`() {
+        val codeFailure = assertFailsWith<DomainException> {
+            Order.create(createOrderCommand(lines = listOf(orderLine(productCode = "\u0000"))), FixedIdentifierGenerator(emptyList()), now)
+        }
+        val nameFailure = assertFailsWith<DomainException> {
+            Order.create(createOrderCommand(lines = listOf(orderLine(productName = "\u0000"))), FixedIdentifierGenerator(emptyList()), now)
+        }
+
+        assertEquals(OrderLine.INVALID_PRODUCT_CODE, codeFailure.code)
+        assertEquals(OrderLine.INVALID_PRODUCT_NAME, nameFailure.code)
+    }
+
+    @Test
+    fun `NUL과 길이 초과가 겹치면 NUL 거절이 이긴다`() {
+        val codeFailure = assertFailsWith<DomainException> {
+            Order.create(createOrderCommand(lines = listOf(orderLine(productCode = "\u0000" + "A".repeat(100)))), FixedIdentifierGenerator(emptyList()), now)
+        }
+        val nameFailure = assertFailsWith<DomainException> {
+            Order.create(createOrderCommand(lines = listOf(orderLine(productName = "\u0000" + "A".repeat(300)))), FixedIdentifierGenerator(emptyList()), now)
+        }
+
+        assertEquals(OrderLine.INVALID_PRODUCT_CODE, codeFailure.code)
+        assertEquals(OrderLine.INVALID_PRODUCT_NAME, nameFailure.code)
+    }
+
+    @Test
     fun `NUL이 아닌 제어 문자는 상품 코드와 상품명에서 통과한다`() {
         val created = Order.create(
             createOrderCommand(lines = listOf(orderLine(productCode = "A\tB", productName = "아메\n리카노"))),

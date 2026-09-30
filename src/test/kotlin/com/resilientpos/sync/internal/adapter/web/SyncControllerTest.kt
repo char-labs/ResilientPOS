@@ -204,7 +204,7 @@ class SyncControllerTest(
             storeId = StoreId(UUID.fromString(STORE_ID)),
             clientOrderId = ClientOrderId(UUID.fromString(CLIENT_ORDER_ID)),
             currency = "KRW",
-            lines = listOf(OrderPayload.Line("SKU-1", "아메리카노", BigDecimal("4500"), 2L)),
+            lines = listOf(OrderPayload.Line("SKU-1", "아메리카노", BigDecimal("4500"), BigDecimal(2))),
         )
 
         private val CHECKOUT_COMMAND = CheckoutPayload(ClientOrderId(UUID.fromString(CLIENT_ORDER_ID)), BigDecimal("3502"))
@@ -245,11 +245,11 @@ class SyncControllerTest(
             fieldWithPath("operations[].amount").type(JsonFieldType.STRING).optional().description("REQUEST_CHECKOUT일 때만 있고 그 항목에서는 필수다. 단말이 본 주문 합계로 주문 통화 기준 decimal string이다. JSON 숫자도 받지만 문자열로 보내기를 권한다. 재전송 때 소수 자릿수(scale)가 바뀌면(3502와 3502.0) 다른 내용으로 판정되어 CONFLICT다. 통화 자릿수·범위에 맞지 않으면 그 항목은 REJECTED(INVALID_MONEY_SCALE 등)이고, 서버의 확정 금액과 다르면 그 항목은 REJECTED(CHECKOUT_AMOUNT_MISMATCH)이고 주문은 그대로다. 없으면 배치 전체가 400 BAD_REQUEST"),
             fieldWithPath("operations[].order.storeId").type(JsonFieldType.STRING).optional().description("CREATE_ORDER일 때만 있는 order 객체의 매장 ID(UUID). order 아래 필드는 모두 CREATE_ORDER 항목에만 있다"),
             fieldWithPath("operations[].order.clientOrderId").type(JsonFieldType.STRING).optional().description("단말이 부여한 주문 생성 요청 ID(UUID). 주문 멱등 키"),
-            fieldWithPath("operations[].order.currency").type(JsonFieldType.STRING).optional().description("ISO 4217 통화 코드. ISO 4217에 없으면 그 항목은 REJECTED(UNSUPPORTED_CURRENCY)"),
+            fieldWithPath("operations[].order.currency").type(JsonFieldType.STRING).optional().description("대문자 ISO 4217 코드. ISO 4217에 없으면 그 항목은 REJECTED(UNSUPPORTED_CURRENCY). 소문자·공백이 붙은 값·금액을 표현할 수 없는 통화(XXX)도 같은 거절. null이면 배치 전체가 400"),
             fieldWithPath("operations[].order.lines[].productCode").type(JsonFieldType.STRING).optional().description("상품 코드. 비어 있으면 그 항목은 REJECTED(BLANK_PRODUCT_CODE), 64자(문자 수, code point)를 넘으면 REJECTED(PRODUCT_CODE_TOO_LONG), NUL 문자가 있으면 REJECTED(INVALID_PRODUCT_CODE)"),
             fieldWithPath("operations[].order.lines[].productName").type(JsonFieldType.STRING).optional().description("상품명. 비어 있으면 그 항목은 REJECTED(BLANK_PRODUCT_NAME), 255자(문자 수, code point)를 넘으면 REJECTED(PRODUCT_NAME_TOO_LONG), NUL 문자가 있으면 REJECTED(INVALID_PRODUCT_NAME)"),
             fieldWithPath("operations[].order.lines[].unitPrice").type(JsonFieldType.STRING).optional().description("단가. 주문 통화 기준 decimal string. 자릿수·범위·통화 규칙에 어긋나면 그 항목이 REJECTED(INVALID_MONEY_SCALE 등)"),
-            fieldWithPath("operations[].order.lines[].quantity").type(JsonFieldType.NUMBER).optional().description("수량. Int 범위 밖이면 그 항목은 REJECTED(INVALID_QUANTITY)"),
+            fieldWithPath("operations[].order.lines[].quantity").type(JsonFieldType.NUMBER).optional().description("정수. 1 미만이거나 소수이거나 Int 범위 밖이면 그 항목은 REJECTED(INVALID_QUANTITY). 숫자가 아니면 배치 전체가 400"),
         )
     }
 }

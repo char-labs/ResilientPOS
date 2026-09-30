@@ -82,7 +82,7 @@ class SyncApiIntegrationTest(
                            "lines": [{ "productCode": "SKU-1", "productName": "아메리카노", "unitPrice": "4500", "quantity": 2 }] } },
               { "operationId": "${UUID.randomUUID()}", "sequence": 2, "kind": "CREATE_ORDER",
                 "order": { "storeId": "${UUID.randomUUID()}", "clientOrderId": "${UUID.randomUUID()}", "currency": "KRW",
-                           "lines": [{ "productCode": "SKU-1", "productName": "아메리카노", "unitPrice": "4500", "quantity": 2147483648 }] } },
+                           "lines": [{ "productCode": "SKU-1", "productName": "아메리카노", "unitPrice": "4500", "quantity": 4294967297 }] } },
               { "operationId": "${UUID.randomUUID()}", "sequence": 3, "kind": "CREATE_ORDER",
                 "order": { "storeId": "${UUID.randomUUID()}", "clientOrderId": "${UUID.randomUUID()}", "currency": "KRW",
                            "lines": [{ "productCode": "SKU-1", "productName": "아메리카노", "unitPrice": "4500", "quantity": 2 }] } }
@@ -97,6 +97,29 @@ class SyncApiIntegrationTest(
         assertEquals("INVALID_QUANTITY", response.at("/data/items/1/errorCode").asString())
         assertEquals("APPLIED", response.at("/data/items/2/status").asString())
         assertEquals(3, response.at("/data/lastAckedSequence").asInt())
+    }
+
+    @Test
+    fun `소수 수량의 항목은 잘려서 적용되지 않고 배치 400도 아니라 REJECTED이며 다음 항목은 적용된다`() {
+        val terminalId = UUID.randomUUID()
+        val fractionalClientOrderId = UUID.randomUUID()
+        val body = """
+            { "operations": [
+              { "operationId": "${UUID.randomUUID()}", "sequence": 1, "kind": "CREATE_ORDER",
+                "order": { "storeId": "${UUID.randomUUID()}", "clientOrderId": "$fractionalClientOrderId", "currency": "KRW",
+                           "lines": [{ "productCode": "SKU-1", "productName": "아메리카노", "unitPrice": "4500", "quantity": 1.5 }] } },
+              { "operationId": "${UUID.randomUUID()}", "sequence": 2, "kind": "CREATE_ORDER",
+                "order": { "storeId": "${UUID.randomUUID()}", "clientOrderId": "${UUID.randomUUID()}", "currency": "KRW",
+                           "lines": [{ "productCode": "SKU-1", "productName": "아메리카노", "unitPrice": "4500", "quantity": 2 }] } }
+            ] }
+        """.trimIndent()
+
+        val response = objectMapper.readTree(post(terminalId, body))
+
+        assertEquals("REJECTED", response.at("/data/items/0/status").asString())
+        assertEquals("INVALID_QUANTITY", response.at("/data/items/0/errorCode").asString())
+        assertEquals("APPLIED", response.at("/data/items/1/status").asString())
+        assertEquals(0L, jdbcTemplate.queryForObject<Long>("select count(*) from t_order where client_order_id = ?", fractionalClientOrderId))
     }
 
     private fun post(terminalId: UUID, body: String): String =
