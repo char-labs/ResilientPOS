@@ -37,7 +37,7 @@ t_payment_attempt.retried_from ────────────────�
 t_fulfillment.order_id ─────────────────────────────────────────────────────────────────────► t_order.id
 ```
 
-- 화살표는 "값이 저 행의 ID다"라는 뜻이고 DB가 검사하지 않는다. `t_order.id`를 가리키는 표가 넷(line·checkout·payment·fulfillment·sync)이지만 서로 조인하는 코드는 없다. 모듈 경계 밖의 값은 이벤트로 건너간다(`OrderPaymentRequested`·`PaymentApproved`·`OrderPaid`).
+- 화살표는 "값이 저 행의 ID다"라는 뜻이고 DB가 검사하지 않는다. `t_order.id`를 가리키는 표가 다섯(line·checkout·payment·fulfillment·sync)이지만 서로 조인하는 코드는 없다. 모듈 경계 밖의 값은 이벤트로 건너간다(`OrderPaymentRequested`·`PaymentApproved`·`OrderPaid`).
 - `t_payment_attempt`는 checkout 회차를 `checkout_no`(1, 2, …)로 가리킨다. `t_order_checkout.id`가 아니다. 결제 승인을 주문에 대조할 때 `order.markPaid`가 최신 회차 번호·금액과 비교한다.
 - `terminal_id`·`store_id`는 `terminal`·`store` 모듈에 아직 테이블이 없어 가리키는 행이 없다. 값은 단말이 보낸 것을 그대로 저장한다.
 
@@ -111,7 +111,7 @@ t_fulfillment.order_id ───────────────────
 | 1. 재연결 뒤 `POST /v1/terminals/{terminalId}/sync`에 배치 | — | 새 단말이면 `t_sync_watermark` 1행(0) | 짧은 커밋 하나 |
 | 2. `CREATE_ORDER` 항목: watermark 잠금 → 순번 판정 → `order` 명령 변환 → `createInCallerTransaction` | 항목 `APPLIED`+`orderId` | `t_order`·`t_order_line` + `t_sync_operation`(`APPLIED`) + `t_sync_watermark.last_acked_sequence` +1 | **항목 하나가 한 커밋** |
 | 2a. `REQUEST_CHECKOUT` 항목: watermark 잠금 → 순번 판정 → `clientOrderId`로 주문 행 잠금 → 전이 → 단말 합계 대조 → 저장 | 항목 `APPLIED`+`orderId` | `t_order.status`→`CHECKOUT_REQUESTED` + `t_order_checkout` 1행 + `event_publication`(`OrderPaymentRequested`) + `t_sync_operation`(`APPLIED`) + watermark +1. 이후는 4.1의 3단계부터 | **항목 하나가 한 커밋**. 행 잠금은 watermark 다음에 주문 순서다 |
-| 2'. 항목이 도메인 규칙에 걸림(빈 상품명, 금액 자릿수, 같은 `clientOrderId`에 다른 내용, 결제 요청의 주문 없음, 단말 합계와 확정 금액 불일치) | 항목 `REJECTED`+`errorCode` | 첫 트랜잭션은 롤백(그 항목이 쓴 행 없음). 두 번째 트랜잭션이 `t_sync_operation`(`REJECTED`)과 watermark +1 | 두 커밋. 단말은 그 항목을 버린다 |
+| 2'. 항목이 도메인 규칙에 걸림(빈 상품명, 상품 코드·상품명 길이 초과, 금액 자릿수, 같은 `clientOrderId`에 다른 내용, 결제 요청의 주문 없음, 단말 합계와 확정 금액 불일치) | 항목 `REJECTED`+`errorCode` | 첫 트랜잭션은 롤백(그 항목이 쓴 행 없음). 두 번째 트랜잭션이 `t_sync_operation`(`REJECTED`)과 watermark +1 | 두 커밋. 단말은 그 항목을 버린다 |
 | 2''. 이미 확정된 순번 | 같은 내용이면 `DUPLICATE`(기록된 `orderId`), 다른 내용·다른 순번·모르는 operation이면 `CONFLICT` | 아무것도 쓰지 않는다 | 읽기만 |
 | 2'''. 순번이 비었다 | 그 항목부터 `GAP` | 아무것도 쓰지 않는다 | 첫 GAP 뒤는 트랜잭션도 열지 않는다 |
 | 3. 응답의 `lastAckedSequence` | 단말은 그 다음 순번부터 다시 보내고 `APPLIED`·`DUPLICATE`·`REJECTED`는 큐에서 지운다 | — | — |

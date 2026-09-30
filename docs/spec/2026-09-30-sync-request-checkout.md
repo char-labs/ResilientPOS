@@ -35,7 +35,7 @@
 - `domain`: `sealed interface OperationPayload`가 `kind`와 `hash()`를 가진다. 구현은 기존 `OrderPayload`와 새 `CheckoutPayload(clientOrderId, amount)`다. `amount`는 `OrderPayload`의 단가처럼 단말이 보낸 raw `BigDecimal`이다. `SyncOperationKind`(`CREATE_ORDER`·`REQUEST_CHECKOUT`)는 요청의 `kind` 값이자 DB 저장 값이다.
 - `SyncCommand.ReceiveBatch.Operation`의 `order`는 `payload`가 된다.
 - `SyncCommandFacade`는 항목 트랜잭션 안에서 else 없는 `when`으로 갈라 `createInCallerTransaction` 또는 `requestCheckout`을 부른다. `when`은 payload 타입으로 갈리므로 `OperationPayload` 구현을 더하면 이 `when`이 컴파일되지 않는다. enum 상수나 요청 DTO의 하위 타입만 더하는 것은 컴파일러가 잡지 않는다. 분기가 한 곳이라 전략 클래스로 올리지 않는다.
-- `CheckoutPayload.hash()`는 `OrderPayload`와 같은 공식이다. `REQUEST_CHECKOUT`, `clientOrderId`, raw `amount.toString()`을 각각 `길이:값;`으로 이은 문자열의 SHA-256 hex다. `toPlainString()`을 쓰지 않는다. hash는 `Money`의 거절보다 먼저 돌고, `toPlainString()`은 `1E+999999999` 같은 지수 표기를 자릿수만큼 펴서 입력 하나로 메모리를 다 쓴다. 같은 금액이라도 scale이 다르면(`3502`와 `3502.0`) 다른 hash다. `3502`와 `3.502E3`은 같은 값·같은 scale이라 같은 hash다. 단말은 저장한 봉투를 그대로 다시 보낸다. `OrderPayload`의 공식과 접두어는 그대로라 이미 기록된 hash가 바뀌지 않는다.
+- `CheckoutPayload.hash()`는 `OrderPayload`와 같은 공식이다. `REQUEST_CHECKOUT`, `clientOrderId`, raw `amount.toString()`을 각각 `길이:값;`으로 이은 문자열의 SHA-256 hex다. `toPlainString()`을 쓰지 않는다. hash는 `Money`의 거절보다 먼저 돌고, `toPlainString()`은 `1E+999999999` 같은 지수 표기를 자릿수만큼 펴서 입력 하나로 메모리를 다 쓴다. 같은 금액이라도 scale이 다르면(`3502`와 `3502.0`) 다른 hash다. `3502`와 `3.502E3`은 같은 값·같은 scale이라 같은 hash다. 단말은 저장한 봉투를 그대로 다시 보낸다. `OrderPayload`의 접두어와 필드 순서는 그대로다. 단가 표기는 결정 6이 바꾼다.
 
 **결정 3: `t_sync_operation`에 `kind` 컬럼을 더한다.** 업무 코드가 읽지 않는 쓰기 전용 컬럼이다. 그래도 지금 더하는 이유는 나중에 채울 수 없어서다. 두 종류가 섞인 뒤에는 기존 행의 종류를 다른 컬럼에서 알아낼 수 없다(hash는 단방향이고 `order_id`는 두 종류 모두 가진다). 지금은 모든 행이 `CREATE_ORDER`라 상수 기본값이 정확한 값이다. 답은 아래 스키마 변경 검토 절에 있다.
 
@@ -62,8 +62,8 @@
 
 **결정 6: `OrderPayload.hash()`의 단가를 `toString()`으로 넣는다(범위 조정, 병목 점검 뒤 추가).**
 - 문제: hash는 `Money`의 거절보다 먼저 도는데 `toPlainString()`이 지수 표기를 자릿수만큼 편다. `unitPrice`가 `1E+40000000`인 요청이 hash를 계산한 뒤에야 거절되는 것을 HTTP로 확인했다. 지수에 비례해 메모리를 쓰므로 더 큰 지수 하나로 힙을 다 쓸 수 있다.
-- 제약: `payload_hash`는 저장 형식이다. 다만 배포된 환경이 없어 기록된 행이 없다. scale이 0 이상이고 지수 표기가 필요 없는 값(`4500`, `4500.50`)은 `toString()`과 `toPlainString()`이 같은 문자열을 낸다.
-- 수단: 분기 없이 `toString()`으로 바꾼다. `CheckoutPayload`와 공식이 하나가 된다. 평문 표기로 온 단가의 hash는 그대로이고(`PayloadHashTest`의 고정 hex가 그대로 통과한다), 달라지는 것은 지수 표기로 온 단가(`1E+3`)뿐이다. 범위를 미리 거절하는 검사는 두지 않는다. 거절은 지금처럼 항목 트랜잭션 안의 `Money`가 한다.
+- 제약: `payload_hash`는 저장 형식이다. 다만 배포된 환경이 없어 기록된 행이 없다. `toString()`은 scale이 0 이상이고 조정 지수(precision - 1 - scale)가 -6 이상이면 평문으로 적는다. 그런 값(`4500`, `4500.50`)은 `toPlainString()`과 같은 문자열이다. 갈리는 기준은 입력의 표기가 아니라 값의 scale이다.
+- 수단: 분기 없이 `toString()`으로 바꾼다. `CheckoutPayload`와 공식이 하나가 된다. 위 조건에 드는 단가의 hash는 그대로다(`PayloadHashTest`의 고정 hex가 그대로 통과한다). 달라지는 것은 scale이 음수인 값(`1E+3`)과 조정 지수가 -6보다 작은 값(`0.0000001`, 소수 0이 일곱 개 이상인 `0.0000000`)이다. 뒤의 것은 평문으로 와도 달라지고, 그중 0은 `Money`가 받아들여 `APPLIED`가 되는 값이다. 범위를 미리 거절하는 검사는 두지 않는다. 거절은 지금처럼 항목 트랜잭션 안의 `Money`가 한다.
 
 **병목 점검(범위 조정, PR을 연 뒤 추가).** 결제 요청 항목 하나가 내는 문장을 Hibernate 통계와 SQL 로그로 쟀다.
 - 적용 경로는 항목당 18문장이다. watermark 잠금(`lock_timeout` 조회·설정·해제 3, 잠금 조회 1), `findOperation` 1, 주문 잠금(`lock_timeout` 3, 잠금 조회 1, line 조회 1, checkout 조회 1), 저장(line·checkout 다시 조회 2, checkout INSERT 1, 주문 UPDATE 1), 발행 기록 INSERT 1, 접수 기록 INSERT 1, watermark UPDATE 1이다. 배치마다 watermark 확인 조회와 응답용 조회가 하나씩 더 나간다.
@@ -90,7 +90,9 @@
 - 거절된 결제의 재결제 operation. 입구는 `PaymentManagement.retryAuthorization`뿐이고 단말이 거절 사실을 아는 조회도 아직 없다.
 - `kind` 컬럼의 기본값 제거. 새 코드는 늘 값을 적으므로 기본값은 이전 버전 인스턴스가 내려간 뒤에는 쓰이지 않는다. 앱 코드는 `kind` 없이 접수 기록을 만들 수 없으므로 기본값이 남아서 생기는 일은 `kind`를 빠뜨린 수동 SQL이 실패하지 않고 `CREATE_ORDER`로 기록되는 것 하나다. 제거는 이 컬럼을 적는 코드만 배포에 남은 다음 PR의 일이다.
 - **도메인 규칙이 아닌 이유로 늘 실패하는 항목은 여전히 단말 큐를 막는다.** 길이 상한은 결정 5가 닫았지만 같은 모양의 입력이 남아 있다. 확인한 것은 NUL 문자다. `productCode`나 `productName`에 `\u0000`이 든 `CREATE_ORDER` 항목은 PostgreSQL이 `invalid byte sequence for encoding "UTF8": 0x00`으로 거절해 `DataIntegrityViolationException`이 되고 배치가 500이며 watermark가 전진하지 않는다(sync Facade로 관측). 항목 트랜잭션이 `DomainException`이 아닌 예외로 결정적으로 실패하면 재전송마다 같은 배치 오류다. 찾으면 그 입력을 소유 컨텍스트의 도메인 규칙으로 거절한다.
-- 지수 표기로 온 단가의 hash가 #71과 달라진다(결정 6). 배포된 행이 없어 옮길 데이터가 없다.
+- scale이 음수이거나 조정 지수가 -6보다 작은 단가의 hash가 #71과 달라진다(결정 6). 거절된 operation의 hash도 기록되므로 `APPLIED`가 될 수 없는 값도 여기에 든다. 배포된 행이 없어 옮길 데이터가 없다는 전제에 기댄다. 그 전제가 틀리면 그 operation들의 재전송이 `CONFLICT`가 된다.
+- **값 때문에 배치 전체가 400이 되는 입력도 단말 큐를 막는다.** 역직렬화에서 끊기면 앞 순번의 정상 항목까지 적용되지 않고 재전송마다 같은 400이다. 65,536자를 넘는 문자열(256자부터 65,536자까지의 상품명은 `REJECTED`인데 그 위는 배치 400이다), 1,000자를 넘는 숫자, Int 범위 밖이거나 소수인 `quantity`, ISO 4217에 없는 `currency`가 그렇다. `POST /v1/orders`에서는 같은 상한을 테스트가 확인하고 sync endpoint로는 실행해 보지 않았다. 닫으려면 그 필드를 raw로 받아 항목 트랜잭션 안에서 거절해야 한다.
+- 길이 판정이 `varchar(n)`과 어긋나는 경우가 하나 있다. PostgreSQL은 초과분이 모두 공백이면 잘라서 저장하는데 도메인은 거절한다. 도메인이 더 엄격한 쪽이고, 잘린 값이 재시도의 내용 대조를 깨던 것도 없어진다.
 - 대조에 통화가 없다. 같은 키의 KRW 3502원 주문이 있는데 단말이 JPY 3502엔으로 만들어 결제를 요청하면 통과한다. 통화를 선택 필드로 나중에 더해도 없을 때의 hash 공식이 지금과 같아 호환된다.
 - 새로 확정하는 checkout의 `save`가 line과 checkout을 다시 읽는 2문장. 병목 점검 문단에 이유가 있다. 다시 볼 조건은 부하 측정에서 이 조회가 드러날 때다.
 - 배치의 동시 실행 수·빈도·전체 시간에는 상한이 없다. 배치 하나가 커넥션 하나를 거의 연속으로 쓰므로 동시에 도는 배치가 풀 크기(10)를 넘으면 풀이 상시 포화다. 수치는 재지 않았다. k6 부하 측정에서 단말 수와 배치 크기로 `hikaricp_connections_pending`과 배치 시간을 본 뒤 권장 배치 크기나 동시 실행 상한을 정한다.
@@ -126,7 +128,7 @@
 5. 주문이 없는 `clientOrderId`의 `REQUEST_CHECKOUT`은 `REJECTED`와 `errorCode` `ORDER_NOT_FOUND`이고 순번은 확정된다. 재전송은 같은 `errorCode`의 `DUPLICATE`이고 그 뒤 순번은 정상 적용된다.
 6. 확정된 `REQUEST_CHECKOUT`의 `operationId`에 다른 `clientOrderId`가 오거나, `CREATE_ORDER`로 확정된 `operationId`가 `REQUEST_CHECKOUT`으로 오면 `CONFLICT`이고 아무것도 바뀌지 않는다.
 7. 항목 트랜잭션은 하나다. checkout을 확정한 뒤 접수 기록 저장이 unique `(terminal_id, sequence)`로 실패하면 주문은 `OPEN`으로 남고 checkout 행과 `OrderPaymentRequested` 발행 기록이 없다.
-8. `CheckoutPayload.hash()`는 같은 `clientOrderId`에 같은 값, 다른 `clientOrderId`에 다른 값이고 같은 `clientOrderId`를 가진 `OrderPayload`의 hash와 다르다. `OrderPayload.hash()`의 값은 이 PR 전과 같다(고정 입력의 기대 hex로 확인). Spring 없는 단위 테스트다.
+8. `CheckoutPayload.hash()`는 같은 `clientOrderId`에 같은 값, 다른 `clientOrderId`에 다른 값이고 같은 `clientOrderId`를 가진 `OrderPayload`의 hash와 다르다. scale이 0 이상이고 조정 지수가 -6 이상인 단가의 `OrderPayload.hash()` 값은 이 PR 전과 같다(고정 입력의 기대 hex로 확인). Spring 없는 단위 테스트다.
 9. HTTP: `kind`가 `REQUEST_CHECKOUT`인 항목이 `SyncCommand`로 옮겨져 Facade에 닿는다. `kind`가 없거나 모르는 값이면 `400 BAD_REQUEST`이고 Facade를 부르지 않는다. REST Docs 요청 필드에 `kind`와 `REQUEST_CHECKOUT`의 `clientOrderId`를 적는다. HTTP부터 PostgreSQL까지 이어지는 통합 테스트 하나가 인수 3을 HTTP로 확인한다.
 10. V011이 `kind varchar(32) not null default 'CREATE_ORDER'`를 더하고 `ddl-auto: validate`가 통과한다. `kind`를 적지 않은 INSERT(이전 버전 인스턴스를 흉내 낸 JDBC)가 성공하고 그 행의 `kind`가 `CREATE_ORDER`다. `SchemaMigrationTest`의 버전 목록에 011이 있다.
 11. 기존 `CREATE_ORDER` 동작([sync-intake](2026-09-30-sync-intake.md) 인수 1~6·9)이 그대로 통과한다.
@@ -137,7 +139,7 @@
 16. 같은 주문에 다른 `operationId`의 `REQUEST_CHECKOUT`이 두 번 오면 둘 다 `APPLIED`이고 checkout 행과 발행 기록은 하나다.
 17. 이미 요청된 주문의 checkout은 `save`를 부르지 않는다. 결제 요청 항목의 문장 수(멱등 재요청 9, 재전송 4)를 Hibernate 통계로 고정한다. 적용 경로의 문장 수는 비동기 문장이 섞여 고정하지 않는다. 금액 불일치로 거절된 operation의 재전송은 같은 `errorCode`의 `DUPLICATE`이고, 그 뒤 올바른 금액의 새 `operationId`는 `APPLIED`다. `amount`가 `1E+3`인 `CheckoutPayload`의 hash가 고정 hex와 같고 `1E+999999999`의 hash가 끝난다.
 18. `productCode`가 65자이거나 `productName`이 256자인 line은 `PRODUCT_CODE_TOO_LONG`·`PRODUCT_NAME_TOO_LONG`(`INVALID`)이고 64자·255자는 통과한다. 길이는 code point로 센다(surrogate pair 하나는 한 글자다). `POST /v1/orders`는 `400`과 그 code를 돌려준다. sync에서 그런 `CREATE_ORDER` 항목은 `REJECTED`와 그 `errorCode`이고 순번이 확정되며 다음 항목은 적용된다.
-19. `OrderPayload.hash()`는 단가가 `1E+999999999`·`1E-999999999`여도 64자 hex를 돌려주고, 단가가 `1E+3`인 입력의 hash는 고정 hex와 같다(`4:1E+3;`). 평문 표기 입력의 고정 hex는 그대로다. sync에 단가가 `1E+999999999`인 항목을 보내면 `REJECTED`(`INVALID_MONEY_AMOUNT`)다.
+19. `OrderPayload.hash()`는 단가가 `1E+999999999`·`1E-999999999`여도 64자 hex를 돌려주고, 단가가 `1E+3`·`1E+4`·`0.0000000`인 입력의 hash는 고정 hex와 같다(`4:1E+3;`, `4:1E+4;`, `4:0E-7;`). `1001`과 `4500.50`의 고정 hex는 그대로다. 이모지 64자 상품 코드와 255자 상품명의 주문이 PostgreSQL에 저장된다. sync에 단가가 `1E+999999999`인 항목을 보내면 `REJECTED`(`INVALID_MONEY_AMOUNT`)다.
 
 ### Checkpoint와 검증 명령
 | Checkpoint | 검증 명령 | 의존 |
@@ -221,11 +223,11 @@ alter table t_sync_operation
 | 인수 19, `PayloadHashTest`의 `OrderPayload의 hash는 극단적인 지수의 단가도 지수를 펴지 않고 끝난다`, `SyncCommandFacadeIntegrationTest`의 `극단적인 지수의 단가는 지수를 펴지 않고 INVALID_MONEY_AMOUNT 거절이며 다음 항목은 적용된다` | 의도한 RED는 없다. 수정 전 코드로는 테스트 JVM이 죽는다. 위 인수 18의 RED 실행에서 뒤의 테스트가 수정 전 코드로 돌아 실제로 죽었다 | 수정 뒤 통과 | 위와 같은 회귀 통과 |
 
 ## 결과
-- `./gradlew test` 전체 통과(350개), 하네스 테스트 OK(132개), `python3 scripts/check_pr.py --base origin/main` PASS(`--worktree` 있이·없이).
+- `./gradlew test` 전체 통과(352개), 하네스 테스트 OK(132개), `python3 scripts/check_pr.py --base origin/main` PASS(`--worktree` 있이·없이).
 - `order`에 `OrderCommand.RequestCheckoutByClientOrderId`와 `OrderCommandFacade.requestCheckout` 오버로드, `OrderRepository.findByClientOrderIdForUpdate`를 더했다. 두 `requestCheckout`은 전이·저장·발행을 private 함수 하나로 함께 쓴다.
-- `sync`에 `SyncOperationKind`, `OperationPayload`(구현 `OrderPayload`·`CheckoutPayload`), 접수 기록의 `kind`, Facade의 종류 분기, `kind`로 갈리는 요청 DTO를 더했다. V011이 `t_sync_operation.kind`를 더한다. `OrderPayload`의 hash 공식과 결과는 그대로다.
+- `sync`에 `SyncOperationKind`, `OperationPayload`(구현 `OrderPayload`·`CheckoutPayload`), 접수 기록의 `kind`, Facade의 종류 분기, `kind`로 갈리는 요청 DTO를 더했다. V011이 `t_sync_operation.kind`를 더한다.
 - 스키마 대조(code-reviewer)에서 불일치는 없었고 누락 6건을 위 대조 기록대로 반영했다.
 - 제출 전 리뷰는 Claude(84점)와 Codex(점수 없음, 지적 1건)가 했고 Gemini는 CLI가 없어 실행하지 않았다. Claude가 찾은 HIGH 1건이 결정 4가 됐다. 다른 내용의 기존 주문에 결제 요청이 적용되는 경로다. 그 밖에 판별력 없는 테스트 3곳(`kind` 기본 종류, 잠금 조회, 발행 기록 대조군)을 변형으로 실패를 관측하며 보강했고, 멱등 재요청 테스트, REST Docs 예시, private 함수 이름, KDoc, wiki §4.6의 옛 문장, 롤링 배포 설명을 고쳤다. Codex의 지적(watermark 잠금 대기 초과의 409를 HTTP로 잇는 테스트)은 [sync-intake](2026-09-30-sync-intake.md)가 제외로 둔 기존 빈틈이라 제외 절에 남겼다.
-- PR을 연 뒤 병목 점검(spring-backend-specialist)과 금액 대조 코드의 재리뷰(Claude 87점, Codex 점수 없음)를 했다. 둘 다 CRITICAL·HIGH는 없었다. 병목에서는 멱등 checkout의 불필요한 `save`를 없애고 문장 수 테스트를 뒀다. 재리뷰에서는 hash의 `toString()` 선택, 금액 불일치 뒤 복구 경로, 통화·0원·`PAID` 대조, `amount` 입력 변형을 테스트로 고정하고 REST Docs·KDoc·wiki의 부정확한 문장을 고쳤다. 점검이 찾은 기존 결함 둘(길이 초과 입력이 단말 큐를 막는 것, `OrderPayload` hash의 지수 입력)은 HTTP로 재현했고 제외 절에 적었다. externalizer가 커넥션을 쥔 채 막힌다는 가설은 소스로 확인해 기각했다.
-- 병목 점검이 찾은 기존 결함 둘을 이 PR에서 닫았다(결정 5·6). `OrderLine`이 상품 코드 64자·상품명 255자를 넘으면 `PRODUCT_CODE_TOO_LONG`·`PRODUCT_NAME_TOO_LONG`으로 거절하고, `OrderPayload.hash()`는 단가를 `toString()`으로 넣는다. 평문 표기 입력의 고정 hex는 그대로다. 그 과정에서 NUL 문자가 같은 방식으로 단말 큐를 막는 것을 관측했고 제외 절에 남겼다.
+- PR을 연 뒤 병목 점검(spring-backend-specialist)과 금액 대조 코드의 재리뷰(Claude 87점, Codex 점수 없음)를 했다. 둘 다 CRITICAL·HIGH는 없었다. 병목에서는 멱등 checkout의 불필요한 `save`를 없애고 문장 수 테스트를 뒀다. 재리뷰에서는 hash의 `toString()` 선택, 금액 불일치 뒤 복구 경로, 통화·0원·`PAID` 대조, `amount` 입력 변형을 테스트로 고정하고 REST Docs·KDoc·wiki의 부정확한 문장을 고쳤다. 점검이 찾은 기존 결함 둘(길이 초과 입력이 단말 큐를 막는 것, `OrderPayload` hash의 지수 입력)은 HTTP로 재현했다. externalizer가 커넥션을 쥔 채 막힌다는 가설은 소스로 확인해 기각했다.
+- 병목 점검이 찾은 기존 결함 둘을 이 PR에서 닫았다(결정 5·6). `OrderLine`이 상품 코드 64자·상품명 255자를 넘으면 `PRODUCT_CODE_TOO_LONG`·`PRODUCT_NAME_TOO_LONG`으로 거절하고, `OrderPayload.hash()`는 단가를 `toString()`으로 넣는다. scale이 0 이상이고 조정 지수가 -6 이상인 단가의 고정 hex는 그대로다. 그 과정에서 NUL 문자가 같은 방식으로 단말 큐를 막는 것을 관측했고 제외 절에 남겼다. 이 두 변경은 Claude가 다시 리뷰했다(86점, CRITICAL·HIGH 없음). hash가 달라지는 값의 조건을 정확히 고치고 spec의 모순 문장 셋을 바로잡았으며, `0.0000000`·`1E+4`의 고정 hex와 이모지 길이의 DB 저장 테스트를 더했다. 리뷰가 찾은 배치 400 계열의 입력은 제외 절에 적었다.
 - `order`에 `Order.verifyCheckoutAmount`와 오류 code `CHECKOUT_AMOUNT_MISMATCH`를 더했다. `RequestCheckoutByClientOrderId`가 `expectedAmount`를 받고, 전이한 뒤 저장 전에 대조한다. sync의 `CheckoutPayload`와 요청 항목에 `amount`가 생겼다.
