@@ -20,12 +20,12 @@ object Lock {
 
     /**
      * 블록은 새 트랜잭션([Tx.newTx], `REQUIRES_NEW`)에서 돌고, 커밋한 뒤에 락을 푼다.
-     * 바깥 트랜잭션 안에서는 거절한다. 합류하면 바깥이 커밋하기 전에 락이 풀려 뒤 요청이 커밋되지 않은 상태를 읽고,
+     * 바깥 트랜잭션 안에서는 `IllegalTransactionStateException`으로 거절한다. 합류하면 바깥이 커밋하기 전에 락이 풀려 뒤 요청이 커밋되지 않은 상태를 읽고,
      * 따로 커밋하면 바깥이 롤백돼도 블록의 커밋이 남아 한 커밋으로 묶으려던 흐름이 갈라진다. 한 커밋으로 묶어야 하는 흐름
      * (§4.6 sync intake)은 락 없는 합류 경로(`OrderCommandFacade.createInCallerTransaction`)를 부른다.
      */
     fun <T> executeWithLock(key: String, action: () -> T): T {
-        Tx.requireNoCaller("executeWithLock($key)")
+        Tx.requireNoCaller()
         return locked(key) { Tx.newTx(action) }
     }
 
@@ -35,7 +35,7 @@ object Lock {
      * 바깥 트랜잭션 안에서는 거절한다. 합류하면 바깥이 커밋하기 전에 락이 풀린다. Facade는 쓰지 않는다.
      */
     fun <T> executeWithLockNoTx(key: String, action: () -> T): T {
-        Tx.requireNoCaller("executeWithLockNoTx($key)")
+        Tx.requireNoCaller()
         return locked(key, action)
     }
 

@@ -16,6 +16,7 @@ import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.data.redis.core.StringRedisTemplate
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.jdbc.core.queryForObject
+import org.springframework.transaction.IllegalTransactionStateException
 import org.springframework.transaction.PlatformTransactionManager
 import org.springframework.transaction.TransactionDefinition
 import org.springframework.transaction.support.TransactionOperations
@@ -90,7 +91,7 @@ class LockIntegrationTest(
 
         try {
             val started = System.nanoTime()
-            assertFailsWith<IllegalStateException> {
+            assertFailsWith<IllegalTransactionStateException> {
                 transactions.executeWithoutResult { Lock.executeWithLock(key) { insertProbe(id) } }
             }
             assertTrue(System.nanoTime() - started < TimeUnit.SECONDS.toNanos(1), "잠금을 기다린 뒤 거절했다")
@@ -136,7 +137,7 @@ class LockIntegrationTest(
     fun `트랜잭션 없는 블록을 트랜잭션 안에서 부르면 잠그기 전에 거절한다`() {
         val key = "test:lock:${UUID.randomUUID()}"
 
-        assertFailsWith<IllegalStateException> {
+        assertFailsWith<IllegalTransactionStateException> {
             transactions.executeWithoutResult { Lock.executeWithLockNoTx(key) { } }
         }
         assertFalse(redis.hasKey(key))
