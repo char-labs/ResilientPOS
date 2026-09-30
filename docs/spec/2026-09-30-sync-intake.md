@@ -10,15 +10,15 @@
 - `OrderCommandFacade.create`와 `PaymentManagement.createAttempt`가 쓰는 `Lock` 블록은 바깥 트랜잭션 안에서 부르면 거절한다([shared-distributed-lock](2026-09-28-shared-distributed-lock.md) 제외 절의 M-1b).
 
 ## 범위
-소유 모듈은 `sync`(새 코드), `order`(합류 진입점 하나), `platform`(`Lock` check 한 줄)이다.
+소유 모듈은 `sync`(새 코드), `order`(합류 진입점 하나), `platform`(`Tx.requireCaller`·`requireNoCaller`와 `Lock`의 거절 한 줄)이다.
 
-**결정 1: `order.create`는 락 없는 합류 경로로 부른다.** `OrderCommandFacade`에 `createInCallerTransaction(command)`를 더한다. 지금의 `create`는 `Lock.executeWithLock` 블록이 이 메서드를 감싸는 모양이 된다. 새 메서드는 호출자 트랜잭션에 합류(`REQUIRED`)하고 첫 줄에서 활성 트랜잭션이 없으면 `check`로 거절한다. 어느 쪽이 잠그는지가 호출부 이름과 첫 줄에서 읽힌다.
+**결정 1: `order.create`는 락 없는 합류 경로로 부른다.** `OrderCommandFacade`에 `createInCallerTransaction(command)`를 더한다. 지금의 `create`는 `Lock.executeWithLock` 블록이 이 메서드를 감싸는 모양이 된다. 새 메서드는 호출자 트랜잭션에 합류(`REQUIRED`)하고 첫 줄의 `Tx.requireCaller`가 활성 트랜잭션이 없으면 거절한다. 어느 쪽이 잠그는지가 호출부 이름과 첫 줄에서 읽힌다.
 - 문제: `create`가 `REQUIRES_NEW`로 스스로 커밋해 §4.6의 "항목 하나 = 커밋 하나"가 깨진다.
 - 제약: sync는 단말별 `t_sync_watermark` 행을 잠그고 항목을 처리한다. 순번 판정과 전진이 같은 잠금 아래서 직렬화돼야 하기 때문이다. "한 경로에서 기다리는 수단은 하나"(도메인 모델 §4.7 질문 6) 규칙상 그 안에서 Redis 락을 또 기다릴 수 없다.
 - 수단: sync 경로의 줄 세우기는 watermark 행 잠금이 맡는다. 같은 단말의 두 배치는 항목 단위로 직렬화되고 뒤 배치는 `DUPLICATE`를 받는다. HTTP `create`와 sync가 같은 `(terminalId, clientOrderId)`로 겹치는 경합은 unique `(terminal_id, client_order_id)`가 막는다. 진 쪽이 sync 항목이면 그 항목 트랜잭션이 롤백되고 배치가 오류 응답을 받으며, 재전송 때 `create`의 멱등 조회가 기존 주문을 돌려준다.
 - `PaymentManagement.createAttempt`는 sync의 동기 경로에 없다. 단말의 결제 요청은 `order.requestCheckout`이고 시도 생성은 `OrderPaymentRequested` 이벤트가 잇는다. 이 PR은 결제 쪽 코드를 바꾸지 않는다.
 
-**결정 2: `Lock.executeWithLock` 첫 줄에 바깥 트랜잭션 거절 `check`를 넣는다.** `executeWithLockNoTx`와 같은 한 줄이다. 지금 호출처 둘(HTTP `create`, Kafka 리스너의 `createAttempt`)은 모두 트랜잭션 밖이라 깨지지 않는다. `REQUIRES_NEW`와 `Tx.newTx`는 그대로 둔다. 바깥이 없으니 `REQUIRED`와 같지만 지우는 일은 이 PR의 목표가 아니다.
+**결정 2: `Lock.executeWithLock` 첫 줄에 바깥 트랜잭션 거절을 넣는다.** `executeWithLockNoTx`와 같은 한 줄이다. 트랜잭션 존재를 묻는 Spring API(`TransactionSynchronizationManager`)는 `platform.Tx`에만 두고 호출부는 `Tx.requireCaller(이름)`·`Tx.requireNoCaller(이름)`로 읽는다(개발 중 사용자 요청). `executeWithLockNoTx`의 기존 직접 호출도 같은 헬퍼로 옮긴다. 지금 호출처 둘(HTTP `create`, Kafka 리스너의 `createAttempt`)은 모두 트랜잭션 밖이라 깨지지 않는다. `REQUIRES_NEW`와 `Tx.newTx`는 그대로 둔다. 바깥이 없으니 `REQUIRED`와 같지만 지우는 일은 이 PR의 목표가 아니다.
 
 **결정 3: 이 PR의 operation 종류는 `CREATE_ORDER` 하나다.** 종류 필드와 컬럼을 두지 않는다. `REQUEST_CHECKOUT`은 단말이 아는 `clientOrderId`로 checkout을 요청하는 `order` 공개 계약이 먼저 필요해서 다음 PR이 종류를 하나 늘리며 함께 정한다.
 
@@ -68,6 +68,7 @@
 - src/main/kotlin/com/resilientpos/sync/**
 - src/main/kotlin/com/resilientpos/order/OrderCommandFacade.kt
 - src/main/kotlin/com/resilientpos/platform/Lock.kt
+- src/main/kotlin/com/resilientpos/platform/Tx.kt
 - src/main/resources/db/migration/V010__sync_intake.sql
 - src/test/kotlin/com/resilientpos/**
 - docs/spec/2026-09-30-sync-intake.md
@@ -114,7 +115,7 @@ create table t_sync_operation (
     terminal_id uuid not null,
     operation_id uuid not null,
     sequence bigint not null,
-    payload_hash char(64) not null,
+    payload_hash varchar(64) not null,
     status varchar(32) not null,
     order_id uuid,
     error_code varchar(64),
@@ -127,6 +128,7 @@ create table t_sync_operation (
 
 매핑은 `t_fulfillment`와 같은 구성이다(`UUID`↔`uuid`, `Long`↔`bigint`, enum은 `EnumType.STRING`, `Instant`↔`timestamptz`, `deleted_at`은 `BaseEntity`의 `@SoftDelete`). `ddl-auto: validate`가 통합 테스트의 컨텍스트 기동에서 대조한다.
 
+- 질문 0(대체 수단): Spring Modulith가 제공하는 것은 나가는 이벤트의 Event Publication Registry(리스너별 기록·완료 추적)와 externalization이고, 들어오는 명령의 inbox·멱등 소비·순번 추적은 없다. Registry는 업무 키 unique와 잠글 행이 없고 응답에 실을 판정도 만들지 않아 이 두 표를 대신하지 못한다. 도메인 모델 §4.3의 "processed-event 보조 테이블을 만들지 않는다"는 내부 이벤트 소비 이야기이고, §4.7 사례가 sync 접수 기록을 예외로 허용했다.
 - 질문 1(도출): watermark는 `t_sync_operation`의 `max(sequence)`와 같지만 그 집계로 대신하지 않는다. 항목마다 잠글 행이 필요하고(질문 6) 집계는 잠글 수 없다. 접수 사실·payload hash·판정은 다른 어디에도 없다. `order_id`는 `t_order`에 `(terminal_id, client_order_id)`로 있지만 sync는 `order`의 테이블을 읽지 않는다(모듈 경계).
 - 질문 2(읽는 코드): `last_acked_sequence`는 판정이, `payload_hash`는 `DUPLICATE`/`CONFLICT` 판정이, `status`·`order_id`·`error_code`는 `DUPLICATE` 응답이 읽는다. `sequence`는 응답·판정이 읽지 않는다 — 접수 기록이 어느 순번이었는지는 `CONFLICT`를 조사할 때 사람이 읽는 값이고, 없으면 "확정된 순번을 모르는 operationId"를 사후에 설명할 수 없다. operation 종류 컬럼은 종류가 하나뿐이라 두지 않는다.
 - 질문 3(나중에 채우기): 종류 컬럼은 상수 기본값(`CREATE_ORDER`)으로 기존 행을 채울 수 있다. `REQUEST_CHECKOUT`을 더하는 PR이 붙인다. 행 수가 operation 수를 따라가므로 그때 `lock_timeout`을 둔 메타데이터 변경으로 더한다.
@@ -158,7 +160,12 @@ create table t_sync_operation (
 ## TDD 검증 기록
 | 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
 |---|---|---|---|
-| 개발 전에 테스트 의도를 적고 실행 후 관측 결과를 기록 | 미실행 | 미실행 | 미실행 |
+| 인수 8, `LockIntegrationTest`의 `바깥 트랜잭션 안에서 부르면 잠그기 전에 거절한다`(#68 인수 2 테스트를 대체) | `./gradlew test --tests 'com.resilientpos.platform.LockIntegrationTest' --tests 'com.resilientpos.order.OrderCommandFacadeCallerTransactionTest'`. 거절 없이 성공해 `AssertionFailedError`("Expected IllegalStateException ... completed successfully") | 같은 명령. `Lock.executeWithLock` 첫 줄에 거절을 넣은 뒤 통과 | 거절을 `Tx.requireNoCaller`로 옮긴 뒤 `./gradlew test --tests 'com.resilientpos.platform.Lock*' --tests 'com.resilientpos.order.OrderCommandFacade*'` 통과 |
+| 인수 7, `OrderCommandFacadeCallerTransactionTest`의 `트랜잭션 밖에서 부르면 저장소를 건드리기 전에 거절한다` | 같은 명령. 검사 없는 최소 선언으로 실행. 저장소 mock까지 진행해 `NullPointerException`(saved가 null)으로 `AssertionFailedError` | 같은 명령. 첫 줄에 거절을 넣은 뒤 통과 | 위와 같은 회귀 통과. `./gradlew test --tests 'com.resilientpos.order.*'`에서 `OrderRequestCheckoutIntegrationTest`의 잠금 대기 테스트가 한 번 `Transaction timeout expired`로 실패했으나(Docker 첫 기동 직후 5분 20초 실행) 단독 재실행에서 통과했다. 변경과 무관한 경로다 |
+| 인수 11, `WatermarkTest` 5개 | `./gradlew test --tests 'com.resilientpos.sync.*'`. 판정이 늘 `NEXT`, 전진이 `this`인 최소 선언으로 실행. 4개가 `AssertionFailedError`(expected GAP/ACKED but was NEXT, expected 3 but was 2) | 같은 명령. `judge`·`advance`를 채운 뒤 통과 | `./gradlew test --tests 'com.resilientpos.sync.*'` 통과 |
+| 인수 1~6·9, `SyncCommandFacadeIntegrationTest` 7개 | `./gradlew test --tests 'com.resilientpos.sync.*' --tests 'com.resilientpos.SchemaMigrationTest'`. 영속화·마이그레이션은 갖추고 Facade만 모든 항목을 `GAP`으로 돌려주는 최소 선언으로 실행. 7개 모두 `AssertionFailedError`(expected APPLIED/DUPLICATE/CONFLICT/REJECTED but was GAP, 예외 기대 실패). 컨텍스트는 떠서 V010과 `validate`는 통과했다 | 같은 명령. 판정·적용·기록·전진과 상한을 채운 뒤 7개 통과. `SchemaMigrationTest`는 테이블·버전 목록에 010을 더한 뒤 통과 | `./gradlew test --tests 'com.resilientpos.sync.*'` 통과(16개) |
+| 인수 6(항목 트랜잭션 하나), `접수 기록 저장이 실패하면 그 항목의 주문 행도 남지 않는다` | 위와 같은 RED. 같은 `operationId`를 다른 순번·다른 주문으로 두 번 보내 둘째 항목이 주문을 넣은 뒤 접수 기록 unique에 걸리게 했다. 최소 선언은 예외를 내지 않아 실패 | `DataIntegrityViolationException`이 나고 둘째 주문 행이 0건, watermark가 1로 통과 | 위와 같다 |
+| 인수 10, `SyncControllerTest` 3개·`SyncApiIntegrationTest` 1개 | `./gradlew test --tests 'com.resilientpos.sync.internal.adapter.web.*'`. Facade를 부르지 않고 빈 응답을 돌려주는 최소 Controller로 실행. 4개 모두 실패(lastAckedSequence expected 1/7 but was 0, status expected 400 but was 200, expected APPLIED but was 빈 문자열) | 같은 명령. 커맨드 변환과 Facade 호출을 채운 뒤 통과. 스니펫 `sync-receive-batch`·`sync-receive-batch-too-large`가 `build/generated-snippets`에 생겼다 | `./gradlew test --tests 'com.resilientpos.sync.*'` 통과(16개) |
 
 ## 결과
 개발 전 작성. 개발 후 실행 결과와 변경 이유를 추가한다.
