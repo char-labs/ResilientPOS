@@ -72,6 +72,33 @@ class SyncApiIntegrationTest(
         assertEquals("REQUEST_CHECKOUT", jdbcTemplate.queryForObject<String>("select kind from t_sync_operation where operation_id = ?", checkoutOperationId))
     }
 
+    @Test
+    fun `모르는 통화와 Int 범위를 넘는 수량의 항목은 배치 400이 아니라 각각 REJECTED이고 정상 항목은 적용된다`() {
+        val terminalId = UUID.randomUUID()
+        val body = """
+            { "operations": [
+              { "operationId": "${UUID.randomUUID()}", "sequence": 1, "kind": "CREATE_ORDER",
+                "order": { "storeId": "${UUID.randomUUID()}", "clientOrderId": "${UUID.randomUUID()}", "currency": "ZZZ",
+                           "lines": [{ "productCode": "SKU-1", "productName": "아메리카노", "unitPrice": "4500", "quantity": 2 }] } },
+              { "operationId": "${UUID.randomUUID()}", "sequence": 2, "kind": "CREATE_ORDER",
+                "order": { "storeId": "${UUID.randomUUID()}", "clientOrderId": "${UUID.randomUUID()}", "currency": "KRW",
+                           "lines": [{ "productCode": "SKU-1", "productName": "아메리카노", "unitPrice": "4500", "quantity": 2147483648 }] } },
+              { "operationId": "${UUID.randomUUID()}", "sequence": 3, "kind": "CREATE_ORDER",
+                "order": { "storeId": "${UUID.randomUUID()}", "clientOrderId": "${UUID.randomUUID()}", "currency": "KRW",
+                           "lines": [{ "productCode": "SKU-1", "productName": "아메리카노", "unitPrice": "4500", "quantity": 2 }] } }
+            ] }
+        """.trimIndent()
+
+        val response = objectMapper.readTree(post(terminalId, body))
+
+        assertEquals("REJECTED", response.at("/data/items/0/status").asString())
+        assertEquals("UNSUPPORTED_CURRENCY", response.at("/data/items/0/errorCode").asString())
+        assertEquals("REJECTED", response.at("/data/items/1/status").asString())
+        assertEquals("INVALID_QUANTITY", response.at("/data/items/1/errorCode").asString())
+        assertEquals("APPLIED", response.at("/data/items/2/status").asString())
+        assertEquals(3, response.at("/data/lastAckedSequence").asInt())
+    }
+
     private fun post(terminalId: UUID, body: String): String =
         mockMvc.post("/v1/terminals/$terminalId/sync") {
             contentType = MediaType.APPLICATION_JSON

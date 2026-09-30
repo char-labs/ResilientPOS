@@ -1,5 +1,6 @@
 package com.resilientpos.sync.internal.domain
 
+import com.resilientpos.foundation.DomainException
 import com.resilientpos.foundation.Money
 import com.resilientpos.order.ClientOrderId
 import com.resilientpos.order.OrderCommand
@@ -9,14 +10,14 @@ import java.math.BigDecimal
 import java.util.Currency
 
 /**
- * `CREATE_ORDER` operation이 실어 온 주문 내용. 단말이 보낸 값을 다듬지 않고 그대로 든다(단가는 raw `BigDecimal`).
- * `order` 명령으로 바꾸는 일([toCommand])은 항목 트랜잭션 안에서 한다 — `Money.of`의 거절(자릿수·범위·통화)이 배치 전체의 400이
+ * `CREATE_ORDER` operation이 실어 온 주문 내용. 단말이 보낸 값을 다듬지 않고 그대로 든다(통화는 raw 문자열, 수량은 `Long`, 단가는 raw `BigDecimal`).
+ * `order` 명령으로 바꾸는 일([toCommand])은 항목 트랜잭션 안에서 한다 — `Money.of`의 거절(자릿수·범위)과 통화 코드·수량 범위의 거절이 배치 전체의 400이
  * 아니라 그 항목의 `REJECTED`가 되어야 단말이 그 항목을 버리고 나아간다.
  */
 data class OrderPayload(
     val storeId: StoreId,
     val clientOrderId: ClientOrderId,
-    val currency: Currency,
+    val currency: String,
     val lines: List<Line>,
 ) : OperationPayload {
     override val kind = SyncOperationKind.CREATE_ORDER
@@ -25,21 +26,36 @@ data class OrderPayload(
         val productCode: String,
         val productName: String,
         val unitPrice: BigDecimal,
-        val quantity: Int,
+        val quantity: Long,
     )
 
-    /** `order` 공개 명령으로 바꾼다. 금액 규칙에 어긋나면 `DomainException`이다. */
-    fun toCommand(terminalId: TerminalId): OrderCommand.Create = OrderCommand.Create(
-        storeId = storeId,
-        terminalId = terminalId,
-        clientOrderId = clientOrderId,
-        currency = currency,
-        lines = lines.map { OrderCommand.Create.Line(it.productCode, it.productName, Money.of(it.unitPrice, currency), it.quantity) },
-    )
+    companion object {
+        /** `order`의 code와 같은 이름이다. 단말이 같은 거절로 읽게 하려는 것이고 같다는 것은 테스트가 지킨다. */
+        const val INVALID_QUANTITY = "INVALID_QUANTITY"
+    }
+
+    /** `order` 공개 명령으로 바꾼다. 통화·수량·금액 규칙에 어긋나면 `DomainException`이다. */
+    fun toCommand(terminalId: TerminalId): OrderCommand.Create {
+        // Currency.getInstance가 IllegalArgumentException으로만 거절하므로 예외를 제어 흐름으로 쓰는 범위를 이 한 줄로 좁힌다.
+        val currency = runCatching { Currency.getInstance(currency) }
+            .getOrElse { throw DomainException(Money.UNSUPPORTED_CURRENCY, "지원하지 않는 통화 코드입니다") }
+        return OrderCommand.Create(
+            storeId = storeId,
+            terminalId = terminalId,
+            clientOrderId = clientOrderId,
+            currency = currency,
+            lines = lines.map {
+                if (it.quantity !in Int.MIN_VALUE..Int.MAX_VALUE) {
+                    throw DomainException(INVALID_QUANTITY, "수량이 허용 범위를 넘습니다")
+                }
+                OrderCommand.Create.Line(it.productCode, it.productName, Money.of(it.unitPrice, currency), it.quantity.toInt())
+            },
+        )
+    }
 
     /**
      * 재전송 판정에 쓰는 SHA-256 hex. 종류 이름을 앞에 두고 필드마다 `길이:값;`으로 잇는다 — 길이 접두어라 값 안의 구분자가 경계를
-     * 섞지 않고, 종류 접두어라 둘째 종류가 생겨도 기존 hash가 그대로다. 단가는 raw 표기 그대로라 `Money`의 표현과 무관하다.
+     * 섞지 않고, 종류 접두어라 둘째 종류가 생겨도 기존 hash가 그대로다. 통화·수량·단가는 raw 값 그대로라 `Currency`·`Money`의 표현과 무관하다(통화는 문자열, 수량은 십진 표기).
      * 단가는 `toString()` 표기다. scale이 0 이상이고 조정 지수가 -6 이상인 값(`4500`, `4500.50`)은 `toPlainString()`과 같은 문자열이다.
      * 그 밖의 값(`1E+3`, `0.0000001`, 소수 0이 일곱 개 이상인 0)은 지수 표기로 들어간다. hash는 `Money`의 거절보다 먼저 도는데
      * `toPlainString()`은 큰 지수를 자릿수만큼 펴서 메모리를 다 쓰므로 쓰지 않는다(`CheckoutPayload`와 같다).
@@ -51,7 +67,7 @@ data class OrderPayload(
             add(kind.name)
             add(storeId.value.toString())
             add(clientOrderId.value.toString())
-            add(currency.currencyCode)
+            add(currency)
             lines.forEach { line ->
                 add(line.productCode)
                 add(line.productName)

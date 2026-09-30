@@ -236,6 +236,35 @@ class OrderTest {
     }
 
     @Test
+    fun `상품 코드와 상품명에 NUL 문자가 있으면 각각 INVALID_PRODUCT_CODE와 INVALID_PRODUCT_NAME으로 거절한다`() {
+        val codeFailure = assertFailsWith<DomainException> {
+            Order.create(createOrderCommand(lines = listOf(orderLine(productCode = "X\u0000Y"))), FixedIdentifierGenerator(emptyList()), now)
+        }
+        val nameFailure = assertFailsWith<DomainException> {
+            Order.create(createOrderCommand(lines = listOf(orderLine(productName = "아메\u0000리카노"))), FixedIdentifierGenerator(emptyList()), now)
+        }
+
+        assertEquals(OrderLine.INVALID_PRODUCT_CODE, codeFailure.code)
+        assertEquals(OrderLine.INVALID_PRODUCT_NAME, nameFailure.code)
+        assertEquals(DomainErrorKind.INVALID, codeFailure.kind)
+        assertEquals(DomainErrorKind.INVALID, nameFailure.kind)
+        assertTrue(codeFailure.message.isNotBlank())
+        assertTrue(nameFailure.message.isNotBlank())
+    }
+
+    @Test
+    fun `NUL이 아닌 제어 문자는 상품 코드와 상품명에서 통과한다`() {
+        val created = Order.create(
+            createOrderCommand(lines = listOf(orderLine(productCode = "A\tB", productName = "아메\n리카노"))),
+            FixedIdentifierGenerator(emptyList()),
+            now,
+        )
+
+        assertEquals("A\tB", created.aggregate.lines.single().productCode)
+        assertEquals("아메\n리카노", created.aggregate.lines.single().productName)
+    }
+
+    @Test
     fun `앞뒤 공백이 있는 상품 코드와 상품명은 다듬지 않고 받는다`() {
         val command = createOrderCommand(lines = listOf(orderLine(productCode = " SKU-1 ", productName = " 아메리카노 ")))
 

@@ -1,25 +1,32 @@
 package com.resilientpos.sync.internal.domain
 
+import com.resilientpos.foundation.DomainErrorKind
+import com.resilientpos.foundation.DomainException
+import com.resilientpos.foundation.Money
 import com.resilientpos.order.ClientOrderId
+import com.resilientpos.order.internal.domain.OrderLine
 import com.resilientpos.store.StoreId
+import com.resilientpos.terminal.TerminalId
 import java.math.BigDecimal
-import java.util.Currency
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNotEquals
 
 class PayloadHashTest {
 
     private val clientOrderId = ClientOrderId(UUID.fromString("00000000-0000-0000-0000-000000000002"))
 
+    private val terminalId = TerminalId(UUID.fromString("00000000-0000-0000-0000-000000000003"))
+
     private val amount = BigDecimal("3502")
 
     private val order = OrderPayload(
         storeId = StoreId(UUID.fromString("00000000-0000-0000-0000-000000000001")),
         clientOrderId = clientOrderId,
-        currency = Currency.getInstance("KRW"),
-        lines = listOf(OrderPayload.Line("SKU-1", "아메리카노", BigDecimal("1001"), 2)),
+        currency = "KRW",
+        lines = listOf(OrderPayload.Line("SKU-1", "아메리카노", BigDecimal("1001"), 2L)),
     )
 
     @Test
@@ -29,8 +36,8 @@ class PayloadHashTest {
     }
 
     private fun orderWithUnitPrice(currency: String, unitPrice: String) = order.copy(
-        currency = Currency.getInstance(currency),
-        lines = listOf(OrderPayload.Line("SKU-1", "아메리카노", BigDecimal(unitPrice), 2)),
+        currency = currency,
+        lines = listOf(OrderPayload.Line("SKU-1", "아메리카노", BigDecimal(unitPrice), 2L)),
     )
 
     @Test
@@ -101,6 +108,38 @@ class PayloadHashTest {
     fun `같은 clientOrderId를 가진 OrderPayload와 CheckoutPayload의 hash는 다르다`() {
         assertNotEquals(order.hash(), CheckoutPayload(clientOrderId, amount).hash())
     }
+
+    @Test
+    fun `toCommand는 ISO 4217에 없는 통화와 소문자 통화를 UNSUPPORTED_CURRENCY로 거절한다`() {
+        listOf("ZZZ", "krw").forEach { currency ->
+            val failure = assertFailsWith<DomainException> { order.copy(currency = currency).toCommand(terminalId) }
+
+            assertEquals(Money.UNSUPPORTED_CURRENCY, failure.code)
+            assertEquals(DomainErrorKind.INVALID, failure.kind)
+        }
+    }
+
+    @Test
+    fun `toCommand는 Int 범위 밖의 수량을 INVALID_QUANTITY로 거절하고 범위 안의 값은 넘긴다`() {
+        listOf(2147483648L, -2147483649L).forEach { quantity ->
+            val failure = assertFailsWith<DomainException> { orderWithQuantity(quantity).toCommand(terminalId) }
+
+            assertEquals(OrderLine.INVALID_QUANTITY, failure.code)
+            assertEquals(DomainErrorKind.INVALID, failure.kind)
+        }
+
+        assertEquals(Int.MAX_VALUE, orderWithQuantity(2147483647L).toCommand(terminalId).lines.single().quantity)
+        // 범위 안의 0과 음수는 order가 판정한다.
+        assertEquals(0, orderWithQuantity(0L).toCommand(terminalId).lines.single().quantity)
+        assertEquals(-1, orderWithQuantity(-1L).toCommand(terminalId).lines.single().quantity)
+    }
+
+    @Test
+    fun `sync의 INVALID_QUANTITY는 order의 code와 같은 이름이다`() {
+        assertEquals(OrderLine.INVALID_QUANTITY, OrderPayload.INVALID_QUANTITY)
+    }
+
+    private fun orderWithQuantity(quantity: Long) = order.copy(lines = listOf(OrderPayload.Line("SKU-1", "아메리카노", BigDecimal("1001"), quantity)))
 
     @Test
     fun `payload는 자기 종류를 돌려준다`() {

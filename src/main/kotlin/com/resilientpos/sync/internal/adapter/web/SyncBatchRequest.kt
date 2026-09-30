@@ -9,7 +9,6 @@ import com.resilientpos.sync.internal.domain.CheckoutPayload
 import com.resilientpos.sync.internal.domain.OrderPayload
 import com.resilientpos.terminal.TerminalId
 import java.math.BigDecimal
-import java.util.Currency
 import java.util.UUID
 
 /**
@@ -60,7 +59,7 @@ sealed interface SyncOperationRequest {
 data class SyncOrderRequest(
     val storeId: UUID,
     val clientOrderId: UUID,
-    val currency: Currency,
+    val currency: String,
     val lines: List<SyncOrderLineRequest>,
 ) {
     fun toPayload(): OrderPayload = OrderPayload(
@@ -76,7 +75,7 @@ data class SyncOrderLineRequest(
     val productCode: String,
     val productName: String,
     val unitPrice: BigDecimal,
-    val quantity: Int,
+    val quantity: Long,
 ) {
     fun toPayload(): OrderPayload.Line = OrderPayload.Line(productCode, productName, unitPrice, quantity)
 }

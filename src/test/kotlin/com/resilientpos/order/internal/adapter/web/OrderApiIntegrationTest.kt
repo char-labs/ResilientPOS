@@ -7,6 +7,7 @@ import com.resilientpos.order.orderStatus
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc
 import org.springframework.http.MediaType
@@ -154,6 +155,24 @@ class OrderApiIntegrationTest(
         post(body).andExpect {
             status { isBadRequest() }
             jsonPath("$.error.errorCode") { value("PRODUCT_NAME_TOO_LONG") }
+        }
+
+        assertEquals(0L, orderRowCount(clientOrderId))
+    }
+
+    @Test
+    fun `productName에 NUL 문자가 있는 line은 400 INVALID_PRODUCT_NAME이고 t_order에 행이 생기지 않는다`() {
+        val clientOrderId = UUID.randomUUID()
+        // JSON 이스케이프 \u0000 여섯 글자가 본문에 그대로 들어간다. 실제 NUL 문자가 들어가면 JSON 파서가 먼저 거절한다.
+        val body = requestJson(
+            clientOrderId,
+            lines = """{ "productCode": "SKU-1", "productName": "아메\u0000리카노", "unitPrice": "4500", "quantity": 2 }""",
+        )
+        assertTrue(body.contains("\\u0000") && !body.contains('\u0000'))
+
+        post(body).andExpect {
+            status { isBadRequest() }
+            jsonPath("$.error.errorCode") { value("INVALID_PRODUCT_NAME") }
         }
 
         assertEquals(0L, orderRowCount(clientOrderId))

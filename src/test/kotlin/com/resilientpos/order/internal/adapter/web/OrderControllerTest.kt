@@ -290,8 +290,8 @@ class OrderControllerTest(
         )
 
         private val LINE_FIELDS: List<FieldDescriptor> = listOf(
-            fieldWithPath("lines[].productCode").type(JsonFieldType.STRING).description("상품 코드. 비어 있거나 공백뿐이면 BLANK_PRODUCT_CODE, 64자를 넘으면 PRODUCT_CODE_TOO_LONG"),
-            fieldWithPath("lines[].productName").type(JsonFieldType.STRING).description("상품명. 비어 있거나 공백뿐이면 BLANK_PRODUCT_NAME, 255자를 넘으면 PRODUCT_NAME_TOO_LONG"),
+            fieldWithPath("lines[].productCode").type(JsonFieldType.STRING).description("상품 코드. 비어 있거나 공백뿐이면 BLANK_PRODUCT_CODE, 64자를 넘으면 PRODUCT_CODE_TOO_LONG, NUL 문자가 있으면 INVALID_PRODUCT_CODE"),
+            fieldWithPath("lines[].productName").type(JsonFieldType.STRING).description("상품명. 비어 있거나 공백뿐이면 BLANK_PRODUCT_NAME, 255자를 넘으면 PRODUCT_NAME_TOO_LONG, NUL 문자가 있으면 INVALID_PRODUCT_NAME"),
             fieldWithPath("lines[].unitPrice").type(JsonFieldType.STRING).description("단가. 주문 통화 기준 decimal string"),
             fieldWithPath("lines[].quantity").type(JsonFieldType.NUMBER).description("수량"),
         )
