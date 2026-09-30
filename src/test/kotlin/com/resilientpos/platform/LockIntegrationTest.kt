@@ -16,7 +16,11 @@ import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.data.redis.core.StringRedisTemplate
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.jdbc.core.queryForObject
+import org.springframework.transaction.PlatformTransactionManager
+import org.springframework.transaction.TransactionDefinition
 import org.springframework.transaction.support.TransactionOperations
+import org.springframework.transaction.support.TransactionSynchronizationManager
+import org.springframework.transaction.support.TransactionTemplate
 
 /**
  * [Lock] 블록이 같은 키끼리 줄 서고, 블록의 트랜잭션을 커밋한 뒤에 풀리는지 본다. 실제 Redis와 PostgreSQL을 쓴다.
@@ -28,7 +32,12 @@ class LockIntegrationTest(
     @Autowired private val transactions: TransactionOperations,
     @Autowired private val distributedLock: DistributedLock,
     @Autowired private val redis: StringRedisTemplate,
+    @Autowired transactionManager: PlatformTransactionManager,
 ) : PostgresIntegrationTest() {
+
+    private val requiresNew = TransactionTemplate(transactionManager).apply {
+        propagationBehavior = TransactionDefinition.PROPAGATION_REQUIRES_NEW
+    }
 
     @BeforeTest
     fun createProbe() {
@@ -97,6 +106,32 @@ class LockIntegrationTest(
         }
 
         assertEquals(0, probes(id))
+        assertFalse(redis.hasKey(key))
+    }
+
+    @Test
+    fun `트랜잭션 없는 블록은 줄만 세우고 쓰기는 각자 바로 커밋한다`() {
+        val key = "test:lock:${UUID.randomUUID()}"
+        val id = UUID.randomUUID()
+
+        val seenFromAnotherConnection = Lock.executeWithLockNoTx(key) {
+            assertFalse(TransactionSynchronizationManager.isActualTransactionActive())
+            insertProbe(id)
+            // 블록이 끝나기 전에 새 트랜잭션(다른 커넥션)으로 읽는다. 블록이 트랜잭션 안이면 커밋 전이라 0이다.
+            requiresNew.execute { probes(id) }
+        }
+
+        assertEquals(1, seenFromAnotherConnection)
+        assertFalse(redis.hasKey(key))
+    }
+
+    @Test
+    fun `트랜잭션 없는 블록을 트랜잭션 안에서 부르면 잠그기 전에 거절한다`() {
+        val key = "test:lock:${UUID.randomUUID()}"
+
+        assertFailsWith<IllegalStateException> {
+            transactions.executeWithoutResult { Lock.executeWithLockNoTx(key) { } }
+        }
         assertFalse(redis.hasKey(key))
     }
 
