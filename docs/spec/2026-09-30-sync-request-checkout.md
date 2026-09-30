@@ -146,7 +146,8 @@ alter table t_sync_operation
 ## TDD 검증 기록
 | 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
 |---|---|---|---|
-| 인수 1·2, `clientOrderId`로 checkout을 요청한다 | 미실행 | 미실행 | 미실행 |
+| 인수 1, `OrderRequestCheckoutIntegrationTest`의 `clientOrderId로 requestCheckout하면 orderId 경로와 같은 결과이고 재요청은 행을 늘리지 않는다` | `./gradlew test --tests 'com.resilientpos.order.internal.application.OrderRequestCheckoutIntegrationTest'`. 커맨드·오버로드·포트를 선언하고 어댑터의 잠금 조회가 늘 null을 돌려주는 최소 선언으로 실행. `DomainException: 주문을 찾을 수 없습니다`로 실패 | 같은 명령. 어댑터를 `(terminal_id, client_order_id)` 잠금 조회로 채운 뒤 통과(11개) | `./gradlew test --tests 'com.resilientpos.order.*'` 통과(95개) |
+| 인수 2, 같은 클래스의 `clientOrderId의 주문이 없거나 다른 단말의 키면 ORDER_NOT_FOUND다` | RED 미관측. 늘 null을 돌려주는 최소 선언이 기대와 같은 결과를 내 통과했다 | 같은 명령. 실제 키 조회에서도 통과 | 위와 같은 회귀 통과 |
 | 인수 8, `CheckoutPayload` hash와 `OrderPayload` hash 고정 | 미실행 | 미실행 | 미실행 |
 | 인수 3~7·10, sync Facade의 `REQUEST_CHECKOUT` 판정과 `kind` 기록 | 미실행 | 미실행 | 미실행 |
 | 인수 9, Controller의 `kind` 분기와 REST Docs | 미실행 | 미실행 | 미실행 |

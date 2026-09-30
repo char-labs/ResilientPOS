@@ -58,6 +58,15 @@ object OrderCommand {
     }
 
     /**
+     * 단말이 아는 `clientOrderId`로 찾는 주문의 결제 요청. `OrderCommandFacade.requestCheckout`의 오버로드 입력이고
+     * 결과는 [RequestCheckout.Result]를 그대로 쓴다. `orderId`를 모르는 sync 경로가 쓴다.
+     */
+    data class RequestCheckoutByClientOrderId(
+        val terminalId: TerminalId,
+        val clientOrderId: ClientOrderId,
+    )
+
+    /**
      * 결제 승인을 주문에 반영한다. `OrderCommandFacade.markPaid`의 입력이고 `PaymentApproved`의 값을 그대로 옮긴다.
      */
     data class MarkPaid(

@@ -6,6 +6,7 @@ import com.resilientpos.foundation.DomainErrorKind
 import com.resilientpos.foundation.DomainException
 import com.resilientpos.foundation.Money
 import com.resilientpos.ofType
+import com.resilientpos.order.ClientOrderId
 import com.resilientpos.order.OrderCommand
 import com.resilientpos.order.OrderCommandFacade
 import com.resilientpos.order.OrderFixtures
@@ -16,6 +17,7 @@ import com.resilientpos.order.checkoutRowCount
 import com.resilientpos.order.internal.domain.Order
 import com.resilientpos.order.internal.domain.OrderRepository
 import com.resilientpos.order.orderStatus
+import com.resilientpos.terminal.TerminalId
 import java.sql.Timestamp
 import java.util.Currency
 import java.util.UUID
@@ -229,5 +231,45 @@ class OrderRequestCheckoutIntegrationTest(
 
         assertEquals(orderId, retried.orderId)
         assertEquals(OrderStatus.CHECKOUT_REQUESTED, retried.status)
+    }
+
+    @Test
+    fun `clientOrderId로 requestCheckout하면 orderId 경로와 같은 결과이고 재요청은 행을 늘리지 않는다`() {
+        val createCommand = OrderFixtures.createOrderCommand()
+        val orderId = facade.create(createCommand).orderId
+        val byKey = OrderCommand.RequestCheckoutByClientOrderId(createCommand.terminalId, createCommand.clientOrderId)
+
+        val first = facade.requestCheckout(byKey)
+        val second = facade.requestCheckout(byKey)
+
+        assertEquals(OrderCommand.RequestCheckout.Result(orderId, OrderStatus.CHECKOUT_REQUESTED, 1, fixtureTotal), first)
+        assertEquals(first, facade.requestCheckout(OrderCommand.RequestCheckout(orderId)))
+        assertEquals(first, second)
+        assertEquals("CHECKOUT_REQUESTED", storedStatus(orderId))
+        assertEquals(1L, checkoutRowCount(orderId))
+    }
+
+    @Test
+    fun `clientOrderId의 주문이 없거나 다른 단말의 키면 ORDER_NOT_FOUND다`() {
+        val createCommand = OrderFixtures.createOrderCommand()
+        val orderId = facade.create(createCommand).orderId
+
+        val unknownKey = assertFailsWith<DomainException> {
+            facade.requestCheckout(
+                OrderCommand.RequestCheckoutByClientOrderId(createCommand.terminalId, ClientOrderId(UUID.randomUUID())),
+            )
+        }
+        val otherTerminal = assertFailsWith<DomainException> {
+            facade.requestCheckout(
+                OrderCommand.RequestCheckoutByClientOrderId(TerminalId(UUID.randomUUID()), createCommand.clientOrderId),
+            )
+        }
+
+        assertEquals(Order.ORDER_NOT_FOUND, unknownKey.code)
+        assertEquals(DomainErrorKind.NOT_FOUND, unknownKey.kind)
+        assertEquals(Order.ORDER_NOT_FOUND, otherTerminal.code)
+        assertEquals(DomainErrorKind.NOT_FOUND, otherTerminal.kind)
+        assertEquals("OPEN", storedStatus(orderId))
+        assertEquals(0L, checkoutRowCount(orderId))
     }
 }
