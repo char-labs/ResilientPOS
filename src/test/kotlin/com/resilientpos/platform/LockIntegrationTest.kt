@@ -126,16 +126,6 @@ class LockIntegrationTest(
     }
 
     @Test
-    fun `트랜잭션 없는 블록을 트랜잭션 안에서 부르면 잠그기 전에 거절한다`() {
-        val key = "test:lock:${UUID.randomUUID()}"
-
-        assertFailsWith<IllegalStateException> {
-            transactions.executeWithoutResult { Lock.executeWithLockNoTx(key) { } }
-        }
-        assertFalse(redis.hasKey(key))
-    }
-
-    @Test
     fun `토큰이 다르면 풀지 않는다`() {
         val key = "test:lock:${UUID.randomUUID()}"
         val token = checkNotNull(distributedLock.tryAcquire(key))

@@ -20,6 +20,10 @@ import org.hibernate.annotations.JdbcTypeCode
 import org.hibernate.type.SqlTypes
 
 /**
+ * 역할: 주문 하나의 소유 단말·매장·통화·상태(`OPEN`→`CHECKOUT_REQUESTED`→`PAID`). 합계는 컬럼이 아니라 line에서 접는다.
+ * 관계: `OrderLineEntity`·`OrderCheckoutEntity`가 `orderId`로 이 행을 가리킨다. `payment`·`fulfillment`·`sync`도 `order_id`로 가리키지만 이 표를 읽지 않는다.
+ * 흐름: 단말의 `POST /v1/orders`(또는 sync 항목)에서 line과 함께 생기고, checkout 요청에서 `CHECKOUT_REQUESTED`, 결제 승인 이벤트에서 `PAID`가 된다. 전체 지도는 `docs/wiki/entity-map.md`.
+ *
  * `Order` aggregate 루트의 JPA 매핑. `data class`가 아니고 생성은 `from`, 변경은 `apply`만 한다(도메인 규칙 §5).
  * 전 필드가 `var`에 `protected set`이다. `allOpen`이 `@Entity`에 걸려 있어 멤버가 open이라 Kotlin이 `private set`을 금지하고,
  * 영속 필드를 `val`로 두면 JVM final이 되어 Jakarta Persistence 3.2 §2.2 금지와 bytecode enhancement 비호환에 걸린다.
