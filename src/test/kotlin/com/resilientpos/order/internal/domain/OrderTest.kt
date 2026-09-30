@@ -188,6 +188,54 @@ class OrderTest {
     }
 
     @Test
+    fun `productCode가 64자면 통과하고 65자면 PRODUCT_CODE_TOO_LONG으로 거절한다`() {
+        val atLimit = Order.create(createOrderCommand(lines = listOf(orderLine(productCode = "S".repeat(64)))), FixedIdentifierGenerator(emptyList()), now)
+        assertEquals(64, atLimit.aggregate.lines.single().productCode.length)
+
+        val failure = assertFailsWith<DomainException> {
+            Order.create(createOrderCommand(lines = listOf(orderLine(productCode = "S".repeat(65)))), FixedIdentifierGenerator(emptyList()), now)
+        }
+
+        assertEquals(OrderLine.PRODUCT_CODE_TOO_LONG, failure.code)
+        assertEquals(DomainErrorKind.INVALID, failure.kind)
+        assertTrue(failure.message.contains("64"))
+    }
+
+    @Test
+    fun `productName이 255자면 통과하고 256자면 PRODUCT_NAME_TOO_LONG으로 거절한다`() {
+        val atLimit = Order.create(createOrderCommand(lines = listOf(orderLine(productName = "가".repeat(255)))), FixedIdentifierGenerator(emptyList()), now)
+        assertEquals(255, atLimit.aggregate.lines.single().productName.length)
+
+        val failure = assertFailsWith<DomainException> {
+            Order.create(createOrderCommand(lines = listOf(orderLine(productName = "가".repeat(256)))), FixedIdentifierGenerator(emptyList()), now)
+        }
+
+        assertEquals(OrderLine.PRODUCT_NAME_TOO_LONG, failure.code)
+        assertEquals(DomainErrorKind.INVALID, failure.kind)
+        assertTrue(failure.message.contains("255"))
+    }
+
+    @Test
+    fun `길이 상한은 UTF-16 길이가 아니라 문자 수로 센다`() {
+        // 이모지 하나는 surrogate pair라 length는 2지만 PostgreSQL varchar(n)에서는 한 글자다.
+        val emoji = "😀"
+        val name = Order.create(createOrderCommand(lines = listOf(orderLine(productName = emoji.repeat(255)))), FixedIdentifierGenerator(emptyList()), now)
+        assertEquals(510, name.aggregate.lines.single().productName.length)
+        val code = Order.create(createOrderCommand(lines = listOf(orderLine(productCode = emoji.repeat(64)))), FixedIdentifierGenerator(emptyList()), now)
+        assertEquals(128, code.aggregate.lines.single().productCode.length)
+
+        val nameFailure = assertFailsWith<DomainException> {
+            Order.create(createOrderCommand(lines = listOf(orderLine(productName = emoji.repeat(256)))), FixedIdentifierGenerator(emptyList()), now)
+        }
+        val codeFailure = assertFailsWith<DomainException> {
+            Order.create(createOrderCommand(lines = listOf(orderLine(productCode = emoji.repeat(65)))), FixedIdentifierGenerator(emptyList()), now)
+        }
+
+        assertEquals(OrderLine.PRODUCT_NAME_TOO_LONG, nameFailure.code)
+        assertEquals(OrderLine.PRODUCT_CODE_TOO_LONG, codeFailure.code)
+    }
+
+    @Test
     fun `앞뒤 공백이 있는 상품 코드와 상품명은 다듬지 않고 받는다`() {
         val command = createOrderCommand(lines = listOf(orderLine(productCode = " SKU-1 ", productName = " 아메리카노 ")))
 

@@ -132,6 +132,22 @@ class OrderApiIntegrationTest(
     }
 
     @Test
+    fun `productName이 256자인 line은 400 PRODUCT_NAME_TOO_LONG이고 t_order에 행이 생기지 않는다`() {
+        val clientOrderId = UUID.randomUUID()
+        val body = requestJson(
+            clientOrderId,
+            lines = """{ "productCode": "SKU-1", "productName": "${"가".repeat(256)}", "unitPrice": "4500", "quantity": 2 }""",
+        )
+
+        post(body).andExpect {
+            status { isBadRequest() }
+            jsonPath("$.error.errorCode") { value("PRODUCT_NAME_TOO_LONG") }
+        }
+
+        assertEquals(0L, orderRowCount(clientOrderId))
+    }
+
+    @Test
     fun `같은 storeId terminalId clientOrderId로 수량만 다른 요청을 이어서 보내면 두 번째는 409 IDEMPOTENCY_CONFLICT다`() {
         val storeId = UUID.randomUUID()
         val terminalId = UUID.randomUUID()

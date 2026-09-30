@@ -40,6 +40,9 @@ data class OrderPayload(
     /**
      * 재전송 판정에 쓰는 SHA-256 hex. 종류 이름을 앞에 두고 필드마다 `길이:값;`으로 잇는다 — 길이 접두어라 값 안의 구분자가 경계를
      * 섞지 않고, 종류 접두어라 둘째 종류가 생겨도 기존 hash가 그대로다. 단가는 raw 표기 그대로라 `Money`의 표현과 무관하다.
+     * 단가는 `toString()` 표기다. scale이 0 이상이고 지수 표기가 필요 없는 값(`4500`, `4500.50`)은 `toPlainString()`과 같은 문자열이라
+     * 평문 표기 입력의 hash는 그대로이고 지수 표기 입력(`1E+3`)만 다르다. hash는 `Money`의 거절보다 먼저 도는데 `toPlainString()`은
+     * 큰 지수를 자릿수만큼 펴서 메모리를 다 쓰므로 쓰지 않는다(`CheckoutPayload`와 같다).
      * 이 공식은 `t_sync_operation.payload_hash`의 저장 형식이다. 바꾸면 확정된 operation의 재전송이 모두 conflict가 되므로
      * 형식 버전 없이 바꾸지 않는다. line 순서가 다르면 다른 hash다. 단말은 저장한 봉투를 그대로 다시 보낸다.
      */
@@ -52,7 +55,7 @@ data class OrderPayload(
             lines.forEach { line ->
                 add(line.productCode)
                 add(line.productName)
-                add(line.unitPrice.toPlainString())
+                add(line.unitPrice.toString())
                 add(line.quantity.toString())
             }
         }

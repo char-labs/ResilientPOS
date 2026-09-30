@@ -192,8 +192,8 @@ class OrderCommandFacadeIntegrationTest(
     @Test
     fun `트랜잭션 밖에서 부른 save가 line INSERT에서 실패하면 주문 행도 남지 않는다`() {
         val order = newOrder()
-        // t_order_line.product_code는 varchar(64)다. 길이는 도메인이 아직 거절하지 않아서 INSERT에서 실패한다.
-        val tooLong = OrderLine(OrderLineId(UUID.randomUUID()), "X".repeat(65), "긴 코드", Money.of("100", OrderFixtures.krw), 1)
+        // NUL 문자는 PostgreSQL text에 들어갈 수 없다. 도메인이 거절하지 않는 값이라 INSERT에서 실패한다.
+        val tooLong = OrderLine(OrderLineId(UUID.randomUUID()), "X\u0000Y", "NUL 코드", Money.of("100", OrderFixtures.krw), 1)
 
         assertFailsWith<DataIntegrityViolationException> { repository.save(order.restored(lines = order.lines + tooLong)) }
 

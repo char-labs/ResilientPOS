@@ -28,6 +28,31 @@ class PayloadHashTest {
         assertEquals("d3e729322e5b43637c3b68457459f4b68ac51bda672ab4406c48c7450c81e9b9", order.hash())
     }
 
+    private fun orderWithUnitPrice(currency: String, unitPrice: String) = order.copy(
+        currency = Currency.getInstance(currency),
+        lines = listOf(OrderPayload.Line("SKU-1", "아메리카노", BigDecimal(unitPrice), 2)),
+    )
+
+    @Test
+    fun `OrderPayload의 hash는 지수 표기 단가를 toString 그대로 넣는다`() {
+        // toPlainString이면 단가 필드가 4:1000;이 되어 이 값과 다르다.
+        // python3 hashlib.sha256("12:CREATE_ORDER;36:00000000-0000-0000-0000-000000000001;36:00000000-0000-0000-0000-000000000002;3:KRW;5:SKU-1;5:아메리카노;4:1E+3;1:2;")로 따로 구한 값이다.
+        assertEquals("b42655b725652e278f28ec26a6ece0dad477a39f6c8e5c10b1abaa8371d4facd", orderWithUnitPrice("KRW", "1E+3").hash())
+    }
+
+    @Test
+    fun `OrderPayload의 hash는 소수 단가의 평문 표기를 그대로 넣는다`() {
+        // python3 hashlib.sha256("12:CREATE_ORDER;36:00000000-0000-0000-0000-000000000001;36:00000000-0000-0000-0000-000000000002;3:USD;5:SKU-1;5:아메리카노;7:4500.50;1:2;")로 따로 구한 값이다.
+        assertEquals("f9f4504f48d1243840e7f0ce58118a153bca5ee0d6fb04bec1ee8d8e9e04e0c4", orderWithUnitPrice("USD", "4500.50").hash())
+    }
+
+    @Test
+    fun `OrderPayload의 hash는 극단적인 지수의 단가도 지수를 펴지 않고 끝난다`() {
+        // toPlainString이면 자릿수만큼 펴서 메모리를 다 쓴다.
+        assertEquals(64, orderWithUnitPrice("KRW", "1E+999999999").hash().length)
+        assertEquals(64, orderWithUnitPrice("KRW", "1E-999999999").hash().length)
+    }
+
     @Test
     fun `CheckoutPayload의 hash는 같은 clientOrderId에 같고 다른 clientOrderId에 다르다`() {
         val other = ClientOrderId(UUID.fromString("00000000-0000-0000-0000-000000000003"))

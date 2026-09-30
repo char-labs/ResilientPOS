@@ -248,6 +248,43 @@ class SyncCommandFacadeIntegrationTest(
     }
 
     @Test
+    fun `컬럼 길이를 넘는 상품명은 DB 오류가 아니라 거절이고 순번은 확정되며 다음 항목은 적용된다`() {
+        val tooLong = payload().let { it.copy(lines = listOf(it.lines.first().copy(productName = "가".repeat(256)))) }
+
+        val result = receive(operation(1, tooLong), operation(2))
+
+        assertEquals(listOf(SyncItemStatus.REJECTED, SyncItemStatus.APPLIED), result.items.map { it.status })
+        assertEquals(OrderLine.PRODUCT_NAME_TOO_LONG, result.items[0].errorCode)
+        assertEquals(2, result.lastAckedSequence)
+        assertEquals(2, storedWatermark())
+        assertEquals(1, orderRows())
+    }
+
+    @Test
+    fun `컬럼 길이를 넘는 상품 코드는 DB 오류가 아니라 거절이고 순번은 확정되며 다음 항목은 적용된다`() {
+        val tooLong = payload().let { it.copy(lines = listOf(it.lines.first().copy(productCode = "S".repeat(65)))) }
+
+        val result = receive(operation(1, tooLong), operation(2))
+
+        assertEquals(listOf(SyncItemStatus.REJECTED, SyncItemStatus.APPLIED), result.items.map { it.status })
+        assertEquals(OrderLine.PRODUCT_CODE_TOO_LONG, result.items[0].errorCode)
+        assertEquals(2, storedWatermark())
+        assertEquals(1, orderRows())
+    }
+
+    @Test
+    fun `극단적인 지수의 단가는 지수를 펴지 않고 INVALID_MONEY_AMOUNT 거절이며 다음 항목은 적용된다`() {
+        val hugeExponent = payload().let { it.copy(lines = listOf(it.lines.first().copy(unitPrice = BigDecimal("1E+999999999")))) }
+
+        val result = receive(operation(1, hugeExponent), operation(2))
+
+        assertEquals(listOf(SyncItemStatus.REJECTED, SyncItemStatus.APPLIED), result.items.map { it.status })
+        assertEquals("INVALID_MONEY_AMOUNT", result.items[0].errorCode)
+        assertEquals(2, storedWatermark())
+        assertEquals(1, orderRows())
+    }
+
+    @Test
     fun `접수 기록 저장이 실패하면 그 항목의 주문 행도 남지 않는다`() {
         // 순번 2의 접수 기록을 잠금 밖에서 미리 넣어 둔다(수동 수정을 흉내 낸다). 둘째 항목은 주문을 넣은 뒤 접수 기록의
         // unique (terminal_id, sequence)에 걸려 커밋에 실패한다. 항목 트랜잭션이 하나라면 그 주문 행도 함께 롤백된다.
