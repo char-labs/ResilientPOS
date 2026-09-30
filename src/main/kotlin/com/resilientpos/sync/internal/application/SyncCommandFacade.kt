@@ -1,0 +1,114 @@
+package com.resilientpos.sync.internal.application
+
+import com.resilientpos.foundation.DomainException
+import com.resilientpos.foundation.IdentifierGenerator
+import com.resilientpos.order.OrderCommandFacade
+import com.resilientpos.platform.Tx
+import com.resilientpos.platform.logger
+import com.resilientpos.sync.internal.domain.SyncOperation
+import com.resilientpos.sync.internal.domain.SyncOperationStatus
+import com.resilientpos.sync.internal.domain.SyncRepository
+import com.resilientpos.sync.internal.domain.Watermark
+import com.resilientpos.terminal.TerminalId
+import org.springframework.stereotype.Service
+
+/**
+ * 단말의 오프라인 operation 배치를 받는 `sync`의 유일한 진입점. 모듈 밖에서 부르는 쪽이 없어 `internal`에 둔다.
+ *
+ * 항목 하나가 로컬 트랜잭션 하나다(도메인 모델 §4.6). 그 안에서 watermark 행을 잠그고 판정하고, 다음 항목이면
+ * `order`의 락 없는 합류 경로([OrderCommandFacade.createInCallerTransaction])를 불러 접수 기록과 watermark 전진까지 한 커밋으로 한다.
+ * 같은 단말의 배치 둘은 이 행 잠금으로 항목 단위 직렬화된다. 한 경로에서 기다리는 수단은 이 잠금 하나다.
+ *
+ * 인프라 실패(잠금 대기 초과·DB 장애·unique 위반)는 항목 결과가 아니다. 그 항목 트랜잭션은 롤백되고 예외가 배치 전체를 실패시킨다.
+ * 이미 커밋된 앞 항목은 남고 재전송 때 `DUPLICATE`로 돌아온다.
+ */
+@Service
+class SyncCommandFacade(
+    private val repository: SyncRepository,
+    private val orders: OrderCommandFacade,
+    private val identifierGenerator: IdentifierGenerator,
+) {
+
+    fun receiveBatch(command: SyncCommand.ReceiveBatch): SyncCommand.ReceiveBatch.Result {
+        // 가장 싼 거절을 가장 먼저 한다. 상한을 넘는 배치는 Redis도 커넥션도 건드리지 않는다.
+        if (command.operations.size > MAX_OPERATIONS) {
+            throw DomainException(SYNC_BATCH_TOO_LARGE, "한 배치의 operation은 ${MAX_OPERATIONS}개를 넘을 수 없습니다")
+        }
+
+        val items = command.operations.sortedBy { it.sequence }.map { applyOperation(command.terminalId, it) }
+        val lastAckedSequence = Tx.readOnlyTx { repository.findWatermark(command.terminalId) }?.lastAckedSequence ?: 0
+        log.info {
+            val counts = items.groupingBy { it.status }.eachCount()
+            "sync 배치 처리 terminalId=${command.terminalId.value} operations=${items.size} lastAckedSequence=$lastAckedSequence counts=$counts"
+        }
+        return SyncCommand.ReceiveBatch.Result(lastAckedSequence, items)
+    }
+
+    /**
+     * 주문 생성이 도메인 규칙으로 거절되면 그 트랜잭션은 롤백돼 주문 행이 남지 않는다. 같은 판정을 두 번째 트랜잭션으로 다시 돌려
+     * `REJECTED`를 기록하고 순번을 확정한다. 거절은 결정적이라 두 트랜잭션 사이에 죽어도 재전송이 같은 결과를 낸다.
+     * 두 번째 판정에서 순번을 다시 확인하므로 그 사이에 다른 배치가 같은 operation을 확정했으면 `DUPLICATE`·`CONFLICT`로 갈린다.
+     */
+    private fun applyOperation(terminalId: TerminalId, operation: SyncCommand.ReceiveBatch.Operation): SyncCommand.ReceiveBatch.Item {
+        val payloadHash = SyncOperation.payloadHashOf(operation.order)
+        return try {
+            Tx.masterTx {
+                judge(terminalId, operation, payloadHash) {
+                    val created = orders.createInCallerTransaction(operation.order)
+                    SyncOperation.applied(identifierGenerator, terminalId, operation.operationId, operation.sequence, payloadHash, created.orderId)
+                }
+            }
+        } catch (rejected: DomainException) {
+            Tx.masterTx {
+                judge(terminalId, operation, payloadHash) {
+                    SyncOperation.rejected(identifierGenerator, terminalId, operation.operationId, operation.sequence, payloadHash, rejected.code)
+                }
+            }
+        }
+    }
+
+    /** watermark 행을 잠근 채 판정한다. 다음 항목이면 [record]가 만든 접수 기록을 넣고 전진한다. 그 밖은 아무것도 쓰지 않는다. */
+    private fun judge(
+        terminalId: TerminalId,
+        operation: SyncCommand.ReceiveBatch.Operation,
+        payloadHash: String,
+        record: () -> SyncOperation,
+    ): SyncCommand.ReceiveBatch.Item {
+        // ponytail: 행이 없는 새 단말의 첫 배치가 동시에 둘 오면 둘 다 넣다가 진 쪽이 PK 위반으로 배치 오류를 받는다.
+        // 단말이 재전송하면 DUPLICATE다. 첫 배치가 겹치는 단말이 실제로 보이면 insert ... on conflict do nothing 뒤 잠금 조회로 바꾼다.
+        val watermark = repository.findWatermarkForUpdate(terminalId) ?: Watermark.initial(terminalId)
+        return when (watermark.judge(operation.sequence)) {
+            Watermark.Position.NEXT -> {
+                val recorded = repository.saveOperation(record())
+                repository.saveWatermark(watermark.advance())
+                SyncCommand.ReceiveBatch.Item(operation.operationId, recorded.status.toItemStatus(), recorded.orderId, recorded.errorCode)
+            }
+            Watermark.Position.ACKED -> {
+                val recorded = repository.findOperation(terminalId, operation.operationId)
+                if (recorded != null && recorded.matches(payloadHash)) {
+                    SyncCommand.ReceiveBatch.Item(operation.operationId, SyncItemStatus.DUPLICATE, recorded.orderId, recorded.errorCode)
+                } else {
+                    log.warn {
+                        val reason = if (recorded == null) "확정된 순번에 모르는 operation" else "확정된 operation에 다른 내용"
+                        "sync 충돌 terminalId=${terminalId.value} operationId=${operation.operationId} sequence=${operation.sequence} : $reason"
+                    }
+                    SyncCommand.ReceiveBatch.Item(operation.operationId, SyncItemStatus.CONFLICT, null, null)
+                }
+            }
+            Watermark.Position.GAP -> SyncCommand.ReceiveBatch.Item(operation.operationId, SyncItemStatus.GAP, null, null)
+        }
+    }
+
+    private fun SyncOperationStatus.toItemStatus(): SyncItemStatus = when (this) {
+        SyncOperationStatus.APPLIED -> SyncItemStatus.APPLIED
+        SyncOperationStatus.REJECTED -> SyncItemStatus.REJECTED
+    }
+
+    companion object {
+        private val log by logger()
+
+        /** 한 배치에 담을 수 있는 operation 수. 기획 원문의 "500개 batch"를 상한으로 둔다. */
+        const val MAX_OPERATIONS = 500
+        const val SYNC_BATCH_TOO_LARGE = "SYNC_BATCH_TOO_LARGE"
+    }
+}
