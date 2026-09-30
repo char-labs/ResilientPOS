@@ -6,9 +6,7 @@ import com.resilientpos.order.OrderCommand
 import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.TerminalId
 import java.math.BigDecimal
-import java.security.MessageDigest
 import java.util.Currency
-import java.util.HexFormat
 
 /**
  * `CREATE_ORDER` operation이 실어 온 주문 내용. 단말이 보낸 값을 다듬지 않고 그대로 든다(단가는 raw `BigDecimal`).
@@ -20,7 +18,9 @@ data class OrderPayload(
     val clientOrderId: ClientOrderId,
     val currency: Currency,
     val lines: List<Line>,
-) {
+) : OperationPayload {
+    override val kind = SyncOperationKind.CREATE_ORDER
+
     data class Line(
         val productCode: String,
         val productName: String,
@@ -43,9 +43,9 @@ data class OrderPayload(
      * 이 공식은 `t_sync_operation.payload_hash`의 저장 형식이다. 바꾸면 확정된 operation의 재전송이 모두 conflict가 되므로
      * 형식 버전 없이 바꾸지 않는다. line 순서가 다르면 다른 hash다. 단말은 저장한 봉투를 그대로 다시 보낸다.
      */
-    fun hash(): String {
+    override fun hash(): String {
         val fields = buildList {
-            add(KIND)
+            add(kind.name)
             add(storeId.value.toString())
             add(clientOrderId.value.toString())
             add(currency.currencyCode)
@@ -56,12 +56,6 @@ data class OrderPayload(
                 add(line.quantity.toString())
             }
         }
-        val canonical = fields.joinToString(separator = "") { "${it.length}:$it;" }
-        val digest = MessageDigest.getInstance("SHA-256").digest(canonical.toByteArray(Charsets.UTF_8))
-        return HexFormat.of().formatHex(digest)
-    }
-
-    companion object {
-        private const val KIND = "CREATE_ORDER"
+        return lengthPrefixedSha256(fields)
     }
 }

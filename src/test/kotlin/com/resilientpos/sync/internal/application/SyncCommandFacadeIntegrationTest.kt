@@ -8,6 +8,8 @@ import com.resilientpos.order.OrderFixtures
 import com.resilientpos.order.OrderCommandFacade
 import com.resilientpos.order.internal.domain.Order
 import com.resilientpos.order.internal.domain.OrderLine
+import com.resilientpos.sync.internal.domain.CheckoutPayload
+import com.resilientpos.sync.internal.domain.OperationPayload
 import com.resilientpos.sync.internal.domain.OrderPayload
 import com.resilientpos.terminal.TerminalId
 import java.math.BigDecimal
@@ -43,8 +45,24 @@ class SyncCommandFacadeIntegrationTest(
         lines = command.lines.map { OrderPayload.Line(it.productCode, it.productName, it.unitPrice.amount, it.quantity) },
     )
 
-    private fun operation(sequence: Long, order: OrderPayload = payload(), operationId: UUID = UUID.randomUUID()) =
-        SyncCommand.ReceiveBatch.Operation(operationId, sequence, order)
+    private fun operation(sequence: Long, payload: OperationPayload = payload(), operationId: UUID = UUID.randomUUID()) =
+        SyncCommand.ReceiveBatch.Operation(operationId, sequence, payload)
+
+    private fun checkout(sequence: Long, clientOrderId: ClientOrderId, operationId: UUID = UUID.randomUUID()) =
+        operation(sequence, CheckoutPayload(clientOrderId), operationId)
+
+    private fun orderStatus(clientOrderId: ClientOrderId): String? =
+        jdbcTemplate.query("select status from t_order where terminal_id = ? and client_order_id = ?", { rs, _ -> rs.getString(1) }, terminalId.value, clientOrderId.value).firstOrNull()
+
+    private fun checkoutRows(): Long =
+        checkNotNull(
+            jdbcTemplate.queryForObject<Long>(
+                "select count(*) from t_order_checkout where order_id in (select id from t_order where terminal_id = ?)", terminalId.value,
+            ),
+        )
+
+    private fun kinds(): List<String> =
+        jdbcTemplate.queryForList("select kind from t_sync_operation where terminal_id = ? order by sequence", String::class.java, terminalId.value).filterNotNull()
 
     private fun receive(vararg operations: SyncCommand.ReceiveBatch.Operation) =
         facade.receiveBatch(SyncCommand.ReceiveBatch(terminalId, operations.toList()))
@@ -234,6 +252,100 @@ class SyncCommandFacadeIntegrationTest(
         assertEquals(
             0L,
             jdbcTemplate.queryForObject<Long>("select count(*) from t_order where client_order_id = ?", secondOrder.clientOrderId.value),
+        )
+    }
+
+    @Test
+    fun `주문 생성 다음 순번의 결제 요청이 같은 배치로 오면 둘 다 적용되고 주문은 CHECKOUT_REQUESTED다`() {
+        val order = payload()
+
+        val result = receive(operation(1, order), checkout(2, order.clientOrderId))
+
+        assertEquals(listOf(SyncItemStatus.APPLIED, SyncItemStatus.APPLIED), result.items.map { it.status })
+        assertEquals(result.items[0].orderId, result.items[1].orderId)
+        assertEquals("CHECKOUT_REQUESTED", orderStatus(order.clientOrderId))
+        assertEquals(1, checkoutRows())
+        assertEquals(listOf("CREATE_ORDER", "REQUEST_CHECKOUT"), kinds())
+        assertEquals(2, result.lastAckedSequence)
+        assertEquals(2, storedWatermark())
+    }
+
+    @Test
+    fun `결제 요청까지 적용된 배치를 다시 보내면 모두 중복이고 checkout 행과 접수 기록이 늘지 않는다`() {
+        val order = payload()
+        val batch = arrayOf(operation(1, order), checkout(2, order.clientOrderId))
+        val first = receive(*batch)
+
+        val resent = receive(*batch)
+
+        assertEquals(listOf(SyncItemStatus.DUPLICATE, SyncItemStatus.DUPLICATE), resent.items.map { it.status })
+        assertEquals(first.items.map { it.orderId }, resent.items.map { it.orderId })
+        assertEquals(1, checkoutRows())
+        assertEquals(2, operationRows())
+    }
+
+    @Test
+    fun `주문이 없는 clientOrderId의 결제 요청은 ORDER_NOT_FOUND 거절이고 순번은 확정되며 재전송은 같은 거절의 중복이다`() {
+        val missing = checkout(1, ClientOrderId(UUID.randomUUID()))
+
+        val first = receive(missing, operation(2))
+
+        assertEquals(listOf(SyncItemStatus.REJECTED, SyncItemStatus.APPLIED), first.items.map { it.status })
+        assertEquals("ORDER_NOT_FOUND", first.items[0].errorCode)
+        assertNull(first.items[0].orderId)
+        assertEquals(2, first.lastAckedSequence)
+
+        val resent = receive(missing)
+
+        assertEquals(SyncItemStatus.DUPLICATE, resent.items.single().status)
+        assertEquals("ORDER_NOT_FOUND", resent.items.single().errorCode)
+        assertEquals(2, operationRows())
+        assertEquals(0, checkoutRows())
+    }
+
+    @Test
+    fun `확정된 결제 요청 operationId에 다른 clientOrderId가 오거나 주문 생성 operationId가 결제 요청으로 오면 충돌이고 아무것도 바뀌지 않는다`() {
+        val order = payload()
+        val create = operation(1, order)
+        val applied = checkout(2, order.clientOrderId)
+        receive(create, applied)
+
+        val result = receive(
+            checkout(2, ClientOrderId(UUID.randomUUID()), operationId = applied.operationId),
+            checkout(1, order.clientOrderId, operationId = create.operationId),
+        )
+
+        assertEquals(listOf(SyncItemStatus.CONFLICT, SyncItemStatus.CONFLICT), result.items.map { it.status })
+        assertEquals(2, result.lastAckedSequence)
+        assertEquals(1, orderRows())
+        assertEquals(1, checkoutRows())
+        assertEquals(listOf("CREATE_ORDER", "REQUEST_CHECKOUT"), kinds())
+    }
+
+    @Test
+    fun `결제 요청의 접수 기록 저장이 실패하면 checkout 행과 OrderPaymentRequested 발행 기록도 남지 않고 주문은 OPEN이다`() {
+        // kind를 적지 않은 INSERT(이전 버전 인스턴스)가 기본값으로 성공하는 것도 함께 본다.
+        val strayId = UUID.randomUUID()
+        jdbcTemplate.update(
+            "insert into t_sync_operation (id, terminal_id, operation_id, sequence, payload_hash, status, created_at, updated_at) " +
+                "values (?, ?, ?, 2, 'stray', 'APPLIED', now(), now())",
+            strayId, terminalId.value, UUID.randomUUID(),
+        )
+        assertEquals("CREATE_ORDER", jdbcTemplate.queryForObject<String>("select kind from t_sync_operation where id = ?", strayId))
+        val order = payload()
+
+        assertFailsWith<DataIntegrityViolationException> {
+            receive(operation(1, order), checkout(2, order.clientOrderId))
+        }
+
+        assertEquals("OPEN", orderStatus(order.clientOrderId))
+        assertEquals(0, checkoutRows())
+        val orderId = jdbcTemplate.queryForObject<UUID>("select id from t_order where client_order_id = ?", order.clientOrderId.value)
+        assertEquals(
+            0L,
+            jdbcTemplate.queryForObject<Long>(
+                "select count(*) from event_publication where serialized_event like ? and event_type like '%OrderPaymentRequested'", "%$orderId%",
+            ),
         )
     }
 
