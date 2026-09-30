@@ -29,7 +29,7 @@ class SyncApiIntegrationTest(
         val clientOrderId = UUID.randomUUID()
         val body = """
             { "operations": [ {
-                "operationId": "${UUID.randomUUID()}", "sequence": 1,
+                "operationId": "${UUID.randomUUID()}", "sequence": 1, "kind": "CREATE_ORDER",
                 "order": { "storeId": "${UUID.randomUUID()}", "clientOrderId": "$clientOrderId", "currency": "KRW",
                            "lines": [{ "productCode": "SKU-1", "productName": "아메리카노", "unitPrice": "4500", "quantity": 2 }] }
             } ] }
@@ -43,6 +43,33 @@ class SyncApiIntegrationTest(
         assertEquals(first.at("/data/items/0/orderId").asString(), second.at("/data/items/0/orderId").asString())
         assertEquals(1, second.at("/data/lastAckedSequence").asInt())
         assertEquals(1L, jdbcTemplate.queryForObject<Long>("select count(*) from t_order where client_order_id = ?", clientOrderId))
+    }
+
+    @Test
+    fun `주문 생성 다음 순번의 결제 요청을 HTTP로 보내면 둘 다 APPLIED이고 같은 주문이 CHECKOUT_REQUESTED다`() {
+        val terminalId = UUID.randomUUID()
+        val clientOrderId = UUID.randomUUID()
+        val createOperationId = UUID.randomUUID()
+        val checkoutOperationId = UUID.randomUUID()
+        // 합계 3502원은 Fake 게이트웨이가 미확인으로 남겨 비동기 PAID 전이와 경합하지 않는 값이다.
+        val body = """
+            { "operations": [
+              { "operationId": "$createOperationId", "sequence": 1, "kind": "CREATE_ORDER",
+                "order": { "storeId": "${UUID.randomUUID()}", "clientOrderId": "$clientOrderId", "currency": "KRW",
+                           "lines": [{ "productCode": "SKU-1", "productName": "아메리카노", "unitPrice": "1751", "quantity": 2 }] } },
+              { "operationId": "$checkoutOperationId", "sequence": 2, "kind": "REQUEST_CHECKOUT", "clientOrderId": "$clientOrderId" }
+            ] }
+        """.trimIndent()
+
+        val response = objectMapper.readTree(post(terminalId, body))
+
+        assertEquals("APPLIED", response.at("/data/items/0/status").asString())
+        assertEquals("APPLIED", response.at("/data/items/1/status").asString())
+        assertEquals(response.at("/data/items/0/orderId").asString(), response.at("/data/items/1/orderId").asString())
+        assertEquals(2, response.at("/data/lastAckedSequence").asInt())
+        assertEquals("CHECKOUT_REQUESTED", jdbcTemplate.queryForObject<String>("select status from t_order where client_order_id = ?", clientOrderId))
+        assertEquals("CREATE_ORDER", jdbcTemplate.queryForObject<String>("select kind from t_sync_operation where operation_id = ?", createOperationId))
+        assertEquals("REQUEST_CHECKOUT", jdbcTemplate.queryForObject<String>("select kind from t_sync_operation where operation_id = ?", checkoutOperationId))
     }
 
     private fun post(terminalId: UUID, body: String): String =
