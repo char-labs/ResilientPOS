@@ -41,6 +41,15 @@ class PayloadHashTest {
     }
 
     @Test
+    fun `OrderPayload의 hash는 toString이 지수로 적는 값을 그 표기대로 넣는다`() {
+        // 평문으로 온 0.0000000도 toString은 0E-7이다(조정 지수가 -6보다 작다). Money는 0을 받아들이므로 APPLIED가 되는 값이다.
+        // 1E+4는 toEngineeringString(10E+3)과 갈린다.
+        // python3 hashlib으로 위 1E+3 문자열의 단가 필드만 4:0E-7;, 4:1E+4;로 바꿔 따로 구한 값이다.
+        assertEquals("39686be5175ba85282d4773f50a7f21fbf969279a01f4bdb6e664de182b5d3b7", orderWithUnitPrice("KRW", "0.0000000").hash())
+        assertEquals("7964ab44569c3d60207eade97eeedba87b72ef1cc97a60d2f68db183525887ec", orderWithUnitPrice("KRW", "1E+4").hash())
+    }
+
+    @Test
     fun `OrderPayload의 hash는 소수 단가의 평문 표기를 그대로 넣는다`() {
         // python3 hashlib.sha256("12:CREATE_ORDER;36:00000000-0000-0000-0000-000000000001;36:00000000-0000-0000-0000-000000000002;3:USD;5:SKU-1;5:아메리카노;7:4500.50;1:2;")로 따로 구한 값이다.
         assertEquals("f9f4504f48d1243840e7f0ce58118a153bca5ee0d6fb04bec1ee8d8e9e04e0c4", orderWithUnitPrice("USD", "4500.50").hash())

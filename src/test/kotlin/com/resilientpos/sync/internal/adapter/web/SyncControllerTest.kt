@@ -248,8 +248,8 @@ class SyncControllerTest(
             fieldWithPath("operations[].order.storeId").type(JsonFieldType.STRING).optional().description("CREATE_ORDER일 때만 있는 order 객체의 매장 ID(UUID). order 아래 필드는 모두 CREATE_ORDER 항목에만 있다"),
             fieldWithPath("operations[].order.clientOrderId").type(JsonFieldType.STRING).optional().description("단말이 부여한 주문 생성 요청 ID(UUID). 주문 멱등 키"),
             fieldWithPath("operations[].order.currency").type(JsonFieldType.STRING).optional().description("ISO 4217 통화 코드"),
-            fieldWithPath("operations[].order.lines[].productCode").type(JsonFieldType.STRING).optional().description("상품 코드. 64자를 넘으면 그 항목은 REJECTED(PRODUCT_CODE_TOO_LONG)"),
-            fieldWithPath("operations[].order.lines[].productName").type(JsonFieldType.STRING).optional().description("상품명. 비어 있으면 그 항목은 REJECTED(BLANK_PRODUCT_NAME), 255자를 넘으면 REJECTED(PRODUCT_NAME_TOO_LONG)"),
+            fieldWithPath("operations[].order.lines[].productCode").type(JsonFieldType.STRING).optional().description("상품 코드. 비어 있으면 그 항목은 REJECTED(BLANK_PRODUCT_CODE), 64자(문자 수, code point)를 넘으면 REJECTED(PRODUCT_CODE_TOO_LONG)"),
+            fieldWithPath("operations[].order.lines[].productName").type(JsonFieldType.STRING).optional().description("상품명. 비어 있으면 그 항목은 REJECTED(BLANK_PRODUCT_NAME), 255자(문자 수, code point)를 넘으면 REJECTED(PRODUCT_NAME_TOO_LONG)"),
             fieldWithPath("operations[].order.lines[].unitPrice").type(JsonFieldType.STRING).optional().description("단가. 주문 통화 기준 decimal string. 자릿수·범위·통화 규칙에 어긋나면 그 항목이 REJECTED(INVALID_MONEY_SCALE 등)"),
             fieldWithPath("operations[].order.lines[].quantity").type(JsonFieldType.NUMBER).optional().description("수량"),
         )

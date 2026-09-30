@@ -193,9 +193,9 @@ class OrderCommandFacadeIntegrationTest(
     fun `트랜잭션 밖에서 부른 save가 line INSERT에서 실패하면 주문 행도 남지 않는다`() {
         val order = newOrder()
         // NUL 문자는 PostgreSQL text에 들어갈 수 없다. 도메인이 거절하지 않는 값이라 INSERT에서 실패한다.
-        val tooLong = OrderLine(OrderLineId(UUID.randomUUID()), "X\u0000Y", "NUL 코드", Money.of("100", OrderFixtures.krw), 1)
+        val unstorable = OrderLine(OrderLineId(UUID.randomUUID()), "X\u0000Y", "NUL 코드", Money.of("100", OrderFixtures.krw), 1)
 
-        assertFailsWith<DataIntegrityViolationException> { repository.save(order.restored(lines = order.lines + tooLong)) }
+        assertFailsWith<DataIntegrityViolationException> { repository.save(order.restored(lines = order.lines + unstorable)) }
 
         assertEquals(0L, orderRowCount(order.terminalId, order.clientOrderId))
         assertEquals(0L, orderLineRowCount(order.id.value))

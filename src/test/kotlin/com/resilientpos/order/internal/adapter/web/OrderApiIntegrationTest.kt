@@ -89,6 +89,18 @@ class OrderApiIntegrationTest(
     }
 
     @Test
+    fun `상품 코드 64자와 상품명 255자는 이모지여도 저장된다`() {
+        // 도메인은 길이를 code point로 센다. PostgreSQL varchar(n)도 같은 단위로 세는지를 DB로 확인한다.
+        // UTF-16 길이로는 128·510이라, 단위가 어긋나면 도메인은 통과시키고 DB가 거절한다.
+        val clientOrderId = UUID.randomUUID()
+        val line = """{ "productCode": "${"\uD83D\uDE00".repeat(64)}", "productName": "${"\uD83D\uDE00".repeat(255)}", "unitPrice": "4500", "quantity": 1 }"""
+
+        post(requestJson(clientOrderId, lines = line)).andExpect { status { isCreated() } }
+
+        assertEquals(1L, orderRowCount(clientOrderId))
+    }
+
+    @Test
     fun `line 상한을 하나 넘는 주문은 400 TOO_MANY_ORDER_LINES이고 행이 생기지 않는다`() {
         val clientOrderId = UUID.randomUUID()
         val line = """{ "productCode": "SKU-1", "productName": "아메리카노", "unitPrice": "4500", "quantity": 1 }"""

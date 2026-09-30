@@ -48,7 +48,8 @@ data class OrderLine(
 
         /**
          * 컬럼 `t_order_line.product_code varchar(64)`·`product_name varchar(255)`(V002)를 따라간다. 컬럼을 바꾸면 함께 바꾼다.
-         * 길이는 PostgreSQL `varchar(n)`처럼 문자(code point) 수로 센다.
+         * 길이는 PostgreSQL `varchar(n)`처럼 문자(code point) 수로 센다. 저장된 행을 읽을 때도 이 검사를 지나므로 컬럼보다 작게 두면
+         * 이미 저장된 주문이 읽히지 않는다.
          */
         const val MAX_PRODUCT_CODE_LENGTH = 64
         const val MAX_PRODUCT_NAME_LENGTH = 255
