@@ -22,6 +22,7 @@ data class OrderLine(
         if (productName.isBlank()) {
             throw DomainException(BLANK_PRODUCT_NAME, "상품명은 비어 있을 수 없습니다")
         }
+        // NUL은 코드 0번 글자(U+0000)다. 값이 없다는 뜻의 null이 아니라 문자열 안에 든 글자다.
         // PostgreSQL text가 받지 못하는 문자는 NUL 하나라 그것만 본다.
         if (productCode.contains(NUL)) {
             throw DomainException(INVALID_PRODUCT_CODE, "상품 코드에 쓸 수 없는 문자가 있습니다")

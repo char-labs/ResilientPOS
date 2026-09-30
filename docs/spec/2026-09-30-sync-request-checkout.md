@@ -66,6 +66,7 @@
 - 수단: 분기 없이 `toString()`으로 바꾼다. `CheckoutPayload`와 공식이 하나가 된다. 위 조건에 드는 단가의 hash는 그대로다(`PayloadHashTest`의 고정 hex가 그대로 통과한다). 달라지는 것은 scale이 음수인 값(`1E+3`)과 조정 지수가 -6보다 작은 값(`0.0000001`, 소수 0이 일곱 개 이상인 `0.0000000`)이다. 뒤의 것은 평문으로 와도 달라지고, 그중 0은 `Money`가 받아들여 `APPLIED`가 되는 값이다. 범위를 미리 거절하는 검사는 두지 않는다. 거절은 지금처럼 항목 트랜잭션 안의 `Money`가 한다.
 
 **결정 7: 상품 코드·상품명의 NUL 문자를 `OrderLine`이 거절한다(범위 조정, 결정 5 뒤 추가).**
+- 용어: NUL 문자는 코드 0번 글자(U+0000, JSON으로는 `\u0000`)다. 문자열 안에 든 글자 하나이고, 값이 없다는 뜻의 `null`과 다르다. 필드 값이 `null`인 것은 형식 오류라 배치 400으로 남는다(제외 절).
 - 문제: `\u0000`이 든 값은 PostgreSQL text에 들어가지 못해 커밋에서 `DataIntegrityViolationException`이 된다. 길이 초과와 같은 모양으로 그 단말의 sync를 막는다. sync Facade로 관측했다.
 - 수단: `OrderLine`이 빈 값 검사 다음에 NUL을 검사하고 `INVALID_PRODUCT_CODE`·`INVALID_PRODUCT_NAME`(`INVALID`)으로 던진다. PostgreSQL text가 받지 못하는 문자는 NUL 하나라 그것만 본다. 제어 문자 전반을 막는 규칙은 두지 않는다.
 
