@@ -49,3 +49,8 @@ wiki 표의 서술 한 줄을 바로잡는 한 컨텍스트다. 작업 시작 �
 
 ## 결과
 개발 전 작성. 개발 후 실행 결과를 추가한다.
+
+- `docs/wiki/borrowed-workflows.md` 38행 괄호를 "내부 참조, `/` 메뉴에는 없고 Claude가 자동 호출할 수 있으며 `workflow-reviewer`가 사전 로드"로 바꿨다.
+- 고치기 전에 실제 설정을 대조했다. 스킬 frontmatter는 `user-invocable: false`이고 `disable-model-invocation`은 없다. `workflow-reviewer` 에이전트의 `skills:`에 이 스킬이 있다.
+- `grep -n "자동 호출 안 됨" docs/wiki/borrowed-workflows.md` 결과 없음. `git diff --stat origin/main -- docs/wiki`는 `borrowed-workflows.md` 한 줄 추가·한 줄 삭제.
+- `check_pr.py --base origin/main --worktree` PASS, `check_pr.py --base origin/main` PASS.
