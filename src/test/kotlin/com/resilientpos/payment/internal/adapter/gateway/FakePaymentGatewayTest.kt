@@ -23,6 +23,9 @@ class FakePaymentGatewayTest {
     private fun authorize(amount: String, currency: Currency = krw) =
         gateway.authorize(AuthorizationRequest(paymentId, Money.of(amount, currency)))
 
+    private fun query(amount: String, currency: Currency = krw) =
+        gateway.query(AuthorizationRequest(paymentId, Money.of(amount, currency)))
+
     @Test
     fun `끝자리가 1이면 거절한다`() {
         val outcome = assertIs<AuthorizationOutcome.Declined>(authorize("4501"))
@@ -33,6 +36,37 @@ class FakePaymentGatewayTest {
     @Test
     fun `끝자리가 2이면 결과를 모른다`() {
         assertIs<AuthorizationOutcome.Unknown>(authorize("4502"))
+    }
+
+    @Test
+    fun `끝자리가 3이나 4여도 승인 요청은 결과를 모른다`() {
+        assertIs<AuthorizationOutcome.Unknown>(authorize("4503"))
+        assertIs<AuthorizationOutcome.Unknown>(authorize("4504"))
+    }
+
+    @Test
+    fun `끝자리가 2인 요청을 조회하면 승인이다`() {
+        val outcome = assertIs<AuthorizationOutcome.Approved>(query("4502"))
+
+        assertEquals("FAKE-${paymentId.value}", outcome.providerReference)
+    }
+
+    @Test
+    fun `끝자리가 3인 요청을 조회하면 거절이다`() {
+        val outcome = assertIs<AuthorizationOutcome.Declined>(query("4503"))
+
+        assertEquals("FAKE-${paymentId.value}", outcome.providerReference)
+    }
+
+    @Test
+    fun `끝자리가 4인 요청을 조회하면 여전히 결과를 모른다`() {
+        assertIs<AuthorizationOutcome.Unknown>(query("4504"))
+    }
+
+    @Test
+    fun `끝자리가 2·3·4가 아닌 요청을 조회하면 승인 요청과 같은 답이다`() {
+        assertEquals(authorize("4501"), query("4501"))
+        assertEquals(authorize("4500"), query("4500"))
     }
 
     @Test

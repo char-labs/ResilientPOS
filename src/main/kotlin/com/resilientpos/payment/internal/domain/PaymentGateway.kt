@@ -22,6 +22,17 @@ interface PaymentGateway {
      * 어기고 던지면 시도가 `REQUESTED`로 남아 "아직 부르지 않았다"와 구분되지 않는다 — 돈이 움직였을 수도 있는데.
      */
     fun authorize(request: AuthorizationRequest): AuthorizationOutcome
+
+    /**
+     * 같은 요청(같은 [AuthorizationRequest.paymentId], 곧 provider의 멱등 키)의 결과를 묻는다.
+     * 결과 타입은 [authorize]와 같은 세 갈래이고, [authorize]처럼 던지지 않고 [AuthorizationOutcome.Unknown]을 돌려준다 —
+     * 이때 Unknown은 "조회로도 확인하지 못했다"이다.
+     *
+     * [AuthorizationOutcome.Declined]는 돈이 움직이지 않았다고 provider가 확인한 경우에만 쓴다.
+     * provider의 "그런 요청 없음"을 어느 갈래로 접을지는 실제 PG 어댑터가 정한다.
+     * [AuthorizationRequest.amount]는 조회에 필요 없지만 같은 요청 값을 그대로 넘기려고 싣는다.
+     */
+    fun query(request: AuthorizationRequest): AuthorizationOutcome
 }
 
 /**

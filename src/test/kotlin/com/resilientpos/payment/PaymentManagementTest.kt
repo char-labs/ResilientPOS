@@ -78,6 +78,8 @@ class PaymentManagementTest {
             calls++
             return outcome
         }
+
+        override fun query(request: AuthorizationRequest): AuthorizationOutcome = outcome
     }
 
     /** `repository`를 주면 발행하는 순간까지 몇 번 갱신했는지도 적는다. 저장 → 발행 순서를 본다. */
