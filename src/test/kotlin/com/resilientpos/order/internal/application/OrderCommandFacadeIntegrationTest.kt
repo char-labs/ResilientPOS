@@ -192,10 +192,11 @@ class OrderCommandFacadeIntegrationTest(
     @Test
     fun `트랜잭션 밖에서 부른 save가 line INSERT에서 실패하면 주문 행도 남지 않는다`() {
         val order = newOrder()
-        // t_order_line.product_code는 varchar(64)다. 길이는 도메인이 아직 거절하지 않아서 INSERT에서 실패한다.
-        val tooLong = OrderLine(OrderLineId(UUID.randomUUID()), "X".repeat(65), "긴 코드", Money.of("100", OrderFixtures.krw), 1)
+        // 이미 커밋된 다른 주문의 line ID를 다시 쓰면 도메인 규칙은 지나가고 t_order_line PK 위반으로 INSERT가 실패한다.
+        val committed = newOrder().also { repository.save(it) }
+        val unstorable = OrderLine(committed.lines.first().id, "SKU-X", "중복 ID", Money.of("100", OrderFixtures.krw), 1)
 
-        assertFailsWith<DataIntegrityViolationException> { repository.save(order.restored(lines = order.lines + tooLong)) }
+        assertFailsWith<DataIntegrityViolationException> { repository.save(order.restored(lines = order.lines + unstorable)) }
 
         assertEquals(0L, orderRowCount(order.terminalId, order.clientOrderId))
         assertEquals(0L, orderLineRowCount(order.id.value))

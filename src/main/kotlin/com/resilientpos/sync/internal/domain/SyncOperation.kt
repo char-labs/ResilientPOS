@@ -14,6 +14,7 @@ class SyncOperation private constructor(
     val terminalId: TerminalId,
     val operationId: UUID,
     val sequence: Long,
+    val kind: SyncOperationKind,
     val payloadHash: String,
     val status: SyncOperationStatus,
     val orderId: OrderId?,
@@ -32,20 +33,22 @@ class SyncOperation private constructor(
             terminalId: TerminalId,
             operationId: UUID,
             sequence: Long,
+            kind: SyncOperationKind,
             payloadHash: String,
             orderId: OrderId,
         ): SyncOperation =
-            SyncOperation(SyncOperationId(ids.next()), terminalId, operationId, sequence, payloadHash, SyncOperationStatus.APPLIED, orderId, null)
+            SyncOperation(SyncOperationId(ids.next()), terminalId, operationId, sequence, kind, payloadHash, SyncOperationStatus.APPLIED, orderId, null)
 
         fun rejected(
             ids: IdentifierGenerator,
             terminalId: TerminalId,
             operationId: UUID,
             sequence: Long,
+            kind: SyncOperationKind,
             payloadHash: String,
             errorCode: String,
         ): SyncOperation =
-            SyncOperation(SyncOperationId(ids.next()), terminalId, operationId, sequence, payloadHash, SyncOperationStatus.REJECTED, null, errorCode)
+            SyncOperation(SyncOperationId(ids.next()), terminalId, operationId, sequence, kind, payloadHash, SyncOperationStatus.REJECTED, null, errorCode)
 
         /** 저장된 기록을 그대로 재구성한다. persistence adapter의 `toDomain()`만 부른다. */
         fun restore(
@@ -53,10 +56,11 @@ class SyncOperation private constructor(
             terminalId: TerminalId,
             operationId: UUID,
             sequence: Long,
+            kind: SyncOperationKind,
             payloadHash: String,
             status: SyncOperationStatus,
             orderId: OrderId?,
             errorCode: String?,
-        ): SyncOperation = SyncOperation(id, terminalId, operationId, sequence, payloadHash, status, orderId, errorCode)
+        ): SyncOperation = SyncOperation(id, terminalId, operationId, sequence, kind, payloadHash, status, orderId, errorCode)
     }
 }

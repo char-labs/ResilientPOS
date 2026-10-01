@@ -3,6 +3,7 @@ package com.resilientpos.order
 import com.resilientpos.foundation.Money
 import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.TerminalId
+import java.math.BigDecimal
 import java.util.Currency
 
 /**
@@ -56,6 +57,18 @@ object OrderCommand {
             val amount: Money,
         )
     }
+
+    /**
+     * 단말이 아는 `clientOrderId`로 찾는 주문의 결제 요청. `OrderCommandFacade.requestCheckout`의 오버로드 입력이고
+     * 결과는 [RequestCheckout.Result]를 그대로 쓴다. `orderId`를 모르는 sync 경로가 쓴다.
+     * `clientOrderId`만으로는 단말이 어느 내용의 주문을 가리키는지 알 수 없어 단말이 본 합계 `expectedAmount`를 싣고,
+     * 주문의 확정 금액과 다르면 거절한다. `Money` 변환은 주문의 통화로 `order` 안에서 한다.
+     */
+    data class RequestCheckoutByClientOrderId(
+        val terminalId: TerminalId,
+        val clientOrderId: ClientOrderId,
+        val expectedAmount: BigDecimal,
+    )
 
     /**
      * 결제 승인을 주문에 반영한다. `OrderCommandFacade.markPaid`의 입력이고 `PaymentApproved`의 값을 그대로 옮긴다.

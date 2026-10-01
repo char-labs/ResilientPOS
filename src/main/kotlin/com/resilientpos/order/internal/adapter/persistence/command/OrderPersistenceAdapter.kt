@@ -44,6 +44,16 @@ class OrderPersistenceAdapter(
             selectFrom(OrderEntity::class).where(path(OrderEntity::id).eq(id.value))
         }?.let(::toDomain)
 
+    override fun findByClientOrderIdForUpdate(terminalId: TerminalId, clientOrderId: ClientOrderId): Order? =
+        queries.findFirstForUpdate {
+            selectFrom(OrderEntity::class).where(
+                and(
+                    path(OrderEntity::terminalId).eq(terminalId.value),
+                    path(OrderEntity::clientOrderId).eq(clientOrderId.value),
+                ),
+            )
+        }?.let(::toDomain)
+
     override fun findByClientOrderId(terminalId: TerminalId, clientOrderId: ClientOrderId): Order? =
         queries.findFirst {
             selectFrom(OrderEntity::class).where(

@@ -2,9 +2,12 @@ package com.resilientpos.sync.internal.application
 
 import com.resilientpos.foundation.DomainException
 import com.resilientpos.foundation.IdentifierGenerator
+import com.resilientpos.order.OrderCommand
 import com.resilientpos.order.OrderCommandFacade
 import com.resilientpos.platform.Tx
 import com.resilientpos.platform.logger
+import com.resilientpos.sync.internal.domain.CheckoutPayload
+import com.resilientpos.sync.internal.domain.OrderPayload
 import com.resilientpos.sync.internal.domain.SyncOperation
 import com.resilientpos.sync.internal.domain.SyncOperationStatus
 import com.resilientpos.sync.internal.domain.SyncRepository
@@ -16,9 +19,10 @@ import org.springframework.stereotype.Service
 /**
  * 단말의 오프라인 operation 배치를 받는 `sync`의 유일한 진입점. 모듈 밖에서 부르는 쪽이 없어 `internal`에 둔다.
  *
- * 항목 하나가 로컬 트랜잭션 하나다(도메인 모델 §4.6). 그 안에서 watermark 행을 잠그고 판정하고, 다음 항목이면
- * `order`의 락 없는 합류 경로([OrderCommandFacade.createInCallerTransaction])를 불러 접수 기록과 watermark 전진까지 한 커밋으로 한다.
- * 같은 단말의 배치 둘은 이 행 잠금으로 항목 단위 직렬화된다. 한 경로에서 기다리는 수단은 이 잠금 하나다.
+ * 항목 하나가 로컬 트랜잭션 하나다(도메인 모델 §4.6). 그 안에서 watermark 행을 잠그고 판정하고, 다음 항목이면 종류에 따라 `order`의
+ * 락 없는 합류 경로([OrderCommandFacade.createInCallerTransaction])나 checkout 요청([OrderCommandFacade.requestCheckout])을 불러
+ * 접수 기록과 watermark 전진까지 한 커밋으로 한다. 같은 단말의 배치 둘은 watermark 행 잠금으로 항목 단위 직렬화된다.
+ * `REQUEST_CHECKOUT` 항목은 그 다음에 주문 행을 잠그지만 순서가 늘 같고 각각 대기 3초다. Redis `Lock`은 이 경로에 없다.
  *
  * 인프라 실패(잠금 대기 초과·DB 장애·unique 위반)는 항목 결과가 아니다. 그 항목 트랜잭션은 롤백되고 예외가 배치 전체를 실패시킨다.
  * 이미 커밋된 앞 항목은 남고 재전송 때 `DUPLICATE`로 돌아온다.
@@ -71,23 +75,27 @@ class SyncCommandFacade(
     }
 
     /**
-     * 주문 내용의 변환(`Money.of`)이나 주문 생성이 도메인 규칙으로 거절되면 그 트랜잭션은 롤백돼 주문 행이 남지 않는다. 같은 판정을 두 번째 트랜잭션으로 다시 돌려
-     * `REJECTED`를 기록하고 순번을 확정한다. 거절은 결정적이라 두 트랜잭션 사이에 죽어도 재전송이 같은 결과를 낸다.
+     * 주문 내용의 변환(통화 코드·수량·`Money.of`), 주문 생성, checkout 요청(주문 없음, 금액 불일치 등)이 도메인 규칙으로 거절되면 그 트랜잭션은 롤백돼 그 항목이 쓴 행이 남지 않는다. 같은 판정을 두 번째 트랜잭션으로 다시 돌려
+     * `REJECTED`를 기록하고 순번을 확정한다. 거절 판정은 대개 결정적이라 두 트랜잭션 사이에 죽어도 재전송이 같은 결과를 낸다. 단 주문 없음(`ORDER_NOT_FOUND`)은 시점에 따라 달라질 수 있어(그 사이 같은 clientOrderId의 주문이 HTTP로 커밋될 수 있다) 그때도 거절이 기록되고, 단말은 새 operationId로 다시 요청한다.
      * 두 번째 판정에서 순번을 다시 확인하므로 그 사이에 다른 배치가 같은 operation을 확정했으면 `DUPLICATE`·`CONFLICT`로 갈린다.
      */
     private fun applyOperation(terminalId: TerminalId, operation: SyncCommand.ReceiveBatch.Operation): SyncCommand.ReceiveBatch.Item {
-        val payloadHash = operation.order.hash()
+        val payloadHash = operation.payload.hash()
         return try {
             Tx.masterTx {
                 judge(terminalId, operation, payloadHash) {
-                    val created = orders.createInCallerTransaction(operation.order.toCommand(terminalId))
-                    SyncOperation.applied(identifierGenerator, terminalId, operation.operationId, operation.sequence, payloadHash, created.orderId)
+                    val payload = operation.payload
+                    val orderId = when (payload) {
+                        is OrderPayload -> orders.createInCallerTransaction(payload.toCommand(terminalId)).orderId
+                        is CheckoutPayload -> orders.requestCheckout(OrderCommand.RequestCheckoutByClientOrderId(terminalId, payload.clientOrderId, payload.amount)).orderId
+                    }
+                    SyncOperation.applied(identifierGenerator, terminalId, operation.operationId, operation.sequence, payload.kind, payloadHash, orderId)
                 }
             }
         } catch (rejected: DomainException) {
             Tx.masterTx {
                 judge(terminalId, operation, payloadHash) {
-                    SyncOperation.rejected(identifierGenerator, terminalId, operation.operationId, operation.sequence, payloadHash, rejected.code)
+                    SyncOperation.rejected(identifierGenerator, terminalId, operation.operationId, operation.sequence, operation.payload.kind, payloadHash, rejected.code)
                 }
             }
         }

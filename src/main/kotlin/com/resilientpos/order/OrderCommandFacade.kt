@@ -63,14 +63,33 @@ class OrderCommandFacade(
      * 이미 요청된 주문이면 도메인이 같은 주문과 빈 이벤트를 돌려주므로 같은 경로로 기존 결과를 돌려준다.
      */
     fun requestCheckout(command: OrderCommand.RequestCheckout): OrderCommand.RequestCheckout.Result = Tx.masterTx {
-        val order = repository.findByIdForUpdate(command.orderId)
-            ?: throw DomainException(Order.ORDER_NOT_FOUND, "주문을 찾을 수 없습니다", DomainErrorKind.NOT_FOUND)
+        confirmCheckout(repository.findByIdForUpdate(command.orderId))
+    }
+
+    /**
+     * 단말이 아는 `clientOrderId`로 주문 행을 잠그고 같은 결제 요청을 한다. `orderId`를 먼저 읽고 다시 잠그지 않으려고
+     * 키로 바로 잠근다. 호출자 트랜잭션이 있으면 합류한다(sync 항목 트랜잭션).
+     * 단말이 본 합계(`expectedAmount`)가 확정 금액과 다르면 `CHECKOUT_AMOUNT_MISMATCH`로 거절한다. 이미 요청된 주문도 같다.
+     */
+    fun requestCheckout(command: OrderCommand.RequestCheckoutByClientOrderId): OrderCommand.RequestCheckout.Result =
+        Tx.masterTx {
+            confirmCheckout(
+                order = repository.findByClientOrderIdForUpdate(command.terminalId, command.clientOrderId),
+                verifyBeforeSave = { it.verifyCheckoutAmount(command.expectedAmount) },
+            )
+        }
+
+    /** `verifyBeforeSave`는 전이한 주문을 저장·발행하기 전에 검사한다. 던지면 아무것도 저장하지 않고 이벤트도 내지 않는다. */
+    private fun confirmCheckout(order: Order?, verifyBeforeSave: (Order) -> Unit = {}): OrderCommand.RequestCheckout.Result {
+        order ?: throw DomainException(Order.ORDER_NOT_FOUND, "주문을 찾을 수 없습니다", DomainErrorKind.NOT_FOUND)
 
         val transition = order.requestCheckout(identifierGenerator, clock.instant())
-        val saved = repository.save(transition.aggregate)
+        verifyBeforeSave(transition.aggregate)
+        // 이벤트가 없는 전이는 바뀐 것이 없다(멱등). 저장하면 자식 SELECT 둘만 다시 나간다.
+        val saved = if (transition.events.isEmpty()) transition.aggregate else repository.save(transition.aggregate)
         transition.events.forEach(eventPublisher::publish)
         val checkout = saved.checkouts.last()
-        OrderCommand.RequestCheckout.Result(saved.id, saved.status, checkout.checkoutNo, checkout.amount)
+        return OrderCommand.RequestCheckout.Result(saved.id, saved.status, checkout.checkoutNo, checkout.amount)
     }
 
     /** 결제 승인을 확정값과 대조해 `PAID`로 전이한다. 다르면 `PAYMENT_APPROVAL_MISMATCH`로 실패한다. */
