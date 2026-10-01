@@ -35,7 +35,7 @@ Claude에서 `/이름`, Codex에서 `$이름`으로 호출한다. 자연어 요�
 | Git | `resilientpos-git` | 브랜치·커밋·push·PR·release PR·머지·충돌·리뷰 조회·이슈·epic (plain git/gh) |
 | | `resilientpos-commit-push` (기존) | commit-only와 push 요청 구분, staged 범위·spec 첫 커밋 보존 |
 | 지침·컨벤션 | `resilientpos-workflow` (확장) | 컨벤션 scaffold, `.claude/rules` 설계, 설계 원칙 룰 설치, 워크플로우 리뷰 |
-| | `resilientpos-agent-design-principles` | Command/Agent/Skill 설계 원칙(내부 참조, 자동 호출 안 됨) |
+| | `resilientpos-agent-design-principles` | Command/Agent/Skill 설계 원칙(내부 참조, `/` 메뉴에는 없고 Claude가 자동 호출할 수 있으며 `workflow-reviewer`가 사전 로드) |
 | 글쓰기 | `resilientpos-communicate`, `resilientpos-humanizer` | 대화 밖 독자용 작문 기준, AI 글쓰기 패턴 교정 |
 | 설정 | `resilientpos-setup` | coding-style/develop-workflow/fleta/git-hooks/statusline 모듈 설치·제거. 명시 요청 시만 |
 
