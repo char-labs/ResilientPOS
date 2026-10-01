@@ -2,12 +2,15 @@ package com.resilientpos.sync.internal.application
 
 import com.resilientpos.PostgresIntegrationTest
 import com.resilientpos.foundation.DomainException
+import com.resilientpos.foundation.Money
 import com.resilientpos.order.ClientOrderId
 import com.resilientpos.order.OrderCommand
 import com.resilientpos.order.OrderFixtures
 import com.resilientpos.order.OrderCommandFacade
 import com.resilientpos.order.internal.domain.Order
 import com.resilientpos.order.internal.domain.OrderLine
+import com.resilientpos.sync.internal.domain.CheckoutPayload
+import com.resilientpos.sync.internal.domain.OperationPayload
 import com.resilientpos.sync.internal.domain.OrderPayload
 import com.resilientpos.terminal.TerminalId
 import java.math.BigDecimal
@@ -39,12 +42,43 @@ class SyncCommandFacadeIntegrationTest(
     private fun payload(command: OrderCommand.Create = OrderFixtures.createOrderCommand(terminalId = terminalId)) = OrderPayload(
         storeId = command.storeId,
         clientOrderId = command.clientOrderId,
-        currency = command.currency,
-        lines = command.lines.map { OrderPayload.Line(it.productCode, it.productName, it.unitPrice.amount, it.quantity) },
+        currency = command.currency.currencyCode,
+        lines = command.lines.map { OrderPayload.Line(it.productCode, it.productName, it.unitPrice.amount, it.quantity.toBigDecimal()) },
     )
 
-    private fun operation(sequence: Long, order: OrderPayload = payload(), operationId: UUID = UUID.randomUUID()) =
-        SyncCommand.ReceiveBatch.Operation(operationId, sequence, order)
+    private fun operation(sequence: Long, payload: OperationPayload = payload(), operationId: UUID = UUID.randomUUID()) =
+        SyncCommand.ReceiveBatch.Operation(operationId, sequence, payload)
+
+    // OrderFixtures 기본 line의 합계(1001 x 2 + 500 x 3)다. 단말이 본 합계로 싣는다.
+    private fun checkout(
+        sequence: Long,
+        clientOrderId: ClientOrderId,
+        operationId: UUID = UUID.randomUUID(),
+        amount: BigDecimal = BigDecimal("3502"),
+    ) = operation(sequence, CheckoutPayload(clientOrderId, amount), operationId)
+
+    private fun orderStatus(clientOrderId: ClientOrderId): String? =
+        jdbcTemplate.query("select status from t_order where terminal_id = ? and client_order_id = ?", { rs, _ -> rs.getString(1) }, terminalId.value, clientOrderId.value).firstOrNull()
+
+    private fun checkoutRows(): Long =
+        checkNotNull(
+            jdbcTemplate.queryForObject<Long>(
+                "select count(*) from t_order_checkout where order_id in (select id from t_order where terminal_id = ?)", terminalId.value,
+            ),
+        )
+
+    private fun kinds(): List<String> =
+        jdbcTemplate.queryForList("select kind from t_sync_operation where terminal_id = ? order by sequence", String::class.java, terminalId.value).filterNotNull()
+
+    /** 주문의 `OrderPaymentRequested` 발행 기록 수. 완료된 기록도 행이 남으므로 발행됐는지를 센다. */
+    private fun paymentRequestedPublications(clientOrderId: ClientOrderId): Long {
+        val orderId = jdbcTemplate.queryForObject<UUID>("select id from t_order where client_order_id = ?", clientOrderId.value)
+        return checkNotNull(
+            jdbcTemplate.queryForObject<Long>(
+                "select count(*) from event_publication where serialized_event like ? and event_type like '%OrderPaymentRequested'", "%$orderId%",
+            ),
+        )
+    }
 
     private fun receive(vararg operations: SyncCommand.ReceiveBatch.Operation) =
         facade.receiveBatch(SyncCommand.ReceiveBatch(terminalId, operations.toList()))
@@ -89,7 +123,7 @@ class SyncCommandFacadeIntegrationTest(
         val order = payload()
         val applied = operation(1, order)
         receive(applied)
-        val changed = order.copy(lines = order.lines.take(1) + order.lines.last().copy(quantity = 9))
+        val changed = order.copy(lines = order.lines.take(1) + order.lines.last().copy(quantity = BigDecimal(9)))
 
         val result = receive(
             operation(1, changed, operationId = applied.operationId),
@@ -166,7 +200,7 @@ class SyncCommandFacadeIntegrationTest(
         // 기존 주문 조회 뒤에 나는 거절이라 첫 트랜잭션이 읽은 것을 롤백하는 경로를 지난다.
         val command = OrderFixtures.createOrderCommand(terminalId = terminalId)
         orders.create(command)
-        val differentContent = payload(command).let { it.copy(lines = listOf(it.lines.first().copy(quantity = 7))) }
+        val differentContent = payload(command).let { it.copy(lines = listOf(it.lines.first().copy(quantity = BigDecimal(7)))) }
 
         val result = receive(operation(1, differentContent))
 
@@ -195,7 +229,7 @@ class SyncCommandFacadeIntegrationTest(
 
     @Test
     fun `주문이 도메인 규칙으로 거절되면 항목은 거절이고 주문 행 없이 순번만 확정되며 재전송은 같은 거절의 중복이다`() {
-        val blankName = payload().let { it.copy(lines = listOf(OrderPayload.Line("SKU-1", " ", BigDecimal("1000"), 1))) }
+        val blankName = payload().let { it.copy(lines = listOf(OrderPayload.Line("SKU-1", " ", BigDecimal("1000"), BigDecimal.ONE))) }
         val rejected = operation(1, blankName)
 
         val first = receive(rejected, operation(2))
@@ -212,6 +246,101 @@ class SyncCommandFacadeIntegrationTest(
         assertEquals(SyncItemStatus.DUPLICATE, resent.items.single().status)
         assertEquals(OrderLine.BLANK_PRODUCT_NAME, resent.items.single().errorCode)
         assertEquals(2, operationRows())
+    }
+
+    @Test
+    fun `컬럼 길이를 넘는 상품명은 DB 오류가 아니라 거절이고 순번은 확정되며 다음 항목은 적용된다`() {
+        val tooLong = payload().let { it.copy(lines = listOf(it.lines.first().copy(productName = "가".repeat(256)))) }
+
+        val result = receive(operation(1, tooLong), operation(2))
+
+        assertEquals(listOf(SyncItemStatus.REJECTED, SyncItemStatus.APPLIED), result.items.map { it.status })
+        assertEquals(OrderLine.PRODUCT_NAME_TOO_LONG, result.items[0].errorCode)
+        assertEquals(2, result.lastAckedSequence)
+        assertEquals(2, storedWatermark())
+        assertEquals(1, orderRows())
+    }
+
+    @Test
+    fun `컬럼 길이를 넘는 상품 코드는 DB 오류가 아니라 거절이고 순번은 확정되며 다음 항목은 적용된다`() {
+        val tooLong = payload().let { it.copy(lines = listOf(it.lines.first().copy(productCode = "S".repeat(65)))) }
+
+        val result = receive(operation(1, tooLong), operation(2))
+
+        assertEquals(listOf(SyncItemStatus.REJECTED, SyncItemStatus.APPLIED), result.items.map { it.status })
+        assertEquals(OrderLine.PRODUCT_CODE_TOO_LONG, result.items[0].errorCode)
+        assertEquals(2, storedWatermark())
+        assertEquals(1, orderRows())
+    }
+
+    @Test
+    fun `NUL 문자가 든 상품명은 DB 오류가 아니라 거절이고 순번은 확정되며 다음 항목은 적용된다`() {
+        val nul = payload().let { it.copy(lines = listOf(it.lines.first().copy(productName = "아메\u0000리카노"))) }
+
+        val result = receive(operation(1, nul), operation(2))
+
+        assertEquals(listOf(SyncItemStatus.REJECTED, SyncItemStatus.APPLIED), result.items.map { it.status })
+        assertEquals(OrderLine.INVALID_PRODUCT_NAME, result.items[0].errorCode)
+        assertEquals(2, storedWatermark())
+        assertEquals(1, orderRows())
+    }
+
+    @Test
+    fun `ISO 4217에 없는 통화는 배치 오류가 아니라 거절이고 순번은 확정되며 다음 항목은 적용된다`() {
+        val unknown = payload().copy(currency = "ZZZ")
+
+        val result = receive(operation(1, unknown), operation(2))
+
+        assertEquals(listOf(SyncItemStatus.REJECTED, SyncItemStatus.APPLIED), result.items.map { it.status })
+        assertEquals(Money.UNSUPPORTED_CURRENCY, result.items[0].errorCode)
+        assertEquals(2, storedWatermark())
+        assertEquals(1, orderRows())
+    }
+
+    @Test
+    fun `코드는 유효하지만 Money가 받지 못하는 통화 XXX는 거절이고 순번은 확정되며 다음 항목은 적용된다`() {
+        val result = receive(operation(1, payload().copy(currency = "XXX")), operation(2))
+
+        assertEquals(listOf(SyncItemStatus.REJECTED, SyncItemStatus.APPLIED), result.items.map { it.status })
+        assertEquals(Money.UNSUPPORTED_CURRENCY, result.items[0].errorCode)
+        assertEquals(2, storedWatermark())
+        assertEquals(1, orderRows())
+    }
+
+    @Test
+    fun `소수 수량은 잘려서 적용되지 않고 거절이며 주문 행이 없고 다음 항목은 적용된다`() {
+        val fractional = payload().let { it.copy(lines = listOf(it.lines.first().copy(quantity = BigDecimal("1.5")))) }
+
+        val result = receive(operation(1, fractional), operation(2))
+
+        assertEquals(listOf(SyncItemStatus.REJECTED, SyncItemStatus.APPLIED), result.items.map { it.status })
+        assertEquals(OrderLine.INVALID_QUANTITY, result.items[0].errorCode)
+        assertEquals(2, storedWatermark())
+        assertEquals(1, orderRows())
+    }
+
+    @Test
+    fun `Int 범위를 넘는 수량은 배치 오류가 아니라 거절이고 순번은 확정되며 다음 항목은 적용된다`() {
+        val tooMany = payload().let { it.copy(lines = listOf(it.lines.first().copy(quantity = BigDecimal("4294967297")))) }
+
+        val result = receive(operation(1, tooMany), operation(2))
+
+        assertEquals(listOf(SyncItemStatus.REJECTED, SyncItemStatus.APPLIED), result.items.map { it.status })
+        assertEquals(OrderLine.INVALID_QUANTITY, result.items[0].errorCode)
+        assertEquals(2, storedWatermark())
+        assertEquals(1, orderRows())
+    }
+
+    @Test
+    fun `극단적인 지수의 단가는 지수를 펴지 않고 INVALID_MONEY_AMOUNT 거절이며 다음 항목은 적용된다`() {
+        val hugeExponent = payload().let { it.copy(lines = listOf(it.lines.first().copy(unitPrice = BigDecimal("1E+999999999")))) }
+
+        val result = receive(operation(1, hugeExponent), operation(2))
+
+        assertEquals(listOf(SyncItemStatus.REJECTED, SyncItemStatus.APPLIED), result.items.map { it.status })
+        assertEquals("INVALID_MONEY_AMOUNT", result.items[0].errorCode)
+        assertEquals(2, storedWatermark())
+        assertEquals(1, orderRows())
     }
 
     @Test
@@ -235,6 +364,166 @@ class SyncCommandFacadeIntegrationTest(
             0L,
             jdbcTemplate.queryForObject<Long>("select count(*) from t_order where client_order_id = ?", secondOrder.clientOrderId.value),
         )
+    }
+
+    @Test
+    fun `주문 생성 다음 순번의 결제 요청이 같은 배치로 오면 둘 다 적용되고 주문은 CHECKOUT_REQUESTED다`() {
+        val order = payload()
+
+        val result = receive(operation(1, order), checkout(2, order.clientOrderId))
+
+        assertEquals(listOf(SyncItemStatus.APPLIED, SyncItemStatus.APPLIED), result.items.map { it.status })
+        assertEquals(result.items[0].orderId, result.items[1].orderId)
+        assertEquals("CHECKOUT_REQUESTED", orderStatus(order.clientOrderId))
+        assertEquals(1, checkoutRows())
+        assertEquals(listOf("CREATE_ORDER", "REQUEST_CHECKOUT"), kinds())
+        assertEquals(2, result.lastAckedSequence)
+        assertEquals(2, storedWatermark())
+        assertEquals(1L, paymentRequestedPublications(order.clientOrderId))
+    }
+
+    @Test
+    fun `같은 clientOrderId의 결제 요청이 새 operationId로 다시 오면 적용되고 주문 행 checkout 행 발행 기록은 그대로다`() {
+        val order = payload()
+
+        val result = receive(operation(1, order), checkout(2, order.clientOrderId), checkout(3, order.clientOrderId))
+
+        assertEquals(listOf(SyncItemStatus.APPLIED, SyncItemStatus.APPLIED, SyncItemStatus.APPLIED), result.items.map { it.status })
+        assertEquals(1, result.items.map { it.orderId }.distinct().size)
+        assertEquals(1, orderRows())
+        assertEquals(1, checkoutRows())
+        assertEquals(3, storedWatermark())
+        assertEquals(1L, paymentRequestedPublications(order.clientOrderId))
+    }
+
+    @Test
+    fun `결제 요청까지 적용된 배치를 다시 보내면 모두 중복이고 checkout 행과 접수 기록이 늘지 않는다`() {
+        val order = payload()
+        val batch = arrayOf(operation(1, order), checkout(2, order.clientOrderId))
+        val first = receive(*batch)
+
+        val resent = receive(*batch)
+
+        assertEquals(listOf(SyncItemStatus.DUPLICATE, SyncItemStatus.DUPLICATE), resent.items.map { it.status })
+        assertEquals(first.items.map { it.orderId }, resent.items.map { it.orderId })
+        assertEquals(1, checkoutRows())
+        assertEquals(2, operationRows())
+    }
+
+    @Test
+    fun `주문이 없는 clientOrderId의 결제 요청은 ORDER_NOT_FOUND 거절이고 순번은 확정되며 재전송은 같은 거절의 중복이다`() {
+        val missing = checkout(1, ClientOrderId(UUID.randomUUID()))
+
+        val first = receive(missing, operation(2))
+
+        assertEquals(listOf(SyncItemStatus.REJECTED, SyncItemStatus.APPLIED), first.items.map { it.status })
+        assertEquals("ORDER_NOT_FOUND", first.items[0].errorCode)
+        assertNull(first.items[0].orderId)
+        assertEquals(2, first.lastAckedSequence)
+
+        val resent = receive(missing)
+
+        assertEquals(SyncItemStatus.DUPLICATE, resent.items.single().status)
+        assertEquals("ORDER_NOT_FOUND", resent.items.single().errorCode)
+        assertEquals(2, operationRows())
+        assertEquals(0, checkoutRows())
+    }
+
+    @Test
+    fun `확정된 결제 요청 operationId에 다른 clientOrderId가 오거나 주문 생성 operationId가 결제 요청으로 오면 충돌이고 아무것도 바뀌지 않는다`() {
+        val order = payload()
+        val create = operation(1, order)
+        val applied = checkout(2, order.clientOrderId)
+        receive(create, applied)
+
+        val result = receive(
+            checkout(2, ClientOrderId(UUID.randomUUID()), operationId = applied.operationId),
+            checkout(1, order.clientOrderId, operationId = create.operationId),
+        )
+
+        assertEquals(listOf(SyncItemStatus.CONFLICT, SyncItemStatus.CONFLICT), result.items.map { it.status })
+        assertEquals(2, result.lastAckedSequence)
+        assertEquals(1, orderRows())
+        assertEquals(1, checkoutRows())
+        assertEquals(listOf("CREATE_ORDER", "REQUEST_CHECKOUT"), kinds())
+    }
+
+    @Test
+    fun `서버에 같은 clientOrderId의 주문이 다른 합계로 있으면 주문 생성은 IDEMPOTENCY_CONFLICT 결제 요청은 CHECKOUT_AMOUNT_MISMATCH 거절이고 주문은 OPEN이다`() {
+        val command = OrderFixtures.createOrderCommand(terminalId = terminalId)
+        orders.create(command)
+        val differentContent = payload(command).let { it.copy(lines = listOf(it.lines.first().copy(quantity = BigDecimal(7)))) }
+
+        // 단말의 합계는 자기가 보낸 내용의 합계(1001 x 7)다. 서버의 확정 금액 3502와 다르다.
+        val result = receive(
+            operation(1, differentContent),
+            checkout(2, command.clientOrderId, amount = BigDecimal("7007")),
+        )
+
+        assertEquals(listOf(SyncItemStatus.REJECTED, SyncItemStatus.REJECTED), result.items.map { it.status })
+        assertEquals(listOf(Order.IDEMPOTENCY_CONFLICT, Order.CHECKOUT_AMOUNT_MISMATCH), result.items.map { it.errorCode })
+        assertEquals("OPEN", orderStatus(command.clientOrderId))
+        assertEquals(0, checkoutRows())
+        assertEquals(0L, paymentRequestedPublications(command.clientOrderId))
+        assertEquals(2, result.lastAckedSequence)
+        assertEquals(2, storedWatermark())
+    }
+
+    @Test
+    fun `금액 불일치로 거절된 결제 요청을 재전송하면 같은 거절의 중복이고 올바른 금액의 새 operation은 적용된다`() {
+        val command = OrderFixtures.createOrderCommand(terminalId = terminalId)
+        orders.create(command)
+        val mismatched = checkout(1, command.clientOrderId, amount = BigDecimal("7007"))
+        receive(mismatched)
+
+        val resent = receive(mismatched)
+
+        assertEquals(SyncItemStatus.DUPLICATE, resent.items.single().status)
+        assertEquals(Order.CHECKOUT_AMOUNT_MISMATCH, resent.items.single().errorCode)
+        assertEquals("OPEN", orderStatus(command.clientOrderId))
+
+        // 단말이 서버 주문의 합계(3502)로 새 operationId·다음 순번을 보내면 적용된다.
+        val corrected = receive(checkout(2, command.clientOrderId, amount = BigDecimal("3502")))
+
+        assertEquals(SyncItemStatus.APPLIED, corrected.items.single().status)
+        assertEquals(2, corrected.lastAckedSequence)
+        assertEquals("CHECKOUT_REQUESTED", orderStatus(command.clientOrderId))
+        assertEquals(1, checkoutRows())
+    }
+
+    @Test
+    fun `확정된 결제 요청 operationId에 다른 amount가 오면 충돌이고 아무것도 바뀌지 않는다`() {
+        val order = payload()
+        val applied = checkout(2, order.clientOrderId)
+        receive(operation(1, order), applied)
+
+        val result = receive(checkout(2, order.clientOrderId, operationId = applied.operationId, amount = BigDecimal("3501")))
+
+        assertEquals(SyncItemStatus.CONFLICT, result.items.single().status)
+        assertEquals(2, result.lastAckedSequence)
+        assertEquals(1, checkoutRows())
+        assertEquals(2, operationRows())
+    }
+
+    @Test
+    fun `결제 요청의 접수 기록 저장이 실패하면 checkout 행과 OrderPaymentRequested 발행 기록도 남지 않고 주문은 OPEN이다`() {
+        // kind를 적지 않은 INSERT(이전 버전 인스턴스)가 기본값으로 성공하는 것도 함께 본다.
+        val strayId = UUID.randomUUID()
+        jdbcTemplate.update(
+            "insert into t_sync_operation (id, terminal_id, operation_id, sequence, payload_hash, status, created_at, updated_at) " +
+                "values (?, ?, ?, 2, 'stray', 'APPLIED', now(), now())",
+            strayId, terminalId.value, UUID.randomUUID(),
+        )
+        assertEquals("CREATE_ORDER", jdbcTemplate.queryForObject<String>("select kind from t_sync_operation where id = ?", strayId))
+        val order = payload()
+
+        assertFailsWith<DataIntegrityViolationException> {
+            receive(operation(1, order), checkout(2, order.clientOrderId))
+        }
+
+        assertEquals("OPEN", orderStatus(order.clientOrderId))
+        assertEquals(0, checkoutRows())
+        assertEquals(0L, paymentRequestedPublications(order.clientOrderId))
     }
 
     @Test

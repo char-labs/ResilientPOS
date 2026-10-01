@@ -12,6 +12,7 @@ import com.resilientpos.contract.OrderPaymentRequested
 import com.resilientpos.order.OrderStatus
 import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.TerminalId
+import java.math.BigDecimal
 import java.time.Instant
 import java.util.Currency
 import java.util.UUID
@@ -184,6 +185,109 @@ class OrderTest {
             assertTrue(failure.message.isNotBlank())
             assertTrue(failure.message != failure.code)
         }
+    }
+
+    @Test
+    fun `productCode가 64자면 통과하고 65자면 PRODUCT_CODE_TOO_LONG으로 거절한다`() {
+        val atLimit = Order.create(createOrderCommand(lines = listOf(orderLine(productCode = "S".repeat(64)))), FixedIdentifierGenerator(emptyList()), now)
+        assertEquals(64, atLimit.aggregate.lines.single().productCode.length)
+
+        val failure = assertFailsWith<DomainException> {
+            Order.create(createOrderCommand(lines = listOf(orderLine(productCode = "S".repeat(65)))), FixedIdentifierGenerator(emptyList()), now)
+        }
+
+        assertEquals(OrderLine.PRODUCT_CODE_TOO_LONG, failure.code)
+        assertEquals(DomainErrorKind.INVALID, failure.kind)
+        assertTrue(failure.message.contains("64"))
+    }
+
+    @Test
+    fun `productName이 255자면 통과하고 256자면 PRODUCT_NAME_TOO_LONG으로 거절한다`() {
+        val atLimit = Order.create(createOrderCommand(lines = listOf(orderLine(productName = "가".repeat(255)))), FixedIdentifierGenerator(emptyList()), now)
+        assertEquals(255, atLimit.aggregate.lines.single().productName.length)
+
+        val failure = assertFailsWith<DomainException> {
+            Order.create(createOrderCommand(lines = listOf(orderLine(productName = "가".repeat(256)))), FixedIdentifierGenerator(emptyList()), now)
+        }
+
+        assertEquals(OrderLine.PRODUCT_NAME_TOO_LONG, failure.code)
+        assertEquals(DomainErrorKind.INVALID, failure.kind)
+        assertTrue(failure.message.contains("255"))
+    }
+
+    @Test
+    fun `길이 상한은 UTF-16 길이가 아니라 문자 수로 센다`() {
+        // 이모지 하나는 surrogate pair라 length는 2지만 PostgreSQL varchar(n)에서는 한 글자다.
+        val emoji = "😀"
+        val name = Order.create(createOrderCommand(lines = listOf(orderLine(productName = emoji.repeat(255)))), FixedIdentifierGenerator(emptyList()), now)
+        assertEquals(510, name.aggregate.lines.single().productName.length)
+        val code = Order.create(createOrderCommand(lines = listOf(orderLine(productCode = emoji.repeat(64)))), FixedIdentifierGenerator(emptyList()), now)
+        assertEquals(128, code.aggregate.lines.single().productCode.length)
+
+        val nameFailure = assertFailsWith<DomainException> {
+            Order.create(createOrderCommand(lines = listOf(orderLine(productName = emoji.repeat(256)))), FixedIdentifierGenerator(emptyList()), now)
+        }
+        val codeFailure = assertFailsWith<DomainException> {
+            Order.create(createOrderCommand(lines = listOf(orderLine(productCode = emoji.repeat(65)))), FixedIdentifierGenerator(emptyList()), now)
+        }
+
+        assertEquals(OrderLine.PRODUCT_NAME_TOO_LONG, nameFailure.code)
+        assertEquals(OrderLine.PRODUCT_CODE_TOO_LONG, codeFailure.code)
+    }
+
+    @Test
+    fun `상품 코드와 상품명에 NUL 문자가 있으면 각각 INVALID_PRODUCT_CODE와 INVALID_PRODUCT_NAME으로 거절한다`() {
+        val codeFailure = assertFailsWith<DomainException> {
+            Order.create(createOrderCommand(lines = listOf(orderLine(productCode = "X\u0000Y"))), FixedIdentifierGenerator(emptyList()), now)
+        }
+        val nameFailure = assertFailsWith<DomainException> {
+            Order.create(createOrderCommand(lines = listOf(orderLine(productName = "아메\u0000리카노"))), FixedIdentifierGenerator(emptyList()), now)
+        }
+
+        assertEquals(OrderLine.INVALID_PRODUCT_CODE, codeFailure.code)
+        assertEquals(OrderLine.INVALID_PRODUCT_NAME, nameFailure.code)
+        assertEquals(DomainErrorKind.INVALID, codeFailure.kind)
+        assertEquals(DomainErrorKind.INVALID, nameFailure.kind)
+        assertTrue(codeFailure.message.isNotBlank())
+        assertTrue(nameFailure.message.isNotBlank())
+    }
+
+    @Test
+    fun `NUL만 든 상품 코드와 상품명은 BLANK가 아니라 INVALID로 거절한다`() {
+        val codeFailure = assertFailsWith<DomainException> {
+            Order.create(createOrderCommand(lines = listOf(orderLine(productCode = "\u0000"))), FixedIdentifierGenerator(emptyList()), now)
+        }
+        val nameFailure = assertFailsWith<DomainException> {
+            Order.create(createOrderCommand(lines = listOf(orderLine(productName = "\u0000"))), FixedIdentifierGenerator(emptyList()), now)
+        }
+
+        assertEquals(OrderLine.INVALID_PRODUCT_CODE, codeFailure.code)
+        assertEquals(OrderLine.INVALID_PRODUCT_NAME, nameFailure.code)
+    }
+
+    @Test
+    fun `NUL과 길이 초과가 겹치면 NUL 거절이 이긴다`() {
+        val codeFailure = assertFailsWith<DomainException> {
+            Order.create(createOrderCommand(lines = listOf(orderLine(productCode = "\u0000" + "A".repeat(100)))), FixedIdentifierGenerator(emptyList()), now)
+        }
+        val nameFailure = assertFailsWith<DomainException> {
+            Order.create(createOrderCommand(lines = listOf(orderLine(productName = "\u0000" + "A".repeat(300)))), FixedIdentifierGenerator(emptyList()), now)
+        }
+
+        assertEquals(OrderLine.INVALID_PRODUCT_CODE, codeFailure.code)
+        assertEquals(OrderLine.INVALID_PRODUCT_NAME, nameFailure.code)
+    }
+
+    @Test
+    fun `NUL이 아닌 제어 문자는 상품 코드와 상품명에서 통과한다`() {
+        val created = Order.create(
+            createOrderCommand(lines = listOf(orderLine(productCode = "A\tB", productName = "아메\n리카노"))),
+            FixedIdentifierGenerator(emptyList()),
+            now,
+        )
+
+        assertEquals("A\tB", created.aggregate.lines.single().productCode)
+        assertEquals("아메\n리카노", created.aggregate.lines.single().productName)
     }
 
     @Test
@@ -397,5 +501,89 @@ class OrderTest {
         assertEquals(OrderStatus.CHECKOUT_REQUESTED, again.aggregate.status)
         assertEquals(requested.checkouts, again.aggregate.checkouts)
         assertEquals(emptyList(), again.events)
+    }
+
+    private fun requestedOrder(): Order {
+        val order = Order.create(
+            createOrderCommand(lines = listOf(orderLine(unitPrice = Money.of("1000", krw), quantity = 2))),
+            FixedIdentifierGenerator(emptyList()),
+            now,
+        ).aggregate
+        return order.requestCheckout(FixedIdentifierGenerator(emptyList()), now).aggregate
+    }
+
+    @Test
+    fun `verifyCheckoutAmount는 최신 회차의 확정 금액과 같으면 표기가 달라도 던지지 않는다`() {
+        val order = requestedOrder()
+
+        order.verifyCheckoutAmount(BigDecimal("2000"))
+        order.verifyCheckoutAmount(BigDecimal("2000.0"))
+    }
+
+    @Test
+    fun `verifyCheckoutAmount는 확정 금액과 다르면 CHECKOUT_AMOUNT_MISMATCH를 던지고 주문은 그대로다`() {
+        val order = requestedOrder()
+
+        val failure = assertFailsWith<DomainException> { order.verifyCheckoutAmount(BigDecimal("2001")) }
+
+        assertEquals(Order.CHECKOUT_AMOUNT_MISMATCH, failure.code)
+        assertEquals(DomainErrorKind.CONFLICT, failure.kind)
+        assertEquals(OrderStatus.CHECKOUT_REQUESTED, order.status)
+        assertEquals(listOf(Money.of("2000", krw)), order.checkouts.map { it.amount })
+    }
+
+    @Test
+    fun `verifyCheckoutAmount는 통화 자릿수에 맞지 않는 금액을 Money의 거절 code로 던진다`() {
+        val order = requestedOrder()
+
+        val failure = assertFailsWith<DomainException> { order.verifyCheckoutAmount(BigDecimal("2000.5")) }
+
+        assertEquals(Money.INVALID_MONEY_SCALE, failure.code)
+    }
+
+    private fun assertAmountMismatch(order: Order, amount: String) {
+        val failure = assertFailsWith<DomainException> { order.verifyCheckoutAmount(BigDecimal(amount)) }
+        assertEquals(Order.CHECKOUT_AMOUNT_MISMATCH, failure.code)
+    }
+
+    @Test
+    fun `verifyCheckoutAmount는 주문의 통화로 대조한다`() {
+        // 통화를 KRW로 고정하면 30.3이 자릿수 위반으로 거절된다.
+        val order = Order.create(
+            createOrderCommand(currency = usd, lines = listOf(orderLine(unitPrice = Money.of("15.15", usd), quantity = 2))),
+            FixedIdentifierGenerator(emptyList()),
+            now,
+        ).aggregate.requestCheckout(FixedIdentifierGenerator(emptyList()), now).aggregate
+
+        order.verifyCheckoutAmount(BigDecimal("30.3"))
+        order.verifyCheckoutAmount(BigDecimal("30.30"))
+        assertAmountMismatch(order, "30.31")
+    }
+
+    @Test
+    fun `verifyCheckoutAmount는 0원 주문을 0과 대조한다`() {
+        val order = Order.create(
+            createOrderCommand(lines = listOf(orderLine(unitPrice = Money.of("0", krw)))),
+            FixedIdentifierGenerator(emptyList()),
+            now,
+        ).aggregate.requestCheckout(FixedIdentifierGenerator(emptyList()), now).aggregate
+
+        order.verifyCheckoutAmount(BigDecimal("0"))
+        assertAmountMismatch(order, "1")
+    }
+
+    @Test
+    fun `verifyCheckoutAmount는 PAID 주문도 최신 회차의 확정 금액과 대조한다`() {
+        val paid = requestedOrder().markPaid(1, Money.of("2000", krw), FixedIdentifierGenerator(emptyList()), now).aggregate
+
+        paid.verifyCheckoutAmount(BigDecimal("2000"))
+        assertAmountMismatch(paid, "2001")
+    }
+
+    @Test
+    fun `verifyCheckoutAmount는 checkout이 없는 주문을 거절한다`() {
+        val open = Order.create(createOrderCommand(), FixedIdentifierGenerator(emptyList()), now).aggregate
+
+        assertAmountMismatch(open, "1000")
     }
 }

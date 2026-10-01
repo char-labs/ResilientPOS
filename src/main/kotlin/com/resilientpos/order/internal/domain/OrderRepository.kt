@@ -17,6 +17,12 @@ interface OrderRepository {
      */
     fun findByIdForUpdate(id: OrderId): Order?
 
+    /**
+     * `(terminalId, clientOrderId)`로 주문 행을 잠그고 읽는다. [findByIdForUpdate]와 같은 계약이다.
+     * 트랜잭션 안에서만 부르고, 그 트랜잭션에서 이 주문의 첫 접촉이어야 한다.
+     */
+    fun findByClientOrderIdForUpdate(terminalId: TerminalId, clientOrderId: ClientOrderId): Order?
+
     fun findByClientOrderId(terminalId: TerminalId, clientOrderId: ClientOrderId): Order?
 
     /**

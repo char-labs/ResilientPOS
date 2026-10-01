@@ -7,6 +7,7 @@ import com.resilientpos.order.orderStatus
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc
 import org.springframework.http.MediaType
@@ -89,6 +90,18 @@ class OrderApiIntegrationTest(
     }
 
     @Test
+    fun `상품 코드 64자와 상품명 255자는 이모지여도 저장된다`() {
+        // 도메인은 길이를 code point로 센다. PostgreSQL varchar(n)도 같은 단위로 세는지를 DB로 확인한다.
+        // UTF-16 길이로는 128·510이라, 단위가 어긋나면 도메인은 통과시키고 DB가 거절한다.
+        val clientOrderId = UUID.randomUUID()
+        val line = """{ "productCode": "${"\uD83D\uDE00".repeat(64)}", "productName": "${"\uD83D\uDE00".repeat(255)}", "unitPrice": "4500", "quantity": 1 }"""
+
+        post(requestJson(clientOrderId, lines = line)).andExpect { status { isCreated() } }
+
+        assertEquals(1L, orderRowCount(clientOrderId))
+    }
+
+    @Test
     fun `line 상한을 하나 넘는 주문은 400 TOO_MANY_ORDER_LINES이고 행이 생기지 않는다`() {
         val clientOrderId = UUID.randomUUID()
         val line = """{ "productCode": "SKU-1", "productName": "아메리카노", "unitPrice": "4500", "quantity": 1 }"""
@@ -126,6 +139,40 @@ class OrderApiIntegrationTest(
         post(body).andExpect {
             status { isBadRequest() }
             jsonPath("$.error.errorCode") { value("BLANK_PRODUCT_CODE") }
+        }
+
+        assertEquals(0L, orderRowCount(clientOrderId))
+    }
+
+    @Test
+    fun `productName이 256자인 line은 400 PRODUCT_NAME_TOO_LONG이고 t_order에 행이 생기지 않는다`() {
+        val clientOrderId = UUID.randomUUID()
+        val body = requestJson(
+            clientOrderId,
+            lines = """{ "productCode": "SKU-1", "productName": "${"가".repeat(256)}", "unitPrice": "4500", "quantity": 2 }""",
+        )
+
+        post(body).andExpect {
+            status { isBadRequest() }
+            jsonPath("$.error.errorCode") { value("PRODUCT_NAME_TOO_LONG") }
+        }
+
+        assertEquals(0L, orderRowCount(clientOrderId))
+    }
+
+    @Test
+    fun `productName에 NUL 문자가 있는 line은 400 INVALID_PRODUCT_NAME이고 t_order에 행이 생기지 않는다`() {
+        val clientOrderId = UUID.randomUUID()
+        // JSON 이스케이프 \u0000 여섯 글자가 본문에 그대로 들어간다. 실제 NUL 문자가 들어가면 JSON 파서가 먼저 거절한다.
+        val body = requestJson(
+            clientOrderId,
+            lines = """{ "productCode": "SKU-1", "productName": "아메\u0000리카노", "unitPrice": "4500", "quantity": 2 }""",
+        )
+        assertTrue(body.contains("\\u0000") && !body.contains('\u0000'))
+
+        post(body).andExpect {
+            status { isBadRequest() }
+            jsonPath("$.error.errorCode") { value("INVALID_PRODUCT_NAME") }
         }
 
         assertEquals(0L, orderRowCount(clientOrderId))

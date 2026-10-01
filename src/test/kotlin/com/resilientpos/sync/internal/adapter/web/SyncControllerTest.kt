@@ -7,14 +7,16 @@ import com.resilientpos.store.StoreId
 import com.resilientpos.sync.internal.application.SyncCommand
 import com.resilientpos.sync.internal.application.SyncCommandFacade
 import com.resilientpos.sync.internal.application.SyncItemStatus
+import com.resilientpos.sync.internal.domain.CheckoutPayload
+import com.resilientpos.sync.internal.domain.OperationPayload
 import com.resilientpos.sync.internal.domain.OrderPayload
 import com.resilientpos.terminal.TerminalId
 import java.math.BigDecimal
-import java.util.Currency
 import java.util.UUID
 import kotlin.test.Test
 import org.mockito.BDDMockito.given
 import org.mockito.Mockito.verify
+import org.mockito.Mockito.verifyNoInteractions
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.restdocs.test.autoconfigure.AutoConfigureRestDocs
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest
@@ -54,26 +56,26 @@ class SyncControllerTest(
     @Test
     fun `배치를 커맨드로 옮겨 Facade를 부르고 200과 항목별 결과·watermark를 돌려준다`() {
         val orderId = OrderId(UUID.fromString("018f6b1a-0000-7000-8000-000000000001"))
-        given(facade.receiveBatch(command(operation(1, ORDER_COMMAND), operation(2, ORDER_COMMAND))))
+        given(facade.receiveBatch(command(operation(1, ORDER_COMMAND), operation(2, CHECKOUT_COMMAND))))
             .willReturn(
                 SyncCommand.ReceiveBatch.Result(
-                    lastAckedSequence = 1,
+                    lastAckedSequence = 2,
                     items = listOf(
                         SyncCommand.ReceiveBatch.Item(OPERATION_ID_1, SyncItemStatus.APPLIED, orderId, null),
-                        SyncCommand.ReceiveBatch.Item(OPERATION_ID_2, SyncItemStatus.REJECTED, null, "BLANK_PRODUCT_NAME"),
+                        SyncCommand.ReceiveBatch.Item(OPERATION_ID_2, SyncItemStatus.REJECTED, null, "ORDER_NOT_FOUND"),
                     ),
                 ),
             )
 
-        postBatch(requestJson(operationJson(OPERATION_ID_1, 1), operationJson(OPERATION_ID_2, 2)))
+        postBatch(requestJson(operationJson(OPERATION_ID_1, 1), checkoutJson(OPERATION_ID_2, 2)))
             .andExpect(status().isOk)
             .andExpect(jsonPath("$.result").value("SUCCESS"))
-            .andExpect(jsonPath("$.data.lastAckedSequence").value(1))
+            .andExpect(jsonPath("$.data.lastAckedSequence").value(2))
             .andExpect(jsonPath("$.data.items[0].operationId").value(OPERATION_ID_1.toString()))
             .andExpect(jsonPath("$.data.items[0].status").value("APPLIED"))
             .andExpect(jsonPath("$.data.items[0].orderId").value(orderId.value.toString()))
             .andExpect(jsonPath("$.data.items[1].status").value("REJECTED"))
-            .andExpect(jsonPath("$.data.items[1].errorCode").value("BLANK_PRODUCT_NAME"))
+            .andExpect(jsonPath("$.data.items[1].errorCode").value("ORDER_NOT_FOUND"))
             .andExpect(jsonPath("$.error").value(null))
             .andDo(
                 document(
@@ -93,7 +95,65 @@ class SyncControllerTest(
             )
 
         // Mockito matcher는 Kotlin non-null 파라미터에 null을 넘겨 NPE가 나므로 data class 동등성으로 검증한다.
-        verify(facade).receiveBatch(command(operation(1, ORDER_COMMAND), operation(2, ORDER_COMMAND)))
+        verify(facade).receiveBatch(command(operation(1, ORDER_COMMAND), operation(2, CHECKOUT_COMMAND)))
+    }
+
+    @Test
+    fun `kind가 없거나 모르는 값이면 400 BAD_REQUEST이고 Facade를 부르지 않는다`() {
+        val noKindWithoutOrder = """{ "operationId": "$OPERATION_ID_1", "sequence": 1, "clientOrderId": "$CLIENT_ORDER_ID" }"""
+        val validCreateOrder = operationJson(OPERATION_ID_1, 1)
+        val noKind = validCreateOrder.replace(""""kind": "CREATE_ORDER",""", "")
+        val unknownKind = validCreateOrder.replace(""""kind": "CREATE_ORDER"""", """"kind": "REFUND"""")
+        check(noKind != validCreateOrder && unknownKind != validCreateOrder)
+
+        for (operation in listOf(noKindWithoutOrder, noKind, unknownKind)) {
+            postBatch(requestJson(operation))
+                .andExpect(status().isBadRequest)
+                .andExpect(jsonPath("$.result").value("FAIL"))
+                .andExpect(jsonPath("$.error.errorCode").value("BAD_REQUEST"))
+        }
+
+        verifyNoInteractions(facade)
+    }
+
+    @Test
+    fun `amount가 없는 REQUEST_CHECKOUT 항목은 400 BAD_REQUEST이고 Facade를 부르지 않는다`() {
+        val noAmount = checkoutJson(OPERATION_ID_1, 1).replace(""", "amount": "3502"""", "")
+        check(noAmount != checkoutJson(OPERATION_ID_1, 1))
+
+        postBatch(requestJson(noAmount))
+            .andExpect(status().isBadRequest)
+            .andExpect(jsonPath("$.result").value("FAIL"))
+            .andExpect(jsonPath("$.error.errorCode").value("BAD_REQUEST"))
+
+        verifyNoInteractions(facade)
+    }
+
+    @Test
+    fun `amount가 null이거나 빈 문자열이거나 숫자가 아닌 문자열이면 400 BAD_REQUEST이고 Facade를 부르지 않는다`() {
+        val valid = checkoutJson(OPERATION_ID_1, 1)
+
+        for (amount in listOf("null", "\"\"", "\"abc\"")) {
+            val invalid = valid.replace("\"3502\"", amount)
+            check(invalid != valid)
+
+            postBatch(requestJson(invalid))
+                .andExpect(status().isBadRequest)
+                .andExpect(jsonPath("$.result").value("FAIL"))
+                .andExpect(jsonPath("$.error.errorCode").value("BAD_REQUEST"))
+        }
+
+        verifyNoInteractions(facade)
+    }
+
+    @Test
+    fun `amount가 JSON 숫자여도 받아들여 같은 CheckoutPayload로 옮긴다`() {
+        val number = checkoutJson(OPERATION_ID_1, 1).replace("\"3502\"", "3502")
+        given(facade.receiveBatch(command(operation(1, CHECKOUT_COMMAND)))).willReturn(SyncCommand.ReceiveBatch.Result(1, emptyList()))
+
+        postBatch(requestJson(number)).andExpect(status().isOk)
+
+        verify(facade).receiveBatch(command(operation(1, CHECKOUT_COMMAND)))
     }
 
     @Test
@@ -139,17 +199,18 @@ class SyncControllerTest(
         private const val CLIENT_ORDER_ID = "018f6b1a-0000-7000-8000-0000000000a3"
         private val OPERATION_ID_1: UUID = UUID.fromString("018f6b1a-0000-7000-8000-0000000000b1")
         private val OPERATION_ID_2: UUID = UUID.fromString("018f6b1a-0000-7000-8000-0000000000b2")
-        private val krw: Currency = Currency.getInstance("KRW")
 
         private val ORDER_COMMAND = OrderPayload(
             storeId = StoreId(UUID.fromString(STORE_ID)),
             clientOrderId = ClientOrderId(UUID.fromString(CLIENT_ORDER_ID)),
-            currency = krw,
-            lines = listOf(OrderPayload.Line("SKU-1", "아메리카노", BigDecimal("4500"), 2)),
+            currency = "KRW",
+            lines = listOf(OrderPayload.Line("SKU-1", "아메리카노", BigDecimal("4500"), BigDecimal(2))),
         )
 
-        private fun operation(sequence: Long, order: OrderPayload) =
-            SyncCommand.ReceiveBatch.Operation(if (sequence == 1L) OPERATION_ID_1 else OPERATION_ID_2, sequence, order)
+        private val CHECKOUT_COMMAND = CheckoutPayload(ClientOrderId(UUID.fromString(CLIENT_ORDER_ID)), BigDecimal("3502"))
+
+        private fun operation(sequence: Long, payload: OperationPayload) =
+            SyncCommand.ReceiveBatch.Operation(if (sequence == 1L) OPERATION_ID_1 else OPERATION_ID_2, sequence, payload)
 
         private fun command(vararg operations: SyncCommand.ReceiveBatch.Operation) =
             SyncCommand.ReceiveBatch(TerminalId(UUID.fromString(TERMINAL_ID)), operations.toList())
@@ -158,6 +219,7 @@ class SyncControllerTest(
             {
               "operationId": "$operationId",
               "sequence": $sequence,
+              "kind": "CREATE_ORDER",
               "order": {
                 "storeId": "$STORE_ID",
                 "clientOrderId": "$CLIENT_ORDER_ID",
@@ -167,6 +229,10 @@ class SyncControllerTest(
             }
         """.trimIndent()
 
+        private fun checkoutJson(operationId: UUID, sequence: Long) = """
+            { "operationId": "$operationId", "sequence": $sequence, "kind": "REQUEST_CHECKOUT", "clientOrderId": "$CLIENT_ORDER_ID", "amount": "3502" }
+        """.trimIndent()
+
         private fun requestJson(vararg operations: String) = """{ "operations": [${operations.joinToString(",")}] }"""
 
         private val PATH_PARAMETERS = pathParameters(parameterWithName("terminalId").description("배치를 보낸 단말 ID(UUID). 항목의 주문은 모두 이 단말의 것이다"))
@@ -174,13 +240,16 @@ class SyncControllerTest(
         private val REQUEST_FIELDS: List<FieldDescriptor> = listOf(
             fieldWithPath("operations[].operationId").type(JsonFieldType.STRING).description("단말이 부여한 operation ID(UUID v7). 재전송 판별 키"),
             fieldWithPath("operations[].sequence").type(JsonFieldType.NUMBER).description("단말 안에서 단조 증가하는 순번. 1부터 시작하고 서버는 watermark 다음 순번만 적용한다"),
-            fieldWithPath("operations[].order.storeId").type(JsonFieldType.STRING).description("매장 ID(UUID)"),
-            fieldWithPath("operations[].order.clientOrderId").type(JsonFieldType.STRING).description("단말이 부여한 주문 생성 요청 ID(UUID). 주문 멱등 키"),
-            fieldWithPath("operations[].order.currency").type(JsonFieldType.STRING).description("ISO 4217 통화 코드"),
-            fieldWithPath("operations[].order.lines[].productCode").type(JsonFieldType.STRING).description("상품 코드"),
-            fieldWithPath("operations[].order.lines[].productName").type(JsonFieldType.STRING).description("상품명. 비어 있으면 그 항목은 REJECTED(BLANK_PRODUCT_NAME)"),
-            fieldWithPath("operations[].order.lines[].unitPrice").type(JsonFieldType.STRING).description("단가. 주문 통화 기준 decimal string. 자릿수·범위·통화 규칙에 어긋나면 그 항목이 REJECTED(INVALID_MONEY_SCALE 등)"),
-            fieldWithPath("operations[].order.lines[].quantity").type(JsonFieldType.NUMBER).description("수량"),
+            fieldWithPath("operations[].kind").type(JsonFieldType.STRING).description("operation 종류. 필수이며 CREATE_ORDER(주문 생성) 또는 REQUEST_CHECKOUT(결제 요청)만 받는다. 없거나 모르는 값이면 배치 전체가 400 BAD_REQUEST"),
+            fieldWithPath("operations[].clientOrderId").type(JsonFieldType.STRING).optional().description("REQUEST_CHECKOUT일 때만 있다. 결제를 요청할 주문의 clientOrderId(UUID). 같은 단말의 앞선 CREATE_ORDER가 만든 주문을 가리킨다"),
+            fieldWithPath("operations[].amount").type(JsonFieldType.STRING).optional().description("REQUEST_CHECKOUT일 때만 있고 그 항목에서는 필수다. 단말이 본 주문 합계로 주문 통화 기준 decimal string이다. JSON 숫자도 받지만 문자열로 보내기를 권한다. 재전송 때 소수 자릿수(scale)가 바뀌면(3502와 3502.0) 다른 내용으로 판정되어 CONFLICT다. 통화 자릿수·범위에 맞지 않으면 그 항목은 REJECTED(INVALID_MONEY_SCALE 등)이고, 서버의 확정 금액과 다르면 그 항목은 REJECTED(CHECKOUT_AMOUNT_MISMATCH)이고 주문은 그대로다. 없으면 배치 전체가 400 BAD_REQUEST"),
+            fieldWithPath("operations[].order.storeId").type(JsonFieldType.STRING).optional().description("CREATE_ORDER일 때만 있는 order 객체의 매장 ID(UUID). order 아래 필드는 모두 CREATE_ORDER 항목에만 있다"),
+            fieldWithPath("operations[].order.clientOrderId").type(JsonFieldType.STRING).optional().description("단말이 부여한 주문 생성 요청 ID(UUID). 주문 멱등 키"),
+            fieldWithPath("operations[].order.currency").type(JsonFieldType.STRING).optional().description("대문자 ISO 4217 코드. ISO 4217에 없으면 그 항목은 REJECTED(UNSUPPORTED_CURRENCY). 소문자·공백이 붙은 값·금액을 표현할 수 없는 통화(XXX)도 같은 거절. null이면 배치 전체가 400"),
+            fieldWithPath("operations[].order.lines[].productCode").type(JsonFieldType.STRING).optional().description("상품 코드. 비어 있으면 그 항목은 REJECTED(BLANK_PRODUCT_CODE), 64자(문자 수, code point)를 넘으면 REJECTED(PRODUCT_CODE_TOO_LONG), NUL 문자(코드 0번 글자 U+0000, null 값과 다르다)가 있으면 REJECTED(INVALID_PRODUCT_CODE)"),
+            fieldWithPath("operations[].order.lines[].productName").type(JsonFieldType.STRING).optional().description("상품명. 비어 있으면 그 항목은 REJECTED(BLANK_PRODUCT_NAME), 255자(문자 수, code point)를 넘으면 REJECTED(PRODUCT_NAME_TOO_LONG), NUL 문자(코드 0번 글자 U+0000, null 값과 다르다)가 있으면 REJECTED(INVALID_PRODUCT_NAME)"),
+            fieldWithPath("operations[].order.lines[].unitPrice").type(JsonFieldType.STRING).optional().description("단가. 주문 통화 기준 decimal string. 자릿수·범위·통화 규칙에 어긋나면 그 항목이 REJECTED(INVALID_MONEY_SCALE 등)"),
+            fieldWithPath("operations[].order.lines[].quantity").type(JsonFieldType.NUMBER).optional().description("정수. 1 미만이거나 소수이거나 Int 범위 밖이면 그 항목은 REJECTED(INVALID_QUANTITY). 숫자가 아니면 배치 전체가 400"),
         )
     }
 }
