@@ -9,10 +9,16 @@ import com.resilientpos.order.OrderFixtures
 import com.resilientpos.order.OrderId
 import com.resilientpos.order.OrderStatus
 import com.resilientpos.store.StoreId
+import com.resilientpos.terminal.AuthenticatedTerminal
+import com.resilientpos.terminal.TerminalFixtures.AUTHORIZATION_HEADER
+import com.resilientpos.terminal.TerminalFixtures.BEARER
+import com.resilientpos.terminal.TerminalFixtures.TOKEN
 import com.resilientpos.terminal.TerminalId
+import com.resilientpos.terminal.TerminalManagement
 import java.util.Currency
 import java.util.UUID
 import kotlin.test.Test
+import org.junit.jupiter.api.BeforeEach
 import org.mockito.BDDMockito.given
 import org.mockito.Mockito.verify
 import org.mockito.Mockito.verifyNoInteractions
@@ -20,6 +26,8 @@ import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.restdocs.test.autoconfigure.AutoConfigureRestDocs
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest
 import org.springframework.http.MediaType
+import org.springframework.restdocs.headers.HeaderDocumentation.headerWithName
+import org.springframework.restdocs.headers.HeaderDocumentation.responseHeaders
 import org.springframework.restdocs.mockmvc.MockMvcRestDocumentation.document
 import org.springframework.restdocs.payload.FieldDescriptor
 import org.springframework.restdocs.payload.JsonFieldType
@@ -44,6 +52,14 @@ class OrderControllerTest(
     @MockitoBean
     private lateinit var facade: OrderCommandFacade
 
+    @MockitoBean
+    private lateinit var terminals: TerminalManagement
+
+    @BeforeEach
+    fun authenticate() {
+        given(terminals.authenticate(TOKEN)).willReturn(AuthenticatedTerminal(TerminalId(UUID.fromString(TERMINAL_ID)), StoreId(UUID.fromString(STORE_ID))))
+    }
+
     @Test
     fun `유효한 요청은 본문을 생성 커맨드로 옮기고 201과 orderId·status를 돌려준다`() {
         val orderId = OrderId(UUID.fromString("018f6b1a-0000-7000-8000-000000000001"))
@@ -59,6 +75,7 @@ class OrderControllerTest(
             handle(
                 document(
                     "orders-create",
+                    AUTHORIZATION_HEADER,
                     requestFields(HEADER_FIELDS + LINE_FIELDS),
                     responseFields(
                         fieldWithPath("result").type(JsonFieldType.STRING).description("SUCCESS 또는 FAIL"),
@@ -72,6 +89,78 @@ class OrderControllerTest(
 
         // Mockito matcher는 Kotlin non-null 파라미터에 null을 넘겨 NPE가 나므로 data class 동등성으로 검증한다.
         verify(facade).create(command())
+    }
+
+    @Test
+    fun `Authorization 헤더가 없으면 401 UNAUTHENTICATED와 WWW-Authenticate이고 Facade를 부르지 않는다`() {
+        postOrder(requestJson(), authorization = null).andExpect {
+            status { isUnauthorized() }
+            header { string("WWW-Authenticate", "Bearer") }
+            jsonPath("$.result") { value("FAIL") }
+            jsonPath("$.data") { value(null) }
+            jsonPath("$.error.errorCode") { value("UNAUTHENTICATED") }
+            jsonPath("$.error.message") { value("인증이 필요합니다.") }
+        }.andDo {
+            handle(
+                document(
+                    "orders-create-unauthenticated",
+                    requestFields(HEADER_FIELDS + LINE_FIELDS),
+                    responseFields(failFields("UNAUTHENTICATED 고정 코드. 헤더 없음·형식 오류·모르는 토큰·회전된 토큰·비활성 단말이 모두 같다")),
+                    responseHeaders(headerWithName("WWW-Authenticate").description("항상 Bearer")),
+                ),
+            )
+        }
+
+        verifyNoInteractions(facade)
+    }
+
+    @Test
+    fun `Bearer 형식이 아니거나 authenticate가 없음을 돌려주면 같은 401이고 Facade를 부르지 않는다`() {
+        for (authorization in listOf("Basic dGVzdDp0ZXN0", "Bearer", "Bearer  ", "Bearer unknown-token")) {
+            postOrder(requestJson(), authorization = authorization).andExpect {
+                status { isUnauthorized() }
+                header { string("WWW-Authenticate", "Bearer") }
+                jsonPath("$.error.errorCode") { value("UNAUTHENTICATED") }
+                jsonPath("$.error.message") { value("인증이 필요합니다.") }
+            }
+        }
+
+        verifyNoInteractions(facade)
+    }
+
+    @Test
+    fun `본문의 storeId나 terminalId가 인증 주체와 다르면 403 TERMINAL_MISMATCH이고 Facade를 부르지 않는다`() {
+        postOrder(requestJson(terminalId = OTHER_ID)).andExpect {
+            status { isForbidden() }
+            jsonPath("$.result") { value("FAIL") }
+            jsonPath("$.data") { value(null) }
+            jsonPath("$.error.errorCode") { value("TERMINAL_MISMATCH") }
+        }.andDo {
+            handle(
+                document(
+                    "orders-create-terminal-mismatch",
+                    AUTHORIZATION_HEADER,
+                    requestFields(HEADER_FIELDS + LINE_FIELDS),
+                    responseFields(failFields("TERMINAL_MISMATCH 고정 코드. 본문의 storeId나 terminalId가 인증된 단말과 다르다")),
+                ),
+            )
+        }
+        postOrder(requestJson(storeId = OTHER_ID)).andExpect {
+            status { isForbidden() }
+            jsonPath("$.error.errorCode") { value("TERMINAL_MISMATCH") }
+        }
+
+        verifyNoInteractions(facade)
+    }
+
+    @Test
+    fun `금액이 잘못된 본문도 소유권이 다르면 변환 오류 400보다 403 TERMINAL_MISMATCH가 먼저다`() {
+        postOrder(requestJson(storeId = OTHER_ID, unitPrice = "4500.5")).andExpect {
+            status { isForbidden() }
+            jsonPath("$.error.errorCode") { value("TERMINAL_MISMATCH") }
+        }
+
+        verifyNoInteractions(facade)
     }
 
     @Test
@@ -89,6 +178,7 @@ class OrderControllerTest(
             handle(
                 document(
                     "orders-create-domain-rejected",
+                    AUTHORIZATION_HEADER,
                     requestFields(
                         HEADER_FIELDS + fieldWithPath("lines").type(JsonFieldType.ARRAY).description("주문 line 목록. 비어 있으면 EMPTY_ORDER"),
                     ),
@@ -119,6 +209,7 @@ class OrderControllerTest(
             handle(
                 document(
                     "orders-create-idempotency-conflict",
+                    AUTHORIZATION_HEADER,
                     requestFields(HEADER_FIELDS + LINE_FIELDS),
                     responseFields(failFields("도메인 오류 코드")),
                 ),
@@ -147,6 +238,7 @@ class OrderControllerTest(
             handle(
                 document(
                     "orders-create-unsupported-currency",
+                    AUTHORIZATION_HEADER,
                     requestFields(HEADER_FIELDS + LINE_FIELDS),
                     responseFields(failFields("UNSUPPORTED_CURRENCY 고정 코드")),
                 ),
@@ -212,6 +304,7 @@ class OrderControllerTest(
             handle(
                 document(
                     "orders-create-bad-request",
+                    AUTHORIZATION_HEADER,
                     requestFields(HEADER_FIELDS + LINE_FIELDS),
                     responseFields(failFields("BAD_REQUEST 고정 코드")),
                 ),
@@ -235,8 +328,9 @@ class OrderControllerTest(
         expectBadRequest("{ broken")
     }
 
-    private fun postOrder(body: String): ResultActionsDsl = mockMvc.post("/v1/orders") {
+    private fun postOrder(body: String, authorization: String? = BEARER): ResultActionsDsl = mockMvc.post("/v1/orders") {
         contentType = MediaType.APPLICATION_JSON
+        authorization?.let { header("Authorization", it) }
         content = body
     }
 
@@ -254,6 +348,7 @@ class OrderControllerTest(
     companion object {
         private const val STORE_ID = "018f6b1a-0000-7000-8000-0000000000a1"
         private const val TERMINAL_ID = "018f6b1a-0000-7000-8000-0000000000a2"
+        private const val OTHER_ID = "018f6b1a-0000-7000-8000-0000000000ff"
         private const val CLIENT_ORDER_ID = "018f6b1a-0000-7000-8000-0000000000a3"
         private val krw: Currency = Currency.getInstance("KRW")
 
@@ -269,12 +364,13 @@ class OrderControllerTest(
 
         private fun requestJson(
             terminalId: String = TERMINAL_ID,
+            storeId: String = STORE_ID,
             currency: String = "KRW",
             unitPrice: String = "4500",
             lines: String = """{ "productCode": "SKU-1", "productName": "아메리카노", "unitPrice": "$unitPrice", "quantity": 2 }""",
         ) = """
             {
-              "storeId": "$STORE_ID",
+              "storeId": "$storeId",
               "terminalId": "$terminalId",
               "clientOrderId": "$CLIENT_ORDER_ID",
               "currency": "$currency",

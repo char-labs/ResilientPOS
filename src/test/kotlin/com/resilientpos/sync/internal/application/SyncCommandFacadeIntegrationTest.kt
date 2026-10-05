@@ -9,6 +9,7 @@ import com.resilientpos.order.OrderFixtures
 import com.resilientpos.order.OrderCommandFacade
 import com.resilientpos.order.internal.domain.Order
 import com.resilientpos.order.internal.domain.OrderLine
+import com.resilientpos.store.StoreId
 import com.resilientpos.sync.internal.domain.CheckoutPayload
 import com.resilientpos.sync.internal.domain.OperationPayload
 import com.resilientpos.sync.internal.domain.OrderPayload
@@ -81,7 +82,7 @@ class SyncCommandFacadeIntegrationTest(
     }
 
     private fun receive(vararg operations: SyncCommand.ReceiveBatch.Operation) =
-        facade.receiveBatch(SyncCommand.ReceiveBatch(terminalId, operations.toList()))
+        facade.receiveBatch(SyncCommand.ReceiveBatch(terminalId, OrderFixtures.storeId, operations.toList()))
 
     private fun orderRows(): Long =
         checkNotNull(jdbcTemplate.queryForObject<Long>("select count(*) from t_order where terminal_id = ?", terminalId.value))
@@ -407,6 +408,27 @@ class SyncCommandFacadeIntegrationTest(
         assertEquals(listOf(SyncItemStatus.DUPLICATE, SyncItemStatus.DUPLICATE), resent.items.map { it.status })
         assertEquals(first.items.map { it.orderId }, resent.items.map { it.orderId })
         assertEquals(1, checkoutRows())
+        assertEquals(2, operationRows())
+    }
+
+    @Test
+    fun `인증된 단말의 매장과 다른 storeId의 주문 생성 항목은 STORE_MISMATCH 거절이고 순번은 확정되며 다음 항목은 적용되고 재전송은 같은 거절의 중복이다`() {
+        val otherStore = payload(OrderFixtures.createOrderCommand(terminalId = terminalId, storeId = StoreId(UUID.randomUUID())))
+        val foreign = operation(1, otherStore)
+
+        val first = receive(foreign, operation(2))
+
+        assertEquals(listOf(SyncItemStatus.REJECTED, SyncItemStatus.APPLIED), first.items.map { it.status })
+        assertEquals(SyncCommandFacade.STORE_MISMATCH, first.items[0].errorCode)
+        assertNull(first.items[0].orderId)
+        assertEquals(2, first.lastAckedSequence)
+        assertEquals(1, orderRows())
+        assertEquals(null, orderStatus(otherStore.clientOrderId))
+
+        val resent = receive(foreign)
+
+        assertEquals(SyncItemStatus.DUPLICATE, resent.items.single().status)
+        assertEquals(SyncCommandFacade.STORE_MISMATCH, resent.items.single().errorCode)
         assertEquals(2, operationRows())
     }
 

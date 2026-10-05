@@ -4,6 +4,8 @@ import com.resilientpos.order.checkoutRowCount
 import com.resilientpos.order.internal.domain.Order
 import com.resilientpos.PostgresIntegrationTest
 import com.resilientpos.order.orderStatus
+import com.resilientpos.terminal.TerminalManagement
+import com.resilientpos.terminal.registerTerminal
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -25,7 +27,11 @@ class OrderApiIntegrationTest(
     @Autowired private val mockMvc: MockMvc,
     @Autowired private val jdbcTemplate: JdbcTemplate,
     @Autowired private val objectMapper: ObjectMapper,
+    @Autowired private val terminals: TerminalManagement,
 ) : PostgresIntegrationTest() {
+
+    /** 실제로 등록한 단말. 요청의 토큰과 본문의 storeId·terminalId가 모두 이 단말이다. */
+    private val terminal = terminals.registerTerminal()
 
     private fun orderRowCount(clientOrderId: UUID): Long =
         jdbcTemplate.queryForObject<Long>(
@@ -33,16 +39,23 @@ class OrderApiIntegrationTest(
             clientOrderId,
         ) ?: 0L
 
+    private fun publicationCount(orderId: String): Long =
+        jdbcTemplate.queryForObject<Long>(
+            "select count(*) from event_publication where event_type like '%OrderPaymentRequested' and serialized_event like ?",
+            "%$orderId%",
+        ) ?: 0L
+
     private fun post(body: String) = mockMvc.post("/v1/orders") {
         contentType = MediaType.APPLICATION_JSON
+        header("Authorization", terminal.bearer)
         content = body
     }
 
     private fun requestJson(
         clientOrderId: UUID,
         lines: String = """{ "productCode": "SKU-1", "productName": "아메리카노", "unitPrice": "4500", "quantity": 2 }""",
-        storeId: UUID = UUID.randomUUID(),
-        terminalId: UUID = UUID.randomUUID(),
+        storeId: UUID = terminal.storeId.value,
+        terminalId: UUID = terminal.terminalId.value,
     ) = """
         {
           "storeId": "$storeId",
@@ -180,15 +193,11 @@ class OrderApiIntegrationTest(
 
     @Test
     fun `같은 storeId terminalId clientOrderId로 수량만 다른 요청을 이어서 보내면 두 번째는 409 IDEMPOTENCY_CONFLICT다`() {
-        val storeId = UUID.randomUUID()
-        val terminalId = UUID.randomUUID()
         val clientOrderId = UUID.randomUUID()
-        val first = requestJson(clientOrderId, storeId = storeId, terminalId = terminalId)
+        val first = requestJson(clientOrderId)
         val second = requestJson(
             clientOrderId,
             lines = """{ "productCode": "SKU-1", "productName": "아메리카노", "unitPrice": "4500", "quantity": 3 }""",
-            storeId = storeId,
-            terminalId = terminalId,
         )
 
         post(first).andExpect { status { isCreated() } }
@@ -216,7 +225,7 @@ class OrderApiIntegrationTest(
     fun `주문을 만든 뒤 checkout을 요청하면 200과 확정 금액을 받고 재요청도 같은 본문이다`() {
         val orderId = createOrder(requestJson(UUID.randomUUID(), lines = unsettledLines))
 
-        val first = mockMvc.post("/v1/orders/$orderId/checkout").andExpect {
+        val first = mockMvc.post("/v1/orders/$orderId/checkout") { header("Authorization", terminal.bearer) }.andExpect {
             status { isOk() }
             jsonPath("$.data.orderId") { value(orderId) }
             jsonPath("$.data.status") { value("CHECKOUT_REQUESTED") }
@@ -224,7 +233,7 @@ class OrderApiIntegrationTest(
             jsonPath("$.data.amount") { value("9002") }
             jsonPath("$.data.currency") { value("KRW") }
         }.andReturn().response.contentAsString
-        val second = mockMvc.post("/v1/orders/$orderId/checkout").andExpect { status { isOk() } }.andReturn().response.contentAsString
+        val second = mockMvc.post("/v1/orders/$orderId/checkout") { header("Authorization", terminal.bearer) }.andExpect { status { isOk() } }.andReturn().response.contentAsString
 
         assertEquals(objectMapper.readTree(first), objectMapper.readTree(second))
         assertEquals(
@@ -241,7 +250,7 @@ class OrderApiIntegrationTest(
     fun `checkout을 요청한 주문의 생성 재시도는 201과 CHECKOUT_REQUESTED다`() {
         val createBody = requestJson(UUID.randomUUID(), lines = unsettledLines)
         val orderId = createOrder(createBody)
-        mockMvc.post("/v1/orders/$orderId/checkout").andExpect { status { isOk() } }
+        mockMvc.post("/v1/orders/$orderId/checkout") { header("Authorization", terminal.bearer) }.andExpect { status { isOk() } }
 
         post(createBody).andExpect {
             status { isCreated() }
@@ -290,15 +299,35 @@ class OrderApiIntegrationTest(
         ).andExpect { status { isCreated() } }.andReturn().response.contentAsString
         val orderId = objectMapper.readTree(created).at("/data/orderId").asString()
 
-        mockMvc.post("/v1/orders/$orderId/checkout").andExpect {
+        mockMvc.post("/v1/orders/$orderId/checkout") { header("Authorization", terminal.bearer) }.andExpect {
             status { isOk() }
             jsonPath("$.data.amount") { value("999999999999999") }
         }
     }
 
     @Test
+    fun `같은 매장의 다른 단말은 checkout이 200이고 다른 매장의 단말은 404 ORDER_NOT_FOUND이며 주문은 OPEN으로 남는다`() {
+        val orderId = createOrder(requestJson(UUID.randomUUID(), lines = unsettledLines))
+        val sameStore = terminals.registerTerminal(terminal.storeId)
+        val otherStore = terminals.registerTerminal()
+
+        mockMvc.post("/v1/orders/$orderId/checkout") { header("Authorization", otherStore.bearer) }.andExpect {
+            status { isNotFound() }
+            jsonPath("$.error.errorCode") { value("ORDER_NOT_FOUND") }
+        }
+        assertEquals("OPEN", jdbcTemplate.orderStatus(UUID.fromString(orderId)))
+        assertEquals(0L, jdbcTemplate.checkoutRowCount(UUID.fromString(orderId)))
+        assertEquals(0L, publicationCount(orderId))
+
+        mockMvc.post("/v1/orders/$orderId/checkout") { header("Authorization", sameStore.bearer) }.andExpect {
+            status { isOk() }
+            jsonPath("$.data.status") { value("CHECKOUT_REQUESTED") }
+        }
+    }
+
+    @Test
     fun `없는 주문의 checkout 요청은 404 ORDER_NOT_FOUND다`() {
-        mockMvc.post("/v1/orders/${UUID.randomUUID()}/checkout").andExpect {
+        mockMvc.post("/v1/orders/${UUID.randomUUID()}/checkout") { header("Authorization", terminal.bearer) }.andExpect {
             status { isNotFound() }
             jsonPath("$.error.errorCode") { value("ORDER_NOT_FOUND") }
         }

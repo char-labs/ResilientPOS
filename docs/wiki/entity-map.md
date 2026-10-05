@@ -1,6 +1,6 @@
 # 엔티티 지도
 
-JPA 엔티티 7개가 각각 무엇을 맡고, 서로를 어떻게 가리키며, 단말과 운영자가 쓰는 흐름에서 어느 순서로 생기고 바뀌는지를 한곳에 모은 문서다.
+JPA 엔티티 9개가 각각 무엇을 맡고, 서로를 어떻게 가리키며, 단말과 운영자가 쓰는 흐름에서 어느 순서로 생기고 바뀌는지를 한곳에 모은 문서다.
 엔티티 클래스의 KDoc 첫 문단이 같은 내용을 짧게 갖고, 여기가 전체 그림이다. 용어·aggregate 경계는 [도메인 모델](domain-model.md)이 정본이고,
 Kotlin으로 엔티티를 어떤 형태로 쓰는지(생성자 `private`, `var … protected set`, `from`/`apply`/`toDomain`)는 볼트 규칙 `domain-modeling-kotlin.md` §5가 정본이다.
 
@@ -20,6 +20,8 @@ Kotlin으로 엔티티를 어떤 형태로 쓰는지(생성자 `private`, `var �
 | `FulfillmentEntity` | `t_fulfillment` | fulfillment | 루트 `Fulfillment` | `order_id` | 넣기만 한다 |
 | `WatermarkEntity` | `t_sync_watermark` | sync | 루트 `Watermark`(단말당 하나) | `terminal_id`가 PK | `last_acked_sequence`만 `apply`. 행을 잠그고 바꾼다 |
 | `SyncOperationEntity` | `t_sync_operation` | sync | `Watermark`와 같은 트랜잭션의 접수 기록 | `terminal_id`, `operation_id`(단말이 만든 값), `order_id` | 넣기만 한다 |
+| `TerminalEntity` | `t_terminal` | terminal | 루트 `Terminal` | `store_id`(가리킬 표가 없다) | `status`만 `applyStatus`(`ACTIVE`→`INACTIVE`). 행을 잠그고 바꾼다 |
+| `TerminalCredentialEntity` | `t_terminal_credential` | terminal | `Terminal`과 같은 트랜잭션의 credential 이력 | `terminal_id` | `revoked_at`만 `applyRevokedAt`(회전 때 한 번) |
 
 `event_publication`(Spring Modulith 발행 기록)은 우리 엔티티가 아니다. Modulith의 JPA 엔티티가 스키마를 정하고 `t_` 접두어 규칙의 예외다([도메인 모델 §4.3](domain-model.md)).
 
@@ -35,11 +37,12 @@ t_payment_attempt.order_id ─────────────────�
 t_payment_attempt.checkout_no ──(회차 번호, ID가 아니다)──► t_order_checkout.checkout_no
 t_payment_attempt.retried_from ────────────────────────────────────────────────────────────► t_payment_attempt.id
 t_fulfillment.order_id ─────────────────────────────────────────────────────────────────────► t_order.id
+t_terminal_credential.terminal_id ─────────────────────────────────────────────────────────► t_terminal.id
 ```
 
 - 화살표는 "값이 저 행의 ID다"라는 뜻이고 DB가 검사하지 않는다. `t_order.id`를 가리키는 표가 다섯(line·checkout·payment·fulfillment·sync)이지만 서로 조인하는 코드는 없다. 모듈 경계 밖의 값은 이벤트로 건너간다(`OrderPaymentRequested`·`PaymentApproved`·`OrderPaid`).
 - `t_payment_attempt`는 checkout 회차를 `checkout_no`(1, 2, …)로 가리킨다. `t_order_checkout.id`가 아니다. 결제 승인을 주문에 대조할 때 `order.markPaid`가 최신 회차 번호·금액과 비교한다.
-- `terminal_id`·`store_id`는 `terminal`·`store` 모듈에 아직 테이블이 없어 가리키는 행이 없다. 값은 단말이 보낸 것을 그대로 저장한다.
+- `t_terminal`이 생겼지만 `t_order`·`t_sync_*`·`t_payment_attempt`의 `terminal_id`는 그 표와 FK·조인이 없다. 대신 요청을 받을 때 인증된 단말과 대조한다. 주문 생성은 본문의 `terminalId`·`storeId`를, sync는 경로의 `terminalId`와 `CREATE_ORDER` 항목의 `storeId`를 본다. `store` 모듈에는 아직 표가 없어 `store_id`(`t_terminal.store_id` 포함)가 가리키는 행은 없다.
 
 ## 3. 엔티티별 역할
 
@@ -85,9 +88,22 @@ t_fulfillment.order_id ───────────────────
 - 방어선: unique `(terminal_id, operation_id)`(같은 operation을 두 번 적용하지 않는다), unique `(terminal_id, sequence)`(순번 하나에 기록 하나).
 - 만드는 곳: `SyncCommandFacade`의 항목 트랜잭션. 바꾸지도 지우지도 않는다.
 
+### `TerminalEntity` — 매장에 속한 단말 하나
+- 역할: 단말의 소속 매장(`store_id`)과 활성 상태(`ACTIVE`/`INACTIVE`)를 든다. 소속 매장의 정본이고 바뀌지 않는다. 단말 코드는 아직 없다.
+- 관계: `TerminalCredentialEntity`가 `terminal_id`로 가리킨다. `store_id`는 가리킬 표가 없다.
+- 방어선: 회전·비활성화는 이 행을 잠그고 시작한다(`for no key update`, 대기 3초). 잠금 없이 바꾸는 경로가 없어 `@Version`이 없다.
+- 만드는 곳: `TerminalManagement.register`(첫 credential과 한 커밋). 바꾸는 곳: `deactivate`(멱등, 되돌리지 않는다). HTTP endpoint는 없다.
+
+### `TerminalCredentialEntity` — 단말을 인증하는 비밀값 한 건
+- 역할: 토큰의 SHA-256 hex(`token_hash`)와 폐기 시각(`revoked_at`)을 든다. 평문 토큰은 저장하지 않는다. 폐기된 행도 이력으로 남는다. 만료는 없다.
+- 관계: `terminal_id`로 단말을 가리킨다. 인증은 이 표와 `t_terminal`을 한 조회로 읽는다(해시가 같고 폐기되지 않았으며 단말이 `ACTIVE`).
+- 방어선: unique `ux_terminal_credential_token_hash`(해시 하나가 두 단말을 가리키지 않는다), partial unique `ux_terminal_credential_active`(`revoked_at is null`인 행은 단말당 하나). 둘 다 삭제 행에도 걸린다.
+- 만드는 곳: `register`와 `rotateCredential`. 회전은 옛 행에 `revoked_at`을 찍고 flush한 뒤 새 행을 넣는다. 먼저 내보내지 않으면 Hibernate가 INSERT를 먼저 보내 partial unique에 걸린다.
+
 ## 4. UX 흐름별 엔티티 동작
 
 각 단계의 "보이는 것"은 단말 화면이나 운영자가 확인하는 응답이고, "표"는 그 단계에서 생기거나 바뀌는 행이다. 트랜잭션 경계는 굵게 표시한다.
+단말의 모든 `/v1/**` 요청은 먼저 `t_terminal_credential`·`t_terminal`을 읽어 토큰을 인증한다(쓰지 않는다). 실패하면 `401 UNAUTHENTICATED`이고 아래 표의 어느 행도 생기지 않는다.
 
 ### 4.1 온라인 주문 → 결제 → 이행 (정상 경로)
 
@@ -111,7 +127,7 @@ t_fulfillment.order_id ───────────────────
 | 1. 재연결 뒤 `POST /v1/terminals/{terminalId}/sync`에 배치 | — | 새 단말이면 `t_sync_watermark` 1행(0) | 짧은 커밋 하나 |
 | 2. `CREATE_ORDER` 항목: watermark 잠금 → 순번 판정 → `order` 명령 변환 → `createInCallerTransaction` | 항목 `APPLIED`+`orderId` | `t_order`·`t_order_line` + `t_sync_operation`(`APPLIED`) + `t_sync_watermark.last_acked_sequence` +1 | **항목 하나가 한 커밋** |
 | 2a. `REQUEST_CHECKOUT` 항목: watermark 잠금 → 순번 판정 → `clientOrderId`로 주문 행 잠금 → 전이 → 단말 합계 대조 → 저장 | 항목 `APPLIED`+`orderId` | `t_order.status`→`CHECKOUT_REQUESTED` + `t_order_checkout` 1행 + `event_publication`(`OrderPaymentRequested`) + `t_sync_operation`(`APPLIED`) + watermark +1. 이후는 4.1의 3단계부터 | **항목 하나가 한 커밋**. 행 잠금은 watermark 다음에 주문 순서다 |
-| 2'. 항목이 도메인 규칙에 걸림(빈 상품명, 상품 코드·상품명의 길이 초과와 NUL 문자, 모르는 통화 코드, 정수가 아니거나 Int 범위 밖인 수량, 금액 자릿수, 같은 `clientOrderId`에 다른 내용, 결제 요청의 주문 없음, 단말 합계와 확정 금액 불일치) | 항목 `REJECTED`+`errorCode` | 첫 트랜잭션은 롤백(그 항목이 쓴 행 없음). 두 번째 트랜잭션이 `t_sync_operation`(`REJECTED`)과 watermark +1 | 두 커밋. 단말은 그 항목을 버린다 |
+| 2'. 항목이 도메인 규칙에 걸림(빈 상품명, 상품 코드·상품명의 길이 초과와 NUL 문자, 모르는 통화 코드, 정수가 아니거나 Int 범위 밖인 수량, 금액 자릿수, 같은 `clientOrderId`에 다른 내용, 결제 요청의 주문 없음, 단말 합계와 확정 금액 불일치, 인증된 단말과 다른 매장의 주문 생성 `STORE_MISMATCH`) | 항목 `REJECTED`+`errorCode` | 첫 트랜잭션은 롤백(그 항목이 쓴 행 없음). 두 번째 트랜잭션이 `t_sync_operation`(`REJECTED`)과 watermark +1 | 두 커밋. 단말은 그 항목을 버린다 |
 | 2''. 이미 확정된 순번 | 같은 내용이면 `DUPLICATE`(기록된 `orderId`), 다른 내용·다른 순번·모르는 operation이면 `CONFLICT` | 아무것도 쓰지 않는다 | 읽기만 |
 | 2'''. 순번이 비었다 | 그 항목부터 `GAP` | 아무것도 쓰지 않는다 | 첫 GAP 뒤는 트랜잭션도 열지 않는다 |
 | 3. 응답의 `lastAckedSequence` | 단말은 그 다음 순번부터 다시 보내고 `APPLIED`·`DUPLICATE`·`REJECTED`는 큐에서 지운다 | — | — |
@@ -153,10 +169,10 @@ provider 응답이 끊기면 `t_payment_attempt.status`가 `UNKNOWN`으로 남�
 
 ## 5. 아직 엔티티가 없는 것
 
-`Store`(정책·통화), `Terminal`(등록·자격증명), `ReconciliationCase`(불일치 근거·조치), `ReceiptDelivery`(영수증 전달)는 [도메인 모델 §2](domain-model.md)에 자리만 있고 표와 엔티티는 없다. `terminal_id`·`store_id`는 그때까지 단말이 보낸 값을 검증 없이 저장한다(단말 인증이 없는 알려진 빈틈, [현재 상태](current-state.md)).
+`Store`(정책·통화), `ReconciliationCase`(불일치 근거·조치), `ReceiptDelivery`(영수증 전달)는 [도메인 모델 §2](domain-model.md)에 자리만 있고 표와 엔티티는 없다. `store_id`는 인증된 단말의 매장과 대조할 뿐 매장 표로 검증하지 않는다([현재 상태](current-state.md)).
 
 ## 관련 문서
 - [도메인 모델](domain-model.md) — aggregate 경계(§2), 용어집(§3), 스키마 변경 검토(§4.7)
 - [현재 상태](current-state.md) — 모듈별 구현 상태와 알려진 빈틈
 - 볼트 규칙 `domain-modeling-kotlin.md` §5 — 엔티티 작성 규칙(`.claude/rules`로 복사된다)
-- 마이그레이션 `src/main/resources/db/migration/V002`·`V003`·`V005`~`V008`·`V010`·`V011` — 각 표의 DDL과 주석
+- 마이그레이션 `src/main/resources/db/migration/V002`·`V003`·`V005`~`V008`·`V010`~`V012` — 각 표의 DDL과 주석

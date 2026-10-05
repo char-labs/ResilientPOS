@@ -2,6 +2,7 @@ package com.resilientpos.order.internal.domain
 
 import com.resilientpos.order.ClientOrderId
 import com.resilientpos.order.OrderId
+import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.TerminalId
 
 /**
@@ -16,6 +17,12 @@ interface OrderRepository {
      * 구현이 낡은 값을 돌려주지 않고 낙관적 잠금 예외로 실패한다.
      */
     fun findByIdForUpdate(id: OrderId): Order?
+
+    /**
+     * `id`와 `storeId`가 모두 맞는 주문 행을 잠그고 읽는다. [findByIdForUpdate]와 같은 계약이다. 매장이 다른 행은 잠기지도 반환되지도 않아
+     * 다른 매장의 요청이 남의 주문 행을 잠그거나 그 잠금을 기다리지 않는다.
+     */
+    fun findByIdAndStoreIdForUpdate(id: OrderId, storeId: StoreId): Order?
 
     /**
      * `(terminalId, clientOrderId)`로 주문 행을 잠그고 읽는다. [findByIdForUpdate]와 같은 계약이다.

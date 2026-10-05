@@ -20,8 +20,8 @@ import java.util.UUID
 data class SyncBatchRequest(
     val operations: List<SyncOperationRequest>,
 ) {
-    fun toCommand(terminalId: TerminalId): SyncCommand.ReceiveBatch =
-        SyncCommand.ReceiveBatch(terminalId, operations.map { it.toCommand() })
+    fun toCommand(terminalId: TerminalId, storeId: StoreId): SyncCommand.ReceiveBatch =
+        SyncCommand.ReceiveBatch(terminalId, storeId, operations.map { it.toCommand() })
 }
 
 @JsonTypeInfo(use = JsonTypeInfo.Id.NAME, property = "kind")

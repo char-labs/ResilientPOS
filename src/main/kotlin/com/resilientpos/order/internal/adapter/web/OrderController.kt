@@ -3,6 +3,9 @@ package com.resilientpos.order.internal.adapter.web
 import com.resilientpos.order.OrderCommand
 import com.resilientpos.order.OrderCommandFacade
 import com.resilientpos.order.OrderId
+import com.resilientpos.store.StoreId
+import com.resilientpos.terminal.AuthenticatedTerminal
+import com.resilientpos.terminal.TerminalId
 import java.util.UUID
 import org.springframework.http.HttpStatus
 import org.springframework.web.bind.annotation.PathVariable
@@ -21,11 +24,14 @@ class OrderController(private val facade: OrderCommandFacade) {
 
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
-    fun create(@RequestBody request: CreateOrderRequest): CreateOrderResponse =
-        CreateOrderResponse.from(facade.create(request.toCommand()))
+    fun create(@RequestBody request: CreateOrderRequest, terminal: AuthenticatedTerminal): CreateOrderResponse {
+        // 본문 변환(400)보다 소유권 대조(403)가 먼저다. 남의 식별자로 온 요청에 변환 오류 모양을 보여 주지 않는다.
+        terminal.requireSame(TerminalId(request.terminalId), StoreId(request.storeId))
+        return CreateOrderResponse.from(facade.create(request.toCommand()))
+    }
 
     /** 첫 요청과 재요청이 같은 200과 같은 본문이다. */
     @PostMapping("/{orderId}/checkout")
-    fun requestCheckout(@PathVariable orderId: UUID): RequestCheckoutResponse =
-        RequestCheckoutResponse.from(facade.requestCheckout(OrderCommand.RequestCheckout(OrderId(orderId))))
+    fun requestCheckout(@PathVariable orderId: UUID, terminal: AuthenticatedTerminal): RequestCheckoutResponse =
+        RequestCheckoutResponse.from(facade.requestCheckout(OrderCommand.RequestCheckout(OrderId(orderId), terminal.storeId, terminal.terminalId)))
 }

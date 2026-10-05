@@ -7,6 +7,7 @@ import com.resilientpos.order.internal.domain.OrderRepository
 import com.resilientpos.platform.JdslQueryExecutor
 import com.resilientpos.platform.selectFrom
 import com.resilientpos.platform.ReadOnlyTransactional
+import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.TerminalId
 import jakarta.persistence.EntityManager
 import java.util.UUID
@@ -42,6 +43,16 @@ class OrderPersistenceAdapter(
     override fun findByIdForUpdate(id: OrderId): Order? =
         queries.findFirstForUpdate {
             selectFrom(OrderEntity::class).where(path(OrderEntity::id).eq(id.value))
+        }?.let(::toDomain)
+
+    override fun findByIdAndStoreIdForUpdate(id: OrderId, storeId: StoreId): Order? =
+        queries.findFirstForUpdate {
+            selectFrom(OrderEntity::class).where(
+                and(
+                    path(OrderEntity::id).eq(id.value),
+                    path(OrderEntity::storeId).eq(storeId.value),
+                ),
+            )
         }?.let(::toDomain)
 
     override fun findByClientOrderIdForUpdate(terminalId: TerminalId, clientOrderId: ClientOrderId): Order? =
