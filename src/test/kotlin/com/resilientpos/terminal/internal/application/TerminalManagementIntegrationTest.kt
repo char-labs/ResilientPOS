@@ -11,6 +11,7 @@ import com.resilientpos.terminal.TerminalId
 import com.resilientpos.terminal.TerminalManagement
 import java.security.MessageDigest
 import java.util.UUID
+import java.util.concurrent.ExecutionException
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import kotlin.test.Test
@@ -155,6 +156,34 @@ class TerminalManagementIntegrationTest(
         assertEquals("TERMINAL_INACTIVE", failure.code)
         assertEquals(DomainErrorKind.CONFLICT, failure.kind)
         assertEquals(1L, count("select count(*) from t_terminal_credential where terminal_id = ?", registered.terminalId.value))
+    }
+
+    @Test
+    fun `비활성화가 먼저 커밋되면 잠금을 기다리던 회전은 TERMINAL_INACTIVE이고 credential이 늘지 않는다`() {
+        val registered = register()
+        val executor = Executors.newSingleThreadExecutor()
+
+        try {
+            val rotation = Tx.masterTx {
+                jdbcTemplate.queryForObject<UUID>("select id from t_terminal where id = ? for update", registered.terminalId.value)
+                val rotation = executor.submit<TerminalCommand.RotateCredential.Result> {
+                    terminals.rotateCredential(TerminalCommand.RotateCredential(registered.terminalId))
+                }
+                runCatching { rotation.get(500, TimeUnit.MILLISECONDS) }
+                assertFalse(rotation.isDone, "회전이 단말 행 잠금을 기다리지 않았다")
+                jdbcTemplate.update("update t_terminal set status = 'INACTIVE' where id = ?", registered.terminalId.value)
+                rotation
+            }
+
+            val failure = assertFailsWith<ExecutionException> { rotation.get(5, TimeUnit.SECONDS) }
+
+            val cause = failure.cause as DomainException
+            assertEquals("TERMINAL_INACTIVE", cause.code)
+            assertEquals(1L, count("select count(*) from t_terminal_credential where terminal_id = ?", registered.terminalId.value))
+            assertNull(terminals.authenticate(registered.token))
+        } finally {
+            executor.shutdownNow()
+        }
     }
 
     @Test

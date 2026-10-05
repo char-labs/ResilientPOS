@@ -19,6 +19,14 @@ class Terminal private constructor(
     /** 비활성화한다. 이미 비활성이면 그대로다. 되돌리는 전이는 없다. */
     fun deactivate(): Terminal = if (status == TerminalStatus.INACTIVE) this else Terminal(id, storeId, TerminalStatus.INACTIVE)
 
+    /** credential을 새로 발급하기 전의 전제 조건. 비활성 단말은 [inactive]로 거절한다. */
+    fun requireActive() {
+        when (status) {
+            TerminalStatus.ACTIVE -> Unit
+            TerminalStatus.INACTIVE -> throw inactive()
+        }
+    }
+
     companion object {
         const val TERMINAL_NOT_FOUND = "TERMINAL_NOT_FOUND"
         const val TERMINAL_INACTIVE = "TERMINAL_INACTIVE"

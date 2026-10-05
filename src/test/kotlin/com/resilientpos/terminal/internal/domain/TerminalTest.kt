@@ -5,7 +5,10 @@ import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.TerminalId
 import java.util.UUID
 import kotlin.test.Test
+import com.resilientpos.foundation.DomainErrorKind
+import com.resilientpos.foundation.DomainException
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 
 class TerminalTest {
 
@@ -41,5 +44,21 @@ class TerminalTest {
         val inactive = Terminal.register(storeId, ids).deactivate()
 
         assertEquals(TerminalStatus.INACTIVE, inactive.deactivate().status)
+    }
+
+    @Test
+    fun `활성 단말은 credential 발급 전제 조건을 통과한다`() {
+        Terminal.register(storeId, ids).requireActive()
+    }
+
+    @Test
+    fun `비활성 단말의 credential 발급 전제 조건은 TERMINAL_INACTIVE CONFLICT로 거절한다`() {
+        val inactive = Terminal.register(storeId, ids).deactivate()
+
+        val failure = assertFailsWith<DomainException> { inactive.requireActive() }
+
+        assertEquals("TERMINAL_INACTIVE", failure.code)
+        assertEquals(DomainErrorKind.CONFLICT, failure.kind)
+        assertEquals(TerminalStatus.INACTIVE, inactive.status)
     }
 }

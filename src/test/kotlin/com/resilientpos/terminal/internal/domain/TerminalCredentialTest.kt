@@ -35,6 +35,11 @@ class TerminalCredentialTest {
     }
 
     @Test
+    fun `해시는 고정 입력의 SHA-256 소문자 hex 64자다`() {
+        assertEquals("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", TerminalCredential.hash("abc"))
+    }
+
+    @Test
     fun `발급마다 다른 토큰이다`() {
         assertNotEquals(TerminalCredential.issue(terminalId, ids).token, TerminalCredential.issue(terminalId, ids).token)
     }

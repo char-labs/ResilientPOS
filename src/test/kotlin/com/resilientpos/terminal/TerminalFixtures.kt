@@ -7,7 +7,8 @@ import org.springframework.restdocs.headers.HeaderDocumentation.requestHeaders
 
 /** 웹 슬라이스와 통합 테스트가 v1 경로에 붙이는 단말 인증의 공용 fixture. */
 object TerminalFixtures {
-    const val TOKEN = "test-terminal-token"
+    /** 실제 토큰과 같은 형식(base64url 43자). 인터셉터가 형식이 다른 값은 조회 없이 401로 거르므로 고정 fixture도 맞춘다. */
+    const val TOKEN = "dGVzdC10ZXJtaW5hbC10b2tlbi1maXh0dXJlLTAwMDA"
     const val BEARER = "Bearer $TOKEN"
 
     /** REST Docs 요청 헤더 스니펫. 인증이 걸린 모든 endpoint 문서에 넣는다. */

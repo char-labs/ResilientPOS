@@ -16,8 +16,10 @@ import org.springframework.web.servlet.HandlerInterceptor
 class TerminalAuthenticationInterceptor(private val terminals: TerminalManagement) : HandlerInterceptor {
 
     override fun preHandle(request: HttpServletRequest, response: HttpServletResponse, handler: Any): Boolean {
-        val token = request.getHeader(HttpHeaders.AUTHORIZATION)?.takeIf { it.startsWith(BEARER_PREFIX) }
-            ?.removePrefix(BEARER_PREFIX)?.trim()?.takeIf { it.isNotEmpty() }
+        // 스킴은 대소문자를 구분하지 않는다(RFC 7235 2.1). 토큰 형식이 아니면 해시·DB 조회 없이 거른다.
+        val token = request.getHeader(HttpHeaders.AUTHORIZATION)
+            ?.takeIf { it.regionMatches(0, BEARER_PREFIX, 0, BEARER_PREFIX.length, ignoreCase = true) }
+            ?.substring(BEARER_PREFIX.length)?.takeIf { TOKEN_FORMAT.matches(it) }
             ?: throw UnauthenticatedException()
         request.setAttribute(ATTRIBUTE, terminals.authenticate(token) ?: throw UnauthenticatedException())
         return true
@@ -26,5 +28,8 @@ class TerminalAuthenticationInterceptor(private val terminals: TerminalManagemen
     companion object {
         const val ATTRIBUTE = "com.resilientpos.terminal.AuthenticatedTerminal"
         private const val BEARER_PREFIX = "Bearer "
+
+        /** `TerminalCredential.issue`의 토큰 형식: 32바이트의 base64url(패딩 없음) 43자. */
+        private val TOKEN_FORMAT = Regex("[A-Za-z0-9_-]{43}")
     }
 }

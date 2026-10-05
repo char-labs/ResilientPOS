@@ -5,7 +5,6 @@ import com.resilientpos.platform.Tx
 import com.resilientpos.terminal.internal.domain.Terminal
 import com.resilientpos.terminal.internal.domain.TerminalCredential
 import com.resilientpos.terminal.internal.domain.TerminalRepository
-import com.resilientpos.terminal.internal.domain.TerminalStatus
 import java.time.Clock
 import org.springframework.stereotype.Service
 
@@ -39,7 +38,7 @@ class TerminalManagement(
     /** 유효 credential을 폐기하고 새로 발급한다. 옛 행은 이력으로 남는다. 비활성 단말은 거절한다. */
     fun rotateCredential(command: TerminalCommand.RotateCredential): TerminalCommand.RotateCredential.Result = Tx.masterTx {
         val terminal = repository.findByIdForUpdate(command.terminalId) ?: throw Terminal.notFound()
-        if (terminal.status == TerminalStatus.INACTIVE) throw Terminal.inactive()
+        terminal.requireActive()
         repository.findActiveCredential(terminal.id)?.let { repository.update(it.revoke(clock.instant())) }
         val issued = TerminalCredential.issue(terminal.id, identifierGenerator)
         repository.save(issued.credential)

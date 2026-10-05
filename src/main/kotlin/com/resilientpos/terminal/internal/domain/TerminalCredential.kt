@@ -6,6 +6,7 @@ import java.security.MessageDigest
 import java.security.SecureRandom
 import java.time.Instant
 import java.util.Base64
+import java.util.HexFormat
 import java.util.UUID
 
 /**
@@ -36,7 +37,7 @@ class TerminalCredential private constructor(
 
         /** 토큰의 SHA-256 소문자 hex. 엔트로피가 충분해 salt도 느린 해시도 쓰지 않는다. */
         fun hash(token: String): String =
-            MessageDigest.getInstance("SHA-256").digest(token.toByteArray()).joinToString("") { "%02x".format(it) }
+            MessageDigest.getInstance("SHA-256").digest(token.toByteArray()).let(HexFormat.of()::formatHex)
 
         /** 저장된 credential을 그대로 재구성한다. persistence adapter의 `toDomain()`만 부른다. */
         fun restore(id: UUID, terminalId: TerminalId, tokenHash: String, revokedAt: Instant?) =
