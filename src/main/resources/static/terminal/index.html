@@ -171,6 +171,13 @@
   .co-lines small { color: var(--sub); } .co-lines div { display: flex; justify-content: space-between; gap: 16px; padding: 8px 0; font-variant-numeric: tabular-nums; }
   .co-sum { display: flex; align-items: center; justify-content: space-between; padding: 24px; border-top: 1px solid var(--line); font-size: 15px; }
   .co-sum b { font-size: 22px; } .co-sum i { font-style: normal; color: var(--blue); font-weight: 600; }
+  /* 현금 확인: 결제하기 화면 위에 뜨는 대화상자. 뒤 화면은 inert로 막는다. */
+  .co-dim { position: absolute; inset: 0; background: rgba(0,0,0,.45); display: grid; place-items: center; }
+  .co-dialog { width: 480px; background: #fff; border-radius: 16px; padding: 32px; display: flex; flex-direction: column; gap: 16px; }
+  .co-dialog h2 { margin: 0; font-size: 22px; } .co-dialog .amt { font-size: 32px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .co-dialog p { margin: 0; font-size: 15px; color: var(--sub); }
+  .co-dialog .btns { display: grid; grid-template-columns: 1fr 2fr; gap: 8px; margin-top: 8px; }
+  .co-dialog .receipt { grid-column: 1 / -1; }
 
   /* 고객 화면: 세로형 단말(800×1280 비율)을 480×768 논리 크기로 그리고 fit()이 화면에 맞춰 축소·확대한다 */
   .device.portrait { width: 480px; height: 880px; background: #15171a; border-radius: 32px; }
@@ -482,9 +489,11 @@ function render() {
   (back?.disabled && back.dataset.act === 'catStep' ? device.querySelector('.tab[aria-selected="true"]') : back)?.focus({ preventScroll: true });
   SCROLLERS.forEach((q, i) => { const e = device.querySelector(q); if (e && kept[i]) [e.scrollTop, e.scrollLeft] = kept[i]; });
   device.querySelector('.line.sel')?.scrollIntoView({ block: 'nearest' }); // 방금 담은 줄이 보이게 한다
+  if (U.focusTo) { device.querySelector(U.focusTo)?.focus(); U.focusTo = null; } // 대화상자를 열고 닫을 때 포커스를 옮긴다
   if (U.tabJump) { U.tabJump = false; device.querySelector('.tab[aria-selected="true"]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } // 화살표로 고른 분류가 보이게 한다
 
   if (ROLE !== 'pos') return;
+  document.querySelector('.demo-bar').inert = !!U.cashConfirm; // 대화상자가 떠 있는 동안 시연 제어도 막는다
   const net = document.getElementById('netToggle');
   net.textContent = S.forcedOffline ? '네트워크 차단 중 (눌러서 연결)' : '네트워크 연결됨 (눌러서 차단)';
   net.className = S.forcedOffline ? 'off' : '';
@@ -687,8 +696,8 @@ function statusView() {
 
 // 포스의 결제하기 화면. 연결된 고객 단말에는 같은 금액의 결제 화면이 함께 뜬다(고객도 결제 방법을 고를 수 있다).
 function checkoutView() {
-  const n = count();
-  return `<div class="co"><section class="co-main">
+  const n = count(), off = U.cashConfirm ? 'inert' : '';
+  return `<div class="co"><section class="co-main" ${off}>
       <div class="co-back"><button class="icon-btn" data-act="backOrder" aria-label="뒤로">${ICON.back}</button>${nowLabel()}</div>
       <div class="co-total"><div><small>총 결제금액</small><b>${won(total())}원 결제</b></div><button class="btn-xl soft" data-act="todo">분할 결제</button></div>
       <button class="co-link" data-act="todo">쿠폰·포인트 사용 ›</button>
@@ -701,9 +710,19 @@ function checkoutView() {
         <button class="co-tile" data-act="todo">${ICON.bank}계좌이체</button>
         <button class="co-tile" data-act="todo">${ICON.card}전화승인</button>
       </div></section>
-    <aside class="co-side"><button class="co-edit" data-act="backOrder">✎ 주문내역 수정</button>
+    <aside class="co-side" ${off}><button class="co-edit" data-act="backOrder">✎ 주문내역 수정</button>
       <div class="co-lines"><small>[${U.dining} ${n}개]</small>${U.cart.map(l => `<div><span>${l.name} × ${l.qty}</span><span>${won(l.price * l.qty)}</span></div>`).join('')}</div>
-      <div class="co-sum"><span>총 <i>${n}</i>개</span><b>${won(total())}원</b></div></aside></div>`;
+      <div class="co-sum"><span>총 <i>${n}</i>개</span><b>${won(total())}원</b></div></aside></div>${U.cashConfirm ? cashDialog() : ''}`;
+}
+// 실제 포스처럼 현금은 받은 뒤에 한 번 더 확인한다. 이 시연은 결제 요청을 단말에 저장하는 데까지다.
+function cashDialog() {
+  return `<div class="co-dim"><div class="co-dialog" role="dialog" aria-modal="true" aria-labelledby="cashTitle" aria-describedby="cashDesc">
+    <h2 id="cashTitle">현금을 받으셨나요?</h2>
+    <div class="amt">${won(total())}원</div>
+    <p id="cashDesc">현금을 받은 뒤 누르세요. 시연에서는 결제 요청을 단말에 저장하고, 연결되면 서버로 전송합니다.</p>
+    <div class="btns"><button class="btn-xl soft receipt" data-act="todo">현금영수증 (시연 범위 밖)</button>
+      <button class="btn-xl grey" data-act="cashCancel">취소</button><button class="btn-xl fill" data-act="cashOk">현금 받음 · 요청 저장</button></div>
+  </div></div>`;
 }
 
 // 고객 결제 화면. 결제가 시작되면 직원 화면 대신 이 세로형 화면이 단말에 뜬다.
@@ -802,6 +821,7 @@ function complete(method, lines, dining) {
   const kiosk = !!lines || customerKiosk();
   const clientOrderId = enqueueOrder(method, lines || U.cart, kiosk ? 'KIOSK' : 'POS', dining);
   if (!clientOrderId) return false; // 저장에 실패하면 결제를 완료로 보이지 않는다
+  U.cashConfirm = false;
   if (ROLE === 'pos' && !lines) U.view = 'order'; // 키오스크 주문이 들어왔다고 직원이 보던 화면을 바꾸지 않는다
   if (connected()) { U.remote = null; U.lastResultId = clientOrderId; }
   else if (U.overlay) showDone({ amount: S.orders[0].amount, clientOrderId, kiosk: U.overlay.kiosk }); // 고객 화면에서 진행하던 결제만 완료 화면을 보인다
@@ -863,7 +883,7 @@ const ACT = {
   pay: () => {
     // 직원이 포스에서 누른 결제는 결제하기 화면으로 간다. 고객이 직접 누른 결제(키오스크)는 바로 결제 수단 화면이다.
     if (ROLE === 'pos' && !(U.kiosk && !connected())) {
-      U.view = 'checkout';
+      U.view = 'checkout'; U.cashConfirm = false;
       if (connected()) { U.remote = { amount: total() }; U.lastResultId = null; } // 새 결제가 단말에 남은 이전 결과 화면을 밀어낸다
     } else U.overlay = { step: 'kpay', amount: total(), kiosk: true };
   },
@@ -872,7 +892,10 @@ const ACT = {
     if (connected()) return '고객 단말에 카드를 넣거나 대면 결제됩니다';
     U.overlay = { step: 'pay', amount: total() }; // 단말 창이 없으면 이 화면이 고객 화면으로 바뀐다
   },
-  payCash: () => complete('CASH') ? '현금 결제 요청을 접수했습니다' : undefined,
+  payCash: () => { U.cashConfirm = true; U.focusTo = '[data-act="cashCancel"]'; },
+  cashCancel: () => { U.cashConfirm = false; U.focusTo = '[data-act="payCash"]'; },
+  // 저장에 실패하면 complete가 주문서를 그대로 두고, 대화상자도 열린 채로 남는다
+  cashOk: () => U.cashConfirm && complete('CASH') ? '현금 결제 요청을 저장했습니다' : undefined,
   retryPay: () => { clearTimeout(sentTimer); U.overlay = { step: 'kpay', amount: total(), kiosk: true }; },
   pick: el => { U.selOrder = el.dataset.id; },
   finish: el => { const o = S.orders.find(x => x.clientOrderId === el.dataset.id); if (o) { o.done = true; save(); } },
@@ -997,6 +1020,14 @@ if (ROLE === 'terminal') {
   document.title = 'ResilientPOS 고객 단말';
   send({ t: 'hello' });
 }
+// 현금 확인 대화상자: Esc로 닫고, Tab·Shift+Tab은 대화상자 안에서 돈다
+addEventListener('keydown', e => {
+  if (!U.cashConfirm) return;
+  if (e.key === 'Escape') { ACT.cashCancel(); render(); return; }
+  if (e.key !== 'Tab') return;
+  const b = [...document.querySelectorAll('.co-dialog button')], i = b.indexOf(document.activeElement);
+  if (b.length && (i < 0 || (e.shiftKey ? i === 0 : i === b.length - 1))) { e.preventDefault(); b[i < 0 || !e.shiftKey ? 0 : b.length - 1].focus(); }
+});
 addEventListener('resize', fit);
 addEventListener('online', () => { render(); flush(); });
 addEventListener('offline', render);
