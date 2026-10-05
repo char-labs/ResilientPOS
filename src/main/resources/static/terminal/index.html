@@ -459,6 +459,8 @@ const ICON = {
 const SCROLLERS = ['.tab-scroll', '.lines', '.k-menu', '.k-cats', '.k-list', '.st-list', '.co-lines'];
 function render() {
   const device = document.getElementById('device');
+  // 현금 확인 중에 결제하기를 떠났다면(고객의 결제 취소 등) 대화상자 상태를 버리고 결제 버튼으로 포커스를 옮긴다
+  if (U.cashConfirm && U.view !== 'checkout') { U.cashConfirm = false; U.focusTo = '.order-foot [data-act="pay"]'; }
   fit();
   const KEYS = ['act', 'i', 'id', 'c', 'd', 's', 'v'], a = document.activeElement;
   const focused = a && device.contains(a) && a.dataset.act ? KEYS.map(k => a.dataset[k]) : null;
@@ -821,11 +823,11 @@ function complete(method, lines, dining) {
   const kiosk = !!lines || customerKiosk();
   const clientOrderId = enqueueOrder(method, lines || U.cart, kiosk ? 'KIOSK' : 'POS', dining);
   if (!clientOrderId) return false; // 저장에 실패하면 결제를 완료로 보이지 않는다
-  U.cashConfirm = false;
   if (ROLE === 'pos' && !lines) U.view = 'order'; // 키오스크 주문이 들어왔다고 직원이 보던 화면을 바꾸지 않는다
   if (connected()) { U.remote = null; U.lastResultId = clientOrderId; }
   else if (U.overlay) showDone({ amount: S.orders[0].amount, clientOrderId, kiosk: U.overlay.kiosk }); // 고객 화면에서 진행하던 결제만 완료 화면을 보인다
-  if (!lines) { U.cart = []; U.sel = -1; U.kstep = 'home'; }
+  // 직원이 받은 결제만 현금 확인을 닫는다. 접수 뒤에는 주문 홈의 분류 탭으로 포커스를 옮긴다.
+  if (!lines) { U.cart = []; U.sel = -1; U.kstep = 'home'; U.cashConfirm = false; U.focusTo = '.tab[aria-selected="true"]'; }
   flush();
   return true;
 }
@@ -1026,7 +1028,7 @@ addEventListener('keydown', e => {
   if (e.key === 'Escape') { ACT.cashCancel(); render(); return; }
   if (e.key !== 'Tab') return;
   const b = [...document.querySelectorAll('.co-dialog button')], i = b.indexOf(document.activeElement);
-  if (b.length && (i < 0 || (e.shiftKey ? i === 0 : i === b.length - 1))) { e.preventDefault(); b[i < 0 || !e.shiftKey ? 0 : b.length - 1].focus(); }
+  if (b.length && (i < 0 || (e.shiftKey ? i === 0 : i === b.length - 1))) { e.preventDefault(); b[e.shiftKey ? b.length - 1 : 0].focus(); }
 });
 addEventListener('resize', fit);
 addEventListener('online', () => { render(); flush(); });
