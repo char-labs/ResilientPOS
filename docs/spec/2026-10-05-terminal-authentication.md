@@ -35,7 +35,7 @@
 
 **결정 5: 인증 경로.**
 - `terminal.internal.adapter.web`의 인터셉터가 `/v1/**`에 걸린다. `Authorization` 헤더가 없거나 `Bearer ` 형식이 아니거나 `TerminalManagement.authenticate(token)`이 단말을 돌려주지 않으면 `platform`의 인증 실패 예외를 던진다. `authenticate`는 해시가 같고 폐기되지 않은 credential과 `ACTIVE` 단말을 한 조회로 찾아 `AuthenticatedTerminal(terminalId, storeId)`를 돌려준다.
-- 인증 결과는 요청 속성에 두고, 같은 모듈의 argument resolver가 Controller 파라미터 `AuthenticatedTerminal`로 넘긴다. `AuthenticatedTerminal`은 `terminal` 모듈 루트의 공개 타입이다(§4.4). `order`·`sync`는 이미 `TerminalId`로 `terminal`에 의존하므로 새 간선이 아니다.
+- 인증 결과는 요청 속성에 두고, 같은 모듈의 argument resolver가 Controller 파라미터 `AuthenticatedTerminal`로 넘긴다. `AuthenticatedTerminal`은 `terminal` 모듈 루트의 공개 타입이다(§4.4). `order`·`sync`는 이미 `TerminalId`로 `terminal`에 의존하므로 새 간선이 아니다. 반대로 `terminal`은 리프 모듈이었는데 이제 `store`(값 타입 `StoreId`)와 `platform`·`foundation`(공용 인프라와 예외)에 의존한다. 모두 다른 모듈도 같은 방향으로 쓰는 공개 타입이라 순환이 생기지 않아 받아들인다(리뷰에서 바로잡음).
 - `/actuator/**`는 경로가 달라 인터셉터 대상이 아니다. 지금처럼 배포(ingress)에서 외부로 라우팅하지 않는다.
 - `Authorization` 헤더와 토큰은 로그에 남기지 않는다. `ApiControllerAdvice`는 method와 URI만 남긴다.
 
@@ -51,6 +51,16 @@
 - sync 항목의 `STORE_MISMATCH`는 HTTP가 아니라 항목 결과다.
 
 **관측성.** 401·403은 advice의 기존 WARN 로그(`errorCode`, method, URI)로 남는다. 새 metric은 없다. `terminalId`는 metric label로 쓰지 않는다([관측성](../wiki/observability.md)).
+
+**범위 조정(PR #81 multi-review 반영).** Claude·Codex 리뷰가 지적한 것을 모두 이 PR에 넣는다.
+- checkout은 주문 행을 잠근 뒤 매장을 비교했다. 다른 매장 주문이 그 매장의 요청으로 잠겨 있으면 최대 3초 뒤 409가 나서 즉시 404인 "없는 주문"과 구별되고, 다른 매장 단말이 남의 주문 행을 잠가 그 매장의 checkout·결제 반영을 기다리게 할 수 있었다. 잠금 조회 조건에 매장을 넣는다(`id`와 `store_id`로 잠금). 매장이 다른 행은 잠기지도 반환되지도 않아 없는 주문과 같다. WARN 로그는 null일 때만 잠그지 않는 존재 확인으로 구분하고, 요청한 단말 ID도 남긴다(`RequestCheckout`에 `terminalId`).
+- 주문 생성은 본문 변환보다 소유권 대조를 먼저 한다. 변환 오류(400)보다 403이 앞선다.
+- 인터셉터는 `Bearer` 스킴을 대소문자 구분 없이 받고(RFC 7235 §2.1), 형식이 토큰과 다른 값(base64url 43자가 아님)은 해시·DB 조회 없이 401이다. 응답은 같아 결정 7과 충돌하지 않는다.
+- `UnauthenticatedException`은 스택 트레이스를 만들지 않는다. 대입 공격이 요청마다 스택 한 덩어리를 로그에 쌓지 않게 하려는 것이다.
+- 비활성 단말의 회전 거절은 aggregate(`Terminal`)의 전제 조건으로 옮긴다. 해시 hex 변환은 `HexFormat`을 쓴다(출력 동일).
+- credential은 `Terminal`의 자식이지만 루트가 목록으로 들지 않고 `TerminalManagement`가 따로 저장한다. 이력이 회전마다 늘어 루트를 읽을 때마다 싣지 않으려는 것이고, 회전은 루트 행 잠금 아래 한 커밋으로 묶어 자식 따로 저장 금지 규칙(domain-modeling §2)이 지키려는 원자성을 유지한다.
+- 테스트를 더한다: 토큰이 로그와 결과 객체 `toString`에 남지 않음, 회전·비활성화 커밋 뒤 옛 토큰·비활성 단말이 401이고 새 토큰은 통과함, 비활성화가 먼저 커밋되면 겹친 회전은 `TERMINAL_INACTIVE`, V012의 두 unique를 직접 INSERT로 확인, checkout·sync의 401 HTTP 통합, 소문자 `bearer`와 빈 토큰.
+- 리버스 프록시 access log의 `Authorization` 마스킹은 앱 밖 배포 설정이라 [관측성](../wiki/observability.md)의 배포 확인 항목으로만 적는다.
 
 ## 제외
 - HTTP 단말 등록 API와 운영자 인증. 결정 2.
@@ -93,7 +103,7 @@
 7. checkout은 같은 매장의 다른 단말이 요청해도 200이다. 다른 매장 단말의 요청은 404 `ORDER_NOT_FOUND`이고 주문은 `OPEN`이며 checkout 행과 발행 기록이 없다.
 8. sync는 경로의 `terminalId`가 인증 주체와 다르면 403 `TERMINAL_MISMATCH`이고 watermark를 만들지 않는다. `CREATE_ORDER` 항목의 `storeId`가 다르면 그 항목은 `REJECTED`+`STORE_MISMATCH`이고 순번은 확정되며 다음 항목은 적용된다. 재전송은 같은 거절의 `DUPLICATE`다.
 9. REST Docs 스니펫의 요청에 `Authorization` 헤더가 문서화되고, 기존 Controller·통합 테스트는 인증 헤더를 붙여 지금과 같은 결과를 낸다.
-10. `ModuleStructureTest`가 통과한다(새 모듈 간선 없음).
+10. `ModuleStructureTest`가 통과한다(순환 없음, 다른 모듈의 internal 접근 없음).
 
 ## 스키마 변경 검토
 `V012__terminal_credential.sql`이 새 표 둘을 만든다. 기존 표는 바꾸지 않는다.
