@@ -80,6 +80,7 @@
 - docs/wiki/current-state.md
 - docs/wiki/domain-model.md
 - docs/wiki/observability.md
+- docs/wiki/entity-map.md
 - docs/spec/2026-10-05-terminal-authentication.md
 
 ## 인수 조건
@@ -122,15 +123,15 @@ create unique index ux_terminal_credential_active on t_terminal_credential (term
 ```
 
 - 질문 1(도출): 도출할 수 없다. 단말과 매장의 소속, 상태, 토큰 해시는 지금 어디에도 없다. `t_order.store_id`·`terminal_id`는 주문의 snapshot이고 단말이 없는 매장 소속을 말하지 않는다.
-- 질문 2(읽는 코드): 모든 컬럼을 `authenticate`나 회전·비활성화가 읽는다. `store_id`는 소유권 검사가, `status`는 인증이, `token_hash`·`revoked_at`은 인증과 회전이 읽는다. 단말 코드는 읽는 코드가 없어 넣지 않았다(결정 4).
+- 질문 2(읽는 코드): 업무 컬럼은 모두 읽힌다. `t_terminal.store_id`는 인증 결과의 `storeId`가 되어 소유권 검사가, `status`는 인증과 회전이, `t_terminal_credential.terminal_id`는 인증의 조인과 회전의 유효 credential 조회가, `token_hash`는 인증이, `revoked_at`은 인증과 회전이 읽는다. 회전은 `token_hash`를 쓰기만 한다. `created_at`·`updated_at`은 `BaseEntity` 관례로 붙은 감사 컬럼이라 업무 코드가 읽지 않는다. 단말 코드는 읽는 코드가 없어 넣지 않았다(결정 4).
 - 질문 3(나중에 채우기): 해당 없다. 넣는 컬럼은 모두 지금 읽힌다.
-- 질문 4(마지막 방어선): `ux_terminal_credential_token_hash`는 해시 하나가 두 단말을 가리키지 않게 하는 방어선이다. 256bit 난수라 충돌은 사실상 없지만 조회가 한 행을 전제하므로 제약으로 둔다. `ux_terminal_credential_active`는 "유효 credential은 단말당 하나"의 방어선이다. 평소에는 terminal 행 잠금이 회전을 직렬화하고, 잠금 밖에서 들어온 행(수동 수정)을 여기서 막는다. 둘 다 soft delete된 행에도 걸린다. 지우는 명령이 없고 이력 삭제 금지가 불변식이다. 지우는 명령이 생기면 조회가 삭제된 행도 보게 해야 한다(`@SoftDelete`는 조회만 거르고 제약은 남는다).
+- 질문 4(마지막 방어선): `ux_terminal_credential_token_hash`는 해시 하나가 두 단말을 가리키지 않게 하는 방어선이다. 256bit 난수라 충돌은 사실상 없지만 조회가 한 행을 전제하므로 제약으로 둔다. `ux_terminal_credential_active`는 "유효 credential은 단말당 하나"의 방어선이다. 평소에는 terminal 행 잠금이 회전을 직렬화하고, 잠금 밖에서 들어온 행(수동 수정)을 여기서 막는다. 둘 다 soft delete된 행에도 걸린다. 지우는 명령이 없고 이력 삭제 금지가 불변식이다. 지우는 명령이 생기면 조회가 삭제된 행도 보게 해야 한다(`@SoftDelete`는 조회만 거르고 제약은 남는다). `terminal_id` 전체 인덱스는 두지 않는다. 지금 조회는 유효 행만 찾아 partial unique 인덱스로 충분하다. 단말의 credential 이력을 조회하는 코드가 생기면 그때 더한다.
 - 질문 5(정본): 정본은 하나다. 단말의 매장은 `t_terminal.store_id`, 유효 토큰은 `revoked_at is null`인 행이다. 인증 결과를 캐시하지 않는다.
-- 질문 6(check-then-act): 회전과 비활성화는 단말 상태를 읽고 쓴다. terminal 행 잠금(`PESSIMISTIC_WRITE`, 대기 3초)이 막고 Redis `Lock`과 함께 기다리지 않는다. 행 잠금이 있으므로 `@Version`은 두지 않는다(sync watermark와 같은 판단). 인증은 읽기만 한다. 인증과 회전이 겹치면 인증은 커밋 전 상태를 읽어 옛 토큰을 한 번 더 통과시킬 수 있다. 그 요청은 회전 커밋 직전에 도착한 요청과 구별되지 않아 받아들인다.
+- 질문 6(check-then-act): 회전과 비활성화는 단말 상태를 읽고 쓴다. terminal 행 잠금(`PESSIMISTIC_WRITE`, 대기 3초)이 막고 Redis `Lock`과 함께 기다리지 않는다. 행 잠금이 있으므로 `@Version`은 두지 않는다(sync watermark와 같은 판단). 인증은 읽기만 한다. 인증과 회전이 겹치면 인증은 커밋 전 상태를 읽어 옛 토큰을 한 번 더 통과시킬 수 있다. 비활성화와 겹칠 때도 같아서 커밋 직전의 인증이 `ACTIVE`를 읽고 통과할 수 있다. 두 경우 모두 그 요청은 커밋 직전에 도착한 요청과 구별되지 않아 받아들인다. 회전은 terminal 잠금 조회와 유효 credential 조회를 따로 실행하지만, credential을 쓰는 경로가 등록(새 단말이라 경합이 없다)과 회전(같은 잠금 아래)뿐이라 READ COMMITTED에서도 두 조회가 서로 다른 커밋을 섞어 읽지 않는다. Hibernate가 한 flush에서 INSERT를 UPDATE보다 먼저 보내므로 회전은 옛 credential의 폐기 UPDATE를 먼저 flush한다. 그러지 않으면 새 유효 행이 partial unique에 걸린다(flush를 지운 변형에서 겹침 테스트가 `DataIntegrityViolationException`으로 실패하는 것을 관측했다).
 - 질문 7(락): 새 표라 기존 표에 락을 잡지 않는다. 행이 없어 인덱스 빌드가 즉시 끝난다.
-- 질문 8(이전 버전): 이전 버전은 새 표를 모르고 매핑하지 않아 `validate`가 통과한다. 이전 버전 인스턴스는 인증 없이 요청을 받으므로 배포가 끝날 때까지 빈틈이 남는다. 외부에 노출하지 않은 상태라 받아들인다.
+- 질문 8(이전 버전): 이전 버전은 새 표를 모르고 매핑하지 않아 `validate`가 통과한다. 이전 버전 인스턴스는 인증 없이 요청을 받으므로 배포가 끝날 때까지 빈틈이 남는다. 외부에 노출하지 않은 상태라 받아들인다. DDL은 기존 표를 바꾸지 않지만 기존 컬럼에 새 값이 들어간다. sync 항목 거절이 `t_sync_operation.error_code`(`varchar(64)`)에 `STORE_MISMATCH`를 기록한다. 엔티티가 `String`으로 매핑하므로 이전 버전이 그 행을 `DUPLICATE` 응답으로 읽어도 깨지지 않는다. checkout의 매장 대조는 이미 매핑된 `t_order.store_id`를 읽는다.
 - 질문 9(payload): 이벤트 payload와 캐시되는 DTO에 실리지 않는다. 토큰 평문은 등록·회전 결과에만 있다.
-- 대조 기록: 미작성. PR 제출 전에 구현자가 아닌 리뷰어가 채운다.
+- 대조 기록: code-reviewer(읽기 전용 에이전트), 2026-10-05. V012__terminal_credential.sql, V010__sync_intake.sql, TerminalEntity, TerminalCredentialEntity, TerminalPersistenceAdapter, Terminal, TerminalCredential, TerminalRepository, TerminalManagement, TerminalCommand, BaseEntity, JdslQueryExecutor, OrderCommandFacade, OrderEntity, SyncCommandFacade, SyncOperationEntity를 질문 1~9의 답과 대조했다. 기존 마이그레이션 무변경은 리뷰어가 git status로 보고 구현자가 `git diff 8133048 -- src/main/resources/db/migration`(V012 신규 하나)으로 다시 확인했다. 불일치 1건(질문 2의 읽는 컬럼 목록)과 누락 4건(질문 8의 `error_code` 새 값, 질문 6의 회전 두 조회의 일관성 근거와 비활성화의 같은 창, 질문 4의 `terminal_id` 전체 인덱스 부재)을 받아 위 답에 반영했다. 범위 밖 관찰 1건(adapter 쓰기 메서드의 `@Transactional` 안전망 누락)은 rules와 다른 adapter의 관례대로 고쳤다.
 
 ## 검증
 - `./gradlew test`. 통합 테스트는 Testcontainers의 PostgreSQL·Redis·Kafka를 쓴다.
@@ -142,6 +143,7 @@ create unique index ux_terminal_credential_active on t_terminal_credential (term
 - [현재 상태](../wiki/current-state.md): `terminal` 모듈의 aggregate·Facade·인증 경로, checkout·sync의 소유권 검사, 401·403 응답을 적는다. "인가가 없다"와 sync의 "단말 인증 … 없다"를 고친다. 등록 API가 없어 외부 노출은 여전히 하지 않는다는 점과 이전 버전 인스턴스의 빈틈을 남긴다. `ErrorType` 항목 수를 고친다.
 - [도메인 모델](../wiki/domain-model.md): `terminal` 행의 "매장 안에서 코드 유일"이 아직 구현되지 않았다는 점, `Terminal` 구성(credential 이력), §4.7 사례에 두 unique를 적는다. 용어 `credential`이 용어집에 없으면 더한다.
 - [관측성](../wiki/observability.md): "앱에 인증이 없으므로" 문장을 `/v1/**`만 인증하고 Actuator는 배포에서 막는다로 고친다.
+- [엔티티 지도](../wiki/entity-map.md): `TerminalEntity`·`TerminalCredentialEntity`의 역할과 참조 관계를 더한다. 새 엔티티의 KDoc이 이 문서를 가리킨다(범위 조정, 구현 중 추가).
 - 요구사항 변화: 참고 문서의 요구(단말 인증, 소유권 검사, 비활성 단말 인증 불가)를 처음 구현한다. 요구 자체는 바뀌지 않는다.
 
 ## 분할 계획
@@ -150,12 +152,20 @@ create unique index ux_terminal_credential_active on t_terminal_credential (term
 ## TDD 검증 기록
 | 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
 |---|---|---|---|
-| 인수 1~4, `TerminalManagement` 등록·인증·회전·비활성화 | 미실행 | 미실행 | 미실행 |
-| 인수 5, 인터셉터의 401과 Actuator 제외 | 미실행 | 미실행 | 미실행 |
-| 인수 6, 주문 생성의 403 | 미실행 | 미실행 | 미실행 |
-| 인수 7, checkout의 같은 매장 허용과 다른 매장 404 | 미실행 | 미실행 | 미실행 |
-| 인수 8, sync 경로 403과 항목 `STORE_MISMATCH` | 미실행 | 미실행 | 미실행 |
-| 인수 9, 기존 Controller·REST Docs·통합 테스트의 인증 헤더 | 미실행 | 미실행 | 미실행 |
+| 인수 1~4, `TerminalManagement` 등록·인증·회전·비활성화. 통합 `TerminalManagementIntegrationTest`(등록하면 ACTIVE 단말과 credential 하나가 생기고 DB에는 토큰의 해시만 있다 / 유효한 토큰은 단말과 매장을 돌려주고 모르는 토큰은 없음이다 / 회전하면 새 토큰만 인증되고 옛 credential 행은 폐기된 채 남는다 / 같은 단말의 회전이 겹쳐도 유효 credential은 하나다 / 단말 행이 잠겨 있으면 회전은 잠금이 풀리기를 기다린다 / 비활성화는 멱등이고 그 단말의 토큰은 인증되지 않는다 / 비활성 단말의 회전은 TERMINAL_INACTIVE이고 credential이 늘지 않는다 / 모르는 단말의 회전과 비활성화는 TERMINAL_NOT_FOUND다), 도메인 `TerminalTest`·`TerminalCredentialTest` | `./gradlew test --tests 'com.resilientpos.terminal.*'`. 공개 타입·`TODO()` 본문 스텁만 둔 상태에서 14개 전부 실패했다. 이유는 `kotlin.NotImplementedError`(동작 미구현)이고 컴파일 오류가 아니다. 테이블이 없어서가 아니라 스텁에서 먼저 실패했으므로 마이그레이션 부재는 이 RED에 포함되지 않는다 | 같은 명령. 통합 8개와 도메인 6개 전부 통과. 구현 중 관측: 회전 중 옛 credential 폐기 UPDATE를 flush하지 않으면 Hibernate가 INSERT를 먼저 보내 `ux_terminal_credential_active`에 걸려 겹침 테스트가 `DataIntegrityViolationException`으로 실패했고, 폐기 직후 flush를 넣어 해소했다 | `./gradlew test --tests 'com.resilientpos.terminal.*' --tests 'com.resilientpos.SchemaMigrationTest' --tests 'com.resilientpos.ModuleStructureTest' --tests 'com.resilientpos.EntityVisibilityTest' --tests 'com.resilientpos.TransactionDeclarationTest' --tests 'com.resilientpos.DependencyDirectionTest'`. 30개 통과, 실패 0 |
+| 인수 5, 인터셉터의 401과 Actuator 제외. 슬라이스 `OrderControllerTest`(Authorization 헤더가 없으면 401 UNAUTHENTICATED와 WWW-Authenticate이고 Facade를 부르지 않는다 / Bearer 형식이 아니거나 authenticate가 없음을 돌려주면 같은 401이고 Facade를 부르지 않는다, REST Docs `orders-create-unauthenticated`), `OrderCheckoutControllerTest`·`SyncControllerTest`의 헤더 없음 401, 통합 `TerminalAuthenticationIntegrationTest`(헤더 없음 / Bearer 아님 / 모르는 토큰 / 회전된 옛 토큰 / 비활성 단말은 각각 같은 401이고 주문이 생기지 않는다, 유효한 토큰은 201, actuator health는 토큰 없이 200) | `./gradlew test --tests 'com.resilientpos.order.internal.adapter.web.OrderControllerTest'`. 인터셉터·`UnauthenticatedException`·`UNAUTHENTICATED` 없이 새 401 슬라이스 2개가 assertion으로 실패했다(헤더가 없어도 요청이 통과해 401이 아니었다). 통합 `TerminalAuthenticationIntegrationTest`의 별도 RED는 관측하지 않았다(슬라이스 RED 뒤 구현과 함께 처음 실행) | 같은 명령 통과(15개). `./gradlew test --tests '*ControllerTest' --tests '*ApiIntegrationTest' --tests '*TerminalAuthenticationIntegrationTest'` 통과 | `./gradlew test` 전체. 397개 중 실패 0 |
+| 인수 6, 주문 생성의 403. 슬라이스 `OrderControllerTest`(본문의 storeId나 terminalId가 인증 주체와 다르면 403 TERMINAL_MISMATCH이고 Facade를 부르지 않는다, REST Docs `orders-create-terminal-mismatch`), 같을 때 201은 기존 `유효한 요청은 본문을 생성 커맨드로 옮기고 201과 orderId·status를 돌려준다`와 `OrderApiIntegrationTest`가 고정한다. `AuthenticatedTerminal.requireSame`, `DomainErrorKind.FORBIDDEN`(`ApiAdviceTest`의 kind 매핑 표에 403 추가) | `./gradlew test --tests 'com.resilientpos.order.internal.adapter.web.OrderControllerTest'`. 본문 비교 없는 `requireSame` 빈 본문 스텁과 FORBIDDEN 선언만 둔 상태에서 새 테스트 1개만 assertion으로 실패했다(불일치 요청이 403이 아니라 통과) | 같은 명령 통과(16개) | `./gradlew test` 전체. 400개 중 실패 0 |
+| 인수 7, checkout의 같은 매장 허용과 다른 매장 404. 통합 `OrderRequestCheckoutIntegrationTest`(주문의 매장과 다른 매장의 requestCheckout은 ORDER_NOT_FOUND이고 주문은 OPEN이며 행도 이벤트도 없다), `OrderApiIntegrationTest`(같은 매장의 다른 단말은 checkout이 200이고 다른 매장의 단말은 404 ORDER_NOT_FOUND이며 주문은 OPEN으로 남는다. checkout 행과 발행 기록 0 확인), 슬라이스 `OrderCheckoutControllerTest`는 커맨드에 인증 주체의 `storeId`가 실리는지 고정 | `./gradlew test --tests '*OrderRequestCheckoutIntegrationTest' --tests '*OrderApiIntegrationTest'`. `RequestCheckout`에 `storeId`만 더하고 Facade 검사가 없는 상태에서 새 테스트 2개가 assertion으로 실패했다(다른 매장 요청이 CHECKOUT_REQUESTED로 전이되어 예외가 나지 않음). 같은 실행에서 기존 `IDEMPOTENCY_CONFLICT` 통합 테스트가 임의 storeId·terminalId 본문이 403이 되어 깨졌고 인증 주체의 식별자를 쓰도록 고쳤다 | 같은 명령과 `--tests '*ControllerTest'` 통과 | `./gradlew test` 전체. 400개 중 실패 0 |
+| 인수 8, sync 경로 403과 항목 `STORE_MISMATCH`. 통합 `SyncCommandFacadeIntegrationTest`(인증된 단말의 매장과 다른 storeId의 주문 생성 항목은 STORE_MISMATCH 거절이고 순번은 확정되며 다음 항목은 적용되고 재전송은 같은 거절의 중복이다), 슬라이스 `SyncControllerTest`(경로의 terminalId가 인증된 단말과 다르면 403 TERMINAL_MISMATCH이고 Facade를 부르지 않는다, REST Docs `sync-receive-batch-terminal-mismatch`), 통합 `SyncApiIntegrationTest`(다른 단말의 경로로 보내면 403 TERMINAL_MISMATCH이고 watermark 행이 생기지 않는다) | `./gradlew test --tests 'com.resilientpos.sync.*'`. `ReceiveBatch`에 `storeId`만 더하고 대조는 두지 않은 상태에서 3개 실패했다. Facade는 기대 `[REJECTED, APPLIED]`인데 실제 `[APPLIED, APPLIED]`, 슬라이스는 403 기대에 500(대조가 없어 Facade 목이 null을 돌려줌), 통합은 403 기대에 200 | 같은 명령. 69개 전부 통과. `SyncController`의 `requireSame` 한 줄과 Facade의 `OrderPayload` 항목 storeId 대조를 넣었다. 기존 sync 테스트의 payload storeId는 이미 맞춰져 있어 기대 결과가 바뀐 것이 없다 | `./gradlew test` 전체 403개 통과, 실패 0. `python3 scripts/check_pr.py --base 8133048 --worktree` PASS |
+| 인수 9, 기존 Controller·REST Docs·통합 테스트의 인증 헤더. `OrderControllerTest`·`OrderCheckoutControllerTest`·`SyncControllerTest`는 `TerminalManagement`를 mock해 고정 `AuthenticatedTerminal`을 돌려주고 `Authorization` 헤더를 붙이며 모든 `document`에 `requestHeaders`를 더했다. `OrderApiIntegrationTest`·`SyncApiIntegrationTest`는 실제 `register`한 단말의 토큰과 `terminalId`·`storeId`를 쓴다. `ApiAdviceTest`·`ErrorLogRequestContextTest`는 인터셉터 설정이 슬라이스에 실려 `TerminalManagement` mock만 더했다 | 인터셉터를 넣은 직후 기존 테스트 15개(`ApiAdviceTest` 9, `ErrorLogRequestContextTest` 6)가 `TerminalManagement` 빈이 없어 컨텍스트 로드 실패로 깨졌다(전체 실행에서 관측). Controller 슬라이스와 통합 테스트의 401 회귀는 헤더를 붙이는 수정을 인터셉터 구현과 같은 단계에서 해서 따로 관측하지 않았다 | 위와 같은 명령 통과, `build/generated-snippets`의 `orders-checkout` 등에 `request-headers.adoc` 생성 확인 | `./gradlew test` 전체. 397개 중 실패 0 |
 
 ## 결과
-개발 전 작성. 개발 후 실행 결과와 변경 이유를 추가한다.
+- `./gradlew test` 전체 403개 통과(실패 0, 건너뜀 0). `python3 scripts/check_pr.py --base 8133048 --worktree` PASS.
+- 인수 1~10을 모두 구현했다. 각 동작의 RED·GREEN 관측은 TDD 검증 기록에 있다.
+- 구현 중 판단:
+  - 회전은 옛 credential의 폐기 UPDATE를 먼저 flush한다. Hibernate가 한 flush에서 INSERT를 먼저 보내 새 유효 행이 partial unique에 걸리기 때문이다(스키마 변경 검토 질문 6).
+  - 등록·회전 결과 타입의 `toString`은 토큰을 가린다. 결과 객체가 로그에 찍혀도 평문이 남지 않게 하려는 것이다.
+  - `@WebMvcTest` 슬라이스가 인증 인터셉터와 `WebMvcConfigurer`를 자동으로 싣는다. 그래서 `/v1`을 부르지 않는 슬라이스 테스트(`ApiAdviceTest`, `ErrorLogRequestContextTest`)도 `TerminalManagement` mock을 둔다.
+  - 통합 401 사례는 `POST /v1/orders` 하나로 대표했다. 세 endpoint가 같은 인터셉터를 지나고, checkout·sync는 헤더 없음 슬라이스 테스트로 연결을 확인한다.
+  - `AuthenticatedTerminal` argument resolver는 요청 속성이 없으면 null 대신 예외를 던진다. 인터셉터 밖 경로에서 쓰는 실수를 숨기지 않으려는 것이다.
+- 범위 조정: 새 엔티티의 KDoc이 가리키는 [엔티티 지도](../wiki/entity-map.md)를 Wiki 영향과 변경 경로에 더했다. `current-state.md`는 볼트 링크라 git diff에 나오지 않는다.
