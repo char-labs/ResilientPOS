@@ -105,7 +105,7 @@ class KafkaRetryIntegrationTest(
         )
         failures?.let { failuresLeft[created.orderId.value] = AtomicInteger(it) }
         exception?.let { failure[created.orderId.value] = it }
-        orderFacade.requestCheckout(OrderCommand.RequestCheckout(created.orderId))
+        orderFacade.requestCheckout(OrderCommand.RequestCheckout(created.orderId, OrderFixtures.storeId))
         return created.orderId.value
     }
 
@@ -172,7 +172,7 @@ class KafkaRetryIntegrationTest(
         val before = deadLetters("payment.approved", "PAYMENT_APPROVAL_MISMATCH")
         // 픽스처 합계 3502원은 결과가 미확인이라 진짜 승인이 오지 않는다. 확정값과 다른 승인을 직접 낸다.
         val created = orderFacade.create(OrderFixtures.createOrderCommand())
-        orderFacade.requestCheckout(OrderCommand.RequestCheckout(created.orderId))
+        orderFacade.requestCheckout(OrderCommand.RequestCheckout(created.orderId, OrderFixtures.storeId))
         val orderId = created.orderId.value
         transactions.executeWithoutResult {
             eventPublisher.publishEvent(

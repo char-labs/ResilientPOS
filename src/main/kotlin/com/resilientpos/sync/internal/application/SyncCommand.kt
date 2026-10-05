@@ -1,6 +1,7 @@
 package com.resilientpos.sync.internal.application
 
 import com.resilientpos.order.OrderId
+import com.resilientpos.store.StoreId
 import com.resilientpos.sync.internal.domain.OperationPayload
 import com.resilientpos.terminal.TerminalId
 import java.util.UUID
@@ -12,10 +13,11 @@ object SyncCommand {
 
     /**
      * 한 단말이 오프라인에서 만든 operation 배치. 항목의 `payload`는 단말이 보낸 내용 그대로([OperationPayload])이고
-     * `order` 명령으로의 변환은 Facade가 항목 트랜잭션 안에서 한다. 단말 ID는 배치에만 있다.
+     * `order` 명령으로의 변환은 Facade가 항목 트랜잭션 안에서 한다. 단말 ID와 `storeId`(인증된 단말의 매장)는 배치에만 있다.
      */
     data class ReceiveBatch(
         val terminalId: TerminalId,
+        val storeId: StoreId,
         val operations: List<Operation>,
     ) {
         data class Operation(

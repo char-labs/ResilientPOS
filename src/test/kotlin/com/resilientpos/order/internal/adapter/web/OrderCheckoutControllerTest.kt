@@ -7,9 +7,17 @@ import com.resilientpos.order.OrderCommand
 import com.resilientpos.order.OrderCommandFacade
 import com.resilientpos.order.OrderId
 import com.resilientpos.order.OrderStatus
+import com.resilientpos.store.StoreId
+import com.resilientpos.terminal.AuthenticatedTerminal
+import com.resilientpos.terminal.TerminalFixtures.AUTHORIZATION_HEADER
+import com.resilientpos.terminal.TerminalFixtures.BEARER
+import com.resilientpos.terminal.TerminalFixtures.TOKEN
+import com.resilientpos.terminal.TerminalId
+import com.resilientpos.terminal.TerminalManagement
 import java.util.Currency
 import java.util.UUID
 import kotlin.test.Test
+import org.junit.jupiter.api.BeforeEach
 import org.mockito.BDDMockito.given
 import org.mockito.Mockito.verify
 import org.mockito.Mockito.verifyNoInteractions
@@ -28,6 +36,7 @@ import org.springframework.restdocs.request.RequestDocumentation.pathParameters
 import org.springframework.test.context.bean.override.mockito.MockitoBean
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.ResultActions
+import org.springframework.test.web.servlet.result.MockMvcResultMatchers.header
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
 
@@ -44,8 +53,16 @@ class OrderCheckoutControllerTest(
     @MockitoBean
     private lateinit var facade: OrderCommandFacade
 
-    private fun requestCheckout(orderId: String): ResultActions =
-        mockMvc.perform(post("/v1/orders/{orderId}/checkout", orderId))
+    @MockitoBean
+    private lateinit var terminals: TerminalManagement
+
+    @BeforeEach
+    fun authenticate() {
+        given(terminals.authenticate(TOKEN)).willReturn(AuthenticatedTerminal(TerminalId(UUID.fromString(TERMINAL_ID)), StoreId(UUID.fromString(STORE_ID))))
+    }
+
+    private fun requestCheckout(orderId: String, authorization: String? = BEARER): ResultActions =
+        mockMvc.perform(post("/v1/orders/{orderId}/checkout", orderId).apply { authorization?.let { header("Authorization", it) } })
 
     @Test
     fun `경로의 orderId를 결제 요청 커맨드로 옮기고 200과 확정 금액을 돌려준다`() {
@@ -64,7 +81,7 @@ class OrderCheckoutControllerTest(
             .andDo(
                 document(
                     "orders-checkout",
-                    PATH_PARAMETERS,
+                    AUTHORIZATION_HEADER, PATH_PARAMETERS,
                     responseFields(
                         fieldWithPath("result").type(JsonFieldType.STRING).description("SUCCESS 또는 FAIL"),
                         fieldWithPath("data.orderId").type(JsonFieldType.STRING).description("주문 ID(UUID)"),
@@ -78,6 +95,17 @@ class OrderCheckoutControllerTest(
             )
 
         verify(facade).requestCheckout(COMMAND)
+    }
+
+    @Test
+    fun `Authorization 헤더가 없으면 401 UNAUTHENTICATED와 WWW-Authenticate이고 Facade를 부르지 않는다`() {
+        requestCheckout(ORDER_ID, authorization = null)
+            .andExpect(status().isUnauthorized)
+            .andExpect(header().string("WWW-Authenticate", "Bearer"))
+            .andExpect(jsonPath("$.result").value("FAIL"))
+            .andExpect(jsonPath("$.error.errorCode").value("UNAUTHENTICATED"))
+
+        verifyNoInteractions(facade)
     }
 
     @Test
@@ -103,7 +131,7 @@ class OrderCheckoutControllerTest(
             .andExpect(jsonPath("$.data").value(null))
             .andExpect(jsonPath("$.error.errorCode").value("ORDER_NOT_FOUND"))
             .andExpect(jsonPath("$.error.message").value("주문을 찾을 수 없습니다"))
-            .andDo(document("orders-checkout-not-found", PATH_PARAMETERS, responseFields(failFields("도메인 오류 코드"))))
+            .andDo(document("orders-checkout-not-found", AUTHORIZATION_HEADER, PATH_PARAMETERS, responseFields(failFields("도메인 오류 코드"))))
     }
 
     @Test
@@ -119,7 +147,7 @@ class OrderCheckoutControllerTest(
             .andDo(
                 document(
                     "orders-checkout-concurrent-request",
-                    PATH_PARAMETERS,
+                    AUTHORIZATION_HEADER, PATH_PARAMETERS,
                     responseFields(failFields("CONCURRENT_REQUEST 고정 코드. 이 endpoint는 상태로 멱등을 판정하므로 같은 요청을 다시 보내면 된다")),
                 ),
             )
@@ -133,14 +161,16 @@ class OrderCheckoutControllerTest(
             .andExpect(jsonPath("$.data").value(null))
             .andExpect(jsonPath("$.error.errorCode").value("BAD_REQUEST"))
             .andExpect(jsonPath("$.error.message").value("요청을 처리할 수 없습니다."))
-            .andDo(document("orders-checkout-bad-request", PATH_PARAMETERS, responseFields(failFields("BAD_REQUEST 고정 코드"))))
+            .andDo(document("orders-checkout-bad-request", AUTHORIZATION_HEADER, PATH_PARAMETERS, responseFields(failFields("BAD_REQUEST 고정 코드"))))
 
         verifyNoInteractions(facade)
     }
 
     companion object {
+        private const val STORE_ID = "018f6b1a-0000-7000-8000-0000000000a1"
+        private const val TERMINAL_ID = "018f6b1a-0000-7000-8000-0000000000a2"
         private const val ORDER_ID = "00000000-0000-0000-0000-0000000000a1"
-        private val COMMAND = OrderCommand.RequestCheckout(OrderId(UUID.fromString(ORDER_ID)))
+        private val COMMAND = OrderCommand.RequestCheckout(OrderId(UUID.fromString(ORDER_ID)), StoreId(UUID.fromString(STORE_ID)))
         private val krw: Currency = Currency.getInstance("KRW")
 
         private val PATH_PARAMETERS = pathParameters(parameterWithName("orderId").description("checkout을 요청할 주문 ID(UUID)"))

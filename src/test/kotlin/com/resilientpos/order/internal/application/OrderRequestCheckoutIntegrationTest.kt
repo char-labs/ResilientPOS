@@ -17,6 +17,7 @@ import com.resilientpos.order.checkoutRowCount
 import com.resilientpos.order.internal.domain.Order
 import com.resilientpos.order.internal.domain.OrderRepository
 import com.resilientpos.order.orderStatus
+import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.TerminalId
 import java.math.BigDecimal
 import java.sql.Timestamp
@@ -68,7 +69,7 @@ class OrderRequestCheckoutIntegrationTest(
     fun `requestCheckout은 CHECKOUT_REQUESTED와 checkout 행을 저장하고 OrderPaymentRequested를 한 번 발행한다`(events: ApplicationEvents) {
         val orderId = facade.create(OrderFixtures.createOrderCommand()).orderId
 
-        val result = facade.requestCheckout(OrderCommand.RequestCheckout(orderId))
+        val result = facade.requestCheckout(OrderCommand.RequestCheckout(orderId, OrderFixtures.storeId))
 
         assertEquals(orderId, result.orderId)
         assertEquals(OrderStatus.CHECKOUT_REQUESTED, result.status)
@@ -86,7 +87,7 @@ class OrderRequestCheckoutIntegrationTest(
         val past = Timestamp.valueOf("2000-01-01 00:00:00")
         jdbcTemplate.update("update t_order set created_at = ?, updated_at = ? where id = ?", past, past, orderId.value)
 
-        facade.requestCheckout(OrderCommand.RequestCheckout(orderId))
+        facade.requestCheckout(OrderCommand.RequestCheckout(orderId, OrderFixtures.storeId))
 
         val row = jdbcTemplate.queryForMap("select created_at, updated_at from t_order where id = ?", orderId.value)
         assertEquals(past, row["created_at"])
@@ -102,7 +103,7 @@ class OrderRequestCheckoutIntegrationTest(
         )
         val orderId = facade.create(command).orderId
 
-        val result = facade.requestCheckout(OrderCommand.RequestCheckout(orderId))
+        val result = facade.requestCheckout(OrderCommand.RequestCheckout(orderId, OrderFixtures.storeId))
 
         assertEquals(Money.of("30.30", usd), result.amount)
         assertEquals(Money.of("30.30", usd), assertNotNull(repository.findById(orderId)).checkouts.single().amount)
@@ -111,7 +112,7 @@ class OrderRequestCheckoutIntegrationTest(
     @Test
     fun `checkout을 요청한 주문을 다시 읽으면 checkouts가 그대로 복원된다`() {
         val orderId = facade.create(OrderFixtures.createOrderCommand()).orderId
-        facade.requestCheckout(OrderCommand.RequestCheckout(orderId))
+        facade.requestCheckout(OrderCommand.RequestCheckout(orderId, OrderFixtures.storeId))
 
         val checkout = assertNotNull(repository.findById(orderId)).checkouts.single()
 
@@ -126,9 +127,9 @@ class OrderRequestCheckoutIntegrationTest(
     @Test
     fun `같은 주문의 requestCheckout 재요청은 기존 결과를 돌려주고 행과 이벤트를 늘리지 않는다`(events: ApplicationEvents) {
         val orderId = facade.create(OrderFixtures.createOrderCommand()).orderId
-        val first = facade.requestCheckout(OrderCommand.RequestCheckout(orderId))
+        val first = facade.requestCheckout(OrderCommand.RequestCheckout(orderId, OrderFixtures.storeId))
 
-        val second = facade.requestCheckout(OrderCommand.RequestCheckout(orderId))
+        val second = facade.requestCheckout(OrderCommand.RequestCheckout(orderId, OrderFixtures.storeId))
 
         assertEquals(OrderStatus.CHECKOUT_REQUESTED, second.status)
         assertEquals(first, second)
@@ -137,9 +138,24 @@ class OrderRequestCheckoutIntegrationTest(
     }
 
     @Test
+    fun `주문의 매장과 다른 매장의 requestCheckout은 ORDER_NOT_FOUND이고 주문은 OPEN이며 행도 이벤트도 없다`(events: ApplicationEvents) {
+        val orderId = facade.create(OrderFixtures.createOrderCommand()).orderId
+
+        val failure = assertFailsWith<DomainException> {
+            facade.requestCheckout(OrderCommand.RequestCheckout(orderId, StoreId(UUID.randomUUID())))
+        }
+
+        assertEquals(Order.ORDER_NOT_FOUND, failure.code)
+        assertEquals(DomainErrorKind.NOT_FOUND, failure.kind)
+        assertEquals("OPEN", storedStatus(orderId))
+        assertEquals(0L, checkoutRowCount(orderId))
+        assertEquals(0, paymentRequestedCount(events, orderId))
+    }
+
+    @Test
     fun `없는 주문의 requestCheckout은 ORDER_NOT_FOUND다`() {
         val failure = assertFailsWith<DomainException> {
-            facade.requestCheckout(OrderCommand.RequestCheckout(OrderId(UUID.randomUUID())))
+            facade.requestCheckout(OrderCommand.RequestCheckout(OrderId(UUID.randomUUID()), OrderFixtures.storeId))
         }
 
         assertEquals(Order.ORDER_NOT_FOUND, failure.code)
@@ -192,7 +208,7 @@ class OrderRequestCheckoutIntegrationTest(
     @Test
     fun `커밋 전인 requestCheckout과 겹친 요청은 기다렸다가 같은 결과를 받는다`() {
         val orderId = facade.create(OrderFixtures.createOrderCommand()).orderId
-        val command = OrderCommand.RequestCheckout(orderId)
+        val command = OrderCommand.RequestCheckout(orderId, OrderFixtures.storeId)
 
         assertOverlappingRequestsShareResult(orderId, { facade.requestCheckout(command) }, { facade.requestCheckout(command) })
     }
@@ -206,14 +222,14 @@ class OrderRequestCheckoutIntegrationTest(
         assertOverlappingRequestsShareResult(
             orderId,
             { facade.requestCheckout(byKey) },
-            { facade.requestCheckout(OrderCommand.RequestCheckout(orderId)) },
+            { facade.requestCheckout(OrderCommand.RequestCheckout(orderId, OrderFixtures.storeId)) },
         )
     }
 
     @Test
     fun `잠금을 3초 넘게 기다린 요청은 잠금 실패로 끝나고 다시 요청하면 기존 결과를 받는다`() {
         val orderId = facade.create(OrderFixtures.createOrderCommand()).orderId
-        val command = OrderCommand.RequestCheckout(orderId)
+        val command = OrderCommand.RequestCheckout(orderId, OrderFixtures.storeId)
         val firstRequested = CountDownLatch(1)
         val releaseFirst = CountDownLatch(1)
         val executor = Executors.newFixedThreadPool(2)
@@ -250,7 +266,7 @@ class OrderRequestCheckoutIntegrationTest(
     fun `checkout을 요청한 주문의 생성 재시도는 CHECKOUT_REQUESTED를 돌려준다`() {
         val createCommand = OrderFixtures.createOrderCommand()
         val orderId = facade.create(createCommand).orderId
-        facade.requestCheckout(OrderCommand.RequestCheckout(orderId))
+        facade.requestCheckout(OrderCommand.RequestCheckout(orderId, OrderFixtures.storeId))
 
         val retried = facade.create(createCommand)
 
@@ -268,7 +284,7 @@ class OrderRequestCheckoutIntegrationTest(
         val second = facade.requestCheckout(byKey)
 
         assertEquals(OrderCommand.RequestCheckout.Result(orderId, OrderStatus.CHECKOUT_REQUESTED, 1, fixtureTotal), first)
-        assertEquals(first, facade.requestCheckout(OrderCommand.RequestCheckout(orderId)))
+        assertEquals(first, facade.requestCheckout(OrderCommand.RequestCheckout(orderId, OrderFixtures.storeId)))
         assertEquals(first, second)
         assertEquals("CHECKOUT_REQUESTED", storedStatus(orderId))
         assertEquals(1L, checkoutRowCount(orderId))

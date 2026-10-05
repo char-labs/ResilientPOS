@@ -99,7 +99,7 @@ class OrderEventPublicationIntegrationTest(
     @Test
     fun `리스너가 성공하면 발행 기록이 완료로 표시된다`() {
         val orderId = facade.create(OrderFixtures.createOrderCommand()).orderId
-        facade.requestCheckout(OrderCommand.RequestCheckout(orderId))
+        facade.requestCheckout(OrderCommand.RequestCheckout(orderId, OrderFixtures.storeId))
 
         awaitUntil("발행 기록에 완료 시각이 찍힌다", publicationDump) { publications(orderId).singleOrNull()?.get("completion_date") != null }
         val publication = publications(orderId).single()
@@ -114,7 +114,7 @@ class OrderEventPublicationIntegrationTest(
         val orderId = facade.create(OrderFixtures.createOrderCommand()).orderId
         listener.failing = true
 
-        val result = facade.requestCheckout(OrderCommand.RequestCheckout(orderId))
+        val result = facade.requestCheckout(OrderCommand.RequestCheckout(orderId, OrderFixtures.storeId))
 
         assertEquals(OrderStatus.CHECKOUT_REQUESTED, result.status)
         assertEquals(
@@ -131,7 +131,7 @@ class OrderEventPublicationIntegrationTest(
         val orderId = facade.create(OrderFixtures.createOrderCommand()).orderId
 
         transaction.executeWithoutResult { status ->
-            facade.requestCheckout(OrderCommand.RequestCheckout(orderId))
+            facade.requestCheckout(OrderCommand.RequestCheckout(orderId, OrderFixtures.storeId))
             status.setRollbackOnly()
         }
 
@@ -139,7 +139,7 @@ class OrderEventPublicationIntegrationTest(
 
         // 시간에 기대지 않으려고 다른 주문의 이벤트가 끝까지 처리되는 것을 기다린다. 롤백된 이벤트가 전달됐다면 그 전에 도착했다.
         val otherOrderId = facade.create(OrderFixtures.createOrderCommand()).orderId
-        facade.requestCheckout(OrderCommand.RequestCheckout(otherOrderId))
+        facade.requestCheckout(OrderCommand.RequestCheckout(otherOrderId, OrderFixtures.storeId))
         awaitUntil("뒤에 발행한 이벤트가 완료된다", publicationDump) { publications(otherOrderId).singleOrNull()?.get("completion_date") != null }
         assertEquals(emptyList(), received(orderId))
         assertEquals("OPEN", jdbcTemplate.orderStatus(orderId.value))
@@ -148,7 +148,7 @@ class OrderEventPublicationIntegrationTest(
     @Test
     fun `저장된 이벤트를 복원하면 발행한 값과 같다`(events: ApplicationEvents) {
         val orderId = facade.create(OrderFixtures.createOrderCommand()).orderId
-        facade.requestCheckout(OrderCommand.RequestCheckout(orderId))
+        facade.requestCheckout(OrderCommand.RequestCheckout(orderId, OrderFixtures.storeId))
         awaitUntil("리스너가 이벤트를 받는다", publicationDump) { received(orderId).size == 1 }
         val published = received(orderId).single()
 

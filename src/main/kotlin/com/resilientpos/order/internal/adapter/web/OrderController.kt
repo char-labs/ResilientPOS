@@ -3,6 +3,7 @@ package com.resilientpos.order.internal.adapter.web
 import com.resilientpos.order.OrderCommand
 import com.resilientpos.order.OrderCommandFacade
 import com.resilientpos.order.OrderId
+import com.resilientpos.terminal.AuthenticatedTerminal
 import java.util.UUID
 import org.springframework.http.HttpStatus
 import org.springframework.web.bind.annotation.PathVariable
@@ -21,11 +22,14 @@ class OrderController(private val facade: OrderCommandFacade) {
 
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
-    fun create(@RequestBody request: CreateOrderRequest): CreateOrderResponse =
-        CreateOrderResponse.from(facade.create(request.toCommand()))
+    fun create(@RequestBody request: CreateOrderRequest, terminal: AuthenticatedTerminal): CreateOrderResponse {
+        val command = request.toCommand()
+        terminal.requireSame(command.terminalId, command.storeId)
+        return CreateOrderResponse.from(facade.create(command))
+    }
 
     /** 첫 요청과 재요청이 같은 200과 같은 본문이다. */
     @PostMapping("/{orderId}/checkout")
-    fun requestCheckout(@PathVariable orderId: UUID): RequestCheckoutResponse =
-        RequestCheckoutResponse.from(facade.requestCheckout(OrderCommand.RequestCheckout(OrderId(orderId))))
+    fun requestCheckout(@PathVariable orderId: UUID, terminal: AuthenticatedTerminal): RequestCheckoutResponse =
+        RequestCheckoutResponse.from(facade.requestCheckout(OrderCommand.RequestCheckout(OrderId(orderId), terminal.storeId)))
 }
