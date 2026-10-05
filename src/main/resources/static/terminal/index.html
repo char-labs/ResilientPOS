@@ -54,7 +54,7 @@
   .kiosk { display: flex; align-items: center; gap: 8px; background: #5b6672; border-radius: 99px; padding: 4px 6px 4px 16px; min-height: 40px; font-size: 13px; font-weight: 600; }
   .kiosk i { font-style: normal; font-size: 11px; line-height: 16px; color: var(--sub); background: #e5e8eb; border-radius: 99px; padding: 4px 8px 4px 24px; position: relative; } /* 높이 24px, 동그라미 16px, 여백 사방 4px */
   .kiosk i::before { content: ""; position: absolute; left: 4px; top: 4px; width: 16px; height: 16px; border-radius: 50%; background: #fff; }
-  .views { margin: 0 auto; display: flex; align-items: center; }
+  .views { margin-right: auto; display: flex; align-items: center; } /* 실제 포스처럼 메뉴 아이콘 바로 옆, 왼쪽에 둔다 */
   .views button { font-size: 19px; font-weight: 700; color: #8b95a1; padding: 8px 24px; }
   .views button[aria-selected="true"] { color: #fff; }
   .views button + button { border-left: 1px solid #5b6672; }
@@ -68,9 +68,10 @@
   .main { flex: 1; display: flex; min-height: 0; }
   .left { flex: 1; display: flex; flex-direction: column; padding: 16px 24px 24px; min-width: 0; }
   .tabs { display: flex; align-items: center; border-bottom: 1px solid #b0b8c1; }
-  .tabs button.tab { font-size: 19px; font-weight: 600; color: var(--sub); padding: 16px 24px 16px; border-bottom: 3px solid transparent; margin-bottom: -1px; }
+  .tab-scroll { flex: 1; min-width: 0; display: flex; overflow-x: auto; scrollbar-width: none; } /* 분류가 많으면 탭 줄 안에서만 스크롤한다 */
+  .tabs button.tab { flex: none; white-space: nowrap; font-size: 19px; font-weight: 600; color: var(--sub); padding: 16px 24px 16px; border-bottom: 3px solid transparent; margin-bottom: -1px; }
   .tabs button.tab[aria-selected="true"] { color: var(--ink); border-color: var(--ink); }
-  .pager { margin-left: auto; display: flex; color: var(--sub); }
+  .pager { flex: none; display: flex; color: var(--sub); }
   .pager button { width: 48px; height: 40px; font-size: 20px; }
   .grid { display: grid; grid-template-columns: repeat(6, 1fr); grid-auto-rows: 104px; gap: 6px; padding-top: 16px; flex: 1; align-content: start; }
   .item { background: #fff; border-radius: 8px; padding: 8px 16px; text-align: left;
@@ -98,7 +99,7 @@
   .lines { flex: 1; overflow-y: auto; }
   .line { display: block; width: 100%; text-align: left; padding: 16px 24px; border-bottom: 1px solid var(--line); }
   .line.sel { background: var(--blue-soft); }
-  .line .row { display: flex; justify-content: space-between; font-size: 17px; font-weight: 600; }
+  .line .row { display: flex; justify-content: space-between; gap: 16px; font-size: 17px; font-weight: 600; }
   .line .row span:last-child { font-weight: 400; font-variant-numeric: tabular-nums; }
   .ctl { display: flex; justify-content: space-between; margin-bottom: 16px; }
   .step { display: flex; align-items: center; background: #fff; border-radius: 8px; border: 1px solid var(--line); }
@@ -110,6 +111,8 @@
   .pay { grid-column: 1 / -1; display: flex; align-items: center; justify-content: center; gap: 8px; }
   .pay i { font-style: normal; background: #fff; color: var(--blue); border-radius: 6px; min-width: 28px; padding: 1px 6px; font-size: 15px; }
   button:disabled { opacity: .35; cursor: default; }
+  /* 시연 범위 밖 기능: 포커스와 설명은 남기고(누르면 안내) 쓸 수 있는 버튼과 모양으로 구분한다 */
+  [aria-disabled="true"] { opacity: .45; cursor: help; }
 
   /* 현황: 왼쪽에 주문 상세(결제 정보·품목), 오른쪽에 진행·완료 목록 */
   .st { flex: 1; min-height: 0; display: flex; }
@@ -155,17 +158,17 @@
   .co-back { display: flex; align-items: center; gap: 8px; margin-left: -8px; font-size: 14px; color: var(--sub); }
   .co svg { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
   .co-total { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-top: 24px; }
-  .co-total small { display: block; font-size: 15px; color: var(--sub); } .co-total b { font-size: 30px; font-weight: 600; line-height: 45px; }
+  .co-total small { display: block; font-size: 15px; color: var(--sub); } .co-total b { display: block; font-size: 32px; font-weight: 700; line-height: 48px; font-variant-numeric: tabular-nums; }
   .co-link { align-self: flex-start; min-height: 40px; font-size: 15px; font-weight: 600; color: var(--blue-weak); }
   .co-label { font-size: 15px; color: var(--sub); } .co-label em { font-style: normal; font-size: 13px; color: var(--blue-weak); margin-left: 8px; }
   .co-tiles { max-width: 640px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
-  .co-tile { height: 128px; border-radius: 8px; background: var(--grey-btn); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; font-size: 16px; font-weight: 600; }
+  .co-tile { height: 128px; border-radius: 8px; background: var(--grey-btn); display: flex; flex-direction: column; align-items: flex-start; justify-content: flex-start; gap: 8px; padding: 24px; text-align: left; font-size: 16px; font-weight: 600; }
   .co-tile svg { width: 32px; height: 32px; stroke: var(--blue); }
   .co-tile small { font-size: 13px; font-weight: 400; color: var(--sub); }
   .co-side { width: 400px; flex: none; background: var(--grey-btn); display: flex; flex-direction: column; }
   .co-edit { height: 64px; flex: none; background: var(--head); color: #fff; font-size: 16px; font-weight: 600; }
   .co-lines { flex: 1; overflow-y: auto; padding: 16px 24px; font-size: 15px; }
-  .co-lines small { color: var(--sub); } .co-lines div { display: flex; justify-content: space-between; padding: 8px 0; }
+  .co-lines small { color: var(--sub); } .co-lines div { display: flex; justify-content: space-between; gap: 16px; padding: 8px 0; font-variant-numeric: tabular-nums; }
   .co-sum { display: flex; align-items: center; justify-content: space-between; padding: 24px; border-top: 1px solid var(--line); font-size: 15px; }
   .co-sum b { font-size: 22px; } .co-sum i { font-style: normal; color: var(--blue); font-weight: 600; }
 
@@ -446,7 +449,7 @@ const ICON = {
   mark: '<svg viewBox="0 0 24 24"><path d="M6 3h12v18l-6-4-6 4z"/></svg>',
 };
 
-const SCROLLERS = ['.lines', '.k-menu', '.k-cats', '.k-list', '.st-list', '.co-lines'];
+const SCROLLERS = ['.tab-scroll', '.lines', '.k-menu', '.k-cats', '.k-list', '.st-list', '.co-lines'];
 function render() {
   const device = document.getElementById('device');
   fit();
@@ -460,22 +463,26 @@ function render() {
   device.innerHTML = (customer !== null ? hardware(customer) : U.view === 'checkout' ? checkoutView() : `
     <header class="top">
       <button class="icon-btn" data-act="todo" aria-label="메뉴">${ICON.menu}</button>
-      <button class="kiosk ${U.kiosk ? 'on' : ''}" data-act="kiosk" aria-pressed="${U.kiosk}">키오스크 <i>${U.kiosk ? 'ON' : 'OFF'}</i></button>
       <nav class="views" role="tablist">
         <button role="tab" aria-selected="${U.view === 'order'}" data-act="view" data-v="order">주문 홈</button>
         <button role="tab" aria-selected="${U.view === 'status'}" data-act="view" data-v="status">현황${open ? `<em class="cnt">${open}</em>` : ''}</button>
       </nav>
+      <button class="kiosk ${U.kiosk ? 'on' : ''}" data-act="kiosk" aria-pressed="${U.kiosk}">키오스크 <i>${U.kiosk ? 'ON' : 'OFF'}</i></button>
       ${netPill()}
       <span class="clock">${clock}</span>
       <button class="icon-btn" data-act="todo" aria-label="알림">${ICON.bell}</button>
       <button class="icon-btn" data-act="todo" aria-label="더보기">${ICON.more}</button>
     </header>
     ${U.view === 'order' ? orderView() : statusView()}`);
+  device.querySelectorAll('[data-act="todo"]').forEach(e => { e.setAttribute('aria-disabled', 'true'); e.title = '시연 범위 밖 기능입니다'; });
   device.appendChild(toastEl); // 알림 영역은 같은 노드를 다시 붙여 스크린리더가 안내를 놓치지 않게 한다
   showToast();
-  if (focused) [...device.querySelectorAll('[data-act]')].find(e => KEYS.every((k, n) => e.dataset[k] === focused[n]))?.focus({ preventScroll: true });
+  const back = focused && [...device.querySelectorAll('[data-act]')].find(e => KEYS.every((k, n) => e.dataset[k] === focused[n]));
+  // 분류 화살표는 끝에 닿으면 비활성이 되어 포커스를 받지 못하므로 고른 분류로 옮긴다
+  (back?.disabled && back.dataset.act === 'catStep' ? device.querySelector('.tab[aria-selected="true"]') : back)?.focus({ preventScroll: true });
   SCROLLERS.forEach((q, i) => { const e = device.querySelector(q); if (e && kept[i]) [e.scrollTop, e.scrollLeft] = kept[i]; });
   device.querySelector('.line.sel')?.scrollIntoView({ block: 'nearest' }); // 방금 담은 줄이 보이게 한다
+  if (U.tabJump) { U.tabJump = false; device.querySelector('.tab[aria-selected="true"]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } // 화살표로 고른 분류가 보이게 한다
 
   if (ROLE !== 'pos') return;
   const net = document.getElementById('netToggle');
@@ -592,12 +599,13 @@ function kioskView() {
 }
 
 function orderView() {
-  const n = count();
+  const n = count(), cats = Object.keys(MENU), ci = cats.indexOf(U.cat);
+  const optOff = U.sel < 0 || !U.cart[U.sel] ? 'disabled' : ''; // 옵션을 붙일 줄을 고르지 않았으면 쓸 수 없다
   return `<div class="main">
     <section class="left">
-      <div class="tabs" role="tablist">
-        ${Object.keys(MENU).map(c => `<button class="tab" role="tab" aria-selected="${c === U.cat}" data-act="cat" data-c="${c}">${c}</button>`).join('')}
-        <span class="pager"><button data-act="todo" aria-label="이전 분류">‹</button><button data-act="todo" aria-label="다음 분류">›</button></span>
+      <div class="tabs">
+        <div class="tab-scroll" role="tablist">${cats.map(c => `<button class="tab" role="tab" aria-selected="${c === U.cat}" data-act="cat" data-c="${c}">${c}</button>`).join('')}</div>
+        <span class="pager"><button data-act="catStep" data-d="-1" aria-label="이전 분류" ${ci > 0 ? '' : 'disabled'}>‹</button><button data-act="catStep" data-d="1" aria-label="다음 분류" ${ci < cats.length - 1 ? '' : 'disabled'}>›</button></span>
       </div>
       <div class="grid">
         ${MENU[U.cat].map(([code, name, price, color], i) => `<button class="item ${color ? 'c-' + color : ''}" data-act="add" data-i="${i}">${name}<small>${won(price)}</small></button>`).join('')}
@@ -605,8 +613,8 @@ function orderView() {
       <div class="tools"><button data-act="todo">✎ 상품편집</button><button data-act="todo">⊕ 상품추가</button><span class="page">1 / 1</span></div>
       <div class="opts"><h3>즐겨찾는 옵션</h3>
         <div class="opt-grid">
-          ${OPTIONS.slice(0, 5).map(o => `<button data-act="todo">${o}</button>`).join('')}<button class="dark" data-act="todo">메모</button>
-          ${OPTIONS.slice(5).map(o => `<button data-act="todo">${o}</button>`).join('')}<span></span><button class="dark" data-act="todo">상세옵션</button>
+          ${OPTIONS.slice(0, 5).map(o => `<button data-act="todo" ${optOff}>${o}</button>`).join('')}<button class="dark" data-act="todo" ${optOff}>메모</button>
+          ${OPTIONS.slice(5).map(o => `<button data-act="todo" ${optOff}>${o}</button>`).join('')}<span></span><button class="dark" data-act="todo" ${optOff}>상세옵션</button>
         </div>
       </div>
     </section>
@@ -620,18 +628,19 @@ function orderView() {
         ${U.cart.length ? U.cart.map((l, i) => i === U.sel ? `<div class="line sel">
             <div class="ctl"><span class="step"><button data-act="qty" data-d="-1" aria-label="수량 줄이기">−</button><b>${l.qty}</b><button data-act="qty" data-d="1" aria-label="수량 늘리기">+</button></span>
               <button class="btn-lg del" data-act="del">삭제</button></div>
-            <div class="row"><span>${l.name}×${l.qty}</span><span>${won(l.price * l.qty)}</span></div></div>`
-          : `<button class="line" data-act="sel" data-i="${i}"><div class="row"><span>${l.name}×${l.qty}</span><span>${won(l.price * l.qty)}</span></div></button>`).join('')
+            <div class="row"><span>${l.name} × ${l.qty}</span><span>${won(l.price * l.qty)}</span></div></div>`
+          : `<button class="line" data-act="sel" data-i="${i}"><div class="row"><span>${l.name} × ${l.qty}</span><span>${won(l.price * l.qty)}</span></div></button>`).join('')
           : '<p class="empty">상품을 눌러 주문을 시작하세요</p>'}
       </div>
       <div class="order-foot">
-        <button class="btn-xl soft" data-act="todo">할인</button><button class="btn-xl grey" data-act="todo">분할 결제</button>
+        <button class="btn-xl soft" data-act="todo" ${n ? '' : 'disabled'}>할인</button><button class="btn-xl grey" data-act="todo" ${n ? '' : 'disabled'}>분할 결제</button>
         <button class="btn-xl fill pay" data-act="pay" ${n ? '' : 'disabled'}>${n ? `<i>${n}</i>` : ''}${won(total())}원 결제</button>
       </div>
     </aside></div>`;
 }
 
-const STATUS_LABEL = { PENDING: '전송 대기', SYNCED: '전송 완료', REJECTED: '거절', CONFLICT: '충돌' };
+// SYNCED는 sync 배치가 서버에 반영된 것이지 결제 승인이 아니다
+const STATUS_LABEL = { PENDING: '전송 대기', SYNCED: '서버 전송 완료', REJECTED: '거절', CONFLICT: '충돌' };
 const METHOD_LABEL = { CARD: '카드', FACE: '페이스페이', CASH: '현금' };
 const ago = at => { const m = Math.floor((Date.now() - at) / 60000); return m < 1 ? '방금 전' : `${m}분 전`; };
 // 주문번호와 품목 기록은 나중에 더했다. 그 전에 만든 주문은 번호 없이 보인다.
@@ -655,9 +664,9 @@ function statusView() {
       <div class="st-head">${chip(cur)}<div class="info"><b>${orderName(cur)}</b>${lines.length ? `메뉴 ${lines.reduce((a, l) => a + l.qty, 0)}개 · ` : ''}총 ${won(cur.amount)}원</div>
         <button class="btn-xl dark" data-act="finish" data-id="${cur.clientOrderId}" ${cur.done ? 'disabled' : ''}>${cur.done ? '조리 완료됨' : '조리 완료'}</button></div>
       <div class="st-cards">
-        <div class="st-card"><dl><dt>주문 금액</dt><dd>${won(cur.amount)}원</dd><dt>할인 금액</dt><dd>0원</dd><dt>결제 금액</dt><dd>${won(cur.amount)}원</dd></dl><hr>
-          <dl><dt>결제시간</dt><dd>${new Date(cur.at).toLocaleString('ko-KR', { month: '2-digit', day: '2-digit', weekday: 'short', hour: '2-digit', minute: '2-digit' })}</dd>
-            <dt>결제수단</dt><dd>${METHOD_LABEL[cur.method] || '카드'}</dd>
+        <div class="st-card"><dl><dt>주문 금액</dt><dd>${won(cur.amount)}원</dd><dt>할인 금액</dt><dd>0원</dd><dt>결제 요청 금액</dt><dd>${won(cur.amount)}원</dd></dl><hr>
+          <dl><dt>접수 시각</dt><dd>${new Date(cur.at).toLocaleString('ko-KR', { month: '2-digit', day: '2-digit', weekday: 'short', hour: '2-digit', minute: '2-digit' })}</dd>
+            <dt>결제 요청 수단</dt><dd>${METHOD_LABEL[cur.method] || '카드'}</dd>
             <dt>접수</dt><dd>${cur.offline ? '오프라인' : '온라인'}</dd>
             <dt>서버 주문번호</dt><dd>${cur.orderId ? esc(String(cur.orderId).slice(0, 8)) : '-'}</dd>
             <dt>서버 전송</dt><dd>${badge(cur)} ${cur.errorCode ? esc(cur.errorCode) : ''}</dd></dl>
@@ -681,7 +690,7 @@ function checkoutView() {
   const n = count();
   return `<div class="co"><section class="co-main">
       <div class="co-back"><button class="icon-btn" data-act="backOrder" aria-label="뒤로">${ICON.back}</button>${nowLabel()}</div>
-      <div class="co-total"><div><small>총 결제금액</small><b>${won(total())}원을 결제할게요</b></div><button class="btn-xl soft" data-act="todo">분할 결제</button></div>
+      <div class="co-total"><div><small>총 결제금액</small><b>${won(total())}원 결제</b></div><button class="btn-xl soft" data-act="todo">분할 결제</button></div>
       <button class="co-link" data-act="todo">쿠폰·포인트 사용 ›</button>
       <hr class="co-hr">
       <div class="co-label">결제 방법<em>${connected() ? '고객도 선택 가능 · 고객 단말에 결제 화면이 떠 있습니다' : '고객도 선택 가능'}</em></div>
@@ -693,7 +702,7 @@ function checkoutView() {
         <button class="co-tile" data-act="todo">${ICON.card}전화승인</button>
       </div></section>
     <aside class="co-side"><button class="co-edit" data-act="backOrder">✎ 주문내역 수정</button>
-      <div class="co-lines"><small>[${U.dining} ${n}개]</small>${U.cart.map(l => `<div><span>${l.name}×${l.qty}</span><span>${won(l.price * l.qty)}</span></div>`).join('')}</div>
+      <div class="co-lines"><small>[${U.dining} ${n}개]</small>${U.cart.map(l => `<div><span>${l.name} × ${l.qty}</span><span>${won(l.price * l.qty)}</span></div>`).join('')}</div>
       <div class="co-sum"><span>총 <i>${n}</i>개</span><b>${won(total())}원</b></div></aside></div>`;
 }
 
@@ -745,7 +754,7 @@ function overlayView() {
     ${o.offline ? '' : '<button class="btn-xl fill c-wide" data-act="face">다시 시도</button>'}
     <button class="btn-xl soft c-wide" data-act="card">카드로 결제</button></div>`;
   if (o.step === 'sent') return `${customerTop('')}<div class="c-body" role="dialog" aria-label="결제 처리 중">${sub}
-    <span class="c-fill"></span><h1 class="c-title">결제를 처리하고 있습니다</h1><span class="c-fill"></span></div>`;
+    <span class="c-fill"></span><h1 class="c-title">결제 요청을 보내고 있습니다</h1><span class="c-fill"></span></div>`;
   if (o.step === 'lost') return `${customerTop('')}<div class="c-body" role="dialog" aria-label="주문 접수 실패">
     <h1 class="c-title">주문이 접수되지 않았습니다</h1>
     <div class="check fail">!</div>
@@ -756,15 +765,15 @@ function overlayView() {
   const order = ROLE === 'terminal' ? R.result : S.orders.find(x => x.clientOrderId === o.clientOrderId);
   const synced = order && order.status === 'SYNCED', failed = order && order.status !== 'SYNCED' && order.status !== 'PENDING';
   const no = ROLE === 'terminal' ? R.result && R.result.no : order && order.no;
-  if (o.kiosk && !failed) return `${kioskTop('')}<div class="c-body" role="dialog" aria-label="주문 완료"><span class="c-fill"></span>
-    <div class="c-sub big">주문번호 ${no ? String(no).padStart(3, '0') : '-'}번${synced ? '으로 준비 완료!' : ''}</div>
-    <h1 class="c-title">${synced ? '메뉴가 나오면 알려드릴게요' : '주문을 접수했습니다'}</h1>
+  if (o.kiosk && !failed) return `${kioskTop('')}<div class="c-body" role="dialog" aria-label="주문 접수"><span class="c-fill"></span>
+    <div class="c-sub big">주문번호 ${no ? String(no).padStart(3, '0') : '-'}번</div>
+    <h1 class="c-title">${synced ? '주문과 결제 요청을<br>서버에 전송했습니다' : '주문을 접수했습니다'}</h1>
     ${synced ? '' : '<div class="notice">결제는 아직 확인되지 않았습니다. 네트워크가 연결되면 결제 요청을 자동으로 전송합니다.</div>'}
     <div class="hint">4초 뒤에 닫혀요</div><span class="c-fill"></span>
     <button class="btn-xl soft c-wide" data-act="todo">영수증 출력</button>
     <button class="btn-xl fill c-wide" data-act="done">닫기</button></div>`;
   return `${customerTop('')}<div class="c-body" role="dialog" aria-label="결제 결과">
-    <h1 class="c-title">${synced ? (order.method === 'FACE' ? '페이스페이 결제 요청을<br>접수했습니다' : '결제 요청을<br>접수했습니다') : failed ? '결제 요청이<br>접수되지 않았습니다' : '결제 요청을<br>단말에 저장했습니다'}</h1>
+    <h1 class="c-title">${synced ? (order.method === 'FACE' ? '페이스페이 결제 요청을<br>서버에 전송했습니다' : '결제 요청을<br>서버에 전송했습니다') : failed ? '결제 요청이<br>접수되지 않았습니다' : '결제 요청을<br>단말에 저장했습니다'}</h1>
     <div class="check ${failed ? 'fail' : synced ? '' : 'wait'}">${failed ? '!' : '✓'}</div>
     <div class="c-amount">${won(o.amount)}원</div>
     ${synced ? '' : failed ? `<div class="notice">결제되지 않았습니다. 직원에게 알려 주세요.</div><div class="hint">사유 코드 ${esc(order.errorCode)}</div>`
@@ -824,6 +833,7 @@ function leave() {
 const ACT = {
   view: el => { U.view = el.dataset.v; },
   cat: el => { U.cat = el.dataset.c; },
+  catStep: el => { const cats = Object.keys(MENU), c = cats[cats.indexOf(U.cat) + +el.dataset.d]; if (c) { U.cat = c; U.tabJump = true; } },
   dining: el => { U.dining = el.dataset.d; },
   add: el => {
     const [code, name, price] = MENU[U.cat][el.dataset.i];
@@ -862,7 +872,7 @@ const ACT = {
     if (connected()) return '고객 단말에 카드를 넣거나 대면 결제됩니다';
     U.overlay = { step: 'pay', amount: total() }; // 단말 창이 없으면 이 화면이 고객 화면으로 바뀐다
   },
-  payCash: () => complete('CASH') ? '현금 결제를 접수했습니다' : undefined,
+  payCash: () => complete('CASH') ? '현금 결제 요청을 접수했습니다' : undefined,
   retryPay: () => { clearTimeout(sentTimer); U.overlay = { step: 'kpay', amount: total(), kiosk: true }; },
   pick: el => { U.selOrder = el.dataset.id; },
   finish: el => { const o = S.orders.find(x => x.clientOrderId === el.dataset.id); if (o) { o.done = true; save(); } },
