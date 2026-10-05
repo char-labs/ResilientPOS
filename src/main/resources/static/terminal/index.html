@@ -1,0 +1,999 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ResilientPOS 포스 시연</title>
+<style>
+  :root {
+    /* DESIGN.md(Toss Design System)의 semantic token. 이름 옆 주석이 그 문서의 token 이름이다. */
+    --ink: #191f28;        /* color.foreground */
+    --sub: #4e5968;        /* color.body */
+    --muted: #8b95a1;      /* color.muted: 흰 배경에서 대비가 낮아 빈 상태 안내에만 쓴다 */
+    --line: #e5e8eb;       /* color.border */
+    --blue: #3182f6;       /* color.primary */
+    --blue-press: #2272eb; /* color.primary-hover */
+    --blue-soft: #e8f3ff;  /* color.weak-background */
+    --blue-weak: #1b64da;  /* color.weak-foreground */
+    --grey-btn: #f2f4f6;   /* color.surface */
+    --red: #e42939;        /* color.danger */
+    /* 아래는 DESIGN.md에 없는 확장이다. 포스 화면 캡처에서 가져온 상단 바·작업 영역 색과 상태 표시 색. */
+    --head: #3d4854; --bg: #d1d6db; --dark-btn: #4e5968; --amber: #d98a00;
+  }
+  * { box-sizing: border-box; word-break: keep-all; }
+  body { margin: 0; background: #17191c; color: var(--ink);
+    line-height: 1.5;
+    font-family: "Toss Product Sans", -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Pretendard", "Noto Sans KR", "Malgun Gothic", sans-serif; }
+  button { font: inherit; color: inherit; border: 0; background: none; cursor: pointer; padding: 0; }
+  button:focus-visible { outline: 3px solid var(--blue); outline-offset: 2px; }
+  button:active:not(:disabled) { filter: brightness(.95); }
+  /* TDS Mobile Button: xlarge 56px·16px, medium 38px·10px, small 32px·8px. 글자는 17px/600. */
+  .btn-xl { height: 56px; border-radius: 16px; padding: 0 24px; font-size: 17px; font-weight: 600; }
+  .btn-lg { height: 48px; border-radius: 14px; padding: 0 16px; font-size: 15px; font-weight: 600; }
+  .btn-md { height: 38px; border-radius: 10px; padding: 0 16px; font-size: 15px; font-weight: 600; }
+  .btn-sm { height: 32px; border-radius: 8px; padding: 0 16px; font-size: 14px; font-weight: 600; }
+  .fill { background: var(--blue); color: #fff; }
+  .fill:hover:not(:disabled), .fill:active:not(:disabled) { background: var(--blue-press); filter: none; }
+
+  /* 시연 제어 막대: 단말 화면 밖 */
+  .demo-bar { height: 48px; overflow-x: auto; white-space: nowrap; display: flex; align-items: center; gap: 8px; padding: 0 16px; color: #c9ced6; font-size: 13px; }
+  .demo-bar b { color: #fff; }
+  .demo-bar button { padding: 6px 16px; border-radius: 6px; background: #2c3138; color: #fff; }
+  .demo-bar button.off { background: var(--red); }
+  .demo-bar .spacer { flex: 1; }
+  .demo-bar code { color: #8b95a1; }
+
+  .stage { margin: 0 auto; }
+  .device { width: 1280px; height: 800px; transform-origin: top left; position: relative; overflow: hidden;
+    background: var(--bg); border-radius: 20px; display: flex; flex-direction: column; }
+
+  /* 상단 바 */
+  .top { height: 64px; flex: none; background: var(--head); color: #fff; display: flex; align-items: center; padding: 0 24px; gap: 16px; }
+  .icon-btn { width: 40px; height: 40px; display: grid; place-items: center; border-radius: 8px; }
+  .icon-btn svg { width: 24px; height: 24px; fill: currentColor; }
+  .kiosk { display: flex; align-items: center; gap: 8px; background: #5b6672; border-radius: 99px; padding: 4px 6px 4px 16px; min-height: 40px; font-size: 13px; font-weight: 600; }
+  .kiosk i { font-style: normal; font-size: 11px; line-height: 16px; color: var(--sub); background: #e5e8eb; border-radius: 99px; padding: 4px 8px 4px 24px; position: relative; } /* 높이 24px, 동그라미 16px, 여백 사방 4px */
+  .kiosk i::before { content: ""; position: absolute; left: 4px; top: 4px; width: 16px; height: 16px; border-radius: 50%; background: #fff; }
+  .views { margin: 0 auto; display: flex; align-items: center; }
+  .views button { font-size: 19px; font-weight: 700; color: #8b95a1; padding: 8px 24px; }
+  .views button[aria-selected="true"] { color: #fff; }
+  .views button + button { border-left: 1px solid #5b6672; }
+  .net { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; background: #2e3741; border-radius: 99px; padding: 6px 16px; }
+  .net::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: #3ecf8e; }
+  .net.offline::before { background: #ff6b6b; }
+  .net em { font-style: normal; background: #f6bd24; color: #3d2f00; border-radius: 99px; padding: 1px 8px; margin-left: 4px; }
+  .clock { font-size: 15px; }
+
+  /* 주문 홈 */
+  .main { flex: 1; display: flex; min-height: 0; }
+  .left { flex: 1; display: flex; flex-direction: column; padding: 16px 24px 24px; min-width: 0; }
+  .tabs { display: flex; align-items: center; border-bottom: 1px solid #b0b8c1; }
+  .tabs button.tab { font-size: 19px; font-weight: 600; color: var(--sub); padding: 16px 24px 16px; border-bottom: 3px solid transparent; margin-bottom: -1px; }
+  .tabs button.tab[aria-selected="true"] { color: var(--ink); border-color: var(--ink); }
+  .pager { margin-left: auto; display: flex; color: var(--sub); }
+  .pager button { width: 48px; height: 40px; font-size: 20px; }
+  .grid { display: grid; grid-template-columns: repeat(6, 1fr); grid-auto-rows: 104px; gap: 6px; padding-top: 16px; flex: 1; align-content: start; }
+  .item { background: #fff; border-radius: 8px; padding: 8px 16px; text-align: left;
+    display: flex; flex-direction: column; justify-content: space-between; font-size: 16px; font-weight: 600; line-height: 1.35; }
+  .item small { font-size: 14px; font-weight: 400; color: var(--sub); }
+  .item:active { transform: scale(.97); }
+  .item.c-blue { background: #4d8fe6; } .item.c-slate { background: #56606e; } .item.c-green { background: #6aad5b; }
+  .item.c-coral { background: #e87b73; } .item.c-yellow { background: #f6bd24; }
+  .item[class*="c-"], .item[class*="c-"] small { color: #fff; }
+  .tools { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--ink); padding: 4px 0; }
+  .tools button { min-height: 40px; padding: 0 8px; }
+  .tools .page { margin: 0 auto; font-weight: 600; }
+  .opts h3 { font-size: 15px; margin: 8px 0; }
+  .opt-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; }
+  .opt-grid button { height: 52px; border-radius: 6px; background: #fff; font-size: 14px; }
+  .opt-grid button.dark { background: var(--dark-btn); color: #fff; font-weight: 600; }
+
+  /* 주문서 */
+  .right { width: 400px; flex: none; background: #fff; display: flex; flex-direction: column; }
+  .order-head { display: flex; align-items: center; padding: 16px 24px; gap: 8px; }
+  .seg { display: flex; background: var(--grey-btn); border-radius: 8px; padding: 4px; }
+  .seg button { min-height: 40px; padding: 6px 16px; border-radius: 6px; font-size: 15px; font-weight: 600; color: var(--sub); }
+  .seg button[aria-pressed="true"] { background: #fff; color: var(--ink); }
+  .order-head .icon-btn { color: #4e5968; } .order-head .icon-btn:first-of-type { margin-left: auto; }
+  .lines { flex: 1; overflow-y: auto; }
+  .line { display: block; width: 100%; text-align: left; padding: 16px 24px; border-bottom: 1px solid var(--line); }
+  .line.sel { background: var(--blue-soft); }
+  .line .row { display: flex; justify-content: space-between; font-size: 17px; font-weight: 600; }
+  .line .row span:last-child { font-weight: 400; font-variant-numeric: tabular-nums; }
+  .ctl { display: flex; justify-content: space-between; margin-bottom: 16px; }
+  .step { display: flex; align-items: center; background: #fff; border-radius: 8px; border: 1px solid var(--line); }
+  .step button { width: 44px; height: 46px; font-size: 22px; } .step b { width: 28px; text-align: center; font-size: 18px; }
+  .del { background: #fff; border: 1px solid var(--line); align-self: center; font-weight: 400; }
+  .empty { color: var(--muted); text-align: center; margin: 0; padding: 32px 16px; font-size: 15px; }
+  .order-foot { padding: 16px 24px 24px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .soft { background: var(--blue-soft); color: var(--blue-weak); } .grey { background: var(--grey-btn); color: var(--sub); }
+  .pay { grid-column: 1 / -1; display: flex; align-items: center; justify-content: center; gap: 8px; }
+  .pay i { font-style: normal; background: #fff; color: var(--blue); border-radius: 6px; min-width: 28px; padding: 1px 6px; font-size: 15px; }
+  button:disabled { opacity: .35; cursor: default; }
+
+  /* 현황: 왼쪽에 주문 상세(결제 정보·품목), 오른쪽에 진행·완료 목록 */
+  .st { flex: 1; min-height: 0; display: flex; }
+  .st-main { flex: 1; min-width: 0; padding: 24px; display: flex; flex-direction: column; gap: 16px; }
+  .st-head { display: flex; align-items: center; gap: 16px; font-size: 20px; font-weight: 600; }
+  .st-head .info { flex: 1; } .st-head .info b { display: block; font-size: 18px; }
+  .chip { width: 56px; height: 56px; flex: none; border-radius: 8px; background: #8b95a1; color: #fff; display: grid; place-items: center; font-size: 20px; font-weight: 700; }
+  .chip.k { background: #12a594; } .chip.r { width: 40px; height: 40px; border-radius: 50%; font-size: 15px; }
+  .dark { background: var(--dark-btn); color: #fff; }
+  .danger-soft { background: #ffe5e5; color: var(--red); }
+  .st-cards { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr 1.2fr; gap: 16px; }
+  .st-card { min-height: 0; overflow-y: auto; background: #fff; border-radius: 16px; padding: 24px; display: flex; flex-direction: column; }
+  .st-card dl { margin: 0; display: grid; grid-template-columns: auto 1fr; row-gap: 16px; font-size: 15px; }
+  .st-card dt { color: var(--sub); } .st-card dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+  .st-card hr, .co-hr { width: 100%; border: 0; border-top: 1px solid var(--line); margin: 16px 0; }
+  .st-row { display: grid; grid-template-columns: 1fr 32px 96px; padding: 8px 0; font-size: 17px; }
+  .st-row span:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+  .st-card .btns { margin-top: auto; padding-top: 16px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .st-side { width: 420px; flex: none; min-height: 0; background: #fff; display: flex; flex-direction: column; }
+  .st-filter { min-height: 56px; padding: 16px 24px; text-align: left; font-size: 15px; color: var(--sub); }
+  .st-sec { display: flex; justify-content: space-between; padding: 8px 24px; background: var(--grey-btn); font-size: 14px; font-weight: 600; color: var(--sub); }
+  .st-list { flex: 1; overflow-y: auto; }
+  .st-item { display: flex; align-items: center; gap: 16px; padding-right: 24px; border-bottom: 1px solid var(--line); }
+  .st-item.sel { background: var(--blue-soft); }
+  .st-pick { flex: 1; min-width: 0; display: grid; grid-template-columns: 40px 1fr; column-gap: 16px; row-gap: 8px; align-items: center; padding: 16px 0 16px 24px; text-align: left; }
+  .st-pick .t { grid-column: 1 / -1; display: flex; justify-content: space-between; font-weight: 600; }
+  .st-pick .t small { font-size: 13px; font-weight: 400; color: var(--sub); }
+  .st-pick .s { display: block; min-width: 0; font-size: 13px; color: var(--sub); } .st-pick .s b { display: block; font-size: 16px; color: var(--ink); }
+  .st-item .r { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
+  .st-item.done .chip, .st-item.done .s b { opacity: .5; }
+  .err { color: var(--red); } .net em.err { background: var(--red); color: #fff; }
+  .st-sync { display: flex; align-items: center; gap: 8px; padding: 16px 24px; border-top: 1px solid var(--line); font-size: 13px; color: var(--sub); }
+  .st-sync span { flex: 1; }
+  .st-sync button { min-width: 104px; } /* 동기화 중에도 폭을 유지한다 */
+  .views .cnt { font-style: normal; font-size: 13px; background: var(--blue); color: #fff; border-radius: 99px; padding: 1px 8px; margin-left: 6px; }
+  .badge { display: inline-block; border-radius: 6px; padding: 4px 8px; font-size: 13px; font-weight: 600; white-space: nowrap; }
+  .badge.PENDING { background: #fff4d6; color: #8a5a00; } .badge.SYNCED { background: #e0f5ea; color: #1b7a48; }
+  .badge.REJECTED, .badge.CONFLICT { background: #ffe5e5; color: var(--red); }
+
+  /* 결제하기: 왼쪽에 총 결제금액과 결제 방법, 오른쪽에 주문내역 */
+  .co { flex: 1; min-height: 0; display: flex; background: #fff; }
+  .co-main { flex: 1; min-width: 0; padding: 16px 56px 24px; display: flex; flex-direction: column; gap: 16px; }
+  .co-back { display: flex; align-items: center; gap: 8px; margin-left: -8px; font-size: 14px; color: var(--sub); }
+  .co svg { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .co-total { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-top: 24px; }
+  .co-total small { display: block; font-size: 15px; color: var(--sub); } .co-total b { font-size: 30px; font-weight: 600; line-height: 45px; }
+  .co-link { align-self: flex-start; min-height: 40px; font-size: 15px; font-weight: 600; color: var(--blue-weak); }
+  .co-label { font-size: 15px; color: var(--sub); } .co-label em { font-style: normal; font-size: 13px; color: var(--blue-weak); margin-left: 8px; }
+  .co-tiles { max-width: 640px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .co-tile { height: 128px; border-radius: 8px; background: var(--grey-btn); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; font-size: 16px; font-weight: 600; }
+  .co-tile svg { width: 32px; height: 32px; stroke: var(--blue); }
+  .co-tile small { font-size: 13px; font-weight: 400; color: var(--sub); }
+  .co-side { width: 400px; flex: none; background: var(--grey-btn); display: flex; flex-direction: column; }
+  .co-edit { height: 64px; flex: none; background: var(--head); color: #fff; font-size: 16px; font-weight: 600; }
+  .co-lines { flex: 1; overflow-y: auto; padding: 16px 24px; font-size: 15px; }
+  .co-lines small { color: var(--sub); } .co-lines div { display: flex; justify-content: space-between; padding: 8px 0; }
+  .co-sum { display: flex; align-items: center; justify-content: space-between; padding: 24px; border-top: 1px solid var(--line); font-size: 15px; }
+  .co-sum b { font-size: 22px; } .co-sum i { font-style: normal; color: var(--blue); font-weight: 600; }
+
+  /* 고객 화면: 세로형 단말(800×1280 비율)을 480×768 논리 크기로 그리고 fit()이 화면에 맞춰 축소·확대한다 */
+  .device.portrait { width: 480px; height: 880px; background: #15171a; border-radius: 32px; }
+  .hw-top { height: 48px; flex: none; display: flex; align-items: center; gap: 24px; padding: 0 32px; color: #6b7684; }
+  .hw-top .nfc { margin-right: auto; display: grid; }
+  .hw-top .nfc svg { width: 28px; height: 28px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+  .hw-top .cam { width: 8px; height: 8px; border-radius: 50%; background: #3a3f47; }
+  .hw-top .nfc.on { color: #4d9bff; }
+  .hw-top .cam.on { background: #4d9bff; outline: 3px solid rgba(77,155,255,.35); }
+  .screen { flex: 1; min-height: 0; margin: 0 8px 8px; border-radius: 8px; overflow: hidden; background: #fff; display: flex; flex-direction: column; }
+  .hw-chin { height: 56px; flex: none; background: #eef0f2; display: grid; place-items: center; }
+  .hw-slot { width: 168px; height: 8px; border-radius: 99px; background: #b0b8c1; }
+  .c-top { height: 56px; flex: none; display: flex; align-items: center; gap: 4px; padding: 0 8px; color: var(--sub); }
+  .c-top b { font-size: 18px; color: var(--ink); padding: 0 8px; }
+  .c-top .sp { flex: 1; }
+  .c-top .txt { min-height: 40px; padding: 0 8px; font-size: 14px; }
+  .c-top svg { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .c-body { flex: 1; min-height: 0; display: flex; flex-direction: column; align-items: center; text-align: center; gap: 16px; padding: 8px 24px 24px; }
+  .c-sub { font-size: 16px; font-weight: 600; color: var(--blue-weak); }
+  .c-title { font-size: 24px; font-weight: 600; line-height: 36px; margin: 0; }
+  .c-amount { font-size: 40px; font-weight: 700; line-height: 54px; font-variant-numeric: tabular-nums; }
+  .c-tiles { width: 100%; display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+  .c-tile { min-height: 96px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 16px; border-radius: 16px; background: var(--grey-btn); color: var(--sub); font-size: 15px; font-weight: 600; }
+  .c-screen.paying { background: var(--grey-btn); }
+  .c-screen.paying .c-tile, .c-screen.paying .c-nfc { background: #fff; }
+  .c-nfc { width: 100%; min-height: 128px; flex: none; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; border-radius: 16px; color: var(--sub); font-size: 14px; }
+  .c-nfc i { width: 56px; height: 56px; border-radius: 50%; border: 1px solid var(--line); display: grid; place-items: center; }
+  .c-nfc svg { width: 32px; height: 32px; fill: none; stroke: var(--sub); stroke-width: 2; stroke-linecap: round; }
+  .c-tile { flex-direction: row; justify-content: flex-start; min-height: 64px; color: var(--ink); }
+  .c-chip { min-height: 40px; flex: none; padding: 0 16px; border-radius: 99px; background: var(--line); color: var(--sub); font-size: 13px; font-weight: 600; }
+  .c-screen { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  .c-screen.dark { background: var(--ink); color: #fff; }
+  .c-screen.dark .c-top, .c-screen.dark .c-sub { color: #fff; }
+  .c-screen.dark .hint { color: #b0b8c1; }
+  .c-screen.idle { background: var(--blue-soft); }
+  .ring { width: 160px; height: 160px; flex: none; border-radius: 50%; border: 6px solid var(--blue); color: var(--blue); display: grid; place-items: center; }
+  .ring svg { width: 88px; height: 88px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+  .c-tile svg { width: 32px; height: 32px; flex: none; fill: none; stroke: var(--blue); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .c-fill { flex: 1; }
+  .c-slot-label { font-size: 16px; font-weight: 600; color: var(--sub); }
+  .c-slot { width: 208px; height: 56px; flex: none; margin-bottom: -24px; border-radius: 16px 16px 0 0; font-size: 24px; }
+  .c-wide { width: 100%; flex: none; }
+  .c-link { min-height: 40px; flex: none; font-size: 14px; color: var(--sub); }
+  .notice { width: 100%; background: #fff4d6; color: #8a5a00; border-radius: 16px; padding: 16px; font-size: 15px; text-align: left; }
+  .hint { font-size: 14px; color: var(--sub); }
+  .check { width: 96px; height: 96px; flex: none; border-radius: 50%; background: var(--blue); color: #fff; font-size: 56px; line-height: 1; display: grid; place-items: center; }
+  .check.wait { background: var(--amber); } .check.fail { background: var(--red); }
+  .scan { width: 256px; height: 256px; flex: none; position: relative; border-radius: 50%; background: #2b3340; color: #fff; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; font-size: 17px; font-weight: 600; }
+  .scan::before { content: ""; position: absolute; inset: -16px; border-radius: 50%; border: 6px solid #4d9bff; border-right-color: transparent; animation: scan 1.4s linear infinite; }
+  .scan svg { width: 96px; height: 96px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+  @keyframes scan { to { transform: rotate(360deg); } }
+
+  /* 키오스크: 첫 화면 → 매장·포장 → 메뉴 → 주문 확인 → 결제 수단 → 카드 투입 → 주문번호 */
+  .k-hero { flex: 3; min-height: 0; background: var(--blue-soft); color: var(--blue-weak); display: grid; place-items: center; font-size: 24px; font-weight: 600; }
+  .k-startbox { flex: 2; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; }
+  .k-start { width: 240px; height: 72px; border-radius: 99px; font-size: 22px; font-weight: 600; }
+  .k-choice { width: 100%; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .k-choice button { height: 200px; border-radius: 16px; background: var(--grey-btn); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; font-size: 20px; font-weight: 600; }
+  .k-choice svg { width: 56px; height: 56px; fill: none; stroke: var(--blue); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .k-lang { display: flex; gap: 16px; } .k-lang button { width: 48px; height: 48px; border-radius: 50%; background: var(--grey-btn); font-size: 13px; font-weight: 600; }
+  .k-cats { flex: none; display: flex; gap: 8px; overflow-x: auto; padding: 0 16px; border-bottom: 1px solid var(--line); }
+  .k-cats button { flex: none; min-height: 48px; padding: 0 8px; font-size: 16px; font-weight: 600; color: var(--sub); border-bottom: 3px solid transparent; }
+  .k-cats button[aria-selected="true"] { color: var(--ink); border-color: var(--ink); }
+  .k-menu { flex: 1; min-height: 0; overflow-y: auto; padding: 16px; text-align: left; }
+  .k-menu h2 { font-size: 18px; margin: 0 0 16px; }
+  .k-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px 8px; }
+  .k-item { position: relative; display: flex; flex-direction: column; gap: 4px; text-align: left; font-size: 16px; font-weight: 600; }
+  .k-img { width: 100%; aspect-ratio: 1; border-radius: 16px; margin-bottom: 4px; display: grid; place-items: center; color: #fff; font-size: 40px; font-weight: 700; }
+  .k-item small { font-size: 15px; font-weight: 400; color: var(--sub); }
+  .k-badge { position: absolute; top: 8px; left: 8px; font-style: normal; font-size: 12px; font-weight: 600; color: #fff; background: var(--blue); border-radius: 6px; padding: 4px 8px; }
+  .k-badge.new { background: var(--red); }
+  .k-item em { position: absolute; top: 8px; right: 8px; font-style: normal; font-size: 13px; background: var(--ink); color: #fff; border-radius: 99px; min-width: 24px; padding: 2px 6px; text-align: center; }
+  .k-cta { flex: none; margin: 8px 16px 16px; }
+  .k-list { flex: 1; min-height: 0; overflow-y: auto; padding: 0 24px; text-align: left; }
+  .k-line { display: grid; grid-template-columns: 1fr auto; row-gap: 8px; align-items: center; padding: 16px 0; border-bottom: 1px solid var(--line); font-size: 16px; font-weight: 600; }
+  .k-line small { font-size: 15px; font-weight: 400; color: var(--sub); }
+  .k-line .step button { width: 40px; height: 40px; }
+  .k-more { min-height: 48px; font-size: 15px; font-weight: 600; color: var(--blue-weak); }
+  .k-h { align-self: stretch; text-align: left; font-size: 24px; font-weight: 600; line-height: 36px; margin: 8px 24px 0; }
+  .k-pay { width: 100%; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .k-pay button { min-height: 128px; border-radius: 16px; background: var(--grey-btn); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; font-size: 17px; font-weight: 600; }
+  .k-pay button.wide { grid-column: 1 / -1; min-height: 96px; }
+  .k-pay svg { width: 40px; height: 40px; fill: none; stroke: var(--blue); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .k-pay small { font-size: 13px; font-weight: 400; color: var(--sub); }
+  .k-total { width: 100%; display: flex; justify-content: space-between; align-items: center; background: #fff; border-radius: 16px; padding: 16px 24px; font-size: 15px; color: var(--sub); }
+  .k-total b { font-size: 22px; color: var(--ink); }
+  .c-title .red { color: var(--red); }
+  .c-sub.big { font-size: 18px; }
+
+  .kiosk.on i { background: var(--blue); color: #fff; padding: 4px 24px 4px 8px; }
+  .kiosk.on i::before { left: auto; right: 4px; }
+
+  .toast { position: absolute; left: 50%; bottom: 28px; transform: translateX(-50%); background: rgba(0,0,0,.8); color: #fff; padding: 8px 16px; border-radius: 99px; font-size: 14px; }
+  .toast[hidden] { display: none; }
+  .device.portrait .toast { bottom: 160px; } /* 아래쪽 턱과 하단 버튼 위, 화면 안쪽 */
+  @media (prefers-reduced-motion: reduce) { .item:active { transform: none; } .scan::before { animation: none; } }
+</style>
+</head>
+<body>
+<div class="demo-bar">
+  <b>시연 제어</b>
+  <button id="netToggle" data-act="net"></button>
+  <button id="termBtn" data-act="openTerm"></button>
+  <button id="screenToggle" data-act="kiosk"></button>
+  <button id="faceToggle" data-act="faceMode"></button>
+  <span id="modeLabel"></span>
+  <span class="spacer"></span>
+  <code id="tid"></code>
+  <button data-act="reset" id="resetBtn">단말 초기화</button>
+</div>
+<div class="stage" id="stage"><div class="device" id="device"></div></div>
+
+<script>
+// ---- 시연 데이터 ----
+const MENU = {
+  '즐겨찾는 메뉴': [
+    ['AM-HOT', 'HOT 아메리카노', 4000], ['AM-ICE', 'ICE 아메리카노', 4500], ['LT-CAFE', '카페라떼', 5000],
+    ['LT-VAN', '바닐라라떼', 5000], ['LT-SSUK', '쑥라떼', 5000], ['JU-MA', '마주스', 5000],
+    ['TS-KAYA', '카야잼 토스트', 4000, 'blue'], ['LT-GRAIN', '오곡라떼', 5000], ['LT-HAZEL', '헤이즐넛라떼', 5000],
+    ['LT-CINN', '시나몬라떼', 5000], ['TE-ROOI', '루이보스티', 6000], ['TE-MINT', '페퍼민트티', 5000],
+    ['SM-BEAN', '검은콩스무디', 6000, 'slate'], ['SM-APPLE', '애플스무디', 6000, 'green'],
+    ['SM-GRAPE', '자몽스무디', 6000, 'coral'], ['TE-CAMO', '카모마일티', 5000, 'yellow'],
+  ],
+  '에스프레소': [['AM-HOT', 'HOT 아메리카노', 4000], ['AM-ICE', 'ICE 아메리카노', 4500], ['LT-CAFE', '카페라떼', 5000], ['LT-VAN', '바닐라라떼', 5000], ['LT-HAZEL', '헤이즐넛라떼', 5000], ['LT-CINN', '시나몬라떼', 5000]],
+  '스무디': [['SM-BEAN', '검은콩스무디', 6000, 'slate'], ['SM-APPLE', '애플스무디', 6000, 'green'], ['SM-GRAPE', '자몽스무디', 6000, 'coral']],
+  '허브티': [['TE-ROOI', '루이보스티', 6000], ['TE-MINT', '페퍼민트티', 5000], ['TE-CAMO', '카모마일티', 5000, 'yellow']],
+  '베이커리': [['TS-KAYA', '카야잼 토스트', 4000, 'blue']],
+};
+const OPTIONS = ['샷추가 (500)', '사이즈업 (500)', '연하게', '두유(500)', '미지근하게', '시럽추가', '우유많이', '시즌원두', '얼음X'];
+
+// ---- 역할: 포스(주문·대기열·sync)와 고객 단말(결제 화면)은 서로 다른 포트에서 뜬다 ----
+// 포스가 단말 창을 열고 postMessage로만 주고받는다. 양쪽 모두 상대 origin과 창을 확인한다.
+// ponytail: 같은 브라우저의 두 창만 이어진다. 기기 두 대로 시연하려면 서버를 거치는 중계로 바꾼다.
+const Q = new URLSearchParams(location.search);
+const ROLE = Q.get('role') === 'terminal' ? 'terminal' : 'pos';
+// 주소로 받은 상대 주소는 같은 호스트·같은 프로토콜일 때만 쓴다. 그대로 믿으면 바깥 사이트가 이 페이지를 열어
+// 자기를 상대로 지정하고 메시지를 보낼 수 있다.
+function sameHost(value) {
+  if (!value) return null;
+  try { const u = new URL(value); return u.hostname === location.hostname && u.protocol === location.protocol ? u : null; } // 절대 주소만 받는다
+  catch { return null; }
+}
+const DEFAULT_TERM_URL = `${location.protocol}//${location.hostname}:${(+location.port || 8080) + 1}${location.pathname}?role=terminal&pos=${encodeURIComponent(location.origin)}`;
+const TERM_URL = (sameHost(Q.get('terminal')) || {}).href || DEFAULT_TERM_URL;
+const PEER_ORIGIN = ROLE === 'terminal' ? (sameHost(Q.get('pos')) || {}).origin || null : (sameHost(TERM_URL) || {}).origin || null;
+let peer = ROLE === 'terminal' && PEER_ORIGIN ? window.opener : null;
+const connected = () => !!peer && !peer.closed;
+const send = msg => { if (connected() && PEER_ORIGIN) peer.postMessage(msg, PEER_ORIGIN); };
+let R = { online: true, faceFail: false, kiosk: false, pay: null, result: null }; // 단말이 포스에게서 받은 최신 상태
+
+// ---- 단말 저장소: 결제는 여기에 먼저 기록된 뒤에만 완료로 보인다 ----
+const KEY = 'rpos.terminal.v1';
+const MOCK = location.protocol === 'file:' || Q.has('mock');
+const uuid = () => crypto.randomUUID ? crypto.randomUUID()
+  : '10000000-1000-4000-8000-100000000000'.replace(/[018]/g, c => (c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c / 4).toString(16));
+const load = () => { try { return JSON.parse(localStorage.getItem(KEY)); } catch { return null; } };
+const S = load() || { terminalId: uuid(), storeId: uuid(), seq: 0, lastAcked: 0, outbox: [], orders: [], forcedOffline: false };
+function save() {
+  try { localStorage.setItem(KEY, JSON.stringify(S)); return true; }
+  catch { toast('단말 저장소에 기록하지 못했습니다'); return false; }
+}
+function restore(json) { // S를 저장된 모양으로 되돌린다(저장 실패 뒤, 다른 탭이 저장한 뒤)
+  const old = JSON.parse(json);
+  for (const k of Object.keys(S)) delete S[k];
+  Object.assign(S, old);
+}
+
+// 화면 상태(새로 고치면 사라져도 되는 것)
+const U = { syncError: '', again: false, kstep: 'home', remote: null, lastResultId: null, faceFail: false, kiosk: Q.has('kiosk'), view: 'order', cat: '즐겨찾는 메뉴', dining: '매장', cart: [], sel: -1, overlay: null, flushing: false };
+
+const won = n => (Number(n) || 0).toLocaleString('ko-KR'); // 숫자가 아닌 값이 화면에 그대로 들어가지 않게 한다
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const isOnline = () => ROLE === 'terminal' ? R.online : !S.forcedOffline && navigator.onLine;
+const faceFails = () => ROLE === 'terminal' ? R.faceFail : U.faceFail;
+const customerKiosk = () => U.kiosk && (ROLE === 'terminal' || !connected()); // 지금 이 창이 고객용 키오스크 화면인가
+const PRODUCT = Object.fromEntries(Object.values(MENU).flat().map(([code, name, price]) => [code, { code, name, price }]));
+// 단말(다른 origin)이 보낸 주문은 상품 코드와 수량만 받고 이름과 가격은 포스의 메뉴에서 다시 읽는다
+function trustedLines(lines) {
+  if (!Array.isArray(lines) || !lines.length) return null;
+  const out = lines.map(l => l && PRODUCT[l.code] && Number.isInteger(l.qty) && l.qty > 0 && l.qty <= 99 ? { ...PRODUCT[l.code], qty: l.qty } : null);
+  return out.includes(null) ? null : out;
+}
+const total = () => U.cart.reduce((a, l) => a + l.price * l.qty, 0);
+const count = () => U.cart.reduce((a, l) => a + l.qty, 0);
+const orderIdOf = op => op.clientOrderId || op.order.clientOrderId;
+
+// ---- sync: 대기열을 순번대로 보내고 항목 판정을 반영한다 ----
+function enqueueOrder(method, cart, channel, dining) {
+  const snap = JSON.stringify(S);
+  const clientOrderId = uuid(), amount = cart.reduce((a, l) => a + l.price * l.qty, 0);
+  const lines = cart.map(l => ({ productCode: l.code, productName: l.name, unitPrice: String(l.price), quantity: String(l.qty) }));
+  const ops = [
+    { operationId: uuid(), sequence: S.seq + 1, kind: 'CREATE_ORDER', order: { storeId: S.storeId, clientOrderId, currency: 'KRW', lines } },
+    { operationId: uuid(), sequence: S.seq + 2, kind: 'REQUEST_CHECKOUT', clientOrderId, amount: String(amount) },
+  ];
+  S.seq += 2;
+  S.outbox.push(...ops);
+  S.orders.unshift({ clientOrderId, at: Date.now(), amount, summary: cart.map(l => `${l.name}×${l.qty}`).join(', '), status: 'PENDING', offline: !isOnline(), method,
+    no: S.orderNo = (S.orderNo || 0) + 1, channel, dining: dining || U.dining, done: false, lines: cart.map(l => ({ name: l.name, qty: l.qty, price: l.price })) });
+  S.orders = S.orders.filter((o, i) => i < 200 || o.status === 'PENDING'); // 저장소가 끝없이 커지지 않게 오래된 확정 주문은 버린다
+  if (save()) return clientOrderId;
+  restore(snap); // 저장하지 못한 주문이 메모리 대기열에 남아 전송되면 안 된다
+  return null;
+}
+
+function applyAck(state, data) {
+  state.lastAcked = data.lastAckedSequence;
+  for (const item of data.items) {
+    const i = state.outbox.findIndex(op => op.operationId === item.operationId);
+    if (i < 0 || item.status === 'GAP') continue; // GAP은 남겨 두고 다음 전송에서 다시 보낸다
+    const [op] = state.outbox.splice(i, 1);
+    const order = state.orders.find(o => o.clientOrderId === orderIdOf(op));
+    if (!order || order.status !== 'PENDING') continue; // 먼저 확정된 거절 사유를 덮어쓰지 않는다
+    if (item.status === 'REJECTED' || item.status === 'CONFLICT') {
+      // ponytail: CONFLICT는 단말과 서버 상태가 갈라진 것이라 재전송해도 풀리지 않는다. 표시만 하고 버린다. 복구 절차가 정해지면 여기서 멈추도록 바꾼다.
+      // 버려도 순번에 빈틈이 생기지 않는 것은 이 단말이 operationId를 다시 쓰지 않아 CONFLICT가 이미 확정된 순번에서만 오기 때문이다.
+      order.status = item.status; order.errorCode = item.errorCode || item.status;
+    } else if (op.kind === 'REQUEST_CHECKOUT') {
+      order.status = 'SYNCED'; order.orderId = item.orderId;
+    }
+  }
+}
+
+async function postSync(operations) {
+  const res = await fetch(`/v1/terminals/${S.terminalId}/sync`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ operations }), signal: AbortSignal.timeout(5000),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return (await res.json()).data;
+}
+async function mockSync(operations) {
+  await new Promise(r => setTimeout(r, 400));
+  return { lastAckedSequence: operations.at(-1).sequence, items: operations.map(op => ({ operationId: op.operationId, status: 'APPLIED', orderId: null, errorCode: null })) };
+}
+
+async function flush() {
+  if (ROLE !== 'pos' || !S.outbox.length || !isOnline()) return;
+  if (U.flushing) { U.again = true; return; }
+  U.flushing = true; U.again = false;
+  if (U.view === 'status' && !U.overlay) render(); // 기다릴 것이 있을 때만 진행 상태를 보인다
+  const before = S.outbox.length;
+  try {
+    // ponytail: 한 번에 50개. 서버 상한은 500이지만 항목마다 잠금을 잡아 큰 배치는 5초 제한에 걸릴 수 있다.
+    applyAck(S, await (MOCK ? mockSync : postSync)(S.outbox.slice(0, 50)));
+    save();
+    const first = S.outbox[0];
+    U.syncError = first && S.outbox.length === before
+      ? `순번이 맞지 않아 전송이 멈췄습니다(서버 확정 ${S.lastAcked}, 대기 첫 순번 ${first.sequence}). 단말 초기화가 필요할 수 있습니다` : '';
+  } catch (e) {
+    U.syncError = `서버 전송 실패(${e.message}). 5초마다 다시 시도합니다`;
+    console.warn('sync 실패, 대기열을 유지합니다:', e.message);
+  } finally {
+    U.flushing = false;
+    render();
+  }
+  if (S.outbox.length && (S.outbox.length < before || U.again)) flush();
+}
+
+// ---- 화면 ----
+const ICON = {
+  cup: '<svg viewBox="0 0 56 56"><path d="M14 20h28l-3 26H17zM11 20h34M20 12h16l2 8"/></svg>',
+  bag: '<svg viewBox="0 0 56 56"><path d="M12 20h32l-2 28H14zM21 24v-6a7 7 0 0 1 14 0v6"/></svg>',
+  nfc: '<svg viewBox="0 0 32 32"><path d="M10 12c1.5 2.5 1.5 5.5 0 8M15 9c3 4.5 3 9.5 0 14M20 6c4.5 6.5 4.5 13.5 0 20"/></svg>',
+  back: '<svg viewBox="0 0 24 24" width="24" height="24"><path d="M20 12H5M11 6l-6 6 6 6"/></svg>',
+  home: '<svg viewBox="0 0 24 24" width="24" height="24"><path d="M4 11l8-7 8 7v8a1 1 0 0 1-1 1h-4v-6h-6v6H5a1 1 0 0 1-1-1z"/></svg>',
+  qr: '<svg viewBox="0 0 32 32"><rect x="5" y="5" width="9" height="9" rx="1"/><rect x="18" y="5" width="9" height="9" rx="1"/><rect x="5" y="18" width="9" height="9" rx="1"/><path d="M18 18h4v4h-4zM26 18v1M26 23v4h-4"/></svg>',
+  cash: '<svg viewBox="0 0 32 32"><rect x="4" y="9" width="24" height="14" rx="2"/><circle cx="16" cy="16" r="3.5"/><path d="M8 13v6M24 13v6"/></svg>',
+  bank: '<svg viewBox="0 0 32 32"><path d="M6 12h18l-5-5M26 20H8l5 5"/></svg>',
+  face: '<svg viewBox="0 0 48 48"><path d="M6 16V10a4 4 0 0 1 4-4h6M32 6h6a4 4 0 0 1 4 4v6M42 32v6a4 4 0 0 1-4 4h-6M16 42h-6a4 4 0 0 1-4-4v-6"/><path d="M18 20v3M30 20v3M24 20v7h-2M18 32c3.5 3 8.5 3 12 0"/></svg>',
+  card: '<svg viewBox="0 0 48 48"><rect x="6" y="11" width="36" height="26" rx="4"/><path d="M6 19h36M12 30h8"/></svg>',
+  menu: '<svg viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>',
+  bell: '<svg viewBox="0 0 24 24"><path d="M12 22a2.2 2.2 0 0 0 2.2-2.2H9.8A2.2 2.2 0 0 0 12 22zm7-5.5V11a7 7 0 0 0-5.3-6.8V3.5a1.7 1.7 0 0 0-3.4 0v.7A7 7 0 0 0 5 11v5.5L3 18.4v.9h18v-.9z"/></svg>',
+  more: '<svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>',
+  trash: '<svg viewBox="0 0 24 24"><path d="M9 3h6l1 2h4v2H4V5h4zM6 9h12l-1 12H7zm4 2v8h1.5v-8zm2.5 0v8H14v-8z"/></svg>',
+  mark: '<svg viewBox="0 0 24 24"><path d="M6 3h12v18l-6-4-6 4z"/></svg>',
+};
+
+const SCROLLERS = ['.lines', '.k-menu', '.k-cats', '.k-list', '.st-list', '.co-lines'];
+function render() {
+  const device = document.getElementById('device');
+  fit();
+  const KEYS = ['act', 'i', 'id', 'c', 'd', 's', 'v'], a = document.activeElement;
+  const focused = a && device.contains(a) && a.dataset.act ? KEYS.map(k => a.dataset[k]) : null;
+  const kept = SCROLLERS.map(q => { const e = device.querySelector(q); return e && [e.scrollTop, e.scrollLeft]; });
+  const clock = new Date().toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', weekday: 'short', hour: 'numeric', minute: '2-digit' });
+  const local = ROLE === 'pos' && !connected(); // 단말 창이 없으면 포스 화면이 고객 화면으로 바뀐다
+  const customer = ROLE === 'terminal' ? terminalView() : local && U.overlay ? overlayView() : local && U.kiosk ? kioskView() : null;
+  const open = S.orders.filter(o => !o.done).length;
+  device.innerHTML = (customer !== null ? hardware(customer) : U.view === 'checkout' ? checkoutView() : `
+    <header class="top">
+      <button class="icon-btn" data-act="todo" aria-label="메뉴">${ICON.menu}</button>
+      <button class="kiosk ${U.kiosk ? 'on' : ''}" data-act="kiosk" aria-pressed="${U.kiosk}">키오스크 <i>${U.kiosk ? 'ON' : 'OFF'}</i></button>
+      <nav class="views" role="tablist">
+        <button role="tab" aria-selected="${U.view === 'order'}" data-act="view" data-v="order">주문 홈</button>
+        <button role="tab" aria-selected="${U.view === 'status'}" data-act="view" data-v="status">현황${open ? `<em class="cnt">${open}</em>` : ''}</button>
+      </nav>
+      ${netPill()}
+      <span class="clock">${clock}</span>
+      <button class="icon-btn" data-act="todo" aria-label="알림">${ICON.bell}</button>
+      <button class="icon-btn" data-act="todo" aria-label="더보기">${ICON.more}</button>
+    </header>
+    ${U.view === 'order' ? orderView() : statusView()}`);
+  device.appendChild(toastEl); // 알림 영역은 같은 노드를 다시 붙여 스크린리더가 안내를 놓치지 않게 한다
+  showToast();
+  if (focused) [...device.querySelectorAll('[data-act]')].find(e => KEYS.every((k, n) => e.dataset[k] === focused[n]))?.focus({ preventScroll: true });
+  SCROLLERS.forEach((q, i) => { const e = device.querySelector(q); if (e && kept[i]) [e.scrollTop, e.scrollLeft] = kept[i]; });
+  device.querySelector('.line.sel')?.scrollIntoView({ block: 'nearest' }); // 방금 담은 줄이 보이게 한다
+
+  if (ROLE !== 'pos') return;
+  const net = document.getElementById('netToggle');
+  net.textContent = S.forcedOffline ? '네트워크 차단 중 (눌러서 연결)' : '네트워크 연결됨 (눌러서 차단)';
+  net.className = S.forcedOffline ? 'off' : '';
+  document.getElementById('termBtn').textContent = connected() ? `고객 단말 연결됨 (${PEER_ORIGIN})` : '고객 단말 창 열기';
+  document.getElementById('screenToggle').textContent = U.kiosk ? '키오스크: 켜짐 (고객이 주문)' : '키오스크: 꺼짐 (직원이 주문)';
+  document.getElementById('faceToggle').textContent = U.faceFail ? '페이스페이: 인식 실패로 시연' : '페이스페이: 인식 성공으로 시연';
+  document.getElementById('modeLabel').textContent = MOCK ? '모드: 모의 서버' : '모드: 실서버 /v1/terminals/{id}/sync';
+  document.getElementById('tid').textContent = `terminal ${S.terminalId.slice(0, 8)}`;
+  pushState();
+}
+
+// 포스 → 단말: 그릴 때마다 최신 상태를 통째로 보낸다(같은 상태를 여러 번 받아도 결과가 같다)
+function pushState() {
+  if (!connected()) return;
+  const o = U.lastResultId && S.orders.find(x => x.clientOrderId === U.lastResultId);
+  send({ t: 'state', online: isOnline(), faceFail: U.faceFail, kiosk: U.kiosk, pay: U.remote && { amount: U.remote.amount },
+    result: o ? { status: o.status, errorCode: o.errorCode || null, method: o.method, amount: o.amount, no: o.no } : null });
+}
+
+// 단말: 포스가 보낸 상태에서 지금 보일 화면을 정한다
+// 다른 origin에서 온 값이라 정해진 모양과 타입만 남긴다
+function cleanState(m) {
+  const num = v => (typeof v === 'number' || typeof v === 'string') && Number.isFinite(Number(v)) && Number(v) >= 0 ? Number(v) : null;
+  const r = m && m.result, p = m && m.pay;
+  return {
+    online: !!m && m.online === true, faceFail: !!m && m.faceFail === true, kiosk: !!m && m.kiosk === true,
+    pay: p && num(p.amount) !== null ? { amount: num(p.amount) } : null,
+    result: r && ['PENDING', 'SYNCED', 'REJECTED', 'CONFLICT'].includes(r.status) && num(r.amount) !== null
+      ? { status: r.status, method: ['CARD', 'FACE', 'CASH'].includes(r.method) ? r.method : 'CARD', amount: num(r.amount),
+          no: Number.isInteger(r.no) ? r.no : null, errorCode: r.errorCode == null ? null : String(r.errorCode).slice(0, 64) } : null,
+  };
+}
+function applyRemote(raw) {
+  const m = R = cleanState(raw); U.kiosk = m.kiosk;
+  const o = U.overlay;
+  if (m.result) {
+    clearTimeout(faceTimer); clearTimeout(sentTimer);
+    if (o && o.own) { U.cart = []; U.sel = -1; U.kstep = 'home'; } // 포스가 받았다고 답한 뒤에만 장바구니를 비운다
+    if (!o || o.step !== 'done') showDone({ amount: m.result.amount, kiosk: !!(o && o.kiosk) });
+  }
+  else if (m.pay) { if (!o || !o.remote) { clearTimeout(faceTimer); U.overlay = { step: 'pay', amount: m.pay.amount, remote: true }; } }
+  // 포스에 결제를 알리고 답을 기다리는 중(sent)이거나 받지 못했다고 안내하는 중(lost)이면 그대로 둔다
+  else if (o && o.step !== 'sent' && o.step !== 'lost' && (o.remote || o.step === 'done' || !m.kiosk)) { clearTimeout(faceTimer); U.overlay = null; }
+  render();
+}
+
+function terminalView() {
+  if (!connected()) return `<div class="c-body"><span class="c-fill"></span><h1 class="c-title">포스에서 열어 주세요</h1>
+    <div class="hint">포스 화면 위쪽의 '고객 단말 창 열기'를 누르면 연결됩니다.</div><span class="c-fill"></span></div>`;
+  if (U.overlay) return overlayView();
+  if (U.kiosk) return kioskView();
+  return `<div class="c-screen idle">${customerTop('')}<div class="c-body"><span class="c-fill"></span>
+    <div class="ring">${ICON.face}</div>
+    <h1 class="c-title">얼굴이나 카드로<br>결제할 수 있습니다</h1>
+    <div class="hint">직원이 주문을 입력하면 결제 화면이 나타납니다.</div><span class="c-fill"></span></div></div>`;
+}
+
+function netPill() {
+  const pending = S.outbox.length;
+  return `<span class="net ${isOnline() ? '' : 'offline'}" role="status">${isOnline() ? '온라인' : '오프라인'}${U.syncError ? '<em class="err">전송 멈춤</em>' : pending ? `<em>전송 대기 ${pending}</em>` : ''}</span>`;
+}
+
+// 프론트 2의 전면: 화면 위 검은 띠에 비접촉 결제 표시와 카메라 2개, 화면 아래에 IC 카드 투입구가 있다.
+// 지금 쓸 수 있는 자리를 밝힌다(결제 화면에서는 비접촉 표시, 얼굴 확인 중에는 카메라).
+function hardware(view) {
+  const step = U.overlay?.step;
+  return `<div class="hw-top" aria-hidden="true"><span class="nfc ${step === 'pay' ? 'on' : ''}">${ICON.nfc}</span><span class="cam ${step === 'face' ? 'on' : ''}"></span><span class="cam ${step === 'face' ? 'on' : ''}"></span></div>
+    <div class="screen">${view}</div>
+    <div class="hw-chin" aria-hidden="true"><span class="hw-slot"></span></div>`;
+}
+
+// 고객 화면의 상단 바. back이 있으면 뒤로 가기를 보인다.
+function customerTop(back, title = '') {
+  return `<header class="c-top">${back ? `<button class="icon-btn" data-act="${back}" aria-label="뒤로">${ICON.back}</button>` : ''}${title ? `<b>${title}</b>` : ''}<span class="sp"></span>
+    <button class="txt" data-act="todo">직원 부르기</button><button class="txt" data-act="todo" lang="en">English</button>
+    <button class="icon-btn" data-act="home" aria-label="처음으로">${ICON.home}</button></header>`;
+}
+
+// 키오스크 화면의 상단 바: 왼쪽 뒤로, 오른쪽 처음으로
+function kioskTop(back) {
+  return `<header class="c-top">${back ? `<button class="icon-btn" data-act="${back}" aria-label="뒤로">${ICON.back}</button>` : ''}<span class="sp"></span>
+    <button class="txt" data-act="home">처음으로 ↻</button></header>`;
+}
+const TINT = ['#7aa7e9', '#8bc48a', '#e9a27a', '#c59ae0', '#e3c05a', '#7fc7c0'];
+const BADGE = { 'AM-ICE': ['인기', ''], 'LT-VAN': ['신규', 'new'] };
+
+// 고객이 직접 주문하고 결제하는 화면. 주문 접수와 sync는 포스가 맡는다.
+function kioskView() {
+  const n = count();
+  if (U.kstep === 'home') return `<div class="k-hero">ResilientPOS 카페</div>
+    <div class="k-startbox"><button class="k-start fill" data-act="kgo" data-s="dine">주문하기</button></div>`;
+  if (U.kstep === 'dine') return `${kioskTop('home')}<div class="c-body"><span class="c-fill"></span>
+    <h1 class="c-title">반가워요<br>주문을 시작할게요</h1>
+    <div class="k-choice"><button data-act="kdine" data-d="매장">${ICON.cup}먹고가요</button><button data-act="kdine" data-d="포장">${ICON.bag}포장해요</button></div>
+    <div class="k-lang"><button data-act="todo" aria-label="한국어">한</button><button data-act="todo" aria-label="English" lang="en">EN</button></div>
+    <span class="c-fill"></span></div>`;
+  if (U.kstep === 'cart') return `${kioskTop('kback')}<h1 class="k-h">이대로 주문할까요?</h1>
+    <div class="k-list">${U.cart.map((l, i) => `<div class="k-line"><span>${l.name}</span><button class="icon-btn" data-act="kdel" data-i="${i}" aria-label="${l.name} 빼기">✕</button>
+        <small>${won(l.price * l.qty)}원</small>
+        <span class="step"><button data-act="kqty" data-i="${i}" data-d="-1" aria-label="${l.name} 줄이기">−</button><b>${l.qty}</b><button data-act="kqty" data-i="${i}" data-d="1" aria-label="${l.name} 늘리기">+</button></span></div>`).join('')}
+      <button class="k-more" data-act="kgo" data-s="menu">메뉴 더 추가 +</button></div>
+    <button class="btn-xl fill pay k-cta" data-act="pay" ${n ? '' : 'disabled'}><i>${n}</i>${won(total())}원 결제하기</button>`;
+  return `${kioskTop('kback')}
+    <div class="k-cats" role="tablist">${Object.keys(MENU).map(c => `<button role="tab" aria-selected="${c === U.cat}" data-act="cat" data-c="${c}">${c === '즐겨찾는 메뉴' ? '추천메뉴' : c}</button>`).join('')}</div>
+    <section class="k-menu"><h2>${U.cat === '즐겨찾는 메뉴' ? '추천메뉴' : U.cat}</h2>
+      <div class="k-grid">${MENU[U.cat].map(([code, name, price], i) => {
+        const q = U.cart.find(l => l.code === code)?.qty, b = BADGE[code];
+        return `<button class="k-item" data-act="add" data-i="${i}"><span class="k-img" style="background:${TINT[i % TINT.length]}">${name.replace(/^(HOT|ICE) /, '')[0]}</span>
+          ${b ? `<i class="k-badge ${b[1]}">${b[0]}</i>` : ''}${q ? `<em>${q}</em>` : ''}${name}<small>${won(price)}원</small></button>`;
+      }).join('')}</div></section>
+    ${n ? `<button class="btn-xl fill pay k-cta" data-act="kgo" data-s="cart"><i>${n}</i>${won(total())}원 확인하기</button>` : ''}`;
+}
+
+function orderView() {
+  const n = count();
+  return `<div class="main">
+    <section class="left">
+      <div class="tabs" role="tablist">
+        ${Object.keys(MENU).map(c => `<button class="tab" role="tab" aria-selected="${c === U.cat}" data-act="cat" data-c="${c}">${c}</button>`).join('')}
+        <span class="pager"><button data-act="todo" aria-label="이전 분류">‹</button><button data-act="todo" aria-label="다음 분류">›</button></span>
+      </div>
+      <div class="grid">
+        ${MENU[U.cat].map(([code, name, price, color], i) => `<button class="item ${color ? 'c-' + color : ''}" data-act="add" data-i="${i}">${name}<small>${won(price)}</small></button>`).join('')}
+      </div>
+      <div class="tools"><button data-act="todo">✎ 상품편집</button><button data-act="todo">⊕ 상품추가</button><span class="page">1 / 1</span></div>
+      <div class="opts"><h3>즐겨찾는 옵션</h3>
+        <div class="opt-grid">
+          ${OPTIONS.slice(0, 5).map(o => `<button data-act="todo">${o}</button>`).join('')}<button class="dark" data-act="todo">메모</button>
+          ${OPTIONS.slice(5).map(o => `<button data-act="todo">${o}</button>`).join('')}<span></span><button class="dark" data-act="todo">상세옵션</button>
+        </div>
+      </div>
+    </section>
+    <aside class="right">
+      <div class="order-head">
+        <div class="seg">${['매장', '포장', '둘다'].map(d => `<button aria-pressed="${d === U.dining}" data-act="dining" data-d="${d}">${d}</button>`).join('')}</div>
+        <button class="icon-btn" data-act="clear" aria-label="주문서 비우기">${ICON.trash}</button>
+        <button class="icon-btn" data-act="todo" aria-label="주문 보류">${ICON.mark}</button>
+      </div>
+      <div class="lines">
+        ${U.cart.length ? U.cart.map((l, i) => i === U.sel ? `<div class="line sel">
+            <div class="ctl"><span class="step"><button data-act="qty" data-d="-1" aria-label="수량 줄이기">−</button><b>${l.qty}</b><button data-act="qty" data-d="1" aria-label="수량 늘리기">+</button></span>
+              <button class="btn-lg del" data-act="del">삭제</button></div>
+            <div class="row"><span>${l.name}×${l.qty}</span><span>${won(l.price * l.qty)}</span></div></div>`
+          : `<button class="line" data-act="sel" data-i="${i}"><div class="row"><span>${l.name}×${l.qty}</span><span>${won(l.price * l.qty)}</span></div></button>`).join('')
+          : '<p class="empty">상품을 눌러 주문을 시작하세요</p>'}
+      </div>
+      <div class="order-foot">
+        <button class="btn-xl soft" data-act="todo">할인</button><button class="btn-xl grey" data-act="todo">분할 결제</button>
+        <button class="btn-xl fill pay" data-act="pay" ${n ? '' : 'disabled'}>${n ? `<i>${n}</i>` : ''}${won(total())}원 결제</button>
+      </div>
+    </aside></div>`;
+}
+
+const STATUS_LABEL = { PENDING: '전송 대기', SYNCED: '전송 완료', REJECTED: '거절', CONFLICT: '충돌' };
+const METHOD_LABEL = { CARD: '카드', FACE: '페이스페이', CASH: '현금' };
+const ago = at => { const m = Math.floor((Date.now() - at) / 60000); return m < 1 ? '방금 전' : `${m}분 전`; };
+// 주문번호와 품목 기록은 나중에 더했다. 그 전에 만든 주문은 번호 없이 보인다.
+const orderNo = o => o.no ? String(o.no).padStart(3, '0') : '';
+const orderName = o => `${o.dining || '매장'} ${o.channel === 'KIOSK' ? '키오-' : ''}${orderNo(o)}`.trim();
+const nowLabel = () => new Date().toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', weekday: 'short', hour: 'numeric', minute: '2-digit' });
+
+function statusView() {
+  const open = S.orders.filter(o => !o.done).reverse(), done = S.orders.filter(o => o.done); // 진행은 과거순
+  const cur = S.orders.find(o => o.clientOrderId === U.selOrder) || open[0] || done[0];
+  const chip = (o, round) => `<span class="chip ${o.channel === 'KIOSK' ? 'k' : ''} ${round ? 'r' : ''}">${o.channel === 'KIOSK' ? '키' : '포'}</span>`;
+  const badge = o => `<span class="badge ${o.status}">${STATUS_LABEL[o.status]}</span>`;
+  const item = o => `<div class="st-item ${o === cur ? 'sel' : ''} ${o.done ? 'done' : ''}">
+      <button class="st-pick" data-act="pick" data-id="${o.clientOrderId}" aria-pressed="${o === cur}">
+        <span class="t"><span>${orderName(o)}</span><small>${ago(o.at)}</small></span>${chip(o, true)}
+        <span class="s">${esc(o.summary)}<b>${won(o.amount)}원</b></span></button>
+      <span class="r">${badge(o)}${o.done ? '' : `<button class="btn-md dark" data-act="finish" data-id="${o.clientOrderId}">완료</button>`}</span></div>`;
+  const lines = cur ? (cur.lines || []) : [];
+  return `<div class="st">
+    <section class="st-main">${cur ? `
+      <div class="st-head">${chip(cur)}<div class="info"><b>${orderName(cur)}</b>${lines.length ? `메뉴 ${lines.reduce((a, l) => a + l.qty, 0)}개 · ` : ''}총 ${won(cur.amount)}원</div>
+        <button class="btn-xl dark" data-act="finish" data-id="${cur.clientOrderId}" ${cur.done ? 'disabled' : ''}>${cur.done ? '조리 완료됨' : '조리 완료'}</button></div>
+      <div class="st-cards">
+        <div class="st-card"><dl><dt>주문 금액</dt><dd>${won(cur.amount)}원</dd><dt>할인 금액</dt><dd>0원</dd><dt>결제 금액</dt><dd>${won(cur.amount)}원</dd></dl><hr>
+          <dl><dt>결제시간</dt><dd>${new Date(cur.at).toLocaleString('ko-KR', { month: '2-digit', day: '2-digit', weekday: 'short', hour: '2-digit', minute: '2-digit' })}</dd>
+            <dt>결제수단</dt><dd>${METHOD_LABEL[cur.method] || '카드'}</dd>
+            <dt>접수</dt><dd>${cur.offline ? '오프라인' : '온라인'}</dd>
+            <dt>서버 주문번호</dt><dd>${cur.orderId ? esc(String(cur.orderId).slice(0, 8)) : '-'}</dd>
+            <dt>서버 전송</dt><dd>${badge(cur)} ${cur.errorCode ? esc(cur.errorCode) : ''}</dd></dl>
+          <div class="btns"><button class="btn-xl grey" data-act="todo">결제 변경</button><button class="btn-xl danger-soft" data-act="todo">결제 취소</button></div></div>
+        <div class="st-card">${lines.map(l => `<div class="st-row"><span>${esc(l.name)}</span><span>${l.qty}</span><span>${won(l.price * l.qty)}원</span></div>`).join('') || `<p class="empty">${esc(cur.summary)}</p>`}
+          <div class="btns"><button class="btn-xl soft" data-act="todo">주문서 출력</button><button class="btn-xl soft" data-act="todo">영수증 출력</button></div></div>
+      </div>` : '<p class="empty">아직 주문이 없습니다</p>'}
+    </section>
+    <aside class="st-side">
+      <button class="st-filter" data-act="todo">키오스크·포스 ⌄</button>
+      <div class="st-sec"><span>진행 ${open.length}</span><span>과거순</span></div>
+      <div class="st-list">${open.map(item).join('')}
+        ${done.length ? `<div class="st-sec"><span>완료 ${done.length}</span></div>${done.map(item).join('')}` : ''}</div>
+      <div class="st-sync"><span>${U.syncError ? `<b class="err">${esc(U.syncError)}</b>` : `전송 대기 ${S.outbox.length}건 · 서버 확정 순번 ${S.lastAcked} / 단말 발급 ${S.seq}`}</span>
+        <button class="btn-md fill" data-act="flush" ${S.outbox.length && isOnline() && !U.flushing ? '' : 'disabled'}>${U.flushing ? '동기화 중' : '지금 동기화'}</button></div>
+    </aside></div>`;
+}
+
+// 포스의 결제하기 화면. 연결된 고객 단말에는 같은 금액의 결제 화면이 함께 뜬다(고객도 결제 방법을 고를 수 있다).
+function checkoutView() {
+  const n = count();
+  return `<div class="co"><section class="co-main">
+      <div class="co-back"><button class="icon-btn" data-act="backOrder" aria-label="뒤로">${ICON.back}</button>${nowLabel()}</div>
+      <div class="co-total"><div><small>총 결제금액</small><b>${won(total())}원을 결제할게요</b></div><button class="btn-xl soft" data-act="todo">분할 결제</button></div>
+      <button class="co-link" data-act="todo">쿠폰·포인트 사용 ›</button>
+      <hr class="co-hr">
+      <div class="co-label">결제 방법<em>${connected() ? '고객도 선택 가능 · 고객 단말에 결제 화면이 떠 있습니다' : '고객도 선택 가능'}</em></div>
+      <div class="co-tiles">
+        <button class="co-tile" data-act="payCard">${ICON.card}신용카드</button>
+        <button class="co-tile" data-act="payCash">${ICON.cash}현금</button>
+        <button class="co-tile" data-act="todo">${ICON.qr}QR결제<small>(카카오,네이버,제로)</small></button>
+        <button class="co-tile" data-act="todo">${ICON.bank}계좌이체</button>
+        <button class="co-tile" data-act="todo">${ICON.card}전화승인</button>
+      </div></section>
+    <aside class="co-side"><button class="co-edit" data-act="backOrder">✎ 주문내역 수정</button>
+      <div class="co-lines"><small>[${U.dining} ${n}개]</small>${U.cart.map(l => `<div><span>${l.name}×${l.qty}</span><span>${won(l.price * l.qty)}</span></div>`).join('')}</div>
+      <div class="co-sum"><span>총 <i>${n}</i>개</span><b>${won(total())}원</b></div></aside></div>`;
+}
+
+// 고객 결제 화면. 결제가 시작되면 직원 화면 대신 이 세로형 화면이 단말에 뜬다.
+function overlayView() {
+  const o = U.overlay;
+  const sub = `<div class="c-sub">결제할 금액 ${won(o.amount)}원</div>`;
+  if (o.step === 'pay') return `<div class="c-screen paying">${customerTop('cancel')}<div class="c-body" role="dialog" aria-label="결제">${sub}
+    <h1 class="c-title">카드를 넣거나 선택하세요</h1>
+    <button class="c-nfc" data-act="tap" aria-label="삼성페이·애플페이·NFC 결제 (시연: 누르면 인식)"><i>${ICON.nfc}</i>삼성페이 · 애플페이 · NFC ›</button>
+    <div class="c-tiles">
+      <button class="c-tile" data-act="face" ${isOnline() ? '' : 'disabled'}>${ICON.face}얼굴결제</button>
+      <button class="c-tile" data-act="todo">${ICON.qr}QR 간편결제</button>
+      <button class="c-tile" data-act="todo">${ICON.cash}현금</button>
+      <button class="c-tile" data-act="todo">${ICON.bank}계좌이체</button>
+    </div>
+    <button class="c-chip" data-act="todo">선불권 · 포인트 · 쿠폰 사용</button>
+    ${isOnline() ? '' : '<div class="notice">지금은 오프라인입니다. 얼굴결제는 쓸 수 없습니다. 카드 결제는 단말에 저장했다가 연결되면 자동으로 전송합니다.</div>'}
+    <span class="c-fill"></span>
+    <div class="c-slot-label">카드는 여기에</div>
+    <button class="c-slot fill" data-act="tap" aria-label="카드 넣기 (시연: 누르면 인식)">⌃</button></div></div>`;
+  if (o.step === 'kpay') return `${kioskTop('cancel')}<div class="c-body" role="dialog" aria-label="결제 수단 선택">
+    <h1 class="c-title">${won(o.amount)}원을 결제할게요</h1>
+    <div class="k-pay">
+      <button data-act="kinsert">${ICON.card}카드</button>
+      <button data-act="tap">${ICON.nfc}삼성·애플페이</button>
+      <button class="wide" data-act="todo">${ICON.qr}QR 간편결제<small>간편결제 앱의 QR·바코드</small></button>
+    </div>
+    ${isOnline() ? '' : '<div class="notice">지금은 오프라인입니다. 결제 요청은 저장했다가 연결되면 자동으로 전송합니다.</div>'}
+    <span class="c-fill"></span></div>`;
+  if (o.step === 'insert') return `<div class="c-screen paying">${kioskTop('kpayBack')}<div class="c-body" role="dialog" aria-label="카드 투입">
+    <h1 class="c-title">카드를 <span class="red">끝까지</span> 넣어주세요</h1>
+    <div class="k-total"><span>총 결제금액</span><b>${won(o.amount)}원</b></div>
+    <span class="c-fill"></span>
+    <div class="c-slot-label">카드는 여기에</div>
+    <button class="c-slot fill" data-act="tap" aria-label="카드 넣기 (시연: 누르면 인식)">⌃</button></div></div>`;
+  if (o.step === 'face') return `<div class="c-screen dark">${customerTop('card')}<div class="c-body" role="dialog" aria-label="페이스페이 얼굴 확인">${sub}
+    <span class="c-fill"></span>
+    <div class="scan" role="img" aria-label="얼굴 확인 중">${ICON.face}얼굴 확인 중</div>
+    <h1 class="c-title">화면 위 카메라를<br>바라봐 주세요</h1>
+    <span class="c-fill"></span>
+    <div class="hint">시연 화면이며 카메라를 사용하지 않습니다.</div>
+    <button class="btn-xl soft c-wide" data-act="card">카드로 결제</button></div></div>`;
+  if (o.step === 'faceFail') return `${customerTop('card')}<div class="c-body" role="dialog" aria-label="페이스페이 실패">
+    <h1 class="c-title">${o.offline ? '네트워크가 끊겨<br>페이스페이를 쓸 수 없습니다' : '얼굴을 확인하지 못했습니다'}</h1>
+    <div class="check fail">!</div>
+    <div class="notice">아직 결제되지 않았습니다. ${o.offline ? '카드로 결제해 주세요.' : '다시 시도하거나 카드로 결제해 주세요.'}</div>
+    <span class="c-fill"></span>
+    ${o.offline ? '' : '<button class="btn-xl fill c-wide" data-act="face">다시 시도</button>'}
+    <button class="btn-xl soft c-wide" data-act="card">카드로 결제</button></div>`;
+  if (o.step === 'sent') return `${customerTop('')}<div class="c-body" role="dialog" aria-label="결제 처리 중">${sub}
+    <span class="c-fill"></span><h1 class="c-title">결제를 처리하고 있습니다</h1><span class="c-fill"></span></div>`;
+  if (o.step === 'lost') return `${customerTop('')}<div class="c-body" role="dialog" aria-label="주문 접수 실패">
+    <h1 class="c-title">주문이 접수되지 않았습니다</h1>
+    <div class="check fail">!</div>
+    <div class="notice">결제되지 않았습니다. 직원에게 알려 주세요.${o.own ? ' 담은 메뉴는 그대로 있습니다.' : ''}</div>
+    <span class="c-fill"></span>
+    ${o.own ? '<button class="btn-xl fill c-wide" data-act="retryPay">다시 시도</button>' : ''}
+    <button class="btn-xl soft c-wide" data-act="cancel">${o.own ? '주문 화면으로' : '확인'}</button></div>`;
+  const order = ROLE === 'terminal' ? R.result : S.orders.find(x => x.clientOrderId === o.clientOrderId);
+  const synced = order && order.status === 'SYNCED', failed = order && order.status !== 'SYNCED' && order.status !== 'PENDING';
+  const no = ROLE === 'terminal' ? R.result && R.result.no : order && order.no;
+  if (o.kiosk && !failed) return `${kioskTop('')}<div class="c-body" role="dialog" aria-label="주문 완료"><span class="c-fill"></span>
+    <div class="c-sub big">주문번호 ${no ? String(no).padStart(3, '0') : '-'}번${synced ? '으로 준비 완료!' : ''}</div>
+    <h1 class="c-title">${synced ? '메뉴가 나오면 알려드릴게요' : '주문을 접수했습니다'}</h1>
+    ${synced ? '' : '<div class="notice">결제는 아직 확인되지 않았습니다. 네트워크가 연결되면 결제 요청을 자동으로 전송합니다.</div>'}
+    <div class="hint">4초 뒤에 닫혀요</div><span class="c-fill"></span>
+    <button class="btn-xl soft c-wide" data-act="todo">영수증 출력</button>
+    <button class="btn-xl fill c-wide" data-act="done">닫기</button></div>`;
+  return `${customerTop('')}<div class="c-body" role="dialog" aria-label="결제 결과">
+    <h1 class="c-title">${synced ? (order.method === 'FACE' ? '페이스페이 결제 요청을<br>접수했습니다' : '결제 요청을<br>접수했습니다') : failed ? '결제 요청이<br>접수되지 않았습니다' : '결제 요청을<br>단말에 저장했습니다'}</h1>
+    <div class="check ${failed ? 'fail' : synced ? '' : 'wait'}">${failed ? '!' : '✓'}</div>
+    <div class="c-amount">${won(o.amount)}원</div>
+    ${synced ? '' : failed ? `<div class="notice">결제되지 않았습니다. 직원에게 알려 주세요.</div><div class="hint">사유 코드 ${esc(order.errorCode)}</div>`
+      : '<div class="notice">네트워크가 연결되면 자동으로 전송합니다. 다시 결제하지 않아도 됩니다.</div>'}
+    <span class="c-fill"></span>
+    <button class="btn-xl fill c-wide" data-act="done">확인</button>
+    <button class="c-link" data-act="todo">영수증 받기 ›</button></div>`;
+}
+
+let toastTimer, toastMsg = '', toastUntil = 0;
+const toastEl = Object.assign(document.createElement('div'), { className: 'toast', id: 'toast', hidden: true });
+toastEl.setAttribute('role', 'status');
+function toast(msg) {
+  toastMsg = msg; toastUntil = Date.now() + 1800; showToast();
+  clearTimeout(toastTimer); toastTimer = setTimeout(showToast, 1850);
+}
+function showToast() { // render()가 화면을 통째로 다시 그리므로 그릴 때마다 되살린다
+  const t = toastEl, on = Date.now() < toastUntil;
+  t.textContent = on ? toastMsg : ''; t.hidden = !on;
+}
+
+// ---- 조작 ----
+let resetArmed = false, faceTimer, doneTimer, sentTimer;
+// 주문을 대기열에 넣는다. 저장에 실패하면 아무것도 바꾸지 않고 false를 돌려준다.
+function complete(method, lines, dining) {
+  const kiosk = !!lines || customerKiosk();
+  const clientOrderId = enqueueOrder(method, lines || U.cart, kiosk ? 'KIOSK' : 'POS', dining);
+  if (!clientOrderId) return false; // 저장에 실패하면 결제를 완료로 보이지 않는다
+  if (ROLE === 'pos' && !lines) U.view = 'order'; // 키오스크 주문이 들어왔다고 직원이 보던 화면을 바꾸지 않는다
+  if (connected()) { U.remote = null; U.lastResultId = clientOrderId; }
+  else if (U.overlay) showDone({ amount: S.orders[0].amount, clientOrderId, kiosk: U.overlay.kiosk }); // 고객 화면에서 진행하던 결제만 완료 화면을 보인다
+  if (!lines) { U.cart = []; U.sel = -1; U.kstep = 'home'; }
+  flush();
+  return true;
+}
+// 결제 수단이 정해졌을 때. 단말은 포스에 알리기만 하고 주문 접수는 포스가 한다.
+function paid(method) {
+  if (ROLE !== 'terminal') return complete(method);
+  const own = !U.overlay.remote; // 키오스크에서 고객이 직접 담은 주문
+  send({ t: 'paid', method, dining: U.dining, lines: own ? U.cart.map(({ code, qty }) => ({ code, qty })) : null });
+  // 장바구니는 포스의 답을 받은 뒤에 비운다. 5초 안에 답이 없으면 접수되지 않았다고 알린다.
+  U.overlay = { ...U.overlay, step: 'sent', own };
+  clearTimeout(sentTimer);
+  sentTimer = setTimeout(() => { if (U.overlay && U.overlay.step === 'sent') { U.overlay = { ...U.overlay, step: 'lost' }; render(); } }, 5000);
+}
+// 결제 결과 화면. 키오스크 주문은 주문번호를 보이고 4초 뒤 스스로 닫힌다.
+function showDone(o) {
+  U.overlay = { ...o, step: 'done' };
+  clearTimeout(doneTimer);
+  if (o.kiosk) doneTimer = setTimeout(() => { if (U.overlay && U.overlay.step === 'done') { leave(); render(); } }, 4000);
+}
+function leave() {
+  clearTimeout(faceTimer); clearTimeout(doneTimer); clearTimeout(sentTimer);
+  const o = U.overlay; U.overlay = null;
+  if (ROLE === 'terminal' && o) { if (o.step === 'done') send({ t: 'done' }); else if (o.remote) send({ t: 'cancel' }); }
+}
+const ACT = {
+  view: el => { U.view = el.dataset.v; },
+  cat: el => { U.cat = el.dataset.c; },
+  dining: el => { U.dining = el.dataset.d; },
+  add: el => {
+    const [code, name, price] = MENU[U.cat][el.dataset.i];
+    const i = U.cart.findIndex(l => l.code === code);
+    if (i >= 0) { U.cart[i].qty++; U.sel = i; } else { U.sel = U.cart.push({ code, name, price, qty: 1 }) - 1; }
+    if (customerKiosk()) return '추가 완료';
+  },
+  sel: el => { U.sel = +el.dataset.i; },
+  kiosk: () => { clearTimeout(faceTimer); clearTimeout(doneTimer); U.overlay = null; U.remote = null; U.kiosk = !U.kiosk; U.view = 'order'; U.kstep = 'home'; if (customerKiosk()) { U.cart = []; U.sel = -1; } },
+  home: () => { leave(); if (U.kiosk) { U.cart = []; U.sel = -1; U.kstep = 'home'; } },
+  kgo: el => { U.kstep = el.dataset.s; },
+  kdine: el => { U.dining = el.dataset.d; U.kstep = 'menu'; },
+  kback: () => { U.kstep = U.kstep === 'cart' ? 'menu' : 'dine'; },
+  kdel: el => { U.cart.splice(+el.dataset.i, 1); U.sel = U.cart.length - 1; if (!U.cart.length) U.kstep = 'menu'; },
+  kinsert: () => { U.overlay = { ...U.overlay, step: 'insert' }; },
+  kpayBack: () => { U.overlay = { ...U.overlay, step: 'kpay' }; },
+  openTerm: () => {
+    if (location.protocol === 'file:') return '포스와 단말을 서로 다른 포트로 띄웠을 때만 열 수 있습니다';
+    peer = window.open(TERM_URL, 'rpos-terminal', 'width=496,height=860');
+    if (!peer) return '창을 열지 못했습니다. 브라우저의 팝업 차단을 풀어 주세요';
+    clearTimeout(faceTimer); U.overlay = null; U.remote = null; U.lastResultId = null; U.view = 'order';
+  },
+  kqty: el => { const i = +el.dataset.i, l = U.cart[i]; l.qty = Math.max(1, l.qty + +el.dataset.d); },
+  qty: el => { const l = U.cart[U.sel]; l.qty = Math.max(1, l.qty + +el.dataset.d); },
+  del: () => { U.cart.splice(U.sel, 1); U.sel = U.cart.length - 1; },
+  clear: () => { U.cart = []; U.sel = -1; },
+  pay: () => {
+    // 직원이 포스에서 누른 결제는 결제하기 화면으로 간다. 고객이 직접 누른 결제(키오스크)는 바로 결제 수단 화면이다.
+    if (ROLE === 'pos' && !(U.kiosk && !connected())) {
+      U.view = 'checkout';
+      if (connected()) { U.remote = { amount: total() }; U.lastResultId = null; } // 새 결제가 단말에 남은 이전 결과 화면을 밀어낸다
+    } else U.overlay = { step: 'kpay', amount: total(), kiosk: true };
+  },
+  backOrder: () => { U.view = 'order'; U.remote = null; },
+  payCard: () => {
+    if (connected()) return '고객 단말에 카드를 넣거나 대면 결제됩니다';
+    U.overlay = { step: 'pay', amount: total() }; // 단말 창이 없으면 이 화면이 고객 화면으로 바뀐다
+  },
+  payCash: () => complete('CASH') ? '현금 결제를 접수했습니다' : undefined,
+  retryPay: () => { clearTimeout(sentTimer); U.overlay = { step: 'kpay', amount: total(), kiosk: true }; },
+  pick: el => { U.selOrder = el.dataset.id; },
+  finish: el => { const o = S.orders.find(x => x.clientOrderId === el.dataset.id); if (o) { o.done = true; save(); } },
+  cancel: leave,
+  tap: () => paid('CARD'),
+  card: () => { clearTimeout(faceTimer); U.overlay = { ...U.overlay, step: 'pay' }; },
+  face: () => {
+    if (!isOnline()) return;
+    U.overlay = { ...U.overlay, step: 'face' };
+    clearTimeout(faceTimer);
+    // ponytail: 얼굴 인식은 1.5초 뒤 결과를 내는 흉내다. 실제 인식 연동이 생기면 이 타이머를 그 응답으로 바꾼다.
+    faceTimer = setTimeout(() => {
+      if (U.overlay?.step !== 'face') return;
+      if (faceFails() || !isOnline()) U.overlay = { ...U.overlay, step: 'faceFail', offline: !isOnline() };
+      else paid('FACE');
+      render();
+    }, 1500);
+  },
+  faceMode: () => { U.faceFail = !U.faceFail; },
+  done: leave,
+  flush: () => { flush(); },
+  net: () => { S.forcedOffline = !S.forcedOffline; save(); if (!S.forcedOffline) flush(); },
+  reset: () => {
+    if (!resetArmed) {
+      const b = document.getElementById('resetBtn');
+      resetArmed = true; b.textContent = `한 번 더 누르면 초기화 (미전송 ${S.outbox.length}건 삭제)`;
+      setTimeout(() => { resetArmed = false; b.textContent = '단말 초기화'; }, 4000); // 한참 뒤의 실수 한 번으로 지워지지 않게 한다
+      return 'skip';
+    }
+    localStorage.removeItem(KEY); location.reload(); return 'skip';
+  },
+  todo: () => 'todo',
+};
+document.addEventListener('click', e => {
+  const el = e.target.closest('[data-act]');
+  if (!el || el.disabled) return;
+  const r = ACT[el.dataset.act](el);
+  if (r === 'skip') return;
+  render();
+  if (r === 'todo') toast('시연 범위에 없는 기능입니다');
+  else if (typeof r === 'string') toast(r);
+});
+
+function fit() {
+  const portrait = ROLE === 'terminal' || (!connected() && (U.kiosk || !!U.overlay)), [w, h] = portrait ? [480, 880] : [1280, 800];
+  const s = Math.min(innerWidth / w, (innerHeight - 48) / h);
+  const stage = document.getElementById('stage'), device = document.getElementById('device');
+  device.classList.toggle('portrait', portrait);
+  stage.style.width = w * s + 'px'; stage.style.height = h * s + 'px';
+  device.style.transform = `scale(${s})`;
+}
+
+// ---- 자체 점검: ?selftest ----
+function selfTest() {
+  const op = (id, seq, kind, coid) => kind === 'CREATE_ORDER' ? { operationId: id, sequence: seq, kind, order: { clientOrderId: coid } } : { operationId: id, sequence: seq, kind, clientOrderId: coid };
+  const st = { lastAcked: 0, outbox: [op('a', 1, 'CREATE_ORDER', 'A'), op('b', 2, 'REQUEST_CHECKOUT', 'A'), op('c', 3, 'CREATE_ORDER', 'B'), op('d', 4, 'REQUEST_CHECKOUT', 'B'), op('e', 5, 'CREATE_ORDER', 'C')],
+    orders: [{ clientOrderId: 'A', status: 'PENDING' }, { clientOrderId: 'B', status: 'PENDING' }, { clientOrderId: 'C', status: 'PENDING' }] };
+  applyAck(st, { lastAckedSequence: 4, items: [
+    { operationId: 'a', status: 'APPLIED', orderId: 'srv-A' }, { operationId: 'b', status: 'DUPLICATE', orderId: 'srv-A' },
+    { operationId: 'c', status: 'REJECTED', errorCode: 'INVALID_QUANTITY' }, { operationId: 'd', status: 'REJECTED', errorCode: 'ORDER_NOT_FOUND' },
+    { operationId: 'e', status: 'GAP' }] });
+  const ok = st.lastAcked === 4 && st.outbox.length === 1 && st.outbox[0].operationId === 'e'
+    && st.orders[0].status === 'SYNCED' && st.orders[0].orderId === 'srv-A'
+    && st.orders[1].status === 'REJECTED' && st.orders[1].errorCode === 'INVALID_QUANTITY' // 첫 거절 사유를 유지한다
+    && st.orders[2].status === 'PENDING';
+  const t = trustedLines([{ code: 'AM-HOT', qty: 2, price: 1 }]);
+  const ok2 = t && t[0].price === 4000 && t[0].qty === 2 // 단말이 보낸 가격은 쓰지 않는다
+    && !trustedLines([{ code: 'NOPE', qty: 1 }]) && !trustedLines([{ code: 'AM-HOT', qty: 0 }]) && !trustedLines([{ code: 'AM-HOT', qty: 1.5 }]) && !trustedLines([]);
+  console.assert(ok2, 'selftest 실패: trustedLines');
+  if (!ok2) return false;
+  // 바깥에서 온 값은 화면에 그대로 들어가지 않는다
+  const bad = cleanState({ online: 'yes', kiosk: 1, pay: { amount: '<img src=x>' }, result: { status: 'SYNCED', amount: 100, no: '<b>', method: 'X', errorCode: 7 } });
+  const ok3 = !won('<img src=x>').includes('<') && bad.pay === null && bad.online === false && bad.kiosk === false
+    && bad.result.no === null && bad.result.method === 'CARD' && bad.result.errorCode === '7' && cleanState(null).pay === null
+    && sameHost('https://evil.example/x') === null && sameHost(null) === null && sameHost('null') === null && sameHost(location.href) !== null;
+  console.assert(ok3, 'selftest 실패: cleanState');
+  // 저장에 실패하면 대기열과 순번이 그대로다
+  const before = JSON.stringify(S), setItem = Storage.prototype.setItem;
+  Storage.prototype.setItem = () => { throw new Error('quota'); };
+  let ok4;
+  try { ok4 = enqueueOrder('CARD', [{ code: 'AM-HOT', name: 't', price: 1, qty: 1 }], 'POS') === null && JSON.stringify(S) === before; }
+  finally { Storage.prototype.setItem = setItem; }
+  console.assert(ok4, 'selftest 실패: 저장 실패 되돌리기');
+  if (!ok3 || !ok4) return false;
+  console.assert(ok, 'selftest 실패', st);
+  console.log(ok ? 'selftest 통과' : 'selftest 실패');
+  return ok;
+}
+
+addEventListener('message', e => {
+  if (!PEER_ORIGIN || e.origin !== PEER_ORIGIN || e.source !== peer || !e.data || typeof e.data !== 'object') return;
+  const m = e.data;
+  if (ROLE === 'terminal') {
+    if (m.t === 'state') applyRemote(m);
+    else if (m.t === 'rejected' && U.overlay && U.overlay.step === 'sent') { clearTimeout(sentTimer); U.overlay = { ...U.overlay, step: 'lost' }; render(); }
+    return;
+  }
+  let note = '';
+  if (m.t === 'paid') {
+    const method = m.method === 'FACE' ? 'FACE' : 'CARD';
+    let ok = false;
+    if (m.lines) { const lines = U.kiosk && trustedLines(m.lines); ok = !!lines && complete(method, lines, m.dining === '포장' ? '포장' : '매장'); if (ok) note = '고객 단말에서 주문과 결제 요청이 들어왔습니다'; }
+    else if (U.remote) { ok = complete(method); if (ok) note = '결제 요청을 접수했습니다'; }
+    if (!ok) send({ t: 'rejected' }); // 받지 못한 주문이 단말에서 소리 없이 사라지지 않게 알린다
+  } else if (m.t === 'cancel' && U.remote) { U.remote = null; U.view = 'order'; note = '고객이 결제를 취소했습니다'; }
+  else if (m.t === 'done') U.lastResultId = null;
+  render(); // hello를 포함해 어떤 메시지든 최신 상태를 다시 보낸다
+  if (note) toast(note);
+});
+// 같은 주소의 다른 탭이 저장하면 그 내용을 따른다. 두 탭이 각자 순번을 매기면 서버에서 충돌한다.
+addEventListener('storage', e => {
+  if (e.key !== KEY || ROLE !== 'pos') return;
+  if (e.newValue === null) return location.reload(); // 다른 탭에서 단말을 초기화했다
+  try { restore(e.newValue); render(); } catch { /* 깨진 값은 따르지 않는다 */ }
+});
+let wasConnected = false;
+setInterval(() => { // 단말 창이 닫혔는지 살핀다
+  if (ROLE === 'pos' && wasConnected !== connected()) { wasConnected = connected(); if (!wasConnected) U.remote = null; render(); }
+}, 1000);
+if (ROLE === 'terminal') {
+  document.querySelector('.demo-bar').innerHTML = `<b>고객 단말 (프론트 2 구성)</b><span>${esc(location.origin)}</span><span class="spacer"></span><span>포스 ${esc(PEER_ORIGIN || '없음')}</span>`;
+  document.title = 'ResilientPOS 고객 단말';
+  send({ t: 'hello' });
+}
+addEventListener('resize', fit);
+addEventListener('online', () => { render(); flush(); });
+addEventListener('offline', render);
+setInterval(flush, 5000);          // 요청이 실패했을 때의 재시도
+setInterval(() => { if (!U.overlay) render(); }, 30000); // 시계와 경과 시간
+fit(); render(); flush();
+if (new URLSearchParams(location.search).has('selftest')) document.title = selfTest() ? 'selftest 통과' : 'selftest 실패';
+</script>
+</body>
+</html>
