@@ -52,7 +52,7 @@
   .icon-btn { width: 40px; height: 40px; display: grid; place-items: center; border-radius: 8px; }
   .icon-btn svg { width: 24px; height: 24px; fill: currentColor; }
   .kiosk { display: flex; align-items: center; gap: 8px; background: #5b6672; border-radius: 99px; padding: 4px 6px 4px 16px; min-height: 40px; font-size: 13px; font-weight: 600; }
-  .kiosk i { font-style: normal; font-size: 11px; line-height: 16px; color: #8b95a1; background: #e5e8eb; border-radius: 99px; padding: 4px 8px 4px 24px; position: relative; } /* 높이 24px, 동그라미 16px, 여백 사방 4px */
+  .kiosk i { font-style: normal; font-size: 11px; line-height: 16px; color: var(--sub); background: #e5e8eb; border-radius: 99px; padding: 4px 8px 4px 24px; position: relative; } /* 높이 24px, 동그라미 16px, 여백 사방 4px */
   .kiosk i::before { content: ""; position: absolute; left: 4px; top: 4px; width: 16px; height: 16px; border-radius: 50%; background: #fff; }
   .views { margin: 0 auto; display: flex; align-items: center; }
   .views button { font-size: 19px; font-weight: 700; color: #8b95a1; padding: 8px 24px; }
@@ -132,12 +132,15 @@
   .st-filter { min-height: 56px; padding: 16px 24px; text-align: left; font-size: 15px; color: var(--sub); }
   .st-sec { display: flex; justify-content: space-between; padding: 8px 24px; background: var(--grey-btn); font-size: 14px; font-weight: 600; color: var(--sub); }
   .st-list { flex: 1; overflow-y: auto; }
-  .st-item { display: grid; grid-template-columns: 40px 1fr auto; column-gap: 16px; row-gap: 8px; align-items: center; padding: 16px 24px; border-bottom: 1px solid var(--line); cursor: pointer; }
+  .st-item { display: flex; align-items: center; gap: 16px; padding-right: 24px; border-bottom: 1px solid var(--line); }
   .st-item.sel { background: var(--blue-soft); }
-  .st-item .t { grid-column: 1 / -1; display: flex; justify-content: space-between; font-weight: 600; }
-  .st-item .t small { font-size: 13px; font-weight: 400; color: var(--sub); }
-  .st-item .s { min-width: 0; font-size: 13px; color: var(--sub); } .st-item .s b { display: block; font-size: 16px; color: var(--ink); }
+  .st-pick { flex: 1; min-width: 0; display: grid; grid-template-columns: 40px 1fr; column-gap: 16px; row-gap: 8px; align-items: center; padding: 16px 0 16px 24px; text-align: left; }
+  .st-pick .t { grid-column: 1 / -1; display: flex; justify-content: space-between; font-weight: 600; }
+  .st-pick .t small { font-size: 13px; font-weight: 400; color: var(--sub); }
+  .st-pick .s { display: block; min-width: 0; font-size: 13px; color: var(--sub); } .st-pick .s b { display: block; font-size: 16px; color: var(--ink); }
+  .st-item .r { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
   .st-item.done .chip, .st-item.done .s b { opacity: .5; }
+  .err { color: var(--red); } .net em.err { background: var(--red); color: #fff; }
   .st-sync { display: flex; align-items: center; gap: 8px; padding: 16px 24px; border-top: 1px solid var(--line); font-size: 13px; color: var(--sub); }
   .st-sync span { flex: 1; }
   .st-sync button { min-width: 104px; } /* 동기화 중에도 폭을 유지한다 */
@@ -300,9 +303,17 @@ const OPTIONS = ['샷추가 (500)', '사이즈업 (500)', '연하게', '두유(5
 // ponytail: 같은 브라우저의 두 창만 이어진다. 기기 두 대로 시연하려면 서버를 거치는 중계로 바꾼다.
 const Q = new URLSearchParams(location.search);
 const ROLE = Q.get('role') === 'terminal' ? 'terminal' : 'pos';
-const TERM_URL = Q.get('terminal') || `${location.protocol}//${location.hostname}:${(+location.port || 8080) + 1}${location.pathname}?role=terminal&pos=${encodeURIComponent(location.origin)}`;
-const PEER_ORIGIN = ROLE === 'terminal' ? Q.get('pos') : new URL(TERM_URL, location.href).origin;
-let peer = ROLE === 'terminal' ? window.opener : null;
+// 주소로 받은 상대 주소는 같은 호스트·같은 프로토콜일 때만 쓴다. 그대로 믿으면 바깥 사이트가 이 페이지를 열어
+// 자기를 상대로 지정하고 메시지를 보낼 수 있다.
+function sameHost(value) {
+  if (!value) return null;
+  try { const u = new URL(value); return u.hostname === location.hostname && u.protocol === location.protocol ? u : null; } // 절대 주소만 받는다
+  catch { return null; }
+}
+const DEFAULT_TERM_URL = `${location.protocol}//${location.hostname}:${(+location.port || 8080) + 1}${location.pathname}?role=terminal&pos=${encodeURIComponent(location.origin)}`;
+const TERM_URL = (sameHost(Q.get('terminal')) || {}).href || DEFAULT_TERM_URL;
+const PEER_ORIGIN = ROLE === 'terminal' ? (sameHost(Q.get('pos')) || {}).origin || null : (sameHost(TERM_URL) || {}).origin || null;
+let peer = ROLE === 'terminal' && PEER_ORIGIN ? window.opener : null;
 const connected = () => !!peer && !peer.closed;
 const send = msg => { if (connected() && PEER_ORIGIN) peer.postMessage(msg, PEER_ORIGIN); };
 let R = { online: true, faceFail: false, kiosk: false, pay: null, result: null }; // 단말이 포스에게서 받은 최신 상태
@@ -310,18 +321,24 @@ let R = { online: true, faceFail: false, kiosk: false, pay: null, result: null }
 // ---- 단말 저장소: 결제는 여기에 먼저 기록된 뒤에만 완료로 보인다 ----
 const KEY = 'rpos.terminal.v1';
 const MOCK = location.protocol === 'file:' || Q.has('mock');
-const uuid = () => crypto.randomUUID();
+const uuid = () => crypto.randomUUID ? crypto.randomUUID()
+  : '10000000-1000-4000-8000-100000000000'.replace(/[018]/g, c => (c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c / 4).toString(16));
 const load = () => { try { return JSON.parse(localStorage.getItem(KEY)); } catch { return null; } };
 const S = load() || { terminalId: uuid(), storeId: uuid(), seq: 0, lastAcked: 0, outbox: [], orders: [], forcedOffline: false };
 function save() {
   try { localStorage.setItem(KEY, JSON.stringify(S)); return true; }
   catch { toast('단말 저장소에 기록하지 못했습니다'); return false; }
 }
+function restore(json) { // S를 저장된 모양으로 되돌린다(저장 실패 뒤, 다른 탭이 저장한 뒤)
+  const old = JSON.parse(json);
+  for (const k of Object.keys(S)) delete S[k];
+  Object.assign(S, old);
+}
 
 // 화면 상태(새로 고치면 사라져도 되는 것)
-const U = { kstep: 'home', remote: null, lastResultId: null, faceFail: false, kiosk: Q.has('kiosk'), view: 'order', cat: '즐겨찾는 메뉴', dining: '매장', cart: [], sel: -1, overlay: null, flushing: false };
+const U = { syncError: '', again: false, kstep: 'home', remote: null, lastResultId: null, faceFail: false, kiosk: Q.has('kiosk'), view: 'order', cat: '즐겨찾는 메뉴', dining: '매장', cart: [], sel: -1, overlay: null, flushing: false };
 
-const won = n => n.toLocaleString('ko-KR');
+const won = n => (Number(n) || 0).toLocaleString('ko-KR'); // 숫자가 아닌 값이 화면에 그대로 들어가지 않게 한다
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const isOnline = () => ROLE === 'terminal' ? R.online : !S.forcedOffline && navigator.onLine;
 const faceFails = () => ROLE === 'terminal' ? R.faceFail : U.faceFail;
@@ -339,6 +356,7 @@ const orderIdOf = op => op.clientOrderId || op.order.clientOrderId;
 
 // ---- sync: 대기열을 순번대로 보내고 항목 판정을 반영한다 ----
 function enqueueOrder(method, cart, channel, dining) {
+  const snap = JSON.stringify(S);
   const clientOrderId = uuid(), amount = cart.reduce((a, l) => a + l.price * l.qty, 0);
   const lines = cart.map(l => ({ productCode: l.code, productName: l.name, unitPrice: String(l.price), quantity: String(l.qty) }));
   const ops = [
@@ -349,7 +367,10 @@ function enqueueOrder(method, cart, channel, dining) {
   S.outbox.push(...ops);
   S.orders.unshift({ clientOrderId, at: Date.now(), amount, summary: cart.map(l => `${l.name}×${l.qty}`).join(', '), status: 'PENDING', offline: !isOnline(), method,
     no: S.orderNo = (S.orderNo || 0) + 1, channel, dining: dining || U.dining, done: false, lines: cart.map(l => ({ name: l.name, qty: l.qty, price: l.price })) });
-  return save() ? clientOrderId : null;
+  S.orders = S.orders.filter((o, i) => i < 200 || o.status === 'PENDING'); // 저장소가 끝없이 커지지 않게 오래된 확정 주문은 버린다
+  if (save()) return clientOrderId;
+  restore(snap); // 저장하지 못한 주문이 메모리 대기열에 남아 전송되면 안 된다
+  return null;
 }
 
 function applyAck(state, data) {
@@ -362,6 +383,7 @@ function applyAck(state, data) {
     if (!order || order.status !== 'PENDING') continue; // 먼저 확정된 거절 사유를 덮어쓰지 않는다
     if (item.status === 'REJECTED' || item.status === 'CONFLICT') {
       // ponytail: CONFLICT는 단말과 서버 상태가 갈라진 것이라 재전송해도 풀리지 않는다. 표시만 하고 버린다. 복구 절차가 정해지면 여기서 멈추도록 바꾼다.
+      // 버려도 순번에 빈틈이 생기지 않는 것은 이 단말이 operationId를 다시 쓰지 않아 CONFLICT가 이미 확정된 순번에서만 오기 때문이다.
       order.status = item.status; order.errorCode = item.errorCode || item.status;
     } else if (op.kind === 'REQUEST_CHECKOUT') {
       order.status = 'SYNCED'; order.orderId = item.orderId;
@@ -383,20 +405,26 @@ async function mockSync(operations) {
 }
 
 async function flush() {
-  if (ROLE !== 'pos' || U.flushing || !S.outbox.length || !isOnline()) return;
-  U.flushing = true;
+  if (ROLE !== 'pos' || !S.outbox.length || !isOnline()) return;
+  if (U.flushing) { U.again = true; return; }
+  U.flushing = true; U.again = false;
   if (U.view === 'status' && !U.overlay) render(); // 기다릴 것이 있을 때만 진행 상태를 보인다
   const before = S.outbox.length;
   try {
-    applyAck(S, await (MOCK ? mockSync : postSync)(S.outbox.slice(0, 500))); // 서버의 배치 상한이 500이다
+    // ponytail: 한 번에 50개. 서버 상한은 500이지만 항목마다 잠금을 잡아 큰 배치는 5초 제한에 걸릴 수 있다.
+    applyAck(S, await (MOCK ? mockSync : postSync)(S.outbox.slice(0, 50)));
     save();
+    const first = S.outbox[0];
+    U.syncError = first && S.outbox.length === before
+      ? `순번이 맞지 않아 전송이 멈췄습니다(서버 확정 ${S.lastAcked}, 대기 첫 순번 ${first.sequence}). 단말 초기화가 필요할 수 있습니다` : '';
   } catch (e) {
+    U.syncError = `서버 전송 실패(${e.message}). 5초마다 다시 시도합니다`;
     console.warn('sync 실패, 대기열을 유지합니다:', e.message);
   } finally {
     U.flushing = false;
     render();
   }
-  if (S.outbox.length && S.outbox.length < before) flush();
+  if (S.outbox.length && (S.outbox.length < before || U.again)) flush();
 }
 
 // ---- 화면 ----
@@ -422,6 +450,8 @@ const SCROLLERS = ['.lines', '.k-menu', '.k-cats', '.k-list', '.st-list', '.co-l
 function render() {
   const device = document.getElementById('device');
   fit();
+  const KEYS = ['act', 'i', 'id', 'c', 'd', 's', 'v'], a = document.activeElement;
+  const focused = a && device.contains(a) && a.dataset.act ? KEYS.map(k => a.dataset[k]) : null;
   const kept = SCROLLERS.map(q => { const e = device.querySelector(q); return e && [e.scrollTop, e.scrollLeft]; });
   const clock = new Date().toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', weekday: 'short', hour: 'numeric', minute: '2-digit' });
   const local = ROLE === 'pos' && !connected(); // 단말 창이 없으면 포스 화면이 고객 화면으로 바뀐다
@@ -440,9 +470,10 @@ function render() {
       <button class="icon-btn" data-act="todo" aria-label="알림">${ICON.bell}</button>
       <button class="icon-btn" data-act="todo" aria-label="더보기">${ICON.more}</button>
     </header>
-    ${U.view === 'order' ? orderView() : statusView()}`) + `
-    <div class="toast" id="toast" role="status" hidden></div>`;
+    ${U.view === 'order' ? orderView() : statusView()}`);
+  device.appendChild(toastEl); // 알림 영역은 같은 노드를 다시 붙여 스크린리더가 안내를 놓치지 않게 한다
   showToast();
+  if (focused) [...device.querySelectorAll('[data-act]')].find(e => KEYS.every((k, n) => e.dataset[k] === focused[n]))?.focus({ preventScroll: true });
   SCROLLERS.forEach((q, i) => { const e = device.querySelector(q); if (e && kept[i]) [e.scrollTop, e.scrollLeft] = kept[i]; });
   device.querySelector('.line.sel')?.scrollIntoView({ block: 'nearest' }); // 방금 담은 줄이 보이게 한다
 
@@ -467,12 +498,29 @@ function pushState() {
 }
 
 // 단말: 포스가 보낸 상태에서 지금 보일 화면을 정한다
-function applyRemote(m) {
-  R = m; U.kiosk = !!m.kiosk;
+// 다른 origin에서 온 값이라 정해진 모양과 타입만 남긴다
+function cleanState(m) {
+  const num = v => (typeof v === 'number' || typeof v === 'string') && Number.isFinite(Number(v)) && Number(v) >= 0 ? Number(v) : null;
+  const r = m && m.result, p = m && m.pay;
+  return {
+    online: !!m && m.online === true, faceFail: !!m && m.faceFail === true, kiosk: !!m && m.kiosk === true,
+    pay: p && num(p.amount) !== null ? { amount: num(p.amount) } : null,
+    result: r && ['PENDING', 'SYNCED', 'REJECTED', 'CONFLICT'].includes(r.status) && num(r.amount) !== null
+      ? { status: r.status, method: ['CARD', 'FACE', 'CASH'].includes(r.method) ? r.method : 'CARD', amount: num(r.amount),
+          no: Number.isInteger(r.no) ? r.no : null, errorCode: r.errorCode == null ? null : String(r.errorCode).slice(0, 64) } : null,
+  };
+}
+function applyRemote(raw) {
+  const m = R = cleanState(raw); U.kiosk = m.kiosk;
   const o = U.overlay;
-  if (m.result) { clearTimeout(faceTimer); if (!o || o.step !== 'done') showDone({ amount: m.result.amount, kiosk: !!(o && o.kiosk) }); }
+  if (m.result) {
+    clearTimeout(faceTimer); clearTimeout(sentTimer);
+    if (o && o.own) { U.cart = []; U.sel = -1; U.kstep = 'home'; } // 포스가 받았다고 답한 뒤에만 장바구니를 비운다
+    if (!o || o.step !== 'done') showDone({ amount: m.result.amount, kiosk: !!(o && o.kiosk) });
+  }
   else if (m.pay) { if (!o || !o.remote) { clearTimeout(faceTimer); U.overlay = { step: 'pay', amount: m.pay.amount, remote: true }; } }
-  else if (o && (o.remote || o.step === 'done' || o.step === 'sent' || !m.kiosk)) { clearTimeout(faceTimer); U.overlay = null; }
+  // 포스에 결제를 알리고 답을 기다리는 중(sent)이거나 받지 못했다고 안내하는 중(lost)이면 그대로 둔다
+  else if (o && o.step !== 'sent' && o.step !== 'lost' && (o.remote || o.step === 'done' || !m.kiosk)) { clearTimeout(faceTimer); U.overlay = null; }
   render();
 }
 
@@ -489,7 +537,7 @@ function terminalView() {
 
 function netPill() {
   const pending = S.outbox.length;
-  return `<span class="net ${isOnline() ? '' : 'offline'}" role="status">${isOnline() ? '온라인' : '오프라인'}${pending ? `<em>전송 대기 ${pending}</em>` : ''}</span>`;
+  return `<span class="net ${isOnline() ? '' : 'offline'}" role="status">${isOnline() ? '온라인' : '오프라인'}${U.syncError ? '<em class="err">전송 멈춤</em>' : pending ? `<em>전송 대기 ${pending}</em>` : ''}</span>`;
 }
 
 // 프론트 2의 전면: 화면 위 검은 띠에 비접촉 결제 표시와 카메라 2개, 화면 아래에 IC 카드 투입구가 있다.
@@ -596,10 +644,11 @@ function statusView() {
   const cur = S.orders.find(o => o.clientOrderId === U.selOrder) || open[0] || done[0];
   const chip = (o, round) => `<span class="chip ${o.channel === 'KIOSK' ? 'k' : ''} ${round ? 'r' : ''}">${o.channel === 'KIOSK' ? '키' : '포'}</span>`;
   const badge = o => `<span class="badge ${o.status}">${STATUS_LABEL[o.status]}</span>`;
-  const item = o => `<div class="st-item ${o === cur ? 'sel' : ''} ${o.done ? 'done' : ''}" role="button" tabindex="0" data-act="pick" data-id="${o.clientOrderId}">
-      <div class="t"><span>${orderName(o)}</span><small>${ago(o.at)}</small></div>${chip(o, true)}
-      <div class="s">${esc(o.summary)}<b>${won(o.amount)}원</b></div>
-      ${o.done ? badge(o) : `<button class="btn-md dark" data-act="finish" data-id="${o.clientOrderId}">완료</button>`}</div>`;
+  const item = o => `<div class="st-item ${o === cur ? 'sel' : ''} ${o.done ? 'done' : ''}">
+      <button class="st-pick" data-act="pick" data-id="${o.clientOrderId}" aria-pressed="${o === cur}">
+        <span class="t"><span>${orderName(o)}</span><small>${ago(o.at)}</small></span>${chip(o, true)}
+        <span class="s">${esc(o.summary)}<b>${won(o.amount)}원</b></span></button>
+      <span class="r">${badge(o)}${o.done ? '' : `<button class="btn-md dark" data-act="finish" data-id="${o.clientOrderId}">완료</button>`}</span></div>`;
   const lines = cur ? (cur.lines || []) : [];
   return `<div class="st">
     <section class="st-main">${cur ? `
@@ -622,7 +671,7 @@ function statusView() {
       <div class="st-sec"><span>진행 ${open.length}</span><span>과거순</span></div>
       <div class="st-list">${open.map(item).join('')}
         ${done.length ? `<div class="st-sec"><span>완료 ${done.length}</span></div>${done.map(item).join('')}` : ''}</div>
-      <div class="st-sync"><span>전송 대기 ${S.outbox.length}건 · 서버 확정 순번 ${S.lastAcked} / 단말 발급 ${S.seq}</span>
+      <div class="st-sync"><span>${U.syncError ? `<b class="err">${esc(U.syncError)}</b>` : `전송 대기 ${S.outbox.length}건 · 서버 확정 순번 ${S.lastAcked} / 단말 발급 ${S.seq}`}</span>
         <button class="btn-md fill" data-act="flush" ${S.outbox.length && isOnline() && !U.flushing ? '' : 'disabled'}>${U.flushing ? '동기화 중' : '지금 동기화'}</button></div>
     </aside></div>`;
 }
@@ -697,13 +746,20 @@ function overlayView() {
     <button class="btn-xl soft c-wide" data-act="card">카드로 결제</button></div>`;
   if (o.step === 'sent') return `${customerTop('')}<div class="c-body" role="dialog" aria-label="결제 처리 중">${sub}
     <span class="c-fill"></span><h1 class="c-title">결제를 처리하고 있습니다</h1><span class="c-fill"></span></div>`;
+  if (o.step === 'lost') return `${customerTop('')}<div class="c-body" role="dialog" aria-label="주문 접수 실패">
+    <h1 class="c-title">주문이 접수되지 않았습니다</h1>
+    <div class="check fail">!</div>
+    <div class="notice">결제되지 않았습니다. 직원에게 알려 주세요.${o.own ? ' 담은 메뉴는 그대로 있습니다.' : ''}</div>
+    <span class="c-fill"></span>
+    ${o.own ? '<button class="btn-xl fill c-wide" data-act="retryPay">다시 시도</button>' : ''}
+    <button class="btn-xl soft c-wide" data-act="cancel">${o.own ? '주문 화면으로' : '확인'}</button></div>`;
   const order = ROLE === 'terminal' ? R.result : S.orders.find(x => x.clientOrderId === o.clientOrderId);
   const synced = order && order.status === 'SYNCED', failed = order && order.status !== 'SYNCED' && order.status !== 'PENDING';
   const no = ROLE === 'terminal' ? R.result && R.result.no : order && order.no;
   if (o.kiosk && !failed) return `${kioskTop('')}<div class="c-body" role="dialog" aria-label="주문 완료"><span class="c-fill"></span>
-    <div class="c-sub big">주문번호 ${no ? String(no).padStart(3, '0') : '-'}번으로 준비 완료!</div>
-    <h1 class="c-title">메뉴가 나오면 알려드릴게요</h1>
-    ${synced ? '' : '<div class="notice">주문은 접수됐습니다. 결제 요청은 네트워크가 연결되면 자동으로 전송합니다.</div>'}
+    <div class="c-sub big">주문번호 ${no ? String(no).padStart(3, '0') : '-'}번${synced ? '으로 준비 완료!' : ''}</div>
+    <h1 class="c-title">${synced ? '메뉴가 나오면 알려드릴게요' : '주문을 접수했습니다'}</h1>
+    ${synced ? '' : '<div class="notice">결제는 아직 확인되지 않았습니다. 네트워크가 연결되면 결제 요청을 자동으로 전송합니다.</div>'}
     <div class="hint">4초 뒤에 닫혀요</div><span class="c-fill"></span>
     <button class="btn-xl soft c-wide" data-act="todo">영수증 출력</button>
     <button class="btn-xl fill c-wide" data-act="done">닫기</button></div>`;
@@ -719,36 +775,40 @@ function overlayView() {
 }
 
 let toastTimer, toastMsg = '', toastUntil = 0;
+const toastEl = Object.assign(document.createElement('div'), { className: 'toast', id: 'toast', hidden: true });
+toastEl.setAttribute('role', 'status');
 function toast(msg) {
   toastMsg = msg; toastUntil = Date.now() + 1800; showToast();
   clearTimeout(toastTimer); toastTimer = setTimeout(showToast, 1850);
 }
 function showToast() { // render()가 화면을 통째로 다시 그리므로 그릴 때마다 되살린다
-  const t = document.getElementById('toast');
-  if (!t) return;
-  const on = Date.now() < toastUntil;
+  const t = toastEl, on = Date.now() < toastUntil;
   t.textContent = on ? toastMsg : ''; t.hidden = !on;
 }
 
 // ---- 조작 ----
-let resetArmed = false, faceTimer, doneTimer;
+let resetArmed = false, faceTimer, doneTimer, sentTimer;
+// 주문을 대기열에 넣는다. 저장에 실패하면 아무것도 바꾸지 않고 false를 돌려준다.
 function complete(method, lines, dining) {
   const kiosk = !!lines || customerKiosk();
   const clientOrderId = enqueueOrder(method, lines || U.cart, kiosk ? 'KIOSK' : 'POS', dining);
-  if (!clientOrderId) return; // 저장에 실패하면 결제를 완료로 보이지 않는다
-  if (ROLE === 'pos') U.view = 'order';
+  if (!clientOrderId) return false; // 저장에 실패하면 결제를 완료로 보이지 않는다
+  if (ROLE === 'pos' && !lines) U.view = 'order'; // 키오스크 주문이 들어왔다고 직원이 보던 화면을 바꾸지 않는다
   if (connected()) { U.remote = null; U.lastResultId = clientOrderId; }
   else if (U.overlay) showDone({ amount: S.orders[0].amount, clientOrderId, kiosk: U.overlay.kiosk }); // 고객 화면에서 진행하던 결제만 완료 화면을 보인다
   if (!lines) { U.cart = []; U.sel = -1; U.kstep = 'home'; }
   flush();
+  return true;
 }
 // 결제 수단이 정해졌을 때. 단말은 포스에 알리기만 하고 주문 접수는 포스가 한다.
 function paid(method) {
   if (ROLE !== 'terminal') return complete(method);
   const own = !U.overlay.remote; // 키오스크에서 고객이 직접 담은 주문
   send({ t: 'paid', method, dining: U.dining, lines: own ? U.cart.map(({ code, qty }) => ({ code, qty })) : null });
-  U.overlay = { ...U.overlay, step: 'sent' };
-  if (own) { U.cart = []; U.sel = -1; U.kstep = 'home'; }
+  // 장바구니는 포스의 답을 받은 뒤에 비운다. 5초 안에 답이 없으면 접수되지 않았다고 알린다.
+  U.overlay = { ...U.overlay, step: 'sent', own };
+  clearTimeout(sentTimer);
+  sentTimer = setTimeout(() => { if (U.overlay && U.overlay.step === 'sent') { U.overlay = { ...U.overlay, step: 'lost' }; render(); } }, 5000);
 }
 // 결제 결과 화면. 키오스크 주문은 주문번호를 보이고 4초 뒤 스스로 닫힌다.
 function showDone(o) {
@@ -757,7 +817,7 @@ function showDone(o) {
   if (o.kiosk) doneTimer = setTimeout(() => { if (U.overlay && U.overlay.step === 'done') { leave(); render(); } }, 4000);
 }
 function leave() {
-  clearTimeout(faceTimer); clearTimeout(doneTimer);
+  clearTimeout(faceTimer); clearTimeout(doneTimer); clearTimeout(sentTimer);
   const o = U.overlay; U.overlay = null;
   if (ROLE === 'terminal' && o) { if (o.step === 'done') send({ t: 'done' }); else if (o.remote) send({ t: 'cancel' }); }
 }
@@ -772,7 +832,7 @@ const ACT = {
     if (customerKiosk()) return '추가 완료';
   },
   sel: el => { U.sel = +el.dataset.i; },
-  kiosk: () => { clearTimeout(faceTimer); clearTimeout(doneTimer); U.overlay = null; U.kiosk = !U.kiosk; U.view = 'order'; U.kstep = 'home'; if (customerKiosk()) { U.cart = []; U.sel = -1; } },
+  kiosk: () => { clearTimeout(faceTimer); clearTimeout(doneTimer); U.overlay = null; U.remote = null; U.kiosk = !U.kiosk; U.view = 'order'; U.kstep = 'home'; if (customerKiosk()) { U.cart = []; U.sel = -1; } },
   home: () => { leave(); if (U.kiosk) { U.cart = []; U.sel = -1; U.kstep = 'home'; } },
   kgo: el => { U.kstep = el.dataset.s; },
   kdine: el => { U.dining = el.dataset.d; U.kstep = 'menu'; },
@@ -802,7 +862,8 @@ const ACT = {
     if (connected()) return '고객 단말에 카드를 넣거나 대면 결제됩니다';
     U.overlay = { step: 'pay', amount: total() }; // 단말 창이 없으면 이 화면이 고객 화면으로 바뀐다
   },
-  payCash: () => { complete('CASH'); return '현금 결제를 접수했습니다'; },
+  payCash: () => complete('CASH') ? '현금 결제를 접수했습니다' : undefined,
+  retryPay: () => { clearTimeout(sentTimer); U.overlay = { step: 'kpay', amount: total(), kiosk: true }; },
   pick: el => { U.selOrder = el.dataset.id; },
   finish: el => { const o = S.orders.find(x => x.clientOrderId === el.dataset.id); if (o) { o.done = true; save(); } },
   cancel: leave,
@@ -825,7 +886,12 @@ const ACT = {
   flush: () => { flush(); },
   net: () => { S.forcedOffline = !S.forcedOffline; save(); if (!S.forcedOffline) flush(); },
   reset: () => {
-    if (!resetArmed) { resetArmed = true; document.getElementById('resetBtn').textContent = `한 번 더 누르면 초기화 (미전송 ${S.outbox.length}건 삭제)`; return 'skip'; }
+    if (!resetArmed) {
+      const b = document.getElementById('resetBtn');
+      resetArmed = true; b.textContent = `한 번 더 누르면 초기화 (미전송 ${S.outbox.length}건 삭제)`;
+      setTimeout(() => { resetArmed = false; b.textContent = '단말 초기화'; }, 4000); // 한참 뒤의 실수 한 번으로 지워지지 않게 한다
+      return 'skip';
+    }
     localStorage.removeItem(KEY); location.reload(); return 'skip';
   },
   todo: () => 'todo',
@@ -867,24 +933,50 @@ function selfTest() {
     && !trustedLines([{ code: 'NOPE', qty: 1 }]) && !trustedLines([{ code: 'AM-HOT', qty: 0 }]) && !trustedLines([{ code: 'AM-HOT', qty: 1.5 }]) && !trustedLines([]);
   console.assert(ok2, 'selftest 실패: trustedLines');
   if (!ok2) return false;
+  // 바깥에서 온 값은 화면에 그대로 들어가지 않는다
+  const bad = cleanState({ online: 'yes', kiosk: 1, pay: { amount: '<img src=x>' }, result: { status: 'SYNCED', amount: 100, no: '<b>', method: 'X', errorCode: 7 } });
+  const ok3 = !won('<img src=x>').includes('<') && bad.pay === null && bad.online === false && bad.kiosk === false
+    && bad.result.no === null && bad.result.method === 'CARD' && bad.result.errorCode === '7' && cleanState(null).pay === null
+    && sameHost('https://evil.example/x') === null && sameHost(null) === null && sameHost('null') === null && sameHost(location.href) !== null;
+  console.assert(ok3, 'selftest 실패: cleanState');
+  // 저장에 실패하면 대기열과 순번이 그대로다
+  const before = JSON.stringify(S), setItem = Storage.prototype.setItem;
+  Storage.prototype.setItem = () => { throw new Error('quota'); };
+  let ok4;
+  try { ok4 = enqueueOrder('CARD', [{ code: 'AM-HOT', name: 't', price: 1, qty: 1 }], 'POS') === null && JSON.stringify(S) === before; }
+  finally { Storage.prototype.setItem = setItem; }
+  console.assert(ok4, 'selftest 실패: 저장 실패 되돌리기');
+  if (!ok3 || !ok4) return false;
   console.assert(ok, 'selftest 실패', st);
   console.log(ok ? 'selftest 통과' : 'selftest 실패');
   return ok;
 }
 
 addEventListener('message', e => {
-  if (e.origin !== PEER_ORIGIN || e.source !== peer || !e.data) return;
+  if (!PEER_ORIGIN || e.origin !== PEER_ORIGIN || e.source !== peer || !e.data || typeof e.data !== 'object') return;
   const m = e.data;
-  if (ROLE === 'terminal') { if (m.t === 'state') applyRemote(m); return; }
+  if (ROLE === 'terminal') {
+    if (m.t === 'state') applyRemote(m);
+    else if (m.t === 'rejected' && U.overlay && U.overlay.step === 'sent') { clearTimeout(sentTimer); U.overlay = { ...U.overlay, step: 'lost' }; render(); }
+    return;
+  }
   let note = '';
   if (m.t === 'paid') {
     const method = m.method === 'FACE' ? 'FACE' : 'CARD';
-    if (m.lines) { const lines = U.kiosk && trustedLines(m.lines); if (lines) { complete(method, lines, m.dining === '포장' ? '포장' : '매장'); note = '고객 단말에서 주문과 결제 요청이 들어왔습니다'; } }
-    else if (U.remote) { complete(method); note = '결제 요청을 접수했습니다'; }
+    let ok = false;
+    if (m.lines) { const lines = U.kiosk && trustedLines(m.lines); ok = !!lines && complete(method, lines, m.dining === '포장' ? '포장' : '매장'); if (ok) note = '고객 단말에서 주문과 결제 요청이 들어왔습니다'; }
+    else if (U.remote) { ok = complete(method); if (ok) note = '결제 요청을 접수했습니다'; }
+    if (!ok) send({ t: 'rejected' }); // 받지 못한 주문이 단말에서 소리 없이 사라지지 않게 알린다
   } else if (m.t === 'cancel' && U.remote) { U.remote = null; U.view = 'order'; note = '고객이 결제를 취소했습니다'; }
   else if (m.t === 'done') U.lastResultId = null;
   render(); // hello를 포함해 어떤 메시지든 최신 상태를 다시 보낸다
   if (note) toast(note);
+});
+// 같은 주소의 다른 탭이 저장하면 그 내용을 따른다. 두 탭이 각자 순번을 매기면 서버에서 충돌한다.
+addEventListener('storage', e => {
+  if (e.key !== KEY || ROLE !== 'pos') return;
+  if (e.newValue === null) return location.reload(); // 다른 탭에서 단말을 초기화했다
+  try { restore(e.newValue); render(); } catch { /* 깨진 값은 따르지 않는다 */ }
 });
 let wasConnected = false;
 setInterval(() => { // 단말 창이 닫혔는지 살핀다
@@ -895,7 +987,6 @@ if (ROLE === 'terminal') {
   document.title = 'ResilientPOS 고객 단말';
   send({ t: 'hello' });
 }
-addEventListener('keydown', e => { if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('div[data-act]')) { e.preventDefault(); e.target.click(); } });
 addEventListener('resize', fit);
 addEventListener('online', () => { render(); flush(); });
 addEventListener('offline', render);
