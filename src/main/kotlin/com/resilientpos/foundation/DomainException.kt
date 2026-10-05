@@ -25,4 +25,7 @@ enum class DomainErrorKind {
 
     /** 형식과 상태는 맞지만 업무 의미상 처리할 수 없다. */
     UNPROCESSABLE,
+
+    /** 요청자에게 그 대상을 다룰 권한이 없다. */
+    FORBIDDEN,
 }

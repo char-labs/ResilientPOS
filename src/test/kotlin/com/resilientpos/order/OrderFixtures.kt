@@ -21,8 +21,14 @@ object OrderFixtures {
 
     val krw: Currency = Currency.getInstance("KRW")
 
+    /** 기본 주문의 매장. checkout 요청이 주문의 매장과 같아야 해서 기본값을 고정한다. */
+    val storeId = StoreId(UUID.fromString("018f6b1a-0000-7000-8000-0000000000b1"))
+
+    /** 기본 checkout 요청 단말. 매장 안 다른 단말도 이어받을 수 있어 주문의 단말과 같을 필요는 없다. */
+    val terminalId = TerminalId(UUID.fromString("018f6b1a-0000-7000-8000-0000000000b2"))
+
     fun createOrderCommand(
-        storeId: StoreId = StoreId(UUID.randomUUID()),
+        storeId: StoreId = OrderFixtures.storeId,
         terminalId: TerminalId = TerminalId(UUID.randomUUID()),
         clientOrderId: ClientOrderId = ClientOrderId(UUID.randomUUID()),
         currency: Currency = krw,
@@ -53,6 +59,6 @@ object OrderFixtures {
  */
 fun OrderCommandFacade.createAndRequestCheckout(command: OrderCommand.Create = OrderFixtures.createOrderCommand()): OrderId {
     val created = create(command)
-    requestCheckout(OrderCommand.RequestCheckout(created.orderId))
+    requestCheckout(OrderCommand.RequestCheckout(created.orderId, command.storeId, command.terminalId))
     return created.orderId
 }

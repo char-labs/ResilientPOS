@@ -10,10 +10,16 @@ import com.resilientpos.sync.internal.application.SyncItemStatus
 import com.resilientpos.sync.internal.domain.CheckoutPayload
 import com.resilientpos.sync.internal.domain.OperationPayload
 import com.resilientpos.sync.internal.domain.OrderPayload
+import com.resilientpos.terminal.AuthenticatedTerminal
+import com.resilientpos.terminal.TerminalFixtures.AUTHORIZATION_HEADER
+import com.resilientpos.terminal.TerminalFixtures.BEARER
+import com.resilientpos.terminal.TerminalFixtures.TOKEN
 import com.resilientpos.terminal.TerminalId
+import com.resilientpos.terminal.TerminalManagement
 import java.math.BigDecimal
 import java.util.UUID
 import kotlin.test.Test
+import org.junit.jupiter.api.BeforeEach
 import org.mockito.BDDMockito.given
 import org.mockito.Mockito.verify
 import org.mockito.Mockito.verifyNoInteractions
@@ -34,6 +40,7 @@ import org.springframework.restdocs.request.RequestDocumentation.pathParameters
 import org.springframework.test.context.bean.override.mockito.MockitoBean
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.ResultActions
+import org.springframework.test.web.servlet.result.MockMvcResultMatchers.header
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
 
@@ -50,8 +57,19 @@ class SyncControllerTest(
     @MockitoBean
     private lateinit var facade: SyncCommandFacade
 
-    private fun postBatch(body: String): ResultActions =
-        mockMvc.perform(post("/v1/terminals/{terminalId}/sync", TERMINAL_ID).contentType(MediaType.APPLICATION_JSON).content(body))
+    @MockitoBean
+    private lateinit var terminals: TerminalManagement
+
+    @BeforeEach
+    fun authenticate() {
+        given(terminals.authenticate(TOKEN)).willReturn(AuthenticatedTerminal(TerminalId(UUID.fromString(TERMINAL_ID)), StoreId(UUID.fromString(STORE_ID))))
+    }
+
+    private fun postBatch(body: String, authorization: String? = BEARER): ResultActions =
+        mockMvc.perform(
+            post("/v1/terminals/{terminalId}/sync", TERMINAL_ID).contentType(MediaType.APPLICATION_JSON).content(body)
+                .apply { authorization?.let { header("Authorization", it) } },
+        )
 
     @Test
     fun `배치를 커맨드로 옮겨 Facade를 부르고 200과 항목별 결과·watermark를 돌려준다`() {
@@ -80,7 +98,7 @@ class SyncControllerTest(
             .andDo(
                 document(
                     "sync-receive-batch",
-                    PATH_PARAMETERS,
+                    AUTHORIZATION_HEADER, PATH_PARAMETERS,
                     requestFields(REQUEST_FIELDS),
                     responseFields(
                         fieldWithPath("result").type(JsonFieldType.STRING).description("SUCCESS 또는 FAIL"),
@@ -96,6 +114,45 @@ class SyncControllerTest(
 
         // Mockito matcher는 Kotlin non-null 파라미터에 null을 넘겨 NPE가 나므로 data class 동등성으로 검증한다.
         verify(facade).receiveBatch(command(operation(1, ORDER_COMMAND), operation(2, CHECKOUT_COMMAND)))
+    }
+
+    @Test
+    fun `Authorization 헤더가 없으면 401 UNAUTHENTICATED와 WWW-Authenticate이고 Facade를 부르지 않는다`() {
+        postBatch(requestJson(operationJson(OPERATION_ID_1, 1)), authorization = null)
+            .andExpect(status().isUnauthorized)
+            .andExpect(header().string("WWW-Authenticate", "Bearer"))
+            .andExpect(jsonPath("$.result").value("FAIL"))
+            .andExpect(jsonPath("$.error.errorCode").value("UNAUTHENTICATED"))
+
+        verifyNoInteractions(facade)
+    }
+
+    @Test
+    fun `경로의 terminalId가 인증된 단말과 다르면 403 TERMINAL_MISMATCH이고 Facade를 부르지 않는다`() {
+        val otherTerminalId = "018f6b1a-0000-7000-8000-0000000000ff"
+
+        mockMvc.perform(
+            post("/v1/terminals/{terminalId}/sync", otherTerminalId).header("Authorization", BEARER)
+                .contentType(MediaType.APPLICATION_JSON).content(requestJson(operationJson(OPERATION_ID_1, 1))),
+        )
+            .andExpect(status().isForbidden)
+            .andExpect(jsonPath("$.result").value("FAIL"))
+            .andExpect(jsonPath("$.error.errorCode").value("TERMINAL_MISMATCH"))
+            .andDo(
+                document(
+                    "sync-receive-batch-terminal-mismatch",
+                    AUTHORIZATION_HEADER, PATH_PARAMETERS,
+                    requestFields(REQUEST_FIELDS),
+                    responseFields(
+                        fieldWithPath("result").type(JsonFieldType.STRING).description("FAIL"),
+                        fieldWithPath("data").type(JsonFieldType.NULL).description("실패 응답에서는 null"),
+                        fieldWithPath("error.errorCode").type(JsonFieldType.STRING).description("TERMINAL_MISMATCH. 경로의 단말이 토큰의 단말과 다르다"),
+                        fieldWithPath("error.message").type(JsonFieldType.STRING).description("사람이 읽는 설명"),
+                    ),
+                ),
+            )
+
+        verifyNoInteractions(facade)
     }
 
     @Test
@@ -181,7 +238,7 @@ class SyncControllerTest(
             .andDo(
                 document(
                     "sync-receive-batch-too-large",
-                    PATH_PARAMETERS,
+                    AUTHORIZATION_HEADER, PATH_PARAMETERS,
                     requestFields(subsectionWithPath("operations").description("operation 배열. 500개를 넘으면 SYNC_BATCH_TOO_LARGE. 본문은 1 MiB 이하여야 하며 넘으면 BAD_REQUEST이므로 단말은 배치를 나눈다")),
                     responseFields(
                         fieldWithPath("result").type(JsonFieldType.STRING).description("SUCCESS 또는 FAIL"),
@@ -213,7 +270,7 @@ class SyncControllerTest(
             SyncCommand.ReceiveBatch.Operation(if (sequence == 1L) OPERATION_ID_1 else OPERATION_ID_2, sequence, payload)
 
         private fun command(vararg operations: SyncCommand.ReceiveBatch.Operation) =
-            SyncCommand.ReceiveBatch(TerminalId(UUID.fromString(TERMINAL_ID)), operations.toList())
+            SyncCommand.ReceiveBatch(TerminalId(UUID.fromString(TERMINAL_ID)), StoreId(UUID.fromString(STORE_ID)), operations.toList())
 
         private fun operationJson(operationId: UUID, sequence: Long) = """
             {

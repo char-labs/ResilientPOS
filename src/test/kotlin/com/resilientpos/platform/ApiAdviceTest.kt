@@ -2,6 +2,7 @@ package com.resilientpos.platform
 
 import com.resilientpos.foundation.DomainErrorKind
 import com.resilientpos.foundation.DomainException
+import com.resilientpos.terminal.TerminalManagement
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import org.hamcrest.Matchers.containsString
@@ -10,6 +11,7 @@ import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest
 import org.springframework.dao.CannotAcquireLockException
 import org.springframework.dao.OptimisticLockingFailureException
+import org.springframework.test.context.bean.override.mockito.MockitoBean
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.get
 import org.springframework.test.web.servlet.post
@@ -24,6 +26,10 @@ import org.springframework.web.bind.annotation.RestController
  */
 @WebMvcTest(ApiAdviceTestController::class)
 class ApiAdviceTest(@Autowired private val mockMvc: MockMvc) {
+
+    // 슬라이스에 단말 인증 인터셉터 설정이 실린다. 이 테스트의 경로는 v1이 아니라 인증을 타지 않지만 의존성은 채워야 한다.
+    @MockitoBean
+    private lateinit var terminals: TerminalManagement
 
     @Test
     fun `객체 응답은 SUCCESS envelope의 data로 나간다`() {
@@ -113,6 +119,7 @@ class ApiAdviceTest(@Autowired private val mockMvc: MockMvc) {
             DomainErrorKind.NOT_FOUND to 404,
             DomainErrorKind.CONFLICT to 409,
             DomainErrorKind.UNPROCESSABLE to 422,
+            DomainErrorKind.FORBIDDEN to 403,
         )
         assertEquals(DomainErrorKind.entries.toSet(), expected.keys)
 

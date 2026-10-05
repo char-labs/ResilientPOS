@@ -7,6 +7,7 @@ import com.resilientpos.order.internal.application.OrderEventPublisher
 import com.resilientpos.order.internal.domain.Order
 import com.resilientpos.order.internal.domain.OrderRepository
 import com.resilientpos.platform.Lock
+import com.resilientpos.platform.logger
 import com.resilientpos.platform.Tx
 import com.resilientpos.terminal.TerminalId
 import java.time.Clock
@@ -63,7 +64,16 @@ class OrderCommandFacade(
      * 이미 요청된 주문이면 도메인이 같은 주문과 빈 이벤트를 돌려주므로 같은 경로로 기존 결과를 돌려준다.
      */
     fun requestCheckout(command: OrderCommand.RequestCheckout): OrderCommand.RequestCheckout.Result = Tx.masterTx {
-        confirmCheckout(repository.findByIdForUpdate(command.orderId))
+        // 매장 조건으로 잠가 다른 매장의 행은 잠그지도 기다리지도 않는다. 그 매장의 주문은 없는 주문과 같다.
+        val order = repository.findByIdAndStoreIdForUpdate(command.orderId, command.storeId)
+        // 운영자가 구분할 수 있게 매장 불일치만 WARN으로 남긴다. 잠그지 않는 존재 확인이다. 토큰은 남기지 않는다.
+        if (order == null && repository.findById(command.orderId) != null) {
+            log.warn {
+                "다른 매장의 주문 checkout 요청을 주문 없음으로 처리한다 orderId=${command.orderId.value} " +
+                    "storeId=${command.storeId.value} terminalId=${command.terminalId.value}"
+            }
+        }
+        confirmCheckout(order)
     }
 
     /**
@@ -104,6 +114,7 @@ class OrderCommandFacade(
     }
 
     companion object {
+        private val log by logger()
         private const val CREATE_LOCK_PREFIX = "order:create-lock"
 
         fun createLockKey(terminalId: TerminalId, clientOrderId: ClientOrderId): String =

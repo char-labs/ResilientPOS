@@ -46,6 +46,8 @@ object OrderCommand {
      */
     data class RequestCheckout(
         val orderId: OrderId,
+        val storeId: StoreId,
+        val terminalId: TerminalId,
     ) {
         /**
          * 결제 요청 결과. `checkoutNo`회차에 확정한 금액이 `amount`다. 재요청이면 이미 확정된 값을 그대로 담는다.

@@ -68,7 +68,7 @@ class SyncStatementCountIntegrationTest(
         (0 until ATTEMPTS).minOf { attempt ->
             awaitPublicationsDone(clientOrderId)
             val before = statistics.prepareStatementCount
-            facade.receiveBatch(SyncCommand.ReceiveBatch(terminalId, listOf(operation(attempt))))
+            facade.receiveBatch(SyncCommand.ReceiveBatch(terminalId, OrderFixtures.storeId, listOf(operation(attempt))))
             statistics.prepareStatementCount - before
         }
 
@@ -81,7 +81,7 @@ class SyncStatementCountIntegrationTest(
         orders.create(command)
         // 첫 요청(OPEN에서 적용)은 커밋 직후 비동기 문장이 측정에 섞여 세지 않는다. 뒤 둘이 그것이 가라앉은 뒤에 센다.
         awaitPublicationsDone(command.clientOrderId)
-        facade.receiveBatch(SyncCommand.ReceiveBatch(terminalId, listOf(checkout(1, command.clientOrderId))))
+        facade.receiveBatch(SyncCommand.ReceiveBatch(terminalId, OrderFixtures.storeId, listOf(checkout(1, command.clientOrderId))))
         // 순번 2..(1+ATTEMPTS)는 새 operationId의 멱등 요청이다. 그 뒤 순번 2를 다시 보내면 재전송이다.
         val operations = (0 until ATTEMPTS).map { checkout(2L + it, command.clientOrderId) }
 

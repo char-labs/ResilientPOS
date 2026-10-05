@@ -38,7 +38,7 @@ Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰�
 | Context | Aggregate 루트 | 소유하는 것 | 핵심 불변식 | 공개 Facade |
 |---|---|---|---|---|
 | `store` | `Store` | 판매 정책, 통화·반올림, 매장 설정 | 정책은 버전으로 관리하고 과거 주문 금액을 사후에 바꾸지 않는다 | `StoreManagement` |
-| `terminal` | `Terminal` | 단말 코드, 활성화, credential rotation 이력 | 매장 안에서 코드 유일. 비활성 단말은 인증 불가. 이력 삭제 금지 | `TerminalManagement` |
+| `terminal` | `Terminal` | 단말 코드, 소속 매장, 활성화, credential rotation 이력 | 매장 안에서 코드 유일(아직 구현하지 않았다. 단말 코드를 읽는 코드가 없어 컬럼도 없다). 소속 매장은 바뀌지 않는다. 비활성 단말은 인증 불가. 이력 삭제 금지 | `TerminalManagement` |
 | `order` | `Order` | line, 할인, checkout 금액·통화, lifecycle | `OPEN`에서만 금액·line 변경. checkout 이후 금액·통화 불변. 결제 승인 금액은 checkout과 일치해야 한다 | `OrderManagement` |
 | `payment` | `PaymentAttempt` | provider 참조, provider idempotency, 승인·취소 시도, 결제 정본 상태 | 같은 checkout에 진행 중인 승인 시도는 하나. `UNKNOWN`은 실패가 아니다. provider 결과는 한 번만 적용한다 | `PaymentManagement` |
 | `sync` | `Watermark` | 단말 watermark, operation 접수·중복 제거, gap·conflict | `lastAckedSequence`는 단조 증가. gap을 건너뛰어 전진하지 않는다 | 공개 Facade 없음(`internal`의 `SyncCommandFacade`, HTTP만 부른다) |
@@ -61,13 +61,13 @@ Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰�
 |---|---|---|
 | `Order` | `OrderLine`(판매 시점 상품 코드·이름·단가·수량), checkout(회차별 확정 금액. 통화는 주문의 것이다. 정책 버전은 store 정책이 생길 때 더한다. `Checkout`은 `OrderLine`처럼 도메인 ID `CheckoutId`를 갖고 `t_order_checkout`의 PK는 `id` 하나다. 회차 중복은 unique `(order_id, checkout_no)`가 막는다) | line 변경과 금액, checkout 확정과 상태 전이가 한 커밋으로 맞아야 한다 |
 | `PaymentAttempt` | provider 요청·응답 결과. provider idempotency 기록이 attempt의 자식인지 컨텍스트 공용 테이블인지는 payment PR spec에서 정한다 | "provider 결과를 한 번만 적용했다"를 같은 트랜잭션의 기록이 증명한다. 취소는 별도 attempt다([외부 연동 전략](../references/04_External_Integration_Strategy.md)) |
-| `Terminal` | credential rotation 이력 | 회전과 이력이 따로 커밋되면 어느 자격증명이 유효한지 알 수 없다 |
+| `Terminal` | credential rotation 이력(`TerminalCredential`, `t_terminal_credential`). 수가 한정되지 않아 루트가 목록으로 들지 않는다. 회전은 terminal 행을 잠그고 옛 credential 폐기와 새 credential 발급을 한 커밋으로 한다 | 회전과 이력이 따로 커밋되면 어느 자격증명이 유효한지 알 수 없다 |
 | `Watermark` | operation 접수 기록(`SyncOperation`, `t_sync_operation`). 수가 한정되지 않아 루트가 목록으로 들지 않고 같은 트랜잭션에서 함께 쓴다 | watermark 전진과 접수 기록이 함께 커밋돼야 gap을 건너뛰지 않는다 |
 | `ReconciliationCase` | evidence, 조치·승인 감사 기록 | "근거·감사 없이 해결하지 않는다"는 불변식이 자식과 루트를 묶는다 |
 | `Store` | policy 버전 | 정책을 바꿀 때 새 버전 행이 함께 커밋되지 않으면 이미 발행된 checkout이 가리키는 버전이 없어진다 |
 | `Fulfillment`, `ReceiptDelivery` | 없음(단독 루트) | natural key 한 건이면 충분하다 |
 
-지금 있는 JPA 엔티티 7개의 역할·참조 관계·UX 흐름별 동작은 [엔티티 지도](entity-map.md)에 있다. 자식 엔티티는 루트를 통해서만 만들고 바꾼다. 다른 aggregate의 사실(예: 결제 승인)이 필요하면 자식으로 끌어오지 않고 이벤트로 받는다. 한 컨텍스트에 루트가 여럿일 수 있다(`fulfillment`). 루트 하나가 곧 컨텍스트는 아니다.
+지금 있는 JPA 엔티티 9개의 역할·참조 관계·UX 흐름별 동작은 [엔티티 지도](entity-map.md)에 있다. 자식 엔티티는 루트를 통해서만 만들고 바꾼다. 다른 aggregate의 사실(예: 결제 승인)이 필요하면 자식으로 끌어오지 않고 이벤트로 받는다. 한 컨텍스트에 루트가 여럿일 수 있다(`fulfillment`). 루트 하나가 곧 컨텍스트는 아니다.
 
 ## 3. 유비쿼터스 언어 용어집
 
@@ -78,6 +78,7 @@ Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰�
 | 용어 (코드·스키마) | 뜻 | 기각한 대안 | 이유 |
 |---|---|---|---|
 | `terminal` | 매장에 설치된 판매 단말 | `pos` | 제품 전체가 POS라 자기 참조다. 코드에서 `pos`는 position으로 읽힌다. 원문 요구사항과 오프라인 명령 봉투(`terminalId`)가 이미 `terminal`을 쓴다 |
+| `credential` (terminal) | 단말을 인증하는 비밀값과 그 이력. 평문은 저장하지 않고 해시만 둔다. 유효한 것은 단말당 하나이고 폐기된 것도 지우지 않는다 | `token` | 코드에서 `token`은 단말이 드는 평문 하나만 가리킨다. 폐기 상태와 이력을 담는 행은 `credential`이다. 테이블은 `t_terminal_credential` |
 | `operation` (sync) | 단말이 오프라인에서 만든 명령 한 건. 식별자는 `operationId`(UUID v7) | `receipt` | 한 스키마에서 receipt가 접수증과 고객 영수증 두 뜻으로 쓰였다. 봉투의 `operationId`와 어휘를 맞췄다. 테이블은 `t_sync_operation` |
 | `watermark` | 단말별로 서버가 확정한 마지막 sequence(`lastAckedSequence`) | `terminal sync state` | state는 모든 테이블에 해당해 아무 말도 하지 않는다. 기획 문서가 이미 쓰는 단어다. 테이블은 `t_sync_watermark` |
 | `sequence` (terminal sequence) | 한 단말 안에서 단조 증가하는 명령 순번. 누락(gap) 탐지의 근거 | — | UUID 생성 순서, Kafka 순서, aggregate version과 다르다. 서로 대체하지 않는다 |
@@ -238,6 +239,7 @@ Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰�
 - `t_order_checkout`은 통화 컬럼을 두지 않았다(질문 1, `t_order.currency`에서 읽는다). `amount`는 지금은 line 합계와 같아도 확정 시점에만 알 수 있는 값이라 둔다(질문 3·4). 읽고 판단한 뒤 쓰는 `RequestCheckout`의 경합은 주문 행 잠금(`PESSIMISTIC_WRITE`, PostgreSQL에서는 `for no key update`, 대기 3초 제한)이 막고, unique `(order_id, checkout_no)`와 `@Version`이 그 뒤의 방어선이다(질문 6). Hibernate가 INSERT를 UPDATE보다 먼저 flush해서 잠금이 없으면 `@Version`보다 unique 제약이 먼저 걸린다([order-request-checkout-persistence](../spec/2026-09-21-order-request-checkout-persistence.md)).
 - `t_order_line.version`과 `t_order_checkout.version`은 질문 2·4에서 걸려 없앴다. 업무 코드가 읽지 않았고, 행 단위 version은 서로 다른 line을 고치는 두 트랜잭션을 막지 못해 aggregate의 방어선이 아니었다. 대신 같은 line 행을 동시에 고치는 경우의 충돌 감지는 포기했다. 지금 기존 주문의 line을 고치는 명령이 없다는 것이 그 전제이고, 명령을 넣는 PR이 루트 잠금이나 루트 version 증가를 함께 정한다. 방어선은 루트(`t_order`의 행 잠금과 `@Version`)와 unique `(order_id, checkout_no)`다. 배포된 환경이 없던 시점이라 질문 8의 순서를 밟지 않고 코드 제거와 컬럼 삭제를 한 PR로 했다([base-entity-explicit-version](../spec/2026-09-21-base-entity-explicit-version.md)).
 - `t_order`의 unique `(terminal_id, client_order_id)`는 질문 4·6의 답이다. 같은 키의 생성이 동시에 오면 `Lock`이 줄 세워 늦은 요청이 기존 주문을 받고, 락이 통하지 않으면 이 제약이 막는다([shared-distributed-lock](../spec/2026-09-28-shared-distributed-lock.md)). 멱등 키는 삭제 뒤에도 재사용하면 안 되므로 partial unique로 바꾸지 않는다. 주문을 soft delete하는 명령이 생기면 `findByClientOrderId`가 삭제된 주문도 찾게 해야 한다. 지금은 주문을 삭제하는 코드가 없다.
+- `t_terminal`·`t_terminal_credential`은 단말 인증의 표다. 토큰 평문은 저장하지 않고 SHA-256 hex(`token_hash`)만 둔다(질문 9). unique `ux_terminal_credential_token_hash`는 해시 하나가 두 단말을 가리키지 않게 한다. 인증 조회가 한 행을 전제하기 때문이다. partial unique `ux_terminal_credential_active`(`terminal_id`, `revoked_at is null`)는 "유효 credential은 단말당 하나"의 마지막 방어선이다. 평소에는 terminal 행 잠금(`PESSIMISTIC_WRITE`, 대기 3초)이 회전을 직렬화하므로 `@Version`은 두지 않는다(질문 4·6). 둘 다 soft delete된 행에도 걸린다. 회전은 옛 credential의 폐기 UPDATE를 먼저 flush한다. Hibernate는 한 flush에서 INSERT를 UPDATE보다 먼저 보내서, flush하지 않으면 새 유효 행의 INSERT가 partial unique에 걸린다. 인증 결과는 캐시하지 않는다. 정본은 `revoked_at is null`인 행이고 Redis는 정본이 될 수 없다(질문 5). 단말 코드 컬럼은 읽는 코드가 없어 넣지 않았다(질문 2)([terminal-authentication](../spec/2026-10-05-terminal-authentication.md)).
 - `t_fulfillment`의 unique는 청사진의 `(orderId, ticketType)`이 아니라 `(order_id)`다. 이행 방식이 하나뿐이고 `type`을 읽는 코드가 없어 질문 2에서 걸렸다. 방식이 늘면 지금의 유일한 종류를 뜻하는 상수 기본값 컬럼을 더하고 unique를 바꾼다(질문 3). "주문당 한 번"의 마지막 방어선이라 soft delete된 행에도 걸리는 전체 unique로 둔다(질문 4). 상태·매장·품목 snapshot도 읽는 명령·조회가 생길 때 더한다([fulfillment-kitchen-ticket](../spec/2026-09-24-fulfillment.md)).
 
 기술 근거(2026-09-20 확인, PostgreSQL 18·Flyway 12.4.0·Hibernate 7.4.5): [ALTER TABLE](https://www.postgresql.org/docs/18/sql-altertable.html), [CREATE INDEX](https://www.postgresql.org/docs/18/sql-createindex.html), [Explicit Locking](https://www.postgresql.org/docs/18/explicit-locking.html), [Transaction Isolation](https://www.postgresql.org/docs/18/transaction-iso.html), [Flyway 트랜잭션 처리](https://documentation.red-gate.com/fd/migration-transaction-handling-273973399.html), [Flyway PostgreSQL 락](https://documentation.red-gate.com/fd/postgresql-database-277579325.html). Hibernate `validate`가 매핑된 컬럼만 검사한다는 점은 사용자 가이드에 없어서 `AbstractSchemaValidator` 소스로 확인했다.

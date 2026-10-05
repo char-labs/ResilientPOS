@@ -45,6 +45,13 @@ class ApiControllerAdvice : ResponseEntityExceptionHandler() {
         return ResponseEntity.status(e.kind.toHttpStatus()).body(ApiResponse.fail(ErrorResponse(e.code, e.message)))
     }
 
+    /** 원인에 관계없이 같은 응답이다. 원인을 나누면 토큰 추측에 단서를 준다. */
+    @ExceptionHandler(UnauthenticatedException::class)
+    fun handleUnauthenticated(e: UnauthenticatedException, request: HttpServletRequest): ResponseEntity<ApiResponse<Nothing>> =
+        ResponseEntity.status(ErrorType.UNAUTHENTICATED.status)
+            .header(HttpHeaders.WWW_AUTHENTICATE, "Bearer")
+            .body(failBody(ErrorType.UNAUTHENTICATED, e, request.describe()))
+
     /**
      * 같은 대상에 요청이 겹쳐서 난 잠금 대기 초과와 조회 시점의 버전 충돌. 서버 오류로 집계하지 않는다.
      * 다시 보내도 되는지는 endpoint가 멱등인지에 달려 있어서 문구로 약속하지 않는다.
@@ -65,6 +72,7 @@ class ApiControllerAdvice : ResponseEntityExceptionHandler() {
         DomainErrorKind.NOT_FOUND -> HttpStatus.NOT_FOUND
         DomainErrorKind.CONFLICT -> HttpStatus.CONFLICT
         DomainErrorKind.UNPROCESSABLE -> HttpStatus.UNPROCESSABLE_CONTENT
+        DomainErrorKind.FORBIDDEN -> HttpStatus.FORBIDDEN
     }
 
     private fun failBody(errorType: ErrorType, e: Exception, request: String): ApiResponse<Nothing> {

@@ -6,6 +6,7 @@ import com.resilientpos.order.OrderCommand
 import com.resilientpos.order.OrderCommandFacade
 import com.resilientpos.platform.Tx
 import com.resilientpos.platform.logger
+import com.resilientpos.store.StoreId
 import com.resilientpos.sync.internal.domain.CheckoutPayload
 import com.resilientpos.sync.internal.domain.OrderPayload
 import com.resilientpos.sync.internal.domain.SyncOperation
@@ -23,6 +24,8 @@ import org.springframework.stereotype.Service
  * 락 없는 합류 경로([OrderCommandFacade.createInCallerTransaction])나 checkout 요청([OrderCommandFacade.requestCheckout])을 불러
  * 접수 기록과 watermark 전진까지 한 커밋으로 한다. 같은 단말의 배치 둘은 watermark 행 잠금으로 항목 단위 직렬화된다.
  * `REQUEST_CHECKOUT` 항목은 그 다음에 주문 행을 잠그지만 순서가 늘 같고 각각 대기 3초다. Redis `Lock`은 이 경로에 없다.
+ *
+ * `CREATE_ORDER` 항목의 `storeId`가 인증된 단말의 매장과 다르면 항목 트랜잭션 안에서 [STORE_MISMATCH]로 거절한다(`REQUEST_CHECKOUT`은 `(terminalId, clientOrderId)`로 찾아 구조상 자기 단말의 주문이다).
  *
  * 인프라 실패(잠금 대기 초과·DB 장애·unique 위반)는 항목 결과가 아니다. 그 항목 트랜잭션은 롤백되고 예외가 배치 전체를 실패시킨다.
  * 이미 커밋된 앞 항목은 남고 재전송 때 `DUPLICATE`로 돌아온다.
@@ -48,7 +51,7 @@ class SyncCommandFacade(
             if (gapped) {
                 SyncCommand.ReceiveBatch.Item(operation.operationId, SyncItemStatus.GAP, null, null)
             } else {
-                applyOperation(command.terminalId, operation).also { gapped = it.status == SyncItemStatus.GAP }
+                applyOperation(command.terminalId, command.storeId, operation).also { gapped = it.status == SyncItemStatus.GAP }
             }
         }
         val lastAckedSequence = Tx.readOnlyTx { repository.findWatermark(command.terminalId) }?.lastAckedSequence ?: 0
@@ -79,14 +82,17 @@ class SyncCommandFacade(
      * `REJECTED`를 기록하고 순번을 확정한다. 거절 판정은 대개 결정적이라 두 트랜잭션 사이에 죽어도 재전송이 같은 결과를 낸다. 단 주문 없음(`ORDER_NOT_FOUND`)은 시점에 따라 달라질 수 있어(그 사이 같은 clientOrderId의 주문이 HTTP로 커밋될 수 있다) 그때도 거절이 기록되고, 단말은 새 operationId로 다시 요청한다.
      * 두 번째 판정에서 순번을 다시 확인하므로 그 사이에 다른 배치가 같은 operation을 확정했으면 `DUPLICATE`·`CONFLICT`로 갈린다.
      */
-    private fun applyOperation(terminalId: TerminalId, operation: SyncCommand.ReceiveBatch.Operation): SyncCommand.ReceiveBatch.Item {
+    private fun applyOperation(terminalId: TerminalId, storeId: StoreId, operation: SyncCommand.ReceiveBatch.Operation): SyncCommand.ReceiveBatch.Item {
         val payloadHash = operation.payload.hash()
         return try {
             Tx.masterTx {
                 judge(terminalId, operation, payloadHash) {
                     val payload = operation.payload
                     val orderId = when (payload) {
-                        is OrderPayload -> orders.createInCallerTransaction(payload.toCommand(terminalId)).orderId
+                        is OrderPayload -> {
+                            if (payload.storeId != storeId) throw DomainException(STORE_MISMATCH, "주문의 매장이 인증된 단말의 매장과 다릅니다")
+                            orders.createInCallerTransaction(payload.toCommand(terminalId)).orderId
+                        }
                         is CheckoutPayload -> orders.requestCheckout(OrderCommand.RequestCheckoutByClientOrderId(terminalId, payload.clientOrderId, payload.amount)).orderId
                     }
                     SyncOperation.applied(identifierGenerator, terminalId, operation.operationId, operation.sequence, payload.kind, payloadHash, orderId)
@@ -151,5 +157,6 @@ class SyncCommandFacade(
         /** 한 배치에 담을 수 있는 operation 수. 기획 원문의 "500개 batch"를 상한으로 둔다. */
         const val MAX_OPERATIONS = 500
         const val SYNC_BATCH_TOO_LARGE = "SYNC_BATCH_TOO_LARGE"
+        const val STORE_MISMATCH = "STORE_MISMATCH"
     }
 }
