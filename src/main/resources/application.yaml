@@ -33,6 +33,11 @@ spring:
       # 잠금은 Redis가 느리거나 없으면 잠금 없이 진행한다(fail-open). 기본 60초를 기다리면 그동안 결제와 주문 생성이 멈춘다.
       timeout: 1s
       connect-timeout: 1s
+  web:
+    resources:
+      # 정적 파일을 서빙하지 않는다. `static/terminal`의 시연 화면은 인증 없이 열리고 sync endpoint를 부르므로
+      # 운영 jar에 실려도 기본값에서는 404여야 한다. `demo` 프로필만 켠다(이 파일 맨 아래).
+      add-mappings: false
   jackson:
     factory:
       constraints:
@@ -127,3 +132,12 @@ management:
 
 # 구조화 로그는 여기 적지 않는다. 배포 환경에서 LOGGING_STRUCTURED_FORMAT_CONSOLE=ecs를 주면
 # stdout이 한 줄에 JSON 객체 하나가 되어 Loki(Alloy)가 필드로 읽는다. 기본값은 사람이 읽는 평문이다.
+---
+# 시연 화면(`/terminal/index.html`)을 여는 프로필. 로컬 시연에서만 켠다: SPRING_PROFILES_ACTIVE=demo
+spring:
+  config:
+    activate:
+      on-profile: demo
+  web:
+    resources:
+      add-mappings: true
