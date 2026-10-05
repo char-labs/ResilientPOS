@@ -154,6 +154,16 @@ class OrderControllerTest(
     }
 
     @Test
+    fun `금액이 잘못된 본문도 소유권이 다르면 변환 오류 400보다 403 TERMINAL_MISMATCH가 먼저다`() {
+        postOrder(requestJson(storeId = OTHER_ID, unitPrice = "4500.5")).andExpect {
+            status { isForbidden() }
+            jsonPath("$.error.errorCode") { value("TERMINAL_MISMATCH") }
+        }
+
+        verifyNoInteractions(facade)
+    }
+
+    @Test
     fun `도메인이 거절하면 예외의 code와 message를 담은 400이다`() {
         given(facade.create(command(lines = emptyList())))
             .willThrow(DomainException("EMPTY_ORDER", "주문에는 line이 1개 이상 필요합니다"))

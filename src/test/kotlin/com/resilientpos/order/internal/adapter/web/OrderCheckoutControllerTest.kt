@@ -170,7 +170,7 @@ class OrderCheckoutControllerTest(
         private const val STORE_ID = "018f6b1a-0000-7000-8000-0000000000a1"
         private const val TERMINAL_ID = "018f6b1a-0000-7000-8000-0000000000a2"
         private const val ORDER_ID = "00000000-0000-0000-0000-0000000000a1"
-        private val COMMAND = OrderCommand.RequestCheckout(OrderId(UUID.fromString(ORDER_ID)), StoreId(UUID.fromString(STORE_ID)))
+        private val COMMAND = OrderCommand.RequestCheckout(OrderId(UUID.fromString(ORDER_ID)), StoreId(UUID.fromString(STORE_ID)), TerminalId(UUID.fromString(TERMINAL_ID)))
         private val krw: Currency = Currency.getInstance("KRW")
 
         private val PATH_PARAMETERS = pathParameters(parameterWithName("orderId").description("checkout을 요청할 주문 ID(UUID)"))

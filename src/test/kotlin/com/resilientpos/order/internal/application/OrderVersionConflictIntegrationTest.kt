@@ -41,7 +41,7 @@ class OrderVersionConflictIntegrationTest(
             assertFailsWith<OptimisticLockingFailureException> {
                 transaction.execute {
                     val stale = assertNotNull(repository.findById(orderId))
-                    executor.submit { facade.requestCheckout(OrderCommand.RequestCheckout(orderId, OrderFixtures.storeId)) }.get(10, TimeUnit.SECONDS)
+                    executor.submit { facade.requestCheckout(OrderCommand.RequestCheckout(orderId, OrderFixtures.storeId, OrderFixtures.terminalId)) }.get(10, TimeUnit.SECONDS)
 
                     // checkout 행 없이 루트 status만 바꾼다. INSERT가 있으면 Hibernate가 INSERT를 먼저 flush해서 unique 위반이 먼저 걸린다.
                     repository.save(
