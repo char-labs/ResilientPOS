@@ -1,0 +1,162 @@
+# PR spec: 운영자 인증과 단말 등록·회전·비활성화 HTTP 입구를 연다
+
+## 목적
+단말 인증([terminal-authentication](2026-10-05-terminal-authentication.md))은 들어왔지만, 단말을 등록·회전·비활성화하는 입구가 `TerminalManagement` Facade뿐이다. 배포 환경에서는 단말을 등록할 방법이 없어서 API를 외부에 노출하지 못한다. 그 입구를 지킬 운영자 인증을 정하고, 단말 관리 HTTP API를 연다(이슈 #86).
+
+기대 결과:
+- `/admin/**` 경로는 OIDC IdP가 발급한 JWT로 인증하고 `OPERATOR` 역할을 요구한다.
+- 운영자는 HTTP로 단말을 등록하고, credential을 회전하고, 비활성화하고, 매장별 단말 목록을 본다. 평문 토큰은 등록·회전 응답에 한 번만 실린다.
+- 단말에 매장 안에서 유일한 `TerminalCode`가 생기고 기존 행은 채워진다.
+
+## 범위
+소유 모듈은 `terminal`(단말 코드, 관리 API, 목록 조회)과 `platform`(운영자 인증 체인, 401·403 응답)이다. 참고 문서의 근거는 시스템 설계의 "운영 API(reconciliation, replay)는 별도 role/scope 및 audit를 요구한다", PRD PR-05와 청사진의 "operator action에는 principal … 을 남긴다", 청사진 §2 `terminal` 행의 "매장 안에서 코드 유일"이다.
+
+**결정 1: 운영자 인증은 Spring Security OAuth2 Resource Server(OIDC JWT)로 한다.** [terminal-authentication](2026-10-05-terminal-authentication.md) 결정 1("Spring Security를 들이지 않는다. 두 번째 주체가 생기면 다시 본다")을 운영자 주체에 한해 다시 정한다.
+- 문제: 단말 관리 API를 부르는 사람이 운영자인지 서버가 모른다. 후속 운영 API(DLT 재투입, 운영자 재결제)도 같은 주체를 쓴다.
+- 수단: 운영자의 계정·비밀번호·발급·폐기는 IdP가 전담하고 앱은 운영자를 저장하지 않는다. 앱은 서명, `exp`, `iss`, `aud`(`resilientpos-admin`)를 검사한다. 검증은 Spring Boot 자동 구성(`spring.security.oauth2.resourceserver.jwt.issuer-uri`, `audiences`, `authorities-claim-name`, `authority-prefix`)만으로 하고 `JwtDecoder`를 직접 만들지 않는다. `issuer-uri`의 디코더는 첫 요청 때 discovery를 하므로 IdP가 없어도 앱은 뜬다. 값은 환경 변수 `OPERATOR_ISSUER_URI`로 받는다.
+- 역할은 top-level `roles` claim의 `OPERATOR` 하나다(`ROLE_OPERATOR`). 이 역할은 모든 매장의 단말을 다룬다. 지금 운영자를 기다리는 호출자(단말 관리, DLT 재투입, 운영자 재결제)가 모두 매장을 넘나드는 작업이라 매장 단위 권한은 두지 않는다.
+- 폐기의 한계: JWT는 만료 전에 폐기가 반영되지 않는다. realm의 access token 수명을 5분으로 두어, IdP에서 비활성화한 운영자도 최대 5분 동안 통과한다. 단말 토큰과 달리 받아들이는 이유는 운영자가 사람이고 토큰을 매번 새로 받기 때문이다. 앱 쪽 폐기 목록과 introspection은 정본이 둘로 나뉘거나 요청마다 IdP를 부르게 되어 두지 않는다.
+- 버린 것: 설정에 둔 정적 토큰은 발급·폐기가 재배포라서 버렸다. DB 운영자 계정과 비밀번호는 비밀번호 정책·잠금·세션이 따라와서 버렸다.
+
+**결정 2: Security 체인은 `/admin/**`만 맡는다. 단말 인증은 지금의 인터셉터로 둔다.**
+- `platform`의 `SecurityFilterChain` 하나가 `securityMatcher("/admin/**")`로 운영자 경로만 잡는다. 다른 경로는 어떤 체인과도 맞지 않아 Security 필터를 지나지 않는다. 그래서 `/v1/**`(단말 인터셉터), `/actuator/**`, 시연 정적 자원은 지금과 같게 동작한다. Actuator는 지금처럼 배포(ingress)에서 막는다.
+- 체인은 stateless이고 CSRF를 끈다. 쿠키·세션이 없고 Bearer 헤더만 받기 때문이다.
+- 인증 수단이 둘(단말 인터셉터, 운영자 JWT)로 나뉘는 대가를 치른다. 단말 인증을 Security로 옮기면 #81의 401 계약을 Security 쪽에서 다시 만들고 기존 슬라이스 테스트 전반을 고쳐야 해서 이 PR에 넣지 않는다(제외).
+
+**결정 3: 오류 응답은 기존 envelope를 쓴다.**
+- `AuthenticationEntryPoint`와 `AccessDeniedHandler`는 응답을 직접 쓰지 않고 `HandlerExceptionResolver`에 예외를 넘겨 `ApiControllerAdvice`가 envelope와 로그를 맡게 한다.
+- 토큰 없음, 서명·만료·`iss`·`aud` 오류는 모두 단말과 같은 `401 UNAUTHENTICATED`와 `WWW-Authenticate: Bearer`다. RFC 6750의 `error="invalid_token"` 상세는 싣지 않는다. 원인을 나누면 추측에 단서를 준다.
+- 유효한 토큰이지만 `OPERATOR` 역할이 없으면 `403 ACCESS_DENIED`다. 업무 규칙이 아니라 HTTP 공통 오류라 `ErrorType`에 더한다. 단말의 `TERMINAL_MISMATCH`(`DomainException`)와 다르다.
+
+**결정 4: 단말 관리 API.** Controller는 `terminal.internal.adapter.web`에 두고 `@AuthenticationPrincipal Jwt`를 받는다. 운영자 타입은 두 번째 호출자 모듈이 생길 때 만든다.
+- `POST /admin/v1/terminals` 본문 `{storeId, terminalCode}` → `201 {terminalId, terminalCode, token}`.
+- `POST /admin/v1/terminals/{terminalId}/credential/rotate` → `200 {token}`.
+- `POST /admin/v1/terminals/{terminalId}/deactivate` → `200 {terminalId, status}`. 이미 비활성이면 같은 응답이다(멱등).
+- `GET /admin/v1/stores/{storeId}/terminals` → `200 [{terminalId, terminalCode, status}]`, `terminalCode` 오름차순. 매장 하나의 단말 수는 한정적이라 페이지네이션은 두지 않는다. 쓰기 Facade와 나눈 `TerminalQueryFacade`와 `persistence/query`의 `TerminalQueries`(Kotlin JDSL)로 읽는다([payment-status-query](2026-10-06-payment-status-query.md)의 읽기 규약).
+- 평문 토큰은 등록·회전 응답에만 있다. 응답 DTO의 `toString`은 토큰을 가린다.
+- 기존 오류는 그대로다. 모르는 단말은 `404 TERMINAL_NOT_FOUND`, 비활성 단말의 회전은 `409 TERMINAL_INACTIVE`다.
+- 회전 유예는 두지 않는다([terminal-authentication](2026-10-05-terminal-authentication.md) 결정 3 유지). 옛 토큰은 회전 커밋부터 401이고 단말은 새 토큰을 설치할 때까지 오프라인 큐를 보관한다.
+- 비활성 단말의 미전송 큐는 받지 않는다. 비활성화는 분실·도난 대응이고 "비활성 단말은 인증 불가"가 불변식이다. 큐를 살려야 하는 교체라면 비활성화가 아니라 회전을 쓴다고 REST Docs 설명과 wiki에 적는다.
+
+**결정 5: `TerminalCode`.**
+- 운영자가 등록할 때 준다. 형식은 영대문자·숫자·하이픈 1~32자(`^[A-Z0-9-]{1,32}$`)이고 소문자를 대문자로 바꾸지 않고 `400 INVALID_TERMINAL_CODE`로 거절한다. 요청과 응답의 값이 같게 하려는 것이다. 값 객체 `TerminalCode`가 형식을 검사한다.
+- 매장 안에서 유일하다. 마지막 방어선은 unique `(store_id, terminal_code)`이고 사전 조회는 하지 않는다. 위반은 persistence adapter가 제약 이름으로 가려 `409 TERMINAL_CODE_DUPLICATED`(`DomainException`, `CONFLICT`)로 바꾼다. 같은 코드의 동시 등록도 같은 경로를 탄다.
+- 코드는 바뀌지 않는다. 바꾸는 명령은 두지 않는다.
+- 기존 행은 `LEGACY-` + 매장별 `created_at, id` 순번으로 채운다(스키마 변경 검토).
+
+**결정 6: 감사 로그.** Facade가 커밋한 뒤 Controller가 INFO 한 줄을 남긴다. 항목은 `operatorSub`(JWT `sub`), `operatorName`(`preferred_username`, 없으면 생략), `action`(`TERMINAL_REGISTERED`·`TERMINAL_CREDENTIAL_ROTATED`·`TERMINAL_DEACTIVATED`), `terminalId`, 그리고 등록이면 `storeId`·`terminalCode`, 비활성화면 전후 `status`다. 토큰과 `Authorization` 헤더는 남기지 않는다. 사유·증거를 담는 감사 표는 그것이 필요한 DLT 재투입·reconciliation PR이 만든다.
+
+계약: 공개 타입 `TerminalCode`, `TerminalQuery`, `TerminalView`, `TerminalQueryFacade`가 생긴다. `TerminalCommand.Register`가 `terminalCode`를 받고 결과에 담는다. 새 오류 code는 `ACCESS_DENIED`(`ErrorType`), `INVALID_TERMINAL_CODE`, `TERMINAL_CODE_DUPLICATED`다. 이벤트와 `event_publication`은 바뀌지 않는다.
+
+불변식: 운영자 경로는 `OPERATOR` 역할 없이 부를 수 없다. 매장 안에서 단말 코드는 하나다. 평문 토큰은 저장하지 않고 응답에 한 번만 나간다. 그 밖의 단말 불변식(유효 credential 하나, 비활성 단말 인증 불가)은 기존 행 잠금과 partial unique가 그대로 지킨다.
+
+복구: 등록 응답을 잃으면 그 단말은 토큰을 모르므로 목록에서 `terminalId`를 찾아 회전한다. 회전 응답을 잃으면 다시 회전한다. 비활성화는 멱등이다. 코드 중복 409는 아무것도 바꾸지 않는다.
+
+관측성: 감사 INFO 로그(결정 6)와 advice의 기존 WARN 로그(401·403·409)를 쓴다. 새 metric은 없다.
+
+## 제외
+- DLT 재투입 API([kafka-event-redelivery](2026-09-26-kafka-event-redelivery.md) 제외 절)와 운영자 재결제 입구([payment-status-query](2026-10-06-payment-status-query.md) 제외 절). 이 PR의 운영자 체인 위에 각 PR이 연다.
+- 매장 운영자 권한과 작업별 scope. 결정 1.
+- 운영자 토큰의 앱 쪽 폐기 목록·introspection. 결정 1.
+- 단말 인증의 Spring Security 이관. 결정 2.
+- 감사 표. 결정 6.
+- 회전 유예, 재활성화, 비활성 단말의 큐 드레인. 결정 4.
+- 단말 코드 변경 명령.
+- Testcontainers로 Keycloak을 띄우는 테스트. Keycloak 연동은 compose로 수동 확인한다.
+- rate limit, `store` aggregate와 매장 존재 확인([terminal-authentication](2026-10-05-terminal-authentication.md) 제외 절과 같다).
+- 시연 화면(`static/terminal`)이 관리 API를 부르는 것.
+
+## 관련 문서
+없음. 이 PR이 따르는 장기 스펙 문서(DESIGN·concerns·flows)가 없다. 앞 PR은 [terminal-authentication](2026-10-05-terminal-authentication.md), [payment-status-query](2026-10-06-payment-status-query.md)다.
+
+## 변경 경로
+- build.gradle.kts
+- docker/**
+- src/main/kotlin/com/resilientpos/terminal/**
+- src/main/kotlin/com/resilientpos/platform/**
+- src/main/resources/application.yaml
+- src/main/resources/db/migration/V014__terminal_code.sql
+- src/test/kotlin/com/resilientpos/**
+- src/test/resources/**
+- docs/wiki/current-state.md
+- docs/wiki/domain-model.md
+- docs/wiki/observability.md
+- docs/wiki/entity-map.md
+- docs/spec/2026-10-06-operator-authentication.md
+
+## 인수 조건
+1. `/admin/**`는 토큰이 없거나, 서명이 다르거나, 만료됐거나, `iss`·`aud`가 다르면 `401 UNAUTHENTICATED`와 `WWW-Authenticate: Bearer`이고 Facade를 부르지 않는다. 유효하지만 `OPERATOR` 역할이 없으면 `403 ACCESS_DENIED`다.
+2. `/v1/**`의 단말 인증, `/actuator/health`, 시연 정적 자원의 동작은 바뀌지 않는다. 단말 토큰으로 `/admin/**`를 부르면 401이고, 운영자 JWT로 `/v1/**`를 부르면 401이다.
+3. `POST /admin/v1/terminals`는 `ACTIVE` 단말과 credential을 만들고 `201 {terminalId, terminalCode, token}`을 돌려준다. 그 토큰으로 `/v1/**`를 인증할 수 있다.
+4. 같은 매장에 같은 코드로 등록하면 `409 TERMINAL_CODE_DUPLICATED`이고 단말이 늘지 않는다. 다른 매장은 같은 코드를 쓸 수 있다. 형식이 틀린 코드(소문자 포함)는 `400 INVALID_TERMINAL_CODE`다.
+5. 회전은 `200 {token}`이고 새 토큰만 인증된다. 비활성 단말은 `409 TERMINAL_INACTIVE`, 모르는 단말은 `404 TERMINAL_NOT_FOUND`다.
+6. 비활성화는 `200 {terminalId, status: INACTIVE}`이고 다시 불러도 같다. 그 뒤 그 단말의 토큰은 401이다.
+7. `GET /admin/v1/stores/{storeId}/terminals`는 그 매장의 단말만 코드 순으로 돌려준다. 토큰은 싣지 않는다.
+8. 등록·회전·비활성화는 커밋 뒤 감사 INFO 로그를 한 줄 남기고, 로그와 응답 DTO의 `toString` 어디에도 평문 토큰이 없다.
+9. V014가 기존 행을 매장별 `LEGACY-1`, `LEGACY-2`…로 채우고, 그 뒤 `terminal_code`는 NOT NULL이며 `(store_id, terminal_code)`가 unique다.
+10. REST Docs 스니펫(`build/generated-snippets`)이 네 endpoint의 `Authorization` 헤더와 요청·응답 필드, 401·403·409 예를 문서화한다.
+11. `ModuleStructureTest`가 통과한다.
+
+### Checkpoint와 검증 명령 (선택)
+| Checkpoint | 검증 명령 | 의존 |
+|---|---|---|
+| 단말 코드와 마이그레이션 (4·9) | `./gradlew test --tests 'com.resilientpos.terminal.*' --tests 'com.resilientpos.SchemaMigrationTest'` | 없음 |
+| 운영자 체인 (1·2) | `./gradlew test --tests 'com.resilientpos.platform.*' --tests '*OperatorAuthentication*'` | 없음 |
+| 관리 API·조회·감사 (3~8·10) | `./gradlew test --tests 'com.resilientpos.terminal.*'` | 위 둘 |
+
+## 스키마 변경 검토
+`V014__terminal_code.sql`이 `t_terminal`에 컬럼 하나와 unique 제약 하나를 더한다.
+
+```sql
+alter table t_terminal add column terminal_code varchar(32);
+
+update t_terminal t
+set terminal_code = 'LEGACY-' || s.rn
+from (
+    select id, row_number() over (partition by store_id order by created_at, id) as rn
+    from t_terminal
+) s
+where t.id = s.id;
+
+alter table t_terminal alter column terminal_code set not null;
+alter table t_terminal add constraint ux_terminal_store_code unique (store_id, terminal_code);
+```
+
+- 질문 1(도출): 도출할 수 없다. 운영자가 현장에서 부르는 이름이라 다른 컬럼에 없다. 기존 행의 `LEGACY-순번`은 채우기 위한 값이지 도출한 사실이 아니다.
+- 질문 2(읽는 코드): 목록 조회가 `terminal_code`를 읽어 응답하고 정렬한다. 등록 결과도 돌려준다. 운영자가 코드로 단말을 찾아 `terminalId`를 얻는 경로가 이것이다.
+- 질문 3(나중에 채우기): 지금 읽으므로 해당 없다. 기존 행은 위 UPDATE로 채운다.
+- 질문 4(마지막 방어선): `ux_terminal_store_code`가 "매장 안에서 코드 유일"의 유일한 방어선이다. 사전 조회를 하지 않으므로 순차 등록과 동시 등록 모두 이 제약에서 걸린다. soft delete된 행에도 걸린다. 단말을 지우는 명령이 없고, 지운 단말의 코드를 재사용하게 하는 요구도 없다. 그런 명령이 생기면 그 PR이 partial unique로 바꿀지 정한다. 이 제약의 인덱스는 `store_id`가 앞이라 매장별 목록 조회도 탄다.
+- 질문 5(정본): 정본은 `t_terminal.terminal_code` 하나다. 캐시하지 않는다.
+- 질문 6(check-then-act): 등록은 읽고 판단하지 않고 INSERT만 한다. 경합은 unique가 막고 adapter가 409로 바꾼다. 기존 회전·비활성화는 코드를 쓰지 않는다.
+- 질문 7(락): `ALTER TABLE … ADD COLUMN`(nullable, 기본값 없음)은 메타데이터 변경이다. UPDATE와 `SET NOT NULL`의 전체 검사, unique 인덱스 생성은 `ACCESS EXCLUSIVE`나 `SHARE` 락을 잡고 행 수에 비례한다. 배포 환경에는 등록 입구가 없어 행이 없거나 몇 개뿐이라 즉시 끝난다. 그래서 `CONCURRENTLY`로 나누지 않는다. 인증 조회가 이 락을 잠깐 기다릴 수 있다.
+- 질문 8(이전 버전): 이전 버전은 새 컬럼을 매핑하지 않아 `validate`가 통과하고 인증·회전·비활성화는 그대로 동작한다. 이전 버전의 `register`는 `terminal_code` 없이 INSERT해 NOT NULL에 걸린다. 이전 버전에는 HTTP 등록 입구가 없고 main 코드에 Facade 호출자도 없어 받아들인다.
+- 질문 9(payload): 이벤트 payload와 캐시되는 DTO에 실리지 않는다.
+- 대조 기록: 미작성. PR 제출 전에 구현자가 아닌 리뷰어가 채운다.
+
+## 검증
+- `./gradlew test`. 통합 테스트는 Testcontainers의 PostgreSQL·Redis·Kafka를 쓴다. 운영자 JWT는 테스트 리소스의 RSA 키 쌍으로 서명하고, 테스트 설정은 `public-key-location`과 `issuer-uri`·`audiences`를 함께 두어 운영과 같은 검증기(issuer·audience·만료)를 탄다.
+- 정상: 운영자 JWT로 등록한 단말의 토큰으로 주문을 만든다. 회전 뒤 새 토큰만 통과한다. 비활성화 뒤 401이다. 목록이 코드 순이다.
+- 실패: 토큰 없음·서명 다름·만료·`iss`·`aud` 불일치는 401, 역할 없음은 403, 코드 중복 409, 형식 오류 400, 모르는 단말 404, 비활성 단말 회전 409.
+- 수동: `docker compose -f docker/docker-compose.yaml up -d keycloak`으로 realm을 띄워 토큰을 받고 `OPERATOR_ISSUER_URI`로 앱을 띄워 등록 API를 한 번 부른다. 결과는 결과 절에 남긴다.
+- `python3 scripts/check_pr.py --base 2f79976 --worktree`.
+
+## Wiki 영향
+- [현재 상태](../wiki/current-state.md): 운영자 인증(`/admin/**`, OIDC JWT, `OPERATOR`), 단말 관리 API, 단말 코드, `ACCESS_DENIED`를 적는다. "HTTP 등록 API가 없다 … 외부 노출은 여전히 하지 않는다"를 고친다. 외부 노출의 남은 조건(IdP 배포, ingress에서 Actuator 차단)을 적는다. `ErrorType` 항목 수를 고친다.
+- [도메인 모델](../wiki/domain-model.md): `terminal` 행의 "매장 안에서 코드 유일(아직 구현하지 않았다)"을 구현됨으로 고치고, §4.7 사례에 `ux_terminal_store_code`를 적는다. 용어 `operator`가 용어집에 없으면 더한다.
+- [관측성](../wiki/observability.md): 운영자 감사 로그 항목과 토큰 미기록을 적는다.
+- [엔티티 지도](../wiki/entity-map.md): `TerminalEntity`의 `terminalCode`를 더한다.
+- 요구사항 변화: 참고 문서의 요구(운영 API의 별도 권한, 운영자 행위의 실행자 기록, 매장 안 단말 코드 유일)를 처음 구현한다. 요구 자체는 바뀌지 않는다. [terminal-authentication](2026-10-05-terminal-authentication.md) 결정 1·2·4는 이 PR이 대체한다.
+
+## 분할 계획
+개발 컨텍스트는 하나다. 운영자가 누구인지 확인하고 그 운영자가 단말을 관리하게 하는 일이고, 그것이 요구하는 운영자 체인, 관리 API, 운영자가 단말을 고를 단말 코드가 딸려 온다. DLT 재투입·운영자 재결제는 같은 체인 위의 다른 업무라 각자의 PR로 뺐다. 작업 시작 시점(origin/main 2f79976)에 열린 PR이 없어 변경 경로가 겹치지 않는다.
+
+## TDD 검증 기록
+| 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
+|---|---|---|---|
+| 인수 4·9, `TerminalCode` 형식과 V014 채우기, 코드 중복 409 | 미실행 | 미실행 | 미실행 |
+| 인수 1·2, 운영자 체인의 401·403과 다른 경로 무영향 | 미실행 | 미실행 | 미실행 |
+| 인수 3·5·6·8·10, 등록·회전·비활성화 API와 감사 로그 | 미실행 | 미실행 | 미실행 |
+| 인수 7, 매장별 목록 조회 | 미실행 | 미실행 | 미실행 |
+
+## 결과
+개발 전 작성. 개발 후 실행 결과와 변경 이유를 추가한다.
