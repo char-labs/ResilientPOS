@@ -24,5 +24,8 @@ object TerminalCommand {
     }
 
     /** 단말을 `INACTIVE`로 바꾼다. 이미 비활성이면 그대로다. */
-    data class Deactivate(val terminalId: TerminalId)
+    data class Deactivate(val terminalId: TerminalId) {
+        /** 감사 로그와 멱등 응답을 위해 전후 상태를 함께 돌려준다. 이미 비활성이었다면 [before]도 `INACTIVE`다. */
+        data class Result(val terminalId: TerminalId, val before: TerminalStatus, val after: TerminalStatus)
+    }
 }

@@ -4,6 +4,7 @@ import com.resilientpos.foundation.IdentifierGenerator
 import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.TerminalCode
 import com.resilientpos.terminal.TerminalId
+import com.resilientpos.terminal.TerminalStatus
 import java.util.UUID
 import kotlin.test.Test
 import com.resilientpos.foundation.DomainErrorKind

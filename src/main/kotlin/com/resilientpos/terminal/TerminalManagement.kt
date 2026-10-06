@@ -45,10 +45,10 @@ class TerminalManagement(
         TerminalCommand.RotateCredential.Result(issued.token)
     }
 
-    /** 단말을 비활성화한다. 이미 비활성이면 그대로다. */
-    fun deactivate(command: TerminalCommand.Deactivate): Unit = Tx.masterTx {
+    /** 단말을 비활성화한다. 이미 비활성이면 그대로이고 전후 상태가 모두 `INACTIVE`다. */
+    fun deactivate(command: TerminalCommand.Deactivate): TerminalCommand.Deactivate.Result = Tx.masterTx {
         val terminal = repository.findByIdForUpdate(command.terminalId) ?: throw Terminal.notFound()
-        repository.update(terminal.deactivate())
-        Unit
+        val after = repository.update(terminal.deactivate())
+        TerminalCommand.Deactivate.Result(terminal.id, terminal.status, after.status)
     }
 }

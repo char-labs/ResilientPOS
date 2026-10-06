@@ -19,7 +19,6 @@ import org.springframework.test.web.servlet.post
 
 /**
  * `/admin` 아래 운영자 JWT 검증 체인을 실제 Boot 설정(issuer-uri, audiences, authorities-claim-name)으로 검사한다.
- * 아직 `/admin` 핸들러가 없어서 인증을 통과한 요청은 404 envelope로 끝난다. 인증 결과만 본다.
  * Docker가 필요하다.
  */
 @AutoConfigureMockMvc
@@ -77,10 +76,11 @@ class OperatorAuthenticationIntegrationTest(
     }
 
     @Test
-    fun `OPERATOR 토큰은 인증을 통과해 핸들러가 없으면 404 envelope다`() {
-        admin("Bearer ${OperatorJwt.token()}").andExpect {
-            status { isNotFound() }
-            jsonPath("$.error.errorCode") { value("NOT_FOUND") }
+    fun `OPERATOR 토큰은 인증을 통과해 매장 단말 목록을 200으로 받는다`() {
+        mockMvc.get("/admin/v1/stores/${UUID.randomUUID()}/terminals") { header("Authorization", "Bearer ${OperatorJwt.token()}") }.andExpect {
+            status { isOk() }
+            jsonPath("$.result") { value("SUCCESS") }
+            jsonPath("$.data.length()") { value(0) }
         }
     }
 

@@ -5,7 +5,7 @@ import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.TerminalCode
 import com.resilientpos.terminal.TerminalId
 import com.resilientpos.terminal.internal.domain.Terminal
-import com.resilientpos.terminal.internal.domain.TerminalStatus
+import com.resilientpos.terminal.TerminalStatus
 import jakarta.persistence.Entity
 import jakarta.persistence.EnumType
 import jakarta.persistence.Enumerated

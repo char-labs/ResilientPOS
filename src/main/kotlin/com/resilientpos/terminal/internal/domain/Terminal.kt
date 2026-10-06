@@ -6,6 +6,7 @@ import com.resilientpos.foundation.IdentifierGenerator
 import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.TerminalCode
 import com.resilientpos.terminal.TerminalId
+import com.resilientpos.terminal.TerminalStatus
 
 /**
  * 단말 aggregate 루트. 한 매장에 속하고 그 소속은 바뀌지 않는다(옮기려면 새 단말로 등록한다).

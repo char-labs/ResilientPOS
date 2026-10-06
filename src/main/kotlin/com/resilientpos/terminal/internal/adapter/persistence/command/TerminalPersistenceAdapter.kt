@@ -6,7 +6,7 @@ import com.resilientpos.terminal.TerminalId
 import com.resilientpos.terminal.internal.domain.Terminal
 import com.resilientpos.terminal.internal.domain.TerminalCredential
 import com.resilientpos.terminal.internal.domain.TerminalRepository
-import com.resilientpos.terminal.internal.domain.TerminalStatus
+import com.resilientpos.terminal.TerminalStatus
 import jakarta.persistence.EntityManager
 import jakarta.persistence.PersistenceException
 import org.hibernate.exception.ConstraintViolationException

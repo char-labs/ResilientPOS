@@ -10,6 +10,7 @@ import com.resilientpos.terminal.TerminalCode
 import com.resilientpos.terminal.TerminalCommand
 import com.resilientpos.terminal.TerminalId
 import com.resilientpos.terminal.TerminalManagement
+import com.resilientpos.terminal.TerminalStatus
 import com.resilientpos.terminal.uniqueTerminalCode
 import java.security.MessageDigest
 import java.util.UUID
@@ -165,9 +166,11 @@ class TerminalManagementIntegrationTest(
     fun `비활성화는 멱등이고 그 단말의 토큰은 인증되지 않는다`() {
         val registered = register()
 
-        terminals.deactivate(TerminalCommand.Deactivate(registered.terminalId))
-        terminals.deactivate(TerminalCommand.Deactivate(registered.terminalId))
+        val first = terminals.deactivate(TerminalCommand.Deactivate(registered.terminalId))
+        val second = terminals.deactivate(TerminalCommand.Deactivate(registered.terminalId))
 
+        assertEquals(TerminalCommand.Deactivate.Result(registered.terminalId, TerminalStatus.ACTIVE, TerminalStatus.INACTIVE), first)
+        assertEquals(TerminalCommand.Deactivate.Result(registered.terminalId, TerminalStatus.INACTIVE, TerminalStatus.INACTIVE), second)
         assertEquals(
             "INACTIVE",
             jdbcTemplate.queryForObject<String>("select status from t_terminal where id = ?", registered.terminalId.value),

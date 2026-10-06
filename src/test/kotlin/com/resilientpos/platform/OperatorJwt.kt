@@ -50,12 +50,14 @@ object OperatorJwt {
         roles: List<String> = listOf("OPERATOR"),
         expiresAt: Instant = Instant.now().plusSeconds(300),
         key: KeyPair = signing,
+        preferredUsername: String? = null,
     ): String {
         val claims = JWTClaimsSet.Builder()
             .issuer(issuer)
             .audience(audience)
             .subject("operator-1")
             .claim("roles", roles)
+            .apply { preferredUsername?.let { claim("preferred_username", it) } }
             .expirationTime(Date.from(expiresAt))
             .build()
         val jwt = SignedJWT(JWSHeader.Builder(JWSAlgorithm.RS256).keyID(KEY_ID).build(), claims)
