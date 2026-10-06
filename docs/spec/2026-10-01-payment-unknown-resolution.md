@@ -50,6 +50,7 @@ fun resolveUnknown() = Lock.executeWithLockNoTx(LOCK_KEY) {
 - 대상은 `kind = AUTHORIZATION`이고 `status = UNKNOWN`인 시도다. 오래된 것(`id` 오름차순, UUID v7)부터 한 주기에 최대 100건이다. 앞쪽 N건을 읽는 조회가 `JdslQueryExecutor`에 없어 `findAll(limit) { }` 오버로드를 더한다(`setMaxResults` 한 줄, 기존 호출은 그대로).
 - 한 건이 던지면(잠금 대기 초과, DB 오류) 그 건의 `paymentId`와 예외를 ERROR로 남기고 다음 건으로 간다. 한 건이 배치 전체를 막지 않게 하려는 것이다. 그 건은 `UNKNOWN`으로 남아 다음 주기에 다시 잡힌다. 대상 조회 자체가 던지면 그 주기를 건너뛰고 스케줄러가 로그를 남긴다.
 - 조회로도 확정되지 않은 건은 다음 주기에 다시 묻는다. 횟수 상한은 없다.
+- **영영 불명인 건이 새 건을 막지 않게 돌아가며 읽는다.** 작업이 지난 주기에 읽은 마지막 `id`를 pod 메모리에 두고 그 다음부터 100건을 읽는다(keyset). 읽은 것이 100건보다 적으면 끝에 닿은 것이라 다음 주기는 처음부터 읽는다. 영영 불명인 건이 100건을 넘어도 새 건은 늦어도 `ceil(불명 건수 / 100)` 주기 안에 조회된다. 커서는 pod마다 따로이고 재기동하면 처음부터다. 둘 다 조회가 겹치거나 늦어질 뿐 정합성에는 닿지 않는다(확정은 잠근 뒤 재확인). 스키마는 바뀌지 않는다. `id` 범위 조건은 V013 인덱스의 키(`id`)를 그대로 쓴다.
 
 **스케줄러 스레드.** Spring 공용 스케줄러는 기본 스레드가 하나다. 이 작업이 provider 조회로 길어지면 같은 스레드의 발행 기록 재전송(`EventPublicationResubmitter`)과 Modulith Moments가 그동안 멈추고, 재전송이 늦으면 확정한 `PaymentApproved`의 전달도 늦는다. `spring.task.scheduling.pool.size`를 2로 두어 두 작업이 서로를 막지 않게 한다. 실제 PG 어댑터 PR이 조회 타임아웃과 함께 다시 본다.
 
@@ -63,13 +64,13 @@ fun resolveUnknown() = Lock.executeWithLockNoTx(LOCK_KEY) {
 
 **복구.** 확정 트랜잭션이 실패하면 아무것도 남지 않고 다음 주기에 다시 한다. 확정 뒤 주문 전이 실패는 기존 `PaymentApprovedListener`의 재시도·DLT 경로를 그대로 따른다. 작업이 멈추면 `UNKNOWN`이 쌓일 뿐 잘못 확정되지는 않는다. 같은 Facade를 사람이 부르는 운영 입구는 없다(제외).
 
-**관측성.** 로그만 남긴다. 확정하면 INFO(`paymentId`·`orderId`·`checkoutNo`·결말), 조회로도 불명이면 WARN(`paymentId`·`orderId`), 한 건 실패는 ERROR(`paymentId`와 예외)다. 확정 로그는 `Tx.masterTx`가 반환한 뒤에 찍어 로그 시점이 곧 커밋 뒤가 되게 한다. metric은 제외 절에 있다.
+**관측성.** 결과 불명 승인 시도 수를 gauge `payment.attempt.unknown`(Prometheus `payment_attempt_unknown`)으로 낸다. 작업이 주기마다 V013 인덱스로 세어 값을 갱신하므로 scrape가 DB를 부르지 않는다. 세기가 실패하면 그 주기를 건너뛰고 값은 마지막 성공값으로 남는다. 모든 pod가 같은 DB를 세므로 알림은 `max`로 모은다. 사람이 볼 조건은 `max(payment_attempt_unknown) > 0`이 한 시간 넘게 이어지는 경우다. 알림 규칙 파일은 아직 없어 observability wiki에 조건만 적는다. 그 밖에는 로그를 남긴다. 확정하면 INFO(`paymentId`·`orderId`·`checkoutNo`·결말), 조회로도 불명이면 WARN(`paymentId`·`orderId`), 한 건 실패는 ERROR(`paymentId`와 예외)다. 확정 로그는 `Tx.masterTx`가 반환한 뒤에 찍어 로그 시점이 곧 커밋 뒤가 되게 한다. 작업 생존 metric은 제외 절에 있다.
 
 ## 제외
 - `reconciliation` case(`t_reconciliation_case`, `ReconciliationManagement`). 조회로도 확정되지 않는 시도를 넘겨받는 자리다. 해소할 명령·규칙 버전·승인 주체가 없으면 열기만 하는 표가 된다. 그것들을 정하는 PR이 만든다. 그 전까지는 WARN 로그가 단서다.
 - 재결제의 운영 호출자. 단말이 재결제를 요청하려면 거절된 시도의 `paymentId`가 필요한데 그 값을 알려 줄 조회 API가 #75다. 단말 토큰 인증은 #81로 들어왔지만 토큰을 발급할 HTTP 입구가 아직 없어 외부 노출 전이다. sync operation으로 받는 길은 단말이 `paymentId`를 모르고, `retryAuthorization`이 따로 커밋하는 구조라 sync의 한 커밋 안에서 부를 수 없다. #75가 endpoint로 만든다.
 - 거절·불명을 `order`가 받는 것과 `PaymentDeclined`·`PaymentUnknown`의 `contract` 이동. 위 범위의 결정이다. 주문 취소나 다른 결제 수단처럼 주문이 거절을 알아야 하는 명령이 생기면 그 PR이 옮긴다.
-- UNKNOWN 건수 gauge, 작업 생존 metric, 알림 규칙. [event-publication-resubmit](2026-09-29-event-publication-resubmit.md)과 같이 알림 규칙을 만드는 PR이 함께 정한다.
+- 작업 생존 metric(마지막 성공 시각)과 알림 규칙 파일. [event-publication-resubmit](2026-09-29-event-publication-resubmit.md)과 같이 알림 규칙을 만드는 PR이 함께 정한다.
 - 조회 횟수·마지막 조회 시각 컬럼과 조회 상한. 상한에 걸린 건을 넘겨받을 case가 없고, 상한 값을 정할 실제 provider 근거도 없다.
 - `REQUESTED`로 멈춘 시도(승인 요청 consumer가 끝내 실패해 DLT에 간 것). 단서는 DLT 메시지이고 재투입은 기존 절차다. 이 작업은 `UNKNOWN`만 본다.
 - `CANCELLATION` 시도의 조회. 취소 시도를 만드는 코드가 없다.
@@ -103,12 +104,13 @@ fun resolveUnknown() = Lock.executeWithLockNoTx(LOCK_KEY) {
 3. `resolveUnknown`이 `UNKNOWN` 시도를 조회 결과대로 확정하고 같은 커밋에서 발행한다. 승인은 `PaymentApproved`의 발행 기록이 같은 커밋에 남는다. 거절(`PaymentEvent.Declined`)은 받는 쪽이 없어 발행 기록이 생기지 않으므로 발행 자체를 관측한다. 조회 결과가 `Unknown`이면 행도 발행 기록도 바뀌지 않는다. `UNKNOWN`이 아닌 시도는 provider를 부르지 않고 지금 상태를 돌려준다.
 4. provider 조회 순간 그 스레드에 EntityManager와 커넥션이 묶여 있지 않다.
 5. 같은 시도의 `resolveUnknown`이 동시에 둘 와도 한 번만 적용되고 이벤트는 하나다.
-6. 주기 작업 한 번이 `UNKNOWN` 승인 시도만 오래된 순으로 최대 100건 처리한다. 취소 시도는 고르지 않고, `resolveUnknown`에 직접 넘겨도 조회하지 않는다. 한 건이 던져도 나머지는 처리된다. 작업은 `payment:unknown-resolve` 키의 `Lock` 블록 안에서 돌고, 다른 쪽이 그 키를 쥔 동안에는 조회하지 않는다. 대상 조회의 `kind`·`status`는 리터럴로 렌더된다(테스트가 렌더된 쿼리를 확인한다).
+6. 주기 작업 한 번이 `UNKNOWN` 승인 시도만 오래된 순으로 최대 100건 처리한다. 취소 시도는 고르지 않고, `resolveUnknown`에 직접 넘겨도 조회하지 않는다. 한 건이 던져도 나머지는 처리된다. 작업은 `payment:unknown-resolve` 키의 `Lock` 블록 안에서 돌고, 다른 쪽이 그 키를 쥔 동안에는 조회하지 않는다. 대상 조회의 `kind`·`status`는 리터럴로 렌더된다(테스트가 렌더된 쿼리를 확인한다). 영영 불명인 건이 100건을 넘어도 다음 주기에 그 뒤의 건을 읽는다.
 7. 끝자리 2인 주문을 checkout하면 결제가 `UNKNOWN`이 되고, 작업 한 번 뒤 시도는 `APPROVED`, 주문은 `PAID`가 된다(Kafka 포함 통합).
 8. 끝자리 3인 주문은 작업 뒤 시도가 `DECLINED`, 주문은 `CHECKOUT_REQUESTED`다. 그 시도에 `retryAuthorization`을 하면 새 시도가 생기고, 승인되면 주문이 `PAID`가 된다(재결제 승인은 테스트 전용 gateway).
 9. 끝자리 4인 주문은 작업 뒤에도 시도가 `UNKNOWN`, 주문은 `CHECKOUT_REQUESTED`다.
 10. V013 인덱스가 유효한(`indisvalid`) 인덱스로 만들어진다.
 11. `./gradlew test` 전체와 `python3 scripts/check_pr.py --base origin/main --worktree`가 통과한다.
+12. 작업 한 주기 뒤 gauge `payment.attempt.unknown`이 그때의 결과 불명 승인 시도 수와 같다.
 
 ### Checkpoint와 검증 명령
 | Checkpoint | 검증 명령 | 의존 |
@@ -179,4 +181,5 @@ fun resolveUnknown() = Lock.executeWithLockNoTx(LOCK_KEY) {
 - 구현 중 main에 #81·#82가 들어와 rebase했고 인덱스 마이그레이션을 `V013`으로 옮겼다(분할 계획).
 - multi-review(2026-10-06): Claude 86점, Codex 79점(`codex exec` 직접 실행, reviewer-codex 에이전트는 CLI 실행에 실패해 버렸다), Gemini는 CLI가 없어 미실행.
   - 반영: 공용 스케줄러 스레드 2개(Claude), 승인 시도만 확정(Codex), 리터럴 렌더 회귀 테스트(둘 다), 락 대기 테스트의 조회 0건 단언·재확인 분기 단위 테스트(Claude), entity-map §4.4·결말 화살표·마이그레이션 목록, domain-model의 `executeWithLockNoTx` 서술(바깥 트랜잭션 검사가 있다고 적힌 이전부터의 불일치), `PaymentGateway.query`의 "처리 중이면 Unknown", 낡은 KDoc·주석.
-  - 반영하지 않음: 영영 불명인 건 100건의 기아(Codex Important)는 사용자와 합의한 한계라 `ponytail:` 표식과 observability 단서로 둔다. `NOT_SUPPORTED` 직접 선언이 규칙 위반이라는 지적(Codex)은 리뷰 프롬프트가 규칙을 좁게 적은 탓이다. 규칙은 `@Transactional` 애너테이션만 허용하고 `authorize`·`retryAuthorization`이 같은 선언을 쓴다(domain-model §4.3). 101건 상한 테스트는 상수 하나를 위해 행 101개를 넣는 비용에 비해 얻는 것이 적어 두지 않았다. `findAll(limit)` 오버로드는 호출부가 명확해 그대로 둔다.
+  - 반영하지 않음: `NOT_SUPPORTED` 직접 선언이 규칙 위반이라는 지적(Codex)은 리뷰 프롬프트가 규칙을 좁게 적은 탓이다. 규칙은 `@Transactional` 애너테이션만 허용하고 `authorize`·`retryAuthorization`이 같은 선언을 쓴다(domain-model §4.3). 101건 상한 테스트는 상수 하나를 위해 행 101개를 넣는 비용에 비해 얻는 것이 적어 두지 않았다. `findAll(limit)` 오버로드는 호출부가 명확해 그대로 둔다.
+- PR #84를 올린 뒤 사용자 요청으로 남은 위험 둘을 이 PR에서 풀었다. 영영 불명인 건 100건의 기아(Codex Important)는 keyset 커서로, 결과 불명 적체를 알아챌 수단이 로그뿐이던 것은 gauge로 풀었다. 그 전에 #83(시연 화면)이 main에 들어와 origin/main 42a27ab 위로 rebase했고 겹친 경로는 없다.
