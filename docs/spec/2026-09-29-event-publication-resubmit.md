@@ -10,7 +10,7 @@
 
 **주기 작업.** `@EnableScheduling`을 켜고 `@Scheduled` 작업 하나가 아래 세 단계를 차례로 한다. 주기는 `resilientpos.event-publication.resubmit-interval`(기본 `PT1M`)이고 첫 실행도 한 주기 뒤다. 통합 테스트는 이 값을 하루로 늘린다. 여러 테스트가 DB를 함께 쓰면서 `FAILED` 행과 완료 행을 넣기 때문에, 작업이 스스로 돌면 결과가 실행 순서에 따라 바뀐다. 작업이 던지면 Spring 스케줄러가 로그를 남기고 다음 주기를 그대로 돈다.
 
-**1. 끊긴 기록 표시.** `PUBLISHED`·`PROCESSING`·`RESUBMITTED`인 채 마지막 시도(`coalesce(last_resubmission_date, publication_date)`)부터 `resilientpos.event-publication.stale-after`(기본 5분)가 지난 미완료 기록을 `FAILED`로 바꾼다. 이어서 완료됐는데 `RESUBMITTED`로 남은 행(아래 재전송의 fail-open 틈에서 생긴다)을 `COMPLETED`로 돌린다. 둘 다 `JdbcTemplate`의 조건부 UPDATE 한 문장씩이고 쿼리 상한은 10초다. 트랜잭션 밖이라 상한이 없으면 잠금에 걸린 UPDATE가 소켓 상한(30초)까지 공용 스케줄러 스레드를 붙잡는다. 끊긴 기록의 기준은 metric의 `stale`과 같다. 여러 pod가 겹쳐 돌아도 같은 행을 같은 값으로 바꾼다. `stale-after`는 producer 전송 상한(`max.block.ms` + `delivery.timeout.ms`, 기본 약 3분)보다 길어야 한다.
+**1. 끊긴 기록 표시.** `PUBLISHED`·`PROCESSING`·`RESUBMITTED`인 채 마지막 시도(`coalesce(last_resubmission_date, publication_date)`)부터 `resilientpos.event-publication.stale-after`(기본 5분)가 지난 미완료 기록을 `FAILED`로 바꾼다. 이어서 완료됐는데 `RESUBMITTED`로 남은 행(재전송 표시 뒤 완료 표시 전에 프로세스가 죽으면 생긴다)을 `COMPLETED`로 돌린다. 둘 다 `JdbcTemplate`의 조건부 UPDATE 한 문장씩이고 쿼리 상한은 10초다. 트랜잭션 밖이라 상한이 없으면 잠금에 걸린 UPDATE가 소켓 상한(30초)까지 공용 스케줄러 스레드를 붙잡는다. 끊긴 기록의 기준은 metric의 `stale`과 같다. 여러 pod가 겹쳐 돌아도 같은 행을 같은 값으로 바꾼다. `stale-after`는 producer 전송 상한(`max.block.ms` + `delivery.timeout.ms`, 기본 약 3분)보다 길어야 한다.
 
 Modulith staleness 모니터(`spring.modulith.events.staleness.*`)는 쓰지 않는다. 2.1.1 소스를 대조했더니 두 가지가 맞지 않았다.
 - `RESUBMITTED`도 최초 `publication_date`로 잰다. 5분 넘게 묵은 이벤트는 다시 보낸 직후 다음 모니터 주기에 `FAILED`로 되돌아가 앞 전송이 끝나기 전에 또 나간다.
@@ -19,7 +19,7 @@ Modulith staleness 모니터(`spring.modulith.events.staleness.*`)는 쓰지 않
 **2. 재전송.** `FailedEventPublications.resubmit(ResubmissionOptions)`으로 `FAILED` 기록을 오래된 것부터 다시 보낸다.
 - `batchSize` 500, `maxInFlight` 500, `minAge` 0이다. `maxInFlight`는 DB의 `RESUBMITTED` 행 수로 센다(모든 pod 합계). 500건을 넘는 실패는 다음 주기에 이어서 나간다.
 - `Lock.executeWithLockNoTx(상수 키) { }`로 pod 사이를 줄 세운다. 이 진입점은 이 PR에서 `Lock`에 더한다. 트랜잭션을 열지 않고 잠그기만 하며, 바깥 트랜잭션 안에서 부르면 잠그기 전에 거절한다. 합류하면 바깥이 커밋하기 전에 락이 풀리기 때문이다. `executeWithLock`은 전과 같다(바깥 트랜잭션 허용, `REQUIRES_NEW`). 재전송은 트랜잭션 밖에서 돈다. 그래서 Modulith 저장소(클래스 수준 `@Transactional`)의 호출마다 따로 커밋된다. 재전송 표시(`markResubmitted`, `status != RESUBMITTED`인 행만 바꾸는 조건부 UPDATE)가 한 건씩 곧바로 커밋되고, 다음 pod는 표시된 행을 건너뛴다. 기존 `executeWithLock`(`REQUIRES_NEW`)을 쓰면 표시한 500행의 잠금을 블록이 끝날 때까지 쥔다. 그동안 비동기 externalizer가 완료 표시를 하려고 커넥션을 쥔 채 그 잠금을 기다린다(executor 8, Hikari 10).
-- `Lock`이 fail-open이라 Redis 장애나 대기 초과 때는 잠금 없이 돈다. 그때 행 단위 조건부 UPDATE는 같은 행을 두 pod가 동시에 전송 중으로 두는 것을 막는다. 방금 완료된 행의 재전송은 막지 못한다. 한 pod가 읽어 둔 행을 다른 pod가 먼저 완료시키면 `status != RESUBMITTED` 조건을 통과해 다시 나간다. 이 중복 전송은 멱등 consumer가 견딘다. 그 행은 `completion_date`가 찬 채 `RESUBMITTED`로 남는데, Modulith의 완료 표시가 `completion_date`가 빈 행만 바꾸기 때문이다. 1단계가 이 행을 `COMPLETED`로 돌린다.
+- `Lock`이 fail-open이라 Redis 장애나 대기 초과 때는 잠금 없이 돈다. 그때 행 단위 조건부 UPDATE는 같은 행을 두 pod가 동시에 전송 중으로 두는 것을 막는다. 방금 완료된 행의 재전송은 막지 못한다. 한 pod가 읽어 둔 행을 다른 pod가 먼저 완료시키면 `status != RESUBMITTED` 조건을 통과해 다시 나간다. 이 중복 전송은 멱등 consumer가 견딘다. 다시 보낸 기록은 같은 JVM의 진행 중 목록에서 찾아 ID로 완료 표시한다(`MARK_COMPLETED_BY_ID`, `completion_date` 조건 없음). 그래서 전송이 끝나면 `COMPLETED`로 돌아온다. 전송이 실패하면 완료된 행이 `FAILED`로 되돌아간다(한계 절).
 - 재전송 횟수에 상한을 두지 않는다. Modulith는 `FAILED` 행을 읽은 **뒤에** `withFilter`로 거른다. 그래서 상한에 걸린 행이 읽기 자리를 계속 차지하고, 새 실패까지 막는다.
 - 읽어 온 `DefaultJpaEventPublication` 엔티티는 저장소 호출의 트랜잭션이 끝나면 분리된다. Modulith 엔티티에는 변경 메서드가 없다. 표시·삭제는 모두 JPQL 벌크 문장이라 dirty checking이 쓸 것이 없다.
 
@@ -41,7 +41,10 @@ Modulith staleness 모니터(`spring.modulith.events.staleness.*`)는 쓰지 않
 - DLT 재투입.
 
 ## 한계
-- **영영 나가지 못하는 기록.** 리스너가 사라졌거나(리스너를 바꾸는 배포의 조건을 어김) 이벤트 타입을 역직렬화할 수 없는 기록이 여기에 해당한다. 이런 기록은 매 주기 다시 시도되고, Modulith가 행 단위로 예외를 잡아 로그를 남긴다. 이런 기록이 500건을 넘게 쌓이면 가장 오래된 행이라 읽기를 모두 차지해 새 실패가 나가지 못한다. domain-model §4.3에 탐지 SQL과 조치(원인을 되살리거나, 버리기로 한 기록만 완료 처리)를 적었다.
+- **영영 나가지 못하는 기록.** 리스너가 사라졌거나(리스너를 바꾸는 배포의 조건을 어김) 이벤트 타입을 역직렬화할 수 없는 기록이 여기에 해당한다. domain-model §4.3에 탐지 SQL과 조치(원인을 되살리거나, 버리기로 한 기록만 완료 처리)를 적었다.
+  - 리스너가 사라진 기록은 Modulith가 행마다 로그(`Listener … not found`)를 남기고 곧바로 `FAILED`로 돌린 뒤 다음 행으로 넘어간다. 매 주기 다시 시도되고, 500건을 넘게 쌓이면 가장 오래된 행이라 읽기를 모두 차지해 새 실패가 나가지 못한다.
+  - 역직렬화할 수 없는 기록은 그 재전송 실행 전체를 끊는다. 재전송 루프의 catch에서 `unregister`가 이벤트를 다시 역직렬화하다 예외가 새기 때문이다(spring-modulith#1904, 2.1.1도 같다). 예외는 `Lock` 블록 밖으로 나가 그 주기의 정리도 건너뛰고, 스케줄러 로그(`Unexpected error occurred in scheduled task`)만 남는다. 그 행은 `RESUBMITTED`로 남아 다음 주기에는 건너뛰어진다. 1단계가 5분 뒤 `FAILED`로 되돌릴 때마다 실행이 한 번씩 끊기고, 그 실행에서 뒤에 올 행은 다음 주기로 밀린다. 이런 행이 6건 안팎(5분 ÷ 1분 주기)만 쌓여도 거의 모든 실행이 첫 행에서 끊긴다. 소스로 추론했고 실측하지 않았다.
+- **재전송이 실패하면 완료된 행이 `FAILED`로 되돌아간다.** 락이 fail-open일 때 다른 pod가 완료시킨 행을 다시 보냈는데 그 전송이 실패하면, Modulith의 `markFailed`(ID와 `status != FAILED`만 조건)가 그 행을 `completion_date`가 찬 채 `FAILED`로 바꾼다. 업스트림 결함이다. 1단계의 끊긴 기록 UPDATE는 `completion_date is null` 조건이라 이 행을 건드리지 않는다. `findFailedPublications`는 `FAILED` 가지에 `completion_date` 조건이 없어 이 행을 다시 읽는다. 다음 주기에 한 번 더 나가고, 성공하면 `COMPLETED`로 돌아온다. 중복 전송은 멱등 consumer가 견딘다. 그동안 발행 기록 metric은 `completion_date is null`인 행만 세므로 `failed`에 잡히지 않는다.
 - 락 TTL은 10초다. 재전송 블록이 10초를 넘으면 락이 먼저 풀리고 다른 pod가 들어올 수 있다. 그때도 행 단위 조건부 UPDATE가 같은 행의 동시 전송을 막는다.
 - 모든 pod가 매분 세 단계를 돈다. 두 번째 이후 pod는 락을 기다린 뒤 표시된 행을 건너뛰므로 대부분 읽기만 한다. 끊긴 기록 표시와 정리는 겹쳐도 결과가 같다.
 - 발행 뒤 5분 넘게 externalizer 대기열에 머문 이벤트는 `FAILED`가 되어 한 번 더 나갈 수 있다. 브로커 장애로 전송이 `max.block.ms` 동안 막혀 대기열이 밀린 경우다. consumer가 멱등이라 정합성 문제는 아니다.
@@ -168,7 +171,7 @@ Modulith staleness 모니터(`spring.modulith.events.staleness.*`)는 쓰지 않
     - Redis 용도 주석에 재전송 줄 세우기를 더했다.
     - observability에 사람이 볼 조건을 식으로 적었다.
 - 2차 multi-review(Claude·Codex)에서 고친 것
-  - 락이 fail-open일 때 완료된 행이 `RESUBMITTED`로 남아 `maxInFlight` 칸을 차지하는 문제. Modulith의 완료 표시(`completion_date is null`)와 `countByStatus`(status만 봄)를 소스로 확인하고 1단계에 완료로 돌리는 문장을 더했다.
+  - 완료됐는데 `RESUBMITTED`로 남은 행이 `maxInFlight` 칸을 차지하는 문제. `countByStatus`(status만 봄)를 소스로 확인하고 1단계에 완료로 돌리는 문장을 더했다. 이런 행은 재전송 표시 뒤 완료 표시 전에 프로세스가 죽을 때 생긴다. 재전송된 기록의 완료 표시는 ID로 하므로(`MARK_COMPLETED_BY_ID`) 락이 fail-open이어도 정상 경로에서는 남지 않는다([event-resubmit-doc-corrections](2026-10-06-event-resubmit-doc-corrections.md)).
   - `executeWithLockNoTx`가 바깥 트랜잭션을 막지 않던 문제. `check`로 거절한다. `executeWithLock`과 공유하던 경로를 private `locked`로 나눠 `executeWithLock`의 바깥 트랜잭션 허용은 그대로 두었다.
   - 1단계 UPDATE에 쿼리 상한 10초를 걸었다(전용 `JdbcTemplate`).
   - 테스트: 트랜잭션 없는 블록 테스트가 같은 트랜잭션에 합류해 읽던 것을 `REQUIRES_NEW`로 바꿨다. 락 대기 테스트는 단언이 실패해도 락을 푼다. 완료됐는데 `PROCESSING`인 가짜 행을 실제로 생기는 모양(`RESUBMITTED` + 완료 시각)으로 바꿨다.

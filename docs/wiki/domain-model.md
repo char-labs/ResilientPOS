@@ -147,15 +147,19 @@ Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰�
   - **배포 조건(리스너를 consumer로 바꾸는 배포).** 옛 리스너 이름으로 남은 미완료 기록은 끝낼 주체가 없다. 배포 전에 `completion_date is null`이고 `listener_id`에 네 리스너 클래스 이름이 든 행이 0건이어야 한다. 조건 SQL은 [kafka-event-redelivery](../spec/2026-09-26-kafka-event-redelivery.md)에 있다.
   - **Kafka 관련 작업은 공식 문서로 대조한다.** [Spring Modulith 이벤트](https://docs.spring.io/spring-modulith/reference/events.html), [Spring Kafka 오류 처리](https://docs.spring.io/spring-kafka/reference/kafka/annotation-error-handling.html), Apache Kafka 설정 문서를 보고, 문서가 기본값을 설명하지 않거나 페이지를 읽지 못하면 클라이언트가 기동 때 찍는 `ProducerConfig values`·`ConsumerConfig values` 로그로 실제 값을 확인한다. 2026-09-27 점검 결과와 남은 결정(전송 직렬화, 운영 복제 수, 리밸런스 프로토콜)은 [kafka-event-redelivery](../spec/2026-09-26-kafka-event-redelivery.md)에 있다. `DefaultErrorHandler`는 `RuntimeException`만 다루므로 consumer 본문에서 `Error`를 던지지 않는다.
   - **브로커로 보내지 못한 기록은 주기 작업이 다시 보낸다**(`platform.EventPublicationResubmitter`, [event-publication-resubmit](../spec/2026-09-29-event-publication-resubmit.md)). 1분마다 세 단계를 돈다.
-    1. 끊긴 기록을 `FAILED`로 바꾼다. `PUBLISHED`·`PROCESSING`·`RESUBMITTED`인 채 마지막 시도(재전송 시각, 없으면 발행 시각)부터 5분(`stale-after`)이 지난 미완료 기록이 대상이고, 조건을 건 UPDATE 한 문장이다. 이어서 완료됐는데 `RESUBMITTED`로 남은 행을 `COMPLETED`로 돌린다. 락이 fail-open일 때 한 pod가 완료시킨 행을 다른 pod가 다시 표시하면 생기고(Modulith의 완료 표시는 `completion_date`가 빈 행만 바꾼다), 그대로 두면 `maxInFlight` 한 칸을 차지한다. 두 문장에는 쿼리 상한 10초를 건다. Modulith staleness 모니터는 쓰지 않는다. 모니터는 `RESUBMITTED`도 최초 발행 시각으로 재서 방금 다시 보낸 행을 되돌리고, 상태로 고른 뒤 ID로 바꿔 그 사이 완료된 행을 `FAILED`로 덮는다.
+    1. 끊긴 기록을 `FAILED`로 바꾼다. `PUBLISHED`·`PROCESSING`·`RESUBMITTED`인 채 마지막 시도(재전송 시각, 없으면 발행 시각)부터 5분(`stale-after`)이 지난 미완료 기록이 대상이고, 조건을 건 UPDATE 한 문장이다. 이어서 완료됐는데 `RESUBMITTED`로 남은 행을 `COMPLETED`로 돌린다. 재전송된 기록은 같은 JVM의 진행 중 목록에서 찾아 ID로 완료 표시하므로(`completion_date` 조건 없음) 락이 fail-open이어도 정상 경로에서는 남지 않는다. 재전송 표시 뒤 완료 표시 전에 프로세스가 죽으면 생기고, 그대로 두면 `maxInFlight` 한 칸을 차지한다. 두 문장에는 쿼리 상한 10초를 건다. Modulith staleness 모니터는 쓰지 않는다. 모니터는 `RESUBMITTED`도 최초 발행 시각으로 재서 방금 다시 보낸 행을 되돌리고, 상태로 고른 뒤 ID로 바꿔 그 사이 완료된 행을 `FAILED`로 덮는다.
     2. `FAILED` 기록을 오래된 것부터 최대 500건 다시 보낸다. 모든 pod에서 돌고 `Lock.executeWithLockNoTx`로 줄 세운다. 트랜잭션을 열지 않아 재전송 표시(`status != RESUBMITTED`인 행만 바꾸는 조건부 UPDATE)가 한 건씩 바로 커밋되고, 다음 pod는 표시된 행을 건너뛴다. 락이 fail-open으로 빠질 때 남는 중복 전송은 멱등 consumer가 견딘다. 500건을 넘는 실패는 다음 주기에 이어서 나간다.
     3. 완료 뒤 7일(`retention`)이 지난 기록을 지운다. 멱등 DELETE라 락 밖에서 따로 커밋한다.
     - 앞 단계가 던지면 뒤 단계는 그 주기에 건너뛰고 다음 주기에 다시 한다. 스케줄러가 로그를 남긴다.
     - 재전송 횟수에 상한은 없다. Modulith가 읽은 **뒤에** 거르므로 상한에 걸린 행이 읽기 자리를 차지해 새 실패까지 막는다.
-    - **영영 나가지 못하는 기록.** 리스너가 사라졌거나(배포 조건 위반) 이벤트 타입을 역직렬화할 수 없는 기록은 매 주기 다시 시도되고 Modulith가 로그(`Listener … not found`, `Error republishing`)를 남긴다. 500건을 넘게 쌓이면 가장 오래된 행이라 읽기를 모두 차지해 새 실패가 나가지 못한다. 찾는 SQL은 아래와 같다. 원인(리스너·타입)을 되살려 보내거나, 버리기로 결정한 기록만 `completion_date`와 `status = 'COMPLETED'`를 채운다.
+    - **영영 나가지 못하는 기록.** 원인은 둘이고 증상이 다르다.
+      - 리스너가 사라진 기록(배포 조건 위반)은 Modulith가 행마다 ERROR 로그(`Listener … not found!`)를 남기고 곧바로 `FAILED`로 돌린 뒤 다음 행으로 넘어간다. 매 주기 다시 시도되고, 500건을 넘게 쌓이면 가장 오래된 행이라 읽기를 모두 차지해 새 실패가 나가지 못한다.
+      - 이벤트 타입을 역직렬화할 수 없는 기록은 그 재전송 실행 전체를 끊는다. 재전송 루프의 catch에서 다시 역직렬화하다 예외가 새기 때문이다(spring-modulith#1904). 그 주기의 정리(3단계)도 건너뛰고, 로그는 스케줄러의 ERROR `Unexpected error occurred in scheduled task`와 역직렬화 예외다. 그 행은 `RESUBMITTED`로 남아 다음 주기에는 건너뛰어진다. 1단계가 5분 뒤 `FAILED`로 되돌릴 때마다 실행이 한 번씩 끊기고, 그 실행에서 뒤에 올 행은 다음 주기로 밀린다. 6건 안팎(5분 ÷ 1분 주기)만 쌓여도 거의 모든 실행이 첫 행에서 끊긴다.
+
+      찾는 SQL은 아래와 같다. 역직렬화할 수 없는 기록은 대부분 `RESUBMITTED`로 있으므로 함께 본다. 정상 재전송 중인 행과는 `completion_attempts`로 가른다. 원인(리스너·타입)을 되살려 보내거나, 버리기로 결정한 기록만 `completion_date`와 `status = 'COMPLETED'`를 채운다.
       ```sql
       select listener_id, event_type, count(*), max(completion_attempts) from event_publication
-      where completion_date is null and (status = 'FAILED' or status is null)
+      where completion_date is null and (status in ('FAILED', 'RESUBMITTED') or status is null)
       group by 1, 2 order by 4 desc;
       ```
     - 재전송은 Modulith API(JPA)로 한다. externalizer 리스너를 다시 부르는 일이라 Modulith 밖에서 할 수 없다. 읽어 온 엔티티는 저장소 호출마다 트랜잭션이 끝나 분리되고, Modulith에 변경 메서드가 없어 flush가 쓰지 않는다(테스트로 고정). 끊긴 기록 표시는 `JdbcTemplate` 한 문장이다.
@@ -179,7 +183,7 @@ Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰�
   2. 바뀐 만큼 마이그레이션을 추가한다. 추가만 하는 변경이면 이전 버전 인스턴스는 모르는 컬럼이 늘어난 것뿐이라 함께 떠 있어도 된다.
   3. 추가가 아닌 변경(이름·타입)이면 라이브러리 엔티티를 우리가 못 바꿔서 이중 쓰기를 할 수 없다. 남아 있는 미완료 기록을 어떻게 보존할지 함께 정한다.
   4. `EventPublication.Status`의 값도 diff한다. `status`가 문자열 컬럼이라 새 값은 스키마 diff에 나오지 않는데, 발행 기록 metric은 아는 미완료 상태(`PUBLISHED`·`PROCESSING`·`RESUBMITTED`)만 `stale`로 세므로 새 미완료 상태는 조용히 빠진다. 새 미완료 상태가 있으면 `EventPublicationMetrics`의 조회 SQL 상태 목록에 더한다.
-  5. 재전송 작업(`EventPublicationResubmitter`)이 기대는 동작을 새 버전 소스와 대조한다. 재전송 경로(`FailedEventPublications.resubmit` → registry → 저장소)에 바깥 트랜잭션이 없는지, `markResubmitted`가 `status != RESUBMITTED` 조건부 UPDATE인지, 완료 표시가 `completion_date`가 빈 행만 바꾸는지, 끊긴 기록 표시가 쓰는 컬럼(`status`, `completion_date`, `last_resubmission_date`, `publication_date`)과 상태 이름이 그대로인지 본다.
+  5. 재전송 작업(`EventPublicationResubmitter`)이 기대는 동작을 새 버전 소스와 대조한다. 재전송 경로(`FailedEventPublications.resubmit` → registry → 저장소)에 바깥 트랜잭션이 없는지, `markResubmitted`가 `status != RESUBMITTED` 조건부 UPDATE인지, 재전송된 기록의 완료 표시가 진행 중 목록에서 찾아 ID로 하는지(`MARK_COMPLETED_BY_ID`), 재전송 루프가 역직렬화 실패에 실행 전체를 끊는지(#1904), 끊긴 기록 표시가 쓰는 컬럼(`status`, `completion_date`, `last_resubmission_date`, `publication_date`)과 상태 이름이 그대로인지 본다.
 - **컬럼이 늘거나 타입·테이블 이름이 바뀌면 기동이 막히고 CI가 먼저 잡는다.** `Schema validation: missing column [이름] in table [event_publication]`처럼 대상이 메시지에 나온다. 통합 테스트가 컨텍스트를 띄우므로 버전을 올리는 PR에서 실패한다(2026-09-21에 `V004`를 v1 스키마로 되돌려 확인했다). **반대로 라이브러리가 컬럼을 없애면 조용히 통과한다.** `validate`는 매핑된 컬럼만 검사해서(4.7절 질문 8) 쓰이지 않는 컬럼이 남는다. 이건 사람이 정리한다.
 - **이벤트 클래스의 모양이 저장 형식이다.** 발행 기록은 이벤트를 JSON으로, `event_type`에는 클래스의 정규 이름을 저장한다. 미완료 기록이 남아 있는 동안 이벤트의 필드를 지우거나 이름·타입을 바꾸면, 또는 이벤트 클래스를 옮기거나 이름을 바꾸면 복원이 실패해서 그 이벤트를 다시 보낼 수 없다. 하위 호환인 변경은 기본값이 있는 필드 추가뿐이다. 그 밖의 변경은 새 이벤트 타입을 더하고 옛 타입의 미완료 기록이 비워진 뒤에 옛 타입을 지운다.
 - **리스너의 이름도 저장 형식이다.** `listener_id`에는 리스너의 클래스 정규 이름·메서드·이벤트 타입이 저장되고(`패키지.클래스.메서드(이벤트타입)`) Modulith는 `serialized_event`와 `listener_id`가 같은 행을 찾아 완료를 표시한다. 미완료 기록이 남은 동안 리스너의 패키지·클래스·메서드 이름을 바꾸면 그 기록을 끝낼 주체가 없어진다. 지금 기록되는 리스너는 Modulith externalizer 하나다(위 Kafka 문단).
