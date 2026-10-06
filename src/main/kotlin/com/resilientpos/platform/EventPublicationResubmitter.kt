@@ -20,8 +20,9 @@ import org.springframework.stereotype.Component
  *    완료됐는데 `RESUBMITTED`로 남은 행을 `COMPLETED`로 돌린다. 둘 다 조건을 건 UPDATE 한 문장씩이다.
  *    Modulith staleness 모니터를 쓰지 않는다. 모니터는 `RESUBMITTED`도 최초 발행 시각으로 재서 방금 다시 보낸 행을
  *    곧바로 되돌리고, 상태로 고른 뒤 ID로 바꿔 그 사이에 완료된 행을 `FAILED`로 덮는다.
- *    완료됐는데 `RESUBMITTED`인 행은 락이 fail-open일 때 생긴다. 한 pod가 완료시킨 행을 다른 pod가 다시 표시하고,
- *    Modulith의 완료 표시는 `completion_date`가 빈 행만 바꾸기 때문이다. 그대로 두면 정리될 때까지 `maxInFlight` 한 칸을 차지한다.
+ *    재전송된 기록은 같은 JVM의 진행 중 목록에서 찾아 ID로 완료 표시하므로(`completion_date` 조건 없음) 정상 경로에서는
+ *    `COMPLETED`로 돌아온다. 완료됐는데 `RESUBMITTED`인 행은 재전송 표시 뒤 완료 표시 전에 프로세스가 죽은 경우 정도에 생기고,
+ *    그대로 두면 `maxInFlight` 한 칸을 차지한다.
  * 2. `FAILED` 기록을 다시 보낸다. [Lock]으로 pod 사이를 줄 세우되 트랜잭션은 열지 않는다([Lock.executeWithLockNoTx]).
  *    Modulith의 재전송 표시(`status != RESUBMITTED`인 행만 바꾸는 조건부 UPDATE)가 한 건씩 바로 커밋되므로 다음 pod는 표시된
  *    행을 건너뛰고, 비동기 externalizer가 완료 표시를 하려고 행 잠금을 기다리지 않는다. 락이 fail-open으로 빠질 때 남는
@@ -30,8 +31,10 @@ import org.springframework.stereotype.Component
  * 앞 단계가 던지면 뒤 단계는 그 주기에 건너뛰고 다음 주기에 다시 한다.
  *
  * 재전송 횟수에 상한을 두지 않는다. Modulith는 `FAILED` 행을 오래된 것부터 읽은 뒤에 거르므로 상한에 걸린 행이 읽기 자리를 차지한다.
- * 영영 나가지 못하는 행(리스너가 사라짐, 역직렬화 실패)이 [BATCH_SIZE]를 넘게 쌓이면 새 실패도 막힌다. 찾는 SQL과 조치는
- * 도메인 모델 §4.3에 있다.
+ * 영영 나가지 못하는 행은 두 가지다. 리스너가 사라진 행은 Modulith가 로그를 남기고 `FAILED`로 돌린 뒤 다음 행으로 넘어가며,
+ * [BATCH_SIZE]를 넘게 쌓이면 새 실패도 막힌다. 역직렬화할 수 없는 행은 그 재전송 실행 전체를 끊는다(spring-modulith#1904).
+ * 그 행은 `RESUBMITTED`로 남아 다음 주기에는 건너뛰어지고, 1단계가 `FAILED`로 되돌릴 때마다 한 번씩 실행을 끊는다.
+ * 그 실행에서 뒤에 올 행과 3단계는 다음 주기로 밀린다. 찾는 SQL과 조치는 도메인 모델 §4.3에 있다.
  * 작업이 던지면 Spring 스케줄러가 로그를 남기고 다음 주기를 그대로 돈다.
  */
 @Component

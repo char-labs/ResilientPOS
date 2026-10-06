@@ -72,4 +72,14 @@
 적용하지 않는다. 동작을 바꾸지 않는 KDoc·주석·문서 변경이라 새 테스트가 없다. 컴파일과 `check_pr.py`로 확인한다.
 
 ## 결과
-개발 후 적는다.
+범위 절의 고칠 곳을 모두 고쳤다. 2026-10-06 실행 결과는 아래와 같다.
+
+- **sources 대조와 브리프의 차이.** 브리프의 두 사실은 sources와 같았다. 대조하면서 아래를 더 확인해 반영했다.
+  - 역직렬화 실패로 끊긴 실행에서는 `Error republishing` 로그가 남지 않는다. 예외가 `Lock` 블록 밖으로 나가 3단계 정리도 그 주기에 건너뛴다.
+  - 이런 행이 6건 안팎만 쌓여도 거의 모든 실행이 끊긴다. 500건 기준은 리스너가 사라진 경우에만 맞다.
+  - 이런 행은 대부분 `RESUBMITTED`로 있어 기존 탐지 SQL에 잘 잡히지 않는다. 문서의 SQL 조건에 `RESUBMITTED`를 더했다.
+  - 완료된 행이 `FAILED`로 되돌아가면 `findFailedPublications`에 다시 잡힌다. 한 번 더 나가고 성공하면 `COMPLETED`가 되며, 그동안 metric의 `failed`에는 보이지 않는다.
+- **같은 설명이 남아 있던 곳.** 브리프에 없던 세 곳을 더 고쳤다. `EventPublicationResubmitterIntegrationTest`의 주석, domain-model §4.7 절차 5번, #70 spec 1단계의 괄호다. 볼트 문서는 keywords의 재전송 API 동작 항목·8.26과 current-state도 고쳤다. keywords 8.18에는 고칠 설명이 없었다.
+- **`git diff origin/main -- src`.** 주석(KDoc, `//`) 줄만 바뀌었다.
+- **`./gradlew compileKotlin compileTestKotlin`.** 통과했다.
+- **`check_pr.py`.** `--base origin/main --worktree`와 `--worktree` 없는 실행이 모두 PASS다.
