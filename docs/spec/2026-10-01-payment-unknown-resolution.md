@@ -121,7 +121,7 @@ fun resolveUnknown() = Lock.executeWithLockNoTx(LOCK_KEY) {
 `t_payment_attempt`에 `create index concurrently ix_payment_attempt_unknown_authorization on t_payment_attempt (id) where kind = 'AUTHORIZATION' and status = 'UNKNOWN'`를 더한다(`V013`, 이 문장만 담은 마이그레이션).
 
 질문별 답(도메인 모델 §4.7):
-1. 새 값이 아니라 기존 컬럼의 인덱스다. 대체 수단이 없다. 기존 인덱스(`ix_payment_attempt_order`, 두 partial unique)는 `(order_id, ...)`로 시작하거나 `UNKNOWN`만 모으지 않아서 "모든 주문의 `UNKNOWN`"을 좁히지 못한다. 인덱스가 없으면 pod마다 매분 지우지 않는 결제 원장 전체를 순차 스캔한다.
+1. 새 값이 아니라 기존 컬럼의 인덱스다. 대체 수단이 없다. 기존 인덱스(`ix_payment_attempt_order`, 두 partial unique)는 `(order_id, ...)`로 시작하거나 `UNKNOWN`만 모으지 않아서 "모든 주문의 `UNKNOWN`"을 좁히지 못한다. 인덱스가 없으면 pod마다 매분 지우지 않는 결제 원장 전체를 순차 스캔하거나 PK 인덱스로 전부 훑는다(`UNKNOWN`이 100건 미만인 평상시에는 어느 쪽이든 끝까지 읽는다).
 2. 지금 코드가 읽는다. 주기 작업의 대상 조회다.
 3. 인덱스라 기존 행은 빌드가 채운다.
 4. 불변식의 방어선이 아니다. 성능 인덱스다. 확정의 정합성은 행 잠금과 `UNKNOWN` 재확인이 지킨다(질문 6).
@@ -130,7 +130,7 @@ fun resolveUnknown() = Lock.executeWithLockNoTx(LOCK_KEY) {
 7. `CREATE INDEX CONCURRENTLY`라 `SHARE UPDATE EXCLUSIVE`를 잡고 빌드 동안 읽기와 쓰기를 막지 않는다. 트랜잭션 밖에서 돌아야 해서 이 문장만 담은 마이그레이션으로 둔다. `spring.flyway.postgresql.transactional-lock=false`는 V009 때 이미 설정했다. 실패하면 INVALID 인덱스와 `flyway_schema_history`의 `success = false` 행이 남는다. 다시 배포하기 전에 `drop index concurrently if exists ix_payment_attempt_unknown_authorization`로 인덱스를 지우고 실패 행을 정리한다(`flyway repair` 또는 행 삭제). `if not exists`는 쓰지 않는다. 진행 중인 쓰기 트랜잭션을 기다리므로 이전 버전 pod의 긴 트랜잭션이 기동을 늦출 수 있고, 상한은 트랜잭션 상한 30초다. 제약이 아니라 위반 행 검사는 없다. partial 술어가 조회에 쓰이려면 플래너가 조회 조건에서 그 술어를 증명해야 한다. 바인드 파라미터의 generic plan은 그것을 증명하지 못한다(event-publication-resubmit 실측). 그래서 대상 조회는 `kind`·`status`를 리터럴로 렌더하고, 실행 계획에서 이 인덱스를 쓰는지 확인해 결과 절에 남긴다.
 8. 인덱스 추가라 이전 버전의 기동과 쓰기에 영향이 없다.
 9. payload나 캐시 DTO에 실리지 않는다.
-- 대조 기록: 미작성(구현자가 아닌 리뷰어가 PR 제출 전에 남긴다)
+- 대조 기록: code-reviewer 에이전트(읽기 전용), 2026-10-06, 불일치 없음(V013·V006·V008·V009·application.yaml·PaymentAttemptEntity·PaymentAttemptPersistenceAdapter·JdslQueryExecutor·PaymentManagement·UnknownPaymentResolver·PaymentAttempt·SchemaMigrationTest와 대조, 실행 계획은 결과 절 실측으로 확인하고 재실행하지 않음). 참고 ① 질문 1이 PK 인덱스 전체 순회를 빠뜨려 문구를 보탰다 ② 리터럴 렌더를 고정하는 회귀 테스트는 없고 어댑터 KDoc이 이유를 적는다
 
 ## 검증
 - 정상: 끝자리 2(조회 승인)는 주문 `PAID`, 끝자리 3(조회 거절)은 재결제로 `PAID`까지 간다.
@@ -154,14 +154,19 @@ fun resolveUnknown() = Lock.executeWithLockNoTx(LOCK_KEY) {
 
 | 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
 |---|---|---|---|
-| Fake가 끝자리 2·3·4를 결과 불명으로 두고 조회로 승인·거절·불명을 답한다 | 미실행 | 미실행 | 미실행 |
-| 결과 불명 시도만 조회 결과로 확정한다 | 미실행 | 미실행 | 미실행 |
-| `resolveUnknown`이 조회를 트랜잭션 밖에서 하고 확정과 발행을 한 커밋으로 남긴다 | 미실행 | 미실행 | 미실행 |
-| 조회로도 불명이면 아무것도 바꾸지 않는다 | 미실행 | 미실행 | 미실행 |
-| 같은 시도의 동시 확정은 한 번만 적용된다 | 미실행 | 미실행 | 미실행 |
-| 주기 작업이 결과 불명 승인 시도를 오래된 순으로 처리하고 한 건 실패에 멈추지 않는다 | 미실행 | 미실행 | 미실행 |
-| 결과 불명 결제가 조회 승인으로 주문 `PAID`까지 간다 | 미실행 | 미실행 | 미실행 |
-| 조회로 거절이 확정된 시도를 재결제해 주문 `PAID`까지 간다 | 미실행 | 미실행 | 미실행 |
+| Fake가 끝자리 2·3·4를 결과 불명으로 두고 조회로 승인·거절·불명을 답한다 / `FakePaymentGatewayTest` 5건(`끝자리가 3이나 4여도 승인 요청은 결과를 모른다`, `끝자리가 2인 요청을 조회하면 승인이다` 등) | `./gradlew test --tests 'com.resilientpos.payment.internal.adapter.gateway.FakePaymentGatewayTest'` 9건 중 4건 실패. 최소 선언(`query`가 `authorize`와 같은 답)이라 4503 승인 요청이 `Approved`, 끝자리 2 조회가 `Unknown`, 3·4 조회가 `Approved`였다 | 같은 명령 9건 통과 | `./gradlew test --tests 'com.resilientpos.payment.*' --tests 'com.resilientpos.order.*'` 190건 통과. 끝자리 3·4로 승인을 기대하던 픽스처는 없었다 |
+| 결과 불명 시도만 조회 결과로 확정한다 / `PaymentAttemptConfirmationTest` 4건 | `./gradlew test --tests 'com.resilientpos.payment.internal.domain.*'` 26건 중 4건 실패. 최소 선언이 `requireRequested` 가드를 써서 UNKNOWN 확정 3건이 `DomainException`, REQUESTED 거절 1건은 예외가 나지 않았다 | 같은 명령 26건 통과. 그 사이 테스트의 기대값 생성 오류(다른 픽스처로 기대 이벤트를 만듦) 2건을 고쳤고 구현은 그대로였다 | `./gradlew test --tests 'com.resilientpos.payment.*'` 79건 통과 |
+| `resolveUnknown`이 조회를 트랜잭션 밖에서 하고 확정과 발행을 한 커밋으로 남긴다 / `PaymentManagementTest`의 확정 단위 5건, `PaymentUnknownResolutionIntegrationTest`의 `조회가 승인이면 시도가 APPROVED가 되고 provider 참조가 남고 승인 발행 기록이 생긴다`·`조회가 거절이면 시도가 DECLINED가 되고 거절 발행 기록이 생긴다`·`결말이 난 시도는 provider를 조회하지 않고 지금 상태를 돌려준다`·`provider를 조회하는 동안 DB 자원을 쥐지 않는다` | `./gradlew test --tests 'com.resilientpos.payment.*'` 90건 중 10건 실패. 최소 선언이 늘 `UNKNOWN`을 돌려줘 확정·provider 미조회·`PAYMENT_ATTEMPT_NOT_FOUND`·조회 횟수 단언이 어긋났다 | 같은 명령 통과 | `./gradlew test --tests 'com.resilientpos.payment.*' --tests 'com.resilientpos.order.*'` 213건 통과 |
+| 조회로도 불명이면 아무것도 바꾸지 않는다 / `조회로도 불명이면 행도 발행 기록도 바뀌지 않는다` | 최소 선언에서도 통과했다. 아무것도 쓰지 않는 동작이라 characterization이고 RED 증거가 아니다. 단위 테스트 `조회로도 불명이면 아무것도 저장하지도 발행하지도 않고 UNKNOWN을 돌려준다`는 조회 횟수 단언으로 실패했다 | 통과 | 위와 같다 |
+| 같은 시도의 동시 확정은 한 번만 적용된다 / `PaymentUnknownResolutionConcurrencyIntegrationTest`의 `같은 시도의 확정이 겹쳐도 한 번만 적용되고 이벤트는 하나다` | 위 실행에서 실패. 두 조회가 모두 도착해야 답하는 gateway인데 최소 선언이 조회하지 않았다 | 통과 | 위와 같다 |
+| 주기 작업이 결과 불명 승인 시도를 오래된 순으로 처리하고 한 건 실패에 멈추지 않는다 / `UnknownPaymentResolverIntegrationTest` 5건, `SchemaMigrationTest`의 `결제 시도 UNKNOWN 인덱스가 유효하게 만들어진다` | `./gradlew test --tests 'com.resilientpos.payment.internal.application.UnknownPaymentResolver*'` 5건 모두 실패. 빈 작업이라 `expected APPROVED but was UNKNOWN`, 조회 순서가 빈 목록, 락을 기다리지 않음, 스케줄러에 작업 없음 | 같은 명령과 `SchemaMigrationTest` 함께 11건 통과 | payment·order·platform·`SchemaMigrationTest`·`ModuleStructureTest`·`TransactionDeclarationTest` 302건 통과 |
+| 결과 불명 결제가 조회 승인으로 주문 `PAID`까지 간다 / `PaymentUnknownToOrderIntegrationTest`의 `조회로 승인된 결과 불명 시도는 주문을 PAID로 만든다`, `조회로도 불명인 시도는 UNKNOWN으로 남고 주문은 CHECKOUT_REQUESTED에 머문다` | 앞 동작들로 경로가 이미 있어 처음부터 통과했다(characterization). 작업 호출을 잠시 빼면 주문 `PAID` 대기가 `ConditionTimeoutException`으로 실패하는 것을 확인하고 되돌렸다 | `./gradlew test --tests 'com.resilientpos.payment.internal.application.PaymentUnknownToOrder*'` 3건 통과 | `./gradlew test` 전체 453건 통과 |
+| 조회로 거절이 확정된 시도를 재결제해 주문 `PAID`까지 간다 / `조회로 거절된 시도를 재결제하면 새 시도가 승인되어 주문이 PAID가 된다` | 위와 같이 characterization | 위와 같다 | 위와 같다 |
 
 ## 결과
-개발 전 작성. 개발 후 실행 결과와 변경 이유를 추가한다.
+- 인수 조건 1~10을 위 테스트로 확인했다. 전체 `./gradlew test`는 453건 통과다.
+- 대상 조회는 Hibernate가 `where (pae1_0.kind='AUTHORIZATION') and (pae1_0.status='UNKNOWN') and pae1_0.deleted_at is null order by pae1_0.id fetch first ? rows only`로 렌더한다(`enumLiteral`). PostgreSQL 18 컨테이너에 V001~V013을 적용하고 승인 시도 20만 건과 `UNKNOWN` 50건을 넣어 `analyze`했다. 그 뒤 이 문장을 prepare해 `plan_cache_mode = force_generic_plan`으로 실행 계획을 보면 `Index Scan using ix_payment_attempt_unknown_authorization`이다. `deleted_at is null`은 인덱스 술어에 없어 Filter로 남는다.
+- 앞쪽 N건 조회가 `JdslQueryExecutor`에 없어 `findAll(limit) { }`을 더했다. 범위 조정은 spec에 먼저 기록했다.
+- 거절(`PaymentEvent.Declined`)은 외부화되지 않고 받는 리스너도 없어 `event_publication`에 행이 생기지 않는다. 통합 테스트는 거절 발행을 테스트용 `@EventListener`로 관측한다.
+- Kafka·Modulith: 외부화 설정·토픽·consumer group·재시도·DLT는 바꾸지 않았다. 새 발행 지점(`resolveUnknown`)은 기존 Facade와 같이 업무 상태 저장과 같은 트랜잭션에서 발행하므로, [Spring Modulith 이벤트 문서](https://docs.spring.io/spring-modulith/reference/events.html)의 "발행 기록은 발행한 트랜잭션과 함께 커밋되고 커밋 뒤 외부화된다"는 계약을 그대로 따른다(domain-model §4.3). 외부 전달을 하지 않기로 한 결정은 볼트 `modulith-kafka-keywords` 8.28에 적었다.
+- 구현 중 main에 #81·#82가 들어와 rebase했고 인덱스 마이그레이션을 `V013`으로 옮겼다(분할 계획).
