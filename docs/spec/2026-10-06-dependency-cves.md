@@ -9,6 +9,13 @@ Spring Boot 4.1.1 BOM이 정하는 전이 의존성 셋에 수정 버전이 나�
 
 처음에는 `spring-modulith-bom` 2.1.1의 CVE로 알려졌다. 하지만 GitHub advisory DB·OSV·spring.io/security 어디에도 Modulith 2.1.1의 CVE는 없다. Modulith BOM은 다른 BOM을 import하지 않고 자기 아티팩트만 관리하므로 이 셋의 버전을 정하지 않는다. `spring-data-jpa`는 이미 4.1.1이라 CVE-2026-47834에 해당하지 않는다.
 
+업스트림 근거(2026-10-06 확인):
+- **Spring Boot.** main(4.2.0-SNAPSHOT)은 Tomcat 11.0.26(spring-projects/spring-boot#51819)과 Jackson 3.1.6(#51679)을 4.2.0-M2에 넣었다. 4.2.0-M2로 가도 Jackson은 고쳐지지 않는다. 4.1.x 브랜치의 `gradle.properties`는 아직 `tomcatVersion=11.0.24`·`jacksonVersion=3.1.5`이고 Kafka는 4.2.1이다. 4.1.2 마일스톤은 열려 있고(닫힌 이슈 114, 남은 이슈 0, 예정일 없음) 버전 올림 이슈는 없다. 메인테이너(wilkinsona)는 #51476에서 버전 올림 이슈를 받지 않는다고 했다. 릴리스 직전에 도구가 최신 maintenance 버전을 가져가므로 그때까지는 Boot의 Tomcat 버전을 덮어쓰라는 것이다. Jackson 3.1.7로 올리는 커뮤니티 PR #51929도 같은 이유로 `status: invalid`로 닫혔다.
+- **Tomcat 노출 범위.** 같은 #51476에서 이 Tomcat CVE는 Servlet security constraint를 쓰는 애플리케이션에만 해당한다고 했다. 이 저장소는 Servlet 인증·security constraint를 쓰지 않는다(단말 인증은 `HandlerInterceptor`, [terminal-authentication](2026-10-05-terminal-authentication.md) 결정 1). 실제 노출 가능성은 낮지만 등급이 CRITICAL이라 올린다.
+- **Jackson.** FasterXML/jackson-databind#6203(CVE-2026-91776)이 닫혔고 3.1.7이 Maven Central에 있다.
+- **Kafka·lz4-java.** lz4-java #100·#127(XXHash JNI)이 2026-09-25 닫혔다. apache/kafka는 KAFKA-20842(1.11.1)·KAFKA-20936(1.11.2)·KAFKA-21174(1.11.4)를 반영했고 1.12.0(#23637)은 열려 있다. `kafka-clients` 4.2.2의 `lz4-java` 1.11.2는 CVE-2026-59949(1.11.1에서 수정)를 덮는다.
+- **Spring Modulith.** CVE 이슈가 없다. 2.1.2 마일스톤(남은 것은 "Release 2.1.2"뿐)은 버그 수정만 담는다. 그중 #1918(상태별 staleness 기간 0을 즉시 만료로 취급)은 이 저장소에 해당하지 않는다. staleness monitor의 세 기간을 모두 0(기본값)으로 두어 monitor가 등록되지 않기 때문이다([Modulith·Kafka 키워드](../wiki/modulith-kafka-keywords.md) Staleness monitor). Modulith는 올리지 않는다.
+
 ## 범위
 **결정 1: Boot BOM의 버전 속성을 재정의한다.**
 - 문제: Boot 4.1.1 BOM이 고정한 전이 의존성 버전이 취약하다.
@@ -17,7 +24,8 @@ Spring Boot 4.1.1 BOM이 정하는 전이 의존성 셋에 수정 버전이 나�
   - `tomcat.version` = 11.0.26 (11.x 최신. 11.0.25 이상이면 수정 포함)
   - `jackson-bom.version` = 3.1.7 (3.1.x 안에서 수정 포함 최소 버전. 3.2.x는 마이너 변경이라 Boot가 고르게 둔다)
   - `kafka.version` = 4.2.2 (4.2.x 안에서 `lz4-java` 1.11.2를 쓰는 버전. 4.3.x는 마이너 변경이라 같은 이유로 두지 않는다)
-- 각 줄에 이유(CVE)와 "Boot 4.1.2 이상으로 올릴 때 지운다"는 주석을 단다. 의존성 선언에 버전을 직접 박거나 `resolutionStrategy`를 쓰지 않는다. 속성은 같은 BOM이 관리하는 아티팩트(`tomcat-embed-*`, `jackson-*` 3.x 전체, `kafka-*`)를 한꺼번에 맞춘다.
+- 각 줄에 이유(CVE)를 주석으로 단다. 묶음 주석에는 덮어쓰는 근거(#51476)와 다시 볼 조건을 적는다.
+- **다시 볼 조건: 세 줄은 Boot 4.1.2 이상으로 올리는 PR에서 지운다.** 그 PR은 지우기 전에 새 BOM의 `tomcat.version`·`jackson-bom.version`·`kafka.version`이 이 값 이상인지 확인한다. 낮으면 그 줄만 남긴다. 의존성 선언에 버전을 직접 박거나 `resolutionStrategy`를 쓰지 않는다. 속성은 같은 BOM이 관리하는 아티팩트(`tomcat-embed-*`, `jackson-*` 3.x 전체, `kafka-*`)를 한꺼번에 맞춘다.
 - `lz4-java`는 따로 올리지 않는다. `kafka-clients` 4.2.2가 1.11.2를 끌어오는지를 dependencyInsight로 확인한다.
 
 **결정 2: Kafka 클라이언트 동작 대조.** `kafka-clients`가 패치 버전만 바뀌지만 재시도·DLT·재전송 경로가 기대는 클라이언트 기본값을 기동 로그로 대조한다. 바꾸기 전 4.2.1 상태에서 Kafka 통합 테스트(`KafkaRetryIntegrationTest`·`KafkaEventDeliveryIntegrationTest`·`EventPublicationResubmitterIntegrationTest`)의 `ProducerConfig`·`ConsumerConfig`·`AdminClientConfig values`를 뽑아 두었고(키 311개, 식별자·주소 키 제외), 4.2.2에서 같은 방식으로 뽑아 비교한다.
@@ -56,10 +64,16 @@ Spring Boot 4.1.1 BOM이 정하는 전이 의존성 셋에 수정 버전이 나�
 - 두 문서는 볼트 링크라 이 PR의 diff에는 나오지 않는다.
 
 ## 분할 계획
-개발 컨텍스트는 "Boot 4.1.1 BOM의 취약한 전이 의존성 올림" 하나다. 2026-10-06 origin/main 42a27ab 기준으로 열린 PR은 #84(feature/payment-outcome-reconciliation) 하나이고 `build.gradle.kts`를 바꾸지 않는다. 겹칠 수 있는 `application.yaml`은 이 PR이 건드리지 않는다. Boot 4.1.2로 올리면서 재정의를 지우는 일은 배포 뒤의 별도 컨텍스트다.
+개발 컨텍스트는 "Boot 4.1.1 BOM의 취약한 전이 의존성 올림" 하나다. 작업은 origin/main 42a27ab에서 시작했다. 그때 열린 PR은 #84(feature/payment-outcome-reconciliation) 하나였고 `build.gradle.kts`를 바꾸지 않았다. 겹칠 수 있는 `application.yaml`은 이 PR이 건드리지 않는다. #84가 52f507a로 머지되어 그 위로 rebase했고, 지금 열린 PR 가운데 이 PR과 경로가 겹치는 것은 없다. Boot 4.1.2로 올리면서 재정의를 지우는 일은 배포 뒤의 별도 컨텍스트다.
 
 ## TDD 검증 기록
 적용하지 않는다. 업무 동작을 바꾸지 않는 빌드 설정 변경이라 새 테스트가 없고, 기존 `./gradlew test` 전체와 의존성 조회로 검증한다.
 
 ## 결과
-개발 전 작성. 개발 후 실행 결과를 추가한다.
+`build.gradle.kts`에 BOM 버전 속성 셋을 덮어썼다. 2026-10-06 실행 결과는 아래와 같다.
+
+- **dependencyInsight(runtimeClasspath).** `tomcat-embed-core`·`tomcat-embed-websocket`은 11.0.24에서 11.0.26, `jackson-core`·`jackson-databind`는 3.1.5에서 3.1.7, `kafka-clients`는 4.2.1에서 4.2.2가 됐다. `lz4-java`(`at.yawk.lz4`)는 따로 선언하지 않았는데 1.10.1에서 1.11.2로 따라 올라갔다.
+- **OSV querybatch.** `./gradlew -q dependencies --configuration runtimeClasspath`에서 해석된 좌표 144개를 ecosystem Maven으로 조회했다. 바꾼 뒤에는 취약 좌표가 0개다(rebase 뒤 재조회도 0개). 조회 방식이 놓치지 않는지 보려고 바꾸기 전 빌드 파일로도 같은 조회를 돌렸다. 좌표 4개에서 GHSA 11건이 나왔다. `tomcat-embed-core` 3건, `jackson-databind` 5건, `jackson-core` 2건, `lz4-java` 1건이고 목적 절의 CVE 11건과 수가 같다.
+- **`./gradlew test`.** origin/main 52f507a(#84 머지) 위로 rebase한 뒤 459개가 모두 통과했다(실패·오류·건너뜀 0). rebase 전 42a27ab 기준에서도 424개가 모두 통과했다. Kafka 통합 테스트도 4.2.2에서 통과했다. `KafkaRetryIntegrationTest`(재시도·DLT) 7개, `KafkaEventDeliveryIntegrationTest`(externalization·전달) 6개, `EventPublicationResubmitterIntegrationTest`(재전송) 7개다. 기동 로그의 `Kafka version`은 4.2.2다.
+- **클라이언트 설정 값 대조.** 세 테스트의 기동 로그에서 `ProducerConfig`·`ConsumerConfig`·`AdminClientConfig values`를 뽑았다(키 311개, `client.id`·`group.id`·`bootstrap.servers`·`group.instance.id` 제외). 4.2.1과 4.2.2의 값이 모두 같고, rebase 뒤에 다시 뽑아도 같다. 재시도·DLT·재전송이 기대는 `acks=-1`, `enable.idempotence=true`, `delivery.timeout.ms=120000`, `max.block.ms=60000`도 그대로라 동작 영향이 없다.
+- **`check_pr.py`.** `--base origin/main`으로 `--worktree` 없이 실행해 PASS다. 하네스 테스트(`python3 -m unittest discover -s scripts -p 'test_*.py'`)도 통과한다.
