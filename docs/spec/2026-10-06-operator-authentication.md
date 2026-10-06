@@ -134,7 +134,7 @@ alter table t_terminal add constraint ux_terminal_store_code unique (store_id, t
 - 대조 기록: 미작성. PR 제출 전에 구현자가 아닌 리뷰어가 채운다.
 
 ## 검증
-- `./gradlew test`. 통합 테스트는 Testcontainers의 PostgreSQL·Redis·Kafka를 쓴다. 운영자 JWT는 테스트 리소스의 RSA 키 쌍으로 서명하고, 테스트 설정은 `public-key-location`과 `issuer-uri`·`audiences`를 함께 두어 운영과 같은 검증기(issuer·audience·만료)를 탄다.
+- `./gradlew test`. 통합 테스트는 Testcontainers의 PostgreSQL·Redis·Kafka를 쓴다. 운영자 JWT는 테스트 리소스의 RSA 키 쌍으로 서명하고, 테스트는 운영과 같은 `issuer-uri`·`audiences` 설정을 그대로 쓰고 서명 키만 `jwk-set-uri`(테스트 코드의 로컬 JWKS 서버)로 받아 운영과 같은 검증기(issuer·audience·만료)를 탄다. `public-key-location`은 `issuer-uri`가 함께 있으면 Boot가 무시한다(`KeyValueCondition`).
 - 정상: 운영자 JWT로 등록한 단말의 토큰으로 주문을 만든다. 회전 뒤 새 토큰만 통과한다. 비활성화 뒤 401이다. 목록이 코드 순이다.
 - 실패: 토큰 없음·서명 다름·만료·`iss`·`aud` 불일치는 401, 역할 없음은 403, 코드 중복 409, 형식 오류 400, 모르는 단말 404, 비활성 단말 회전 409.
 - 수동: `docker compose -f docker/docker-compose.yaml up -d keycloak`으로 realm을 띄워 토큰을 받고 `OPERATOR_ISSUER_URI`로 앱을 띄워 등록 API를 한 번 부른다. 결과는 결과 절에 남긴다.
@@ -154,7 +154,7 @@ alter table t_terminal add constraint ux_terminal_store_code unique (store_id, t
 | 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
 |---|---|---|---|
 | 인수 4·9, `TerminalCode` 형식과 V014 채우기, 코드 중복 409 (`TerminalCodeTest`, `TerminalManagementIntegrationTest`의 같은 매장 중복·다른 매장 허용, `SchemaMigrationTest`의 V014 채우기·baseline) | `./gradlew test --tests 'com.resilientpos.terminal.*' --tests 'com.resilientpos.SchemaMigrationTest'`. 형식 검사 없는 `TerminalCode`와 미매핑 상태에서 5건 실패: `TerminalCodeTest` 거절 사례 assertion 실패, 중복 등록이 예외 없이 성공해 `assertFailsWith` 실패, baseline 버전 목록에 014 없음, V014 채우기는 V013 적용·행 삽입 뒤 `No migration with a target version 014`(V014 파일 없음), 다른 매장 허용은 `terminal_code` 컬럼 없음 SQL 오류 | 같은 명령 통과(BUILD SUCCESSFUL). V014는 spec SQL 그대로, `TerminalCode` 정규식 검사, adapter가 persist 직후 flush해 `ConstraintViolationException`의 제약명 `ux_terminal_store_code`만 `TERMINAL_CODE_DUPLICATED`(CONFLICT)로 변환 | `./gradlew test --tests 'com.resilientpos.terminal.*' --tests 'com.resilientpos.SchemaMigrationTest' --tests 'com.resilientpos.ModuleStructureTest'` 통과, `./gradlew test` 전체 통과 |
-| 인수 1·2, 운영자 체인의 401·403과 다른 경로 무영향 | 미실행 | 미실행 | 미실행 |
+| 인수 1·2, 운영자 체인의 401·403과 다른 경로 무영향 (`OperatorAuthenticationIntegrationTest` 10건: 토큰 없음·다른 키·만료·iss·aud 401, 역할 없음 403, OPERATOR 404 envelope, 단말 토큰 admin 401, 운영자 JWT v1 401, actuator health 200) | `./gradlew test --tests '*OperatorAuthenticationIntegrationTest'`. 의존성과 `ErrorType.ACCESS_DENIED` 선언만 있고 체인·설정이 없는 상태(Boot 기본 체인)에서 10건 중 8건 assertion 실패: 401 사례는 `WWW-Authenticate` 헤더·envelope 불일치, 403 사례는 ACCESS_DENIED envelope 불일치, actuator health는 200이 아님. 통과한 2건(OPERATOR 404, 운영자 JWT의 v1 401)은 기존 동작 characterization | 같은 명령 통과(10건). 체인 `OperatorSecurityFilterChain`, 401·403 advice 핸들러, application.yaml의 resourceserver 설정 추가. 첫 시도에서 yaml 누락으로 3건이 403이어서 설정을 넣은 뒤 통과 | `./gradlew test --tests ApiAdviceTest --tests ErrorLogRequestContextTest --tests '*ControllerTest' --tests '*InterceptorTest'`에서 슬라이스가 깨졌고(Boot 기본 체인이 v1을 막음) 체인을 `SecurityFilterChain` 타입 컴포넌트로 바꿔 통과. `./gradlew test` 전체 491건 통과 |
 | 인수 3·5·6·8·10, 등록·회전·비활성화 API와 감사 로그 | 미실행 | 미실행 | 미실행 |
 | 인수 7, 매장별 목록 조회 | 미실행 | 미실행 | 미실행 |
 

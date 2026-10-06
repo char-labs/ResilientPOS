@@ -8,6 +8,7 @@ import org.springframework.http.HttpHeaders
 import org.springframework.http.HttpStatus
 import org.springframework.http.HttpStatusCode
 import org.springframework.http.ResponseEntity
+import org.springframework.security.access.AccessDeniedException
 import org.springframework.web.bind.annotation.ExceptionHandler
 import org.springframework.web.bind.annotation.RestControllerAdvice
 import org.springframework.web.context.request.ServletWebRequest
@@ -51,6 +52,12 @@ class ApiControllerAdvice : ResponseEntityExceptionHandler() {
         ResponseEntity.status(ErrorType.UNAUTHENTICATED.status)
             .header(HttpHeaders.WWW_AUTHENTICATE, "Bearer")
             .body(failBody(ErrorType.UNAUTHENTICATED, e, request.describe()))
+
+    /** 유효한 토큰이지만 역할이 없다. 예외 메시지는 로그에만 남기고 응답은 고정 문구다. */
+    @ExceptionHandler(AccessDeniedException::class)
+    fun handleAccessDenied(e: AccessDeniedException, request: HttpServletRequest): ResponseEntity<ApiResponse<Nothing>> =
+        ResponseEntity.status(ErrorType.ACCESS_DENIED.status)
+            .body(failBody(ErrorType.ACCESS_DENIED, e, request.describe()))
 
     /**
      * 같은 대상에 요청이 겹쳐서 난 잠금 대기 초과와 조회 시점의 버전 충돌. 서버 오류로 집계하지 않는다.

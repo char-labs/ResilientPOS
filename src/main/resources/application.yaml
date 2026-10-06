@@ -33,6 +33,17 @@ spring:
       # 잠금은 Redis가 느리거나 없으면 잠금 없이 진행한다(fail-open). 기본 60초를 기다리면 그동안 결제와 주문 생성이 멈춘다.
       timeout: 1s
       connect-timeout: 1s
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          # 운영자(/admin 아래) JWT를 검증하는 IdP의 issuer. 서명 키는 첫 요청 때 discovery로 받으므로 IdP가 없어도 앱은 뜬다.
+          # 기본값은 로컬 Keycloak(docker compose)이다. 운영에서 빠뜨리면 기본값이 가리키는 곳에 닿지 못해 모든 운영자 요청이 실패한다(fail-closed).
+          issuer-uri: ${OPERATOR_ISSUER_URI:http://localhost:8180/realms/resilientpos}
+          audiences: resilientpos-admin
+          # roles claim의 값에 ROLE_을 붙여 hasRole("OPERATOR")로 읽는다.
+          authorities-claim-name: roles
+          authority-prefix: ROLE_
   web:
     resources:
       # 정적 파일을 서빙하지 않는다. `static/terminal`의 시연 화면은 인증 없이 열리고 sync endpoint를 부르므로

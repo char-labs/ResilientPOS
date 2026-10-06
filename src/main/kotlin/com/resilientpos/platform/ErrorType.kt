@@ -13,5 +13,6 @@ enum class ErrorType(val status: HttpStatus, val message: String, val level: Lev
     NOT_FOUND(HttpStatus.NOT_FOUND, "존재하지 않는 요청입니다.", Level.INFO),
     METHOD_NOT_ALLOWED(HttpStatus.METHOD_NOT_ALLOWED, "지원하지 않는 요청 방식입니다.", Level.WARN),
     UNAUTHENTICATED(HttpStatus.UNAUTHORIZED, "인증이 필요합니다.", Level.WARN),
+    ACCESS_DENIED(HttpStatus.FORBIDDEN, "접근 권한이 없습니다.", Level.WARN),
     CONCURRENT_REQUEST(HttpStatus.CONFLICT, "동시 처리 충돌로 요청을 완료하지 못했습니다.", Level.WARN),
 }

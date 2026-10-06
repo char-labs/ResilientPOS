@@ -1,6 +1,6 @@
 # 로컬 개발 전용. 테스트는 이 파일을 쓰지 않고 Testcontainers로 PostgreSQL·Redis·Kafka를 띄운다.
 # 저장소 루트에서 실행한다. 상대 경로는 이 파일의 디렉터리(docker/) 기준이다.
-#   docker compose -f docker/docker-compose.yaml up -d                                  PostgreSQL·Redis·Kafka만 (앱은 IDE·bootRun으로)
+#   docker compose -f docker/docker-compose.yaml up -d                                  PostgreSQL·Redis·Kafka·Keycloak (앱은 IDE·bootRun으로)
 #   docker compose -f docker/docker-compose.yaml --profile app up -d --build            + 앱 컨테이너
 #   docker compose -f docker/docker-compose.yaml --profile app --profile obs up -d      + Alloy·Grafana LGTM (Grafana: localhost:3000)
 # Alloy가 이 프로젝트 이름으로 앱 컨테이너를 고르므로 이름을 고정한다.
@@ -66,6 +66,22 @@ services:
       interval: 5s
       timeout: 10s
       retries: 20
+
+  # 운영자 JWT를 발급하는 로컬 IdP. 운영 IdP는 배포 환경이 정하고 앱은 OPERATOR_ISSUER_URI만 받는다.
+  # realm·사용자·역할은 keycloak/resilientpos-realm.json이 정본이고 볼륨이 없어 재기동마다 그 파일로 돌아간다.
+  # 토큰의 iss가 localhost:8180이라 IDE·bootRun으로 띄운 앱만 검증할 수 있다. app 프로필의 컨테이너는 이 주소로 IdP에 닿지 못한다.
+  #   curl -s -d grant_type=password -d client_id=resilientpos-admin-cli -d username=operator -d password=operator \
+  #     http://localhost:8180/realms/resilientpos/protocol/openid-connect/token
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.4
+    command: ["start-dev", "--import-realm", "--http-port=8180"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
+    volumes:
+      - ./keycloak/resilientpos-realm.json:/opt/keycloak/data/import/resilientpos-realm.json:ro
+    ports:
+      - "8180:8180"
 
   app:
     profiles: [app]
