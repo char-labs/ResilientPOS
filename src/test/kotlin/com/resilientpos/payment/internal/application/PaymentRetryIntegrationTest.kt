@@ -52,6 +52,8 @@ class PaymentRetryIntegrationTest(
             } else {
                 AuthorizationOutcome.Approved("APPROVED-${request.paymentId.value}")
             }
+
+        override fun query(request: AuthorizationRequest): AuthorizationOutcome = AuthorizationOutcome.Unknown
     }
 
     @TestConfiguration

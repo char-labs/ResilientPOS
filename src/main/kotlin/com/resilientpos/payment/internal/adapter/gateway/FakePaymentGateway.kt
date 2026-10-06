@@ -9,7 +9,7 @@ import org.springframework.stereotype.Component
 /**
  * 실제 PG가 붙기 전까지 쓰는 구현. 네트워크를 타지 않고 금액만 보고 답한다.
  *
- * 금액으로 결말을 가르는 이유는 통합 테스트가 설정도 스텁 교체도 없이 세 경로를 다 밟게 하려는 것이다.
+ * 금액으로 결말을 가르는 이유는 통합 테스트가 설정도 스텁 교체도 없이 다섯 경로(승인·거절·조회로 승인·조회로 거절·계속 불명)를 다 밟게 하려는 것이다.
  * 같은 입력이 항상 같은 결과라 재현된다.
  *
  * 보는 값은 **최소 단위의 끝자리**다. `BigDecimal.unscaledValue()`가 그것을 바로 준다 —
@@ -18,19 +18,33 @@ import org.springframework.stereotype.Component
 @Component
 class FakePaymentGateway : PaymentGateway {
 
-    override fun authorize(request: AuthorizationRequest): AuthorizationOutcome {
-        val lastMinorDigit = request.amount.amount.unscaledValue().mod(BigInteger.TEN).toInt()
-        return when (lastMinorDigit) {
-            DECLINE_DIGIT -> AuthorizationOutcome.Declined("$REFERENCE_PREFIX${request.paymentId.value}")
+    override fun authorize(request: AuthorizationRequest): AuthorizationOutcome =
+        when (lastMinorDigit(request)) {
+            DECLINE_DIGIT -> AuthorizationOutcome.Declined(reference(request))
             // 결과를 확인하지 못한 상황을 흉내 낸다. 실제로 기다리지는 않는다 — 테스트를 느리게 할 뿐이다.
-            UNKNOWN_DIGIT -> AuthorizationOutcome.Unknown
-            else -> AuthorizationOutcome.Approved("$REFERENCE_PREFIX${request.paymentId.value}")
+            UNKNOWN_THEN_APPROVED_DIGIT, UNKNOWN_THEN_DECLINED_DIGIT, STAYS_UNKNOWN_DIGIT -> AuthorizationOutcome.Unknown
+            else -> AuthorizationOutcome.Approved(reference(request))
         }
-    }
+
+    /** 승인 요청이 결과를 모른 채 끝난 뒤 provider에 다시 묻는 경로다. 끝자리가 갈래를 정하고 나머지는 승인 요청과 같은 답이다. */
+    override fun query(request: AuthorizationRequest): AuthorizationOutcome =
+        when (lastMinorDigit(request)) {
+            UNKNOWN_THEN_APPROVED_DIGIT -> AuthorizationOutcome.Approved(reference(request))
+            UNKNOWN_THEN_DECLINED_DIGIT -> AuthorizationOutcome.Declined(reference(request))
+            STAYS_UNKNOWN_DIGIT -> AuthorizationOutcome.Unknown
+            else -> authorize(request)
+        }
+
+    private fun lastMinorDigit(request: AuthorizationRequest) =
+        request.amount.amount.unscaledValue().mod(BigInteger.TEN).toInt()
+
+    private fun reference(request: AuthorizationRequest) = "$REFERENCE_PREFIX${request.paymentId.value}"
 
     companion object {
         private const val DECLINE_DIGIT = 1
-        private const val UNKNOWN_DIGIT = 2
+        private const val UNKNOWN_THEN_APPROVED_DIGIT = 2
+        private const val UNKNOWN_THEN_DECLINED_DIGIT = 3
+        private const val STAYS_UNKNOWN_DIGIT = 4
 
         /** 이 참조가 실제 provider 원장을 가리키지 않는다는 것이 이름에 드러나야 한다. */
         private const val REFERENCE_PREFIX = "FAKE-"

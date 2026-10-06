@@ -20,11 +20,13 @@ import org.testcontainers.postgresql.PostgreSQLContainer
  */
 // 재시도 간격을 줄인다. 운영값(1초에서 2배씩 5회, 약 31초)이면 실패를 다루는 테스트가 그동안 파티션을 붙잡아 뒤 테스트가 시간을 넘긴다.
 // 발행 기록 재전송·정리는 하루 뒤로 미룬다. 테스트가 DB를 함께 쓰며 넣은 FAILED·완료 행을 작업이 건드리면 결과가 실행 순서에 따라 바뀐다.
+// 결과 불명 결제 확정도 하루 뒤로 미룬다. 작업이 스스로 돌면 끝자리 2인 기본 픽스처 주문이 테스트 도중 PAID가 된다.
 @SpringBootTest(
     properties = [
         "resilientpos.kafka.partitions=1",
         "resilientpos.kafka.retry.initial-interval=PT0.02S",
         "resilientpos.event-publication.resubmit-interval=P1D",
+        "resilientpos.payment.unknown-resolve-interval=P1D",
     ],
 )
 abstract class PostgresIntegrationTest {

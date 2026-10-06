@@ -38,7 +38,7 @@ sealed interface PaymentEvent : DomainEvent {
     }
 
     /**
-     * provider가 시도를 거절했다는 사실. 받을 쪽이 아직 없어 `payment`에 남는다.
+     * provider가 시도를 거절했다는 사실. order는 거절을 받지 않고 주문은 `CHECKOUT_REQUESTED`에 머물러서 `payment`에 남는다.
      * 사유를 담지 않는다 — 소비자가 없어 무엇이 필요한지 정할 근거가 없다.
      */
     data class Declined(
@@ -55,7 +55,7 @@ sealed interface PaymentEvent : DomainEvent {
     /**
      * provider 결과를 확인하지 못했다는 사실. **실패가 아니다.**
      * 새 승인 요청으로 재시도하지 않고 provider 조회와 reconciliation으로 수렴한다.
-     * 그 수렴을 맡을 `reconciliation`이 비어 있어 받을 쪽이 아직 없고, 그래서 `payment`에 남는다.
+     * 수렴은 `payment`의 주기 작업이 provider 조회로 한다. order는 불명을 받지 않고 주문은 `CHECKOUT_REQUESTED`에 머물러서 `payment`에 남는다.
      */
     data class Unknown(
         override val eventId: UUID,

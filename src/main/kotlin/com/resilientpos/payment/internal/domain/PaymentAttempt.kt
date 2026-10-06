@@ -53,19 +53,41 @@ class PaymentAttempt private constructor(
      * `PaymentManagement`가 결말이 난 시도면 provider를 부르지 않고 돌아선다.
      * 그 조기 반환을 건너뛴 호출만 이 예외를 본다.
      */
-    fun approve(providerReference: String, ids: IdentifierGenerator, now: Instant): Transition<PaymentAttempt, PaymentApproved> =
-        approved(providerReference, ids, now)
+    fun approve(providerReference: String, ids: IdentifierGenerator, now: Instant): Transition<PaymentAttempt, PaymentApproved> {
+        requireRequested()
+        return approved(providerReference, ids, now)
+    }
 
     /**
      * 0원 시도는 provider를 부를 것이 없어 바로 승인한다. 0원이 아니면 `null`이다.
      * 여기서 거절하면 전액 할인·프로모션 주문이 결제 단계에서 막힌다. provider를 부르지 않았으므로 참조가 없다.
      */
-    fun approveIfFree(ids: IdentifierGenerator, now: Instant): Transition<PaymentAttempt, PaymentApproved>? =
-        if (amount.isZero) approved(null, ids, now) else null
+    fun approveIfFree(ids: IdentifierGenerator, now: Instant): Transition<PaymentAttempt, PaymentApproved>? {
+        if (!amount.isZero) return null
+        requireRequested()
+        return approved(null, ids, now)
+    }
+
+    /**
+     * 결과를 모르던([markUnknown]) 시도를 provider 조회가 승인으로 가려낸 결말을 적용한다. 결과 상태와 사실은 [approve]와 같다.
+     * `UNKNOWN`은 결과가 아니라 결과가 없다는 기록이라, 확정은 "provider 결과는 한 번만 적용한다"를 깨지 않고 결과를 처음 적용하는 일이다.
+     *
+     * [PaymentAttemptStatus.UNKNOWN]이 아니면 거절한다. 조회 대상은 `UNKNOWN`만 고르고 Facade가 잠근 뒤 다시 확인하므로
+     * `REQUESTED`는 이 경로로 오지 않는다. 이미 승인·거절된 시도에 덮어쓰면 결과가 조용히 바뀐다.
+     */
+    fun confirmApproved(providerReference: String, ids: IdentifierGenerator, now: Instant): Transition<PaymentAttempt, PaymentApproved> {
+        requireUnknown()
+        return approved(providerReference, ids, now)
+    }
+
+    /** 결과를 모르던 시도를 provider 조회가 거절로 가려낸 결말을 적용한다. 결과 상태와 사실은 [decline]과, 거절 조건은 [confirmApproved]와 같다. */
+    fun confirmDeclined(providerReference: String?, ids: IdentifierGenerator, now: Instant): Transition<PaymentAttempt, PaymentEvent.Declined> {
+        requireUnknown()
+        return declined(providerReference, ids, now)
+    }
 
     /** 참조가 없는 승인은 [approveIfFree]만 만든다. provider가 승인했다면 참조가 늘 있다. */
     private fun approved(providerReference: String?, ids: IdentifierGenerator, now: Instant): Transition<PaymentAttempt, PaymentApproved> {
-        requireRequested()
         val approved = PaymentApproved(
             eventId = ids.next(),
             occurredAt = now,
@@ -84,6 +106,10 @@ class PaymentAttempt private constructor(
     /** provider가 거절한 결말을 적용한다. 거절 조건은 [approve]와 같다. */
     fun decline(providerReference: String?, ids: IdentifierGenerator, now: Instant): Transition<PaymentAttempt, PaymentEvent.Declined> {
         requireRequested()
+        return declined(providerReference, ids, now)
+    }
+
+    private fun declined(providerReference: String?, ids: IdentifierGenerator, now: Instant): Transition<PaymentAttempt, PaymentEvent.Declined> {
         val declined = PaymentEvent.Declined(
             eventId = ids.next(),
             occurredAt = now,
@@ -120,6 +146,16 @@ class PaymentAttempt private constructor(
             throw DomainException(
                 PAYMENT_RESULT_ALREADY_APPLIED,
                 "이미 결말이 난 결제 시도입니다",
+                DomainErrorKind.CONFLICT,
+            )
+        }
+    }
+
+    private fun requireUnknown() {
+        if (status != PaymentAttemptStatus.UNKNOWN) {
+            throw DomainException(
+                PAYMENT_RESULT_ALREADY_APPLIED,
+                "결과를 모르는 결제 시도만 확정할 수 있습니다 paymentId=${id.value} status=$status",
                 DomainErrorKind.CONFLICT,
             )
         }

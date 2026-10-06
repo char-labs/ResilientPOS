@@ -1,5 +1,6 @@
 package com.resilientpos.payment
 
+import com.resilientpos.contract.PaymentAttemptKind
 import com.resilientpos.foundation.DomainEvent
 import com.resilientpos.foundation.IdentifierGenerator
 import com.resilientpos.foundation.Transition
@@ -109,6 +110,40 @@ class PaymentManagement(
         return result
     }
 
+    /**
+     * 결과를 모른 채 남은 시도를 provider 조회로 확정한다. 확정은 승인 요청에서 바로 결말이 났을 때와 같은 행 상태와 같은 사실을 낸다.
+     *
+     * 조회는 트랜잭션 밖이다([authorize]와 같다). `NOT_SUPPORTED`로 호출자 트랜잭션이 있으면 멈추고, 처음 읽는 `findById`와
+     * 확정은 `Tx.masterTx`가 따로 열어 반환 전에 커밋한다. 호출자 트랜잭션에 합류하지 않으므로 §4.6 sync intake의 한 커밋 안에서 부르지 않는다.
+     * 그 안에서 부르면 바깥이 롤백돼도 확정 결과는 따로 커밋된다.
+     *
+     * `UNKNOWN`이 아니거나 승인 시도가 아니면 provider를 부르지 않고 지금 상태를 돌려준다. 조회 요청은 승인 요청이라 취소 시도에 쓰면
+     * 취소를 승인 조회로 확정하게 된다. 조회도 불명이면 아무것도 쓰지 않는다. 가짜 성공도 가짜 실패도 만들지 않는다.
+     * 정합성은 행을 잠근 뒤 `UNKNOWN`을 다시 확인하는 데서 나온다. 조회하는 동안 다른 호출이 먼저 확정했으면 덮지 않고 그 결말을 돌려준다.
+     */
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    fun resolveUnknown(command: PaymentCommand.ResolveUnknown): PaymentCommand.ResolveUnknown.Result {
+        val attempt = Tx.masterTx { repository.findById(command.paymentId) } ?: throw PaymentAttempt.notFound()
+        if (attempt.status != PaymentAttemptStatus.UNKNOWN || attempt.kind != PaymentAttemptKind.AUTHORIZATION) {
+            return PaymentCommand.ResolveUnknown.Result(attempt.id, attempt.status)
+        }
+
+        val outcome = gateway.query(AuthorizationRequest(attempt.id, attempt.amount))
+        if (outcome == AuthorizationOutcome.Unknown) {
+            log.warn { "조회로도 결과를 확인하지 못했다 paymentId=${attempt.id.value} orderId=${attempt.orderId}" }
+            return PaymentCommand.ResolveUnknown.Result(attempt.id, attempt.status)
+        }
+
+        val (result, confirmed) = Tx.masterTx { confirm(command.paymentId, outcome) }
+        if (confirmed != null) {
+            log.info {
+                "결과 불명 결제를 확정했다 paymentId=${confirmed.id.value} orderId=${confirmed.orderId} " +
+                    "checkoutNo=${confirmed.checkoutNo} status=${confirmed.status}"
+            }
+        }
+        return result
+    }
+
     /** 잠그고 다시 읽는다. 호출하는 동안 다른 `authorize`가 먼저 적용했으면 덮지 않고 그 결말을 돌려준다. */
     private fun applyOutcome(paymentId: PaymentId, outcome: AuthorizationOutcome): PaymentCommand.Authorize.Result {
         val current = repository.findByIdForUpdate(paymentId) ?: throw PaymentAttempt.notFound()
@@ -126,6 +161,30 @@ class PaymentManagement(
                 updateAndPublish(current.markUnknown(identifierGenerator, now), eventPublisher::publish)
         }
         return PaymentCommand.Authorize.Result(applied.id, applied.status)
+    }
+
+    /**
+     * 잠그고 다시 읽는다. 아직 `UNKNOWN`이면 조회 결과대로 확정하고 그 시도를 함께 돌려준다. 이미 다른 호출이 확정했으면 `null`과 그 결말을 돌려준다.
+     * `UNKNOWN` 결과는 호출 전에 걸러지므로 여기 오지 않는다.
+     */
+    private fun confirm(
+        paymentId: PaymentId,
+        outcome: AuthorizationOutcome,
+    ): Pair<PaymentCommand.ResolveUnknown.Result, PaymentAttempt?> {
+        val current = repository.findByIdForUpdate(paymentId) ?: throw PaymentAttempt.notFound()
+        if (current.status != PaymentAttemptStatus.UNKNOWN) {
+            return PaymentCommand.ResolveUnknown.Result(current.id, current.status) to null
+        }
+
+        val now = clock.instant()
+        val confirmed = when (outcome) {
+            is AuthorizationOutcome.Approved ->
+                updateAndPublish(current.confirmApproved(outcome.providerReference, identifierGenerator, now), eventPublisher::publish)
+            is AuthorizationOutcome.Declined ->
+                updateAndPublish(current.confirmDeclined(outcome.providerReference, identifierGenerator, now), eventPublisher::publish)
+            AuthorizationOutcome.Unknown -> error("불명 결과는 확정하지 않는다")
+        }
+        return PaymentCommand.ResolveUnknown.Result(confirmed.id, confirmed.status) to confirmed
     }
 
     /**

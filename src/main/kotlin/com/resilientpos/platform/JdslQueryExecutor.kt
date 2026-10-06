@@ -28,6 +28,10 @@ class JdslQueryExecutor(private val entityManager: EntityManager) {
     fun <T : Any> findAll(query: Jpql.() -> JpqlQueryable<SelectQuery<T>>): List<T> =
         createQuery(query).resultList
 
+    /** 정렬한 앞쪽 [limit]건을 읽는다. */
+    fun <T : Any> findAll(limit: Int, query: Jpql.() -> JpqlQueryable<SelectQuery<T>>): List<T> =
+        createQuery(query).setMaxResults(limit).resultList
+
     /** 정렬한 첫 행이나 PK·unique 조건의 한 행을 읽는다. 조건에 맞는 행이 여럿이어도 예외 없이 하나를 고르므로 그 밖의 조건에 쓰지 않는다. */
     fun <T : Any> findFirst(query: Jpql.() -> JpqlQueryable<SelectQuery<T>>): T? =
         createQuery(query).setMaxResults(1).resultList.firstOrNull()
