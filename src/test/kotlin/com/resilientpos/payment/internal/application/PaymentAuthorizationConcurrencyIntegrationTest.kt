@@ -51,6 +51,8 @@ class PaymentAuthorizationConcurrencyIntegrationTest(
                 AuthorizationOutcome.Declined("SECOND")
             }
         }
+
+        override fun query(request: AuthorizationRequest): AuthorizationOutcome = AuthorizationOutcome.Unknown
     }
 
     @TestConfiguration

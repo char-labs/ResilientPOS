@@ -65,10 +65,10 @@ t_terminal_credential.terminal_id ───────────────�
 - 만드는 곳: `OrderCommandFacade.requestCheckout`(HTTP와 sync의 `REQUEST_CHECKOUT` 항목). 바꾸지도 지우지도 않는다.
 
 ### `PaymentAttemptEntity` — provider에게 보낸 요청 1회
-- 역할: 결제 승인(`AUTHORIZATION`)이나 취소·환불(`CANCELLATION`) 요청 한 번과 그 결말(`REQUESTED`→`APPROVED`/`DECLINED`/`UNKNOWN`)을 든다. 금액·통화를 직접 가진다. 결제 정본은 이 표이고 Redis·Kafka는 정본이 아니다.
+- 역할: 결제 승인(`AUTHORIZATION`)이나 취소·환불(`CANCELLATION`) 요청 한 번과 그 결말(`REQUESTED`→`APPROVED`/`DECLINED`/`UNKNOWN`, `UNKNOWN`→`APPROVED`/`DECLINED`는 provider 조회 확정)을 든다. 금액·통화를 직접 가진다. 결제 정본은 이 표이고 Redis·Kafka는 정본이 아니다.
 - 관계: `order_id`·`checkout_no`로 어느 주문의 몇 회차인지, `retried_from`으로 재결제의 원래 시도를 가리킨다. `store_id`·`terminal_id`는 이벤트에서 받아 복사한다.
 - 방어선: partial unique `ux_payment_attempt_inflight_authorization`(진행 중인 승인은 회차당 하나), `ux_payment_attempt_first_authorization`(사실로 만든 첫 승인 시도는 회차당 하나, 재결제는 `retried_from`이 있어 술어 밖). 행 잠금 아래에서 결말을 적용한다. `PaymentId`(이 행의 `id`)가 provider 멱등 키다.
-- 만드는 곳: `PaymentManagement.createAttempt`(`OrderPaymentRequested` consumer, `Lock` 블록)·`retryAuthorization`. 바꾸는 곳: `authorize`의 결말 적용. 지우지 않는다(감사·reconciliation 근거).
+- 만드는 곳: `PaymentManagement.createAttempt`(`OrderPaymentRequested` consumer, `Lock` 블록)·`retryAuthorization`. 바꾸는 곳: `authorize`의 결말 적용, `resolveUnknown`의 `UNKNOWN` 확정(주기 작업이 provider 조회로 `APPROVED`·`DECLINED`로 바꾼다. 대상은 partial index `ix_payment_attempt_unknown_authorization`로 고른다). 지우지 않는다(감사·reconciliation 근거).
 
 ### `FulfillmentEntity` — 결제된 주문 하나를 이행하는 단위
 - 역할: "이 주문은 이행 대상이다"라는 사실 한 줄. 상태·품목·매장은 아직 없다(읽는 화면이 없다). 업종(주방·바·픽업)을 가리지 않는다.
@@ -145,7 +145,14 @@ t_terminal_credential.terminal_id ───────────────�
 
 ### 4.4 결제 미확인(`UNKNOWN`)
 
-provider 응답이 끊기면 `t_payment_attempt.status`가 `UNKNOWN`으로 남는다. 실패가 아니다. 같은 회차에 새 승인 요청을 넣지 않고(partial unique가 막는다) provider 조회와 reconciliation으로 수렴시켜야 하는데, 그 경로(`reconciliation` 모듈, `ReconciliationCase`)는 아직 없다. 운영자는 `t_payment_attempt`에서 `status = 'UNKNOWN'`인 행을 직접 본다.
+provider 응답이 끊기면 `t_payment_attempt.status`가 `UNKNOWN`으로 남는다. 실패가 아니다. 같은 회차에 새 승인 요청을 넣지 않는다(partial unique가 막는다).
+
+| 단계 | 보이는 것 | 표 |
+|---|---|---|
+| 1. 주기 작업(1분)이 `UNKNOWN` 승인 시도를 지난 주기의 마지막 `id` 다음부터 최대 100건 고른다(끝에 닿으면 처음부터) | gauge `payment_attempt_unknown` | partial index `ix_payment_attempt_unknown_authorization`(V013) |
+| 2. provider 조회가 승인 | INFO `결과 불명 결제를 확정했다` | 행을 잠그고 `UNKNOWN`을 다시 확인한 뒤 `APPROVED`. 4.1의 6단계(주문 `PAID`)로 이어진다 |
+| 2'. provider 조회가 거절 | INFO 같은 줄 | `DECLINED`. 주문은 `CHECKOUT_REQUESTED`에 머물고 4.3의 재결제 대상이 된다 |
+| 2''. 조회로도 불명 | WARN `조회로도 결과를 확인하지 못했다` | 아무것도 바뀌지 않고 다음 주기에 다시 묻는다. 넘겨받을 `ReconciliationCase`는 아직 없다 |
 
 ### 4.5 같은 요청이 다시 올 때(멱등)
 
@@ -163,7 +170,7 @@ provider 응답이 끊기면 `t_payment_attempt.status`가 `UNKNOWN`으로 남�
 |---|---|---|
 | 결제는 승인됐는데 주문이 `CHECKOUT_REQUESTED`다 | `t_payment_attempt`(`APPROVED`)와 `t_order.status` | Kafka `payment.approved.DLT`와 `DLT로 보냄` 로그(회차·금액 불일치는 `PAYMENT_APPROVAL_MISMATCH`) |
 | 주문은 `PAID`인데 fulfillment가 없다 | `t_fulfillment`에 `order_id`가 없는지 | `order.paid.DLT` |
-| 시도가 `REQUESTED`·`UNKNOWN`에 오래 머문다 | `t_payment_attempt.updated_at` | provider 원장. 재호출은 `PaymentId` 멱등성에 기댄다 |
+| 시도가 `REQUESTED`·`UNKNOWN`에 오래 머문다 | `t_payment_attempt.updated_at` | `UNKNOWN`이면 그 `paymentId`의 WARN `조회로도 결과를 확인하지 못했다`가 매분 반복되는지 본다. 그다음 provider 원장. 재호출은 `PaymentId` 멱등성에 기댄다 |
 | 단말이 같은 배치를 계속 보낸다 | `t_sync_watermark.last_acked_sequence`와 `t_sync_operation`의 마지막 `sequence` | `sync 충돌` WARN 로그(`terminalId`·`operationId`·`sequence`). `CONFLICT`는 단말 상태가 서버와 갈라진 것이라 사람이 본다 |
 | 이벤트가 나가지 않았다 | `event_publication`에서 `completion_date`가 빈 행 | 매분 도는 재전송과 `event.publication.incomplete` gauge |
 
@@ -175,4 +182,4 @@ provider 응답이 끊기면 `t_payment_attempt.status`가 `UNKNOWN`으로 남�
 - [도메인 모델](domain-model.md) — aggregate 경계(§2), 용어집(§3), 스키마 변경 검토(§4.7)
 - [현재 상태](current-state.md) — 모듈별 구현 상태와 알려진 빈틈
 - 볼트 규칙 `domain-modeling-kotlin.md` §5 — 엔티티 작성 규칙(`.claude/rules`로 복사된다)
-- 마이그레이션 `src/main/resources/db/migration/V002`·`V003`·`V005`~`V008`·`V010`~`V012` — 각 표의 DDL과 주석
+- 마이그레이션 `src/main/resources/db/migration/V002`·`V003`·`V005`~`V008`·`V010`~`V013` — 각 표의 DDL과 주석

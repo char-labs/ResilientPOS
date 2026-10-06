@@ -7,7 +7,7 @@ import java.util.UUID
 
 /**
  * `payment`의 쓰기 커맨드. use case마다 커맨드 하나이고, 그 결과는 커맨드 안에 둔다.
- * 시도를 만드는 것과 provider를 부르는 것이 각각 자기 트랜잭션이라 커맨드가 둘이다.
+ * 시도 생성, 승인 요청, 재결제, 결과 불명 확정이 각각 자기 트랜잭션이다.
  */
 object PaymentCommand {
 
@@ -56,6 +56,21 @@ object PaymentCommand {
     ) {
         /**
          * 새로 만든 시도, 또는 이미 다시 시도했으면 그 회차의 최신 시도.
+         */
+        data class Result(
+            val paymentId: PaymentId,
+            val status: PaymentAttemptStatus,
+        )
+    }
+
+    /**
+     * 결과를 모른 채 남은([PaymentAttemptStatus.UNKNOWN]) 승인 시도를 provider 조회로 확정한다.
+     */
+    data class ResolveUnknown(
+        val paymentId: PaymentId,
+    ) {
+        /**
+         * 확정 결과. `UNKNOWN`이 아니었거나 조회로도 확인하지 못했으면 provider 결과를 적용하지 않고 지금 상태를 그대로 돌려준다.
          */
         data class Result(
             val paymentId: PaymentId,

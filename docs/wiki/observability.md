@@ -8,6 +8,7 @@
 - **Kafka 소비**: `event_kafka_dead_letter_total{topic, reason}`이 토픽별로 DLT에 보낸 메시지 수다. `reason`은 도메인 오류 코드(예: `PAYMENT_APPROVAL_MISMATCH`, 업무 불일치)나 `error`(재시도 소진·버그)다. `reason="error"`는 기동할 때 0으로 등록되므로 `increase(...) > 0`으로 첫 증가를 잡는다. Boot가 Kafka 클라이언트 metric(`kafka_consumer_*`·`kafka_producer_*`)을 함께 내보낸다. consumer lag는 `kafka_consumer_fetch_manager_records_lag_max`이고 `client_id`에 consumer group 이름이 든다. 재시도마다 WARN(`소비 실패 topic=… key=… attempt=…`), DLT로 보낼 때 ERROR(`DLT로 보냄 …`) 로그가 한 줄씩 남는다. key는 `orderId`이고 로그 필드로만 남긴다. DLT 전송 자체가 실패하면 `event_kafka_dead_letter_failed_total{topic}`이 오르고 ERROR(`DLT 전송 실패…`)가 남는다. 0보다 크면 브로커·권한·메시지 크기를 먼저 본다. 재시도·DLT 규칙과 재투입 절차는 [도메인 모델](domain-model.md) §4.3에 있다.
 - **노출 범위**: Actuator는 `health`와 `prometheus`만 연다. 앱은 `/v1/**`만 단말 토큰으로 인증하고 `/actuator/**`는 인증 대상이 아니므로 외부 차단은 배포(ingress·네트워크)에서 한다. 배포 전에 ingress가 `/actuator/**`를 외부로 라우팅하지 않는지 확인한다.
 - **인증 실패**: 401 `UNAUTHENTICATED`와 403 `TERMINAL_MISMATCH`는 `ApiControllerAdvice`의 WARN 로그(`method`·`uri`·`errorCode`)로 남는다. 인증 실패 전용 metric은 없다. 토큰과 `Authorization` 헤더 값은 로그와 예외 메시지에 남기지 않는다. 401 예외는 스택 트레이스를 만들지 않아, 토큰 대입이 반복돼도 요청마다 한 줄만 쌓인다. 앱 밖의 리버스 프록시·ingress access log는 이 보장 밖이다. 배포 전에 그 로그가 `Authorization` 헤더를 남기지 않거나 가리는지 확인한다.
+- **결과 불명 결제 확정**: 주기 작업(1분)이 provider 조회로 `UNKNOWN`을 확정하면 INFO(`결과 불명 결제를 확정했다 paymentId=… orderId=… checkoutNo=… status=…`), 조회로도 불명이면 WARN(`조회로도 결과를 확인하지 못했다 paymentId=… orderId=…`), 한 건이 던지면 ERROR(paymentId와 예외)가 남는다. 결과 불명 승인 시도 수는 gauge `payment_attempt_unknown`이다. 작업이 주기마다 세어 갱신하므로 scrape는 DB를 부르지 않고, 세기가 실패한 주기에는 마지막 성공값이 남는다. 모든 인스턴스가 같은 DB를 세므로 `max`로 모은다. 사람이 볼 조건은 `max(payment_attempt_unknown) > 0`이 한 시간 넘게 이어지는 경우다(`for: 1h`). provider가 그 요청을 끝내 확인해 주지 않는다는 뜻이고, 그 건을 넘겨받을 reconciliation case가 아직 없어 사람이 같은 `paymentId`의 WARN을 찾아 provider 콘솔에서 확인한다. 알림 규칙 파일은 아직 없다. 작업 규칙은 [도메인 모델](domain-model.md) §4.3에 있다.
 - **로그**: 기본은 평문이다. `LOGGING_STRUCTURED_FORMAT_CONSOLE=ecs`를 주면 stdout이 한 줄에 ECS JSON 객체 하나가 된다.
 
 ## LGTM을 붙일 때
@@ -23,5 +24,5 @@
 
 ## 아직 없는 것
 - trace(OpenTelemetry·Tempo), traceId와 correlation id의 MDC 전파.
-- 도메인 metric(`payment_unknown_total` 등). 해당 기능 PR이 더한다.
+- 그 밖의 도메인 metric(`payment_unknown_total` 같은 발생 수)과 주기 작업의 생존 metric(마지막 성공 시각). 알림 규칙을 만드는 PR이 더한다.
 - histogram bucket 범위와 SLO 경계. 지금은 Micrometer 기본 bucket이다. endpoint가 늘어 series 비용이 보이면 `minimum-expected-value`·`maximum-expected-value`나 `slo`로 좁힌다.

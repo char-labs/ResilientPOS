@@ -28,7 +28,8 @@ object Lock {
 
     /**
      * 트랜잭션 없이 줄만 세운다. 블록 안의 쓰기는 각자 자기 트랜잭션에서 곧바로 커밋한다.
-     * 한 커밋으로 묶을 쓰기가 없고, 블록 동안 행 잠금을 쥐면 안 되는 주기 작업([EventPublicationResubmitter])에 쓴다.
+     * 한 커밋으로 묶을 쓰기가 없는 주기 작업 둘이 쓴다. [EventPublicationResubmitter]는 블록 동안 행 잠금을 쥐면 안 된다.
+     * payment의 결과 불명 확정 작업(`UnknownPaymentResolver`)은 블록 안에서 행 잠금을 기다리는 예외이고, 근거는 그 작업의 KDoc에 있다.
      * 바깥 트랜잭션 안에서 부르지 않는다. 합류하면 바깥이 커밋하기 전에 락이 풀린다. Facade는 쓰지 않는다. 검사는 두지 않는다(계약은 이 KDoc이다).
      */
     fun <T> executeWithLockNoTx(key: String, action: () -> T): T = locked(key, action)

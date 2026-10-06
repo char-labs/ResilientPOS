@@ -70,6 +70,8 @@ class PaymentAuthorizationIntegrationTest(
             return delegate.authorize(request)
         }
 
+        override fun query(request: AuthorizationRequest): AuthorizationOutcome = delegate.query(request)
+
         fun callsFor(paymentId: PaymentId) = calls[paymentId]?.get() ?: 0
 
         fun resourceBoundDuringCall(paymentId: PaymentId) = resourceBound[paymentId]
