@@ -2,6 +2,8 @@ package com.resilientpos.payment.internal.application
 
 import com.resilientpos.PostgresIntegrationTest
 import com.resilientpos.awaitUntil
+import com.resilientpos.foundation.DomainErrorKind
+import com.resilientpos.foundation.DomainException
 import com.resilientpos.foundation.Money
 import com.resilientpos.order.OrderCommand
 import com.resilientpos.order.OrderCommandFacade
@@ -15,7 +17,10 @@ import com.resilientpos.payment.PaymentManagement
 import com.resilientpos.payment.internal.adapter.gateway.FakePaymentGateway
 import com.resilientpos.payment.internal.domain.AuthorizationOutcome
 import com.resilientpos.payment.internal.domain.AuthorizationRequest
+import com.resilientpos.payment.internal.domain.PaymentAttempt
+import com.resilientpos.payment.internal.domain.PaymentAttemptRepository
 import com.resilientpos.payment.internal.domain.PaymentGateway
+import com.resilientpos.store.StoreId
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
@@ -23,11 +28,14 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertTrue
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.TestConfiguration
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Primary
 import org.springframework.jdbc.core.JdbcTemplate
+import org.springframework.jdbc.core.queryForObject
 import org.springframework.transaction.support.TransactionOperations
 
 /**
@@ -41,6 +49,7 @@ class PaymentRetryIntegrationTest(
     @Autowired private val paymentManagement: PaymentManagement,
     @Autowired private val jdbcTemplate: JdbcTemplate,
     @Autowired private val transactions: TransactionOperations,
+    @Autowired private val repository: PaymentAttemptRepository,
 ) : PostgresIntegrationTest() {
 
     class DeclineFirstGateway : PaymentGateway {
@@ -83,7 +92,7 @@ class PaymentRetryIntegrationTest(
         val orderId = checkoutOrder("4701")
         val declined = awaitDeclined(orderId)
 
-        val retried = paymentManagement.retryAuthorization(PaymentCommand.RetryAuthorization(declined))
+        val retried = paymentManagement.retryAuthorization(PaymentCommand.RetryAuthorization(declined, OrderFixtures.storeId))
 
         awaitUntil("주문이 PAID가 된다. 현재: ${jdbcTemplate.orderStatus(orderId)} ${attempts(orderId)}") {
             jdbcTemplate.orderStatus(orderId) == "PAID"
@@ -106,7 +115,7 @@ class PaymentRetryIntegrationTest(
                 executor.submit<PaymentCommand.RetryAuthorization.Result> {
                     ready.countDown()
                     ready.await(5, TimeUnit.SECONDS)
-                    paymentManagement.retryAuthorization(PaymentCommand.RetryAuthorization(declined))
+                    paymentManagement.retryAuthorization(PaymentCommand.RetryAuthorization(declined, OrderFixtures.storeId))
                 }
             }.map { it.get(15, TimeUnit.SECONDS) }
         } finally {
@@ -118,13 +127,51 @@ class PaymentRetryIntegrationTest(
     }
 
     @Test
+    fun `다른 매장의 재결제는 시도 행이 잠겨 있어도 기다리지 않고 PAYMENT_ATTEMPT_NOT_FOUND를 받는다`() {
+        val orderId = checkoutOrder("4707")
+        val declined = awaitDeclined(orderId)
+        val lockHeld = CountDownLatch(1)
+        val releaseLock = CountDownLatch(1)
+        val executor = Executors.newFixedThreadPool(2)
+        try {
+            val holder = executor.submit {
+                transactions.executeWithoutResult {
+                    repository.findByIdForUpdate(declined)
+                    lockHeld.countDown()
+                    check(releaseLock.await(30, TimeUnit.SECONDS)) { "잠금을 풀어 주는 신호가 오지 않았다" }
+                }
+            }
+            assertTrue(lockHeld.await(10, TimeUnit.SECONDS), "다른 트랜잭션이 시도 행을 잠가야 한다")
+
+            val other = executor.submit<DomainException> {
+                assertFailsWith<DomainException> {
+                    paymentManagement.retryAuthorization(PaymentCommand.RetryAuthorization(declined, StoreId(UUID.randomUUID())))
+                }
+            }
+            // 매장 조건으로 잠그면 잠긴 행이 조회에 걸리지 않아 즉시 끝난다. 잠금 대기 한도는 3초다.
+            val failure = other.get(2, TimeUnit.SECONDS)
+
+            assertEquals(PaymentAttempt.PAYMENT_ATTEMPT_NOT_FOUND, failure.code)
+            assertEquals(DomainErrorKind.NOT_FOUND, failure.kind)
+            assertEquals(0L, jdbcTemplate.queryForObject<Long>("select count(*) from pg_stat_activity where wait_event_type = 'Lock'"))
+            releaseLock.countDown()
+            holder.get(10, TimeUnit.SECONDS)
+            assertEquals(1, attempts(orderId).size)
+        } finally {
+            releaseLock.countDown()
+            executor.shutdown()
+            executor.awaitTermination(10, TimeUnit.SECONDS)
+        }
+    }
+
+    @Test
     fun `트랜잭션 안에서 재결제를 요청해도 바깥 트랜잭션과 따로 커밋한다`() {
         val orderId = checkoutOrder("4705")
         val declined = awaitDeclined(orderId)
 
         // 바깥 트랜잭션을 멈추고 새 시도를 따로 커밋하므로, 바깥을 롤백해도 새 시도는 남는다.
         transactions.executeWithoutResult { outer ->
-            paymentManagement.retryAuthorization(PaymentCommand.RetryAuthorization(declined))
+            paymentManagement.retryAuthorization(PaymentCommand.RetryAuthorization(declined, OrderFixtures.storeId))
             outer.setRollbackOnly()
         }
 

@@ -1,6 +1,7 @@
 package com.resilientpos.payment.internal.domain
 
 import com.resilientpos.payment.PaymentId
+import com.resilientpos.store.StoreId
 import java.util.UUID
 
 /**
@@ -39,6 +40,12 @@ interface PaymentAttemptRepository {
      * 대기는 3초로 제한하고 넘으면 `PessimisticLockingFailureException` 계열 예외다.
      */
     fun findByIdForUpdate(paymentId: PaymentId): PaymentAttempt?
+
+    /**
+     * [findByIdForUpdate]에 매장 조건을 더한다. 매장이 다른 행은 잠기지도 반환되지도 않아서 다른 매장의 요청은
+     * 그 행을 쥔 트랜잭션을 기다리지 않고 없는 시도와 같은 `null`을 받는다. 나머지 계약은 [findByIdForUpdate]와 같다.
+     */
+    fun findByIdAndStoreIdForUpdate(paymentId: PaymentId, storeId: StoreId): PaymentAttempt?
 
     /**
      * 결말이 바뀐 시도를 반영한다. 트랜잭션 안에서만 부른다.

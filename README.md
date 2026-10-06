@@ -111,7 +111,7 @@ Controller는 MockMvc와 Spring REST Docs로 HTTP 계약을 검증하며, fixtur
   - Service: 도메인 객체 조율만 담당 (DTO 가공/규칙 중복 금지)
 - **CQRS 규약**:
   - 쓰기: 모듈 이름공간 아래 use case별 커맨드와 그 안의 결과 (`OrderCommand.Create -> OrderCommand.Create.Result`)
-  - 읽기: `*Query`/`*Criteria -> *View` (쓰기와 같은 모양을 따를지는 첫 조회 PR에서 정한다)
+  - 읽기: 쓰기와 같은 이름공간 아래 use case별 조회, 투영 View는 이름공간 밖 (`PaymentQuery.FindAttempts -> PaymentAttemptView`). 조회 Facade는 쓰기 Facade와 따로 두고 port 없이 조회 클래스(Kotlin JDSL, `@ReadOnlyTransactional`)를 부른다
   - 저장소: JPA 엔티티로 aggregate를 저장한다. 간단한 조회는 Spring Data repository, 그 밖의 조회(조인·동적 조건·projection·잠금)는 Kotlin JDSL로 쓴다
 - **데이터 정본 원칙**:
   - 주문/결제 정합성 정본: PostgreSQL

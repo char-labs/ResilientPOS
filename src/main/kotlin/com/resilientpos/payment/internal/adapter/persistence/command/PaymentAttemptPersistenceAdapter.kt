@@ -9,6 +9,7 @@ import com.resilientpos.payment.internal.domain.PaymentAttemptRepository
 import com.resilientpos.platform.JdslQueryExecutor
 import com.resilientpos.platform.selectFrom
 import com.resilientpos.platform.ReadOnlyTransactional
+import com.resilientpos.store.StoreId
 import jakarta.persistence.EntityManager
 import java.util.UUID
 import org.springframework.stereotype.Component
@@ -81,6 +82,16 @@ class PaymentAttemptPersistenceAdapter(
         queries.findFirstForUpdate {
             selectFrom(PaymentAttemptEntity::class)
                 .where(path(PaymentAttemptEntity::id).eq(paymentId.value))
+        }?.toDomain()
+
+    override fun findByIdAndStoreIdForUpdate(paymentId: PaymentId, storeId: StoreId): PaymentAttempt? =
+        queries.findFirstForUpdate {
+            selectFrom(PaymentAttemptEntity::class).where(
+                and(
+                    path(PaymentAttemptEntity::id).eq(paymentId.value),
+                    path(PaymentAttemptEntity::storeId).eq(storeId.value),
+                ),
+            )
         }?.toDomain()
 
     /**

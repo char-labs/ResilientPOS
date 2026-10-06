@@ -97,13 +97,14 @@ class PaymentManagement(
      * 대상이 그 회차의 최신 승인 시도가 아니면 이미 다시 시도한 것이라 최신 시도를 돌려준다. 응답을 잃고 다시 보낸
      * 요청이 새 provider 호출이 되지 않게 하려는 것이다. 최신인데 거절이 아니면 aggregate가 거절한다.
      *
+     * 대상 시도는 인증된 단말의 매장 조건으로 잠근다. 매장이 다른 시도는 없는 시도와 같다.
      * 대상 행을 잠그고 최신을 읽는다. 겹친 두 요청 중 진 쪽은 앞 커밋을 기다렸다가 그 새 시도를 최신으로 본다.
      * 트랜잭션을 `Tx.masterTx`로 열어 반환 뒤의 로그가 커밋 뒤의 사실이 되게 한다([authorize]와 같다).
      * 같은 이유로 sync intake의 한 커밋 안에서 부르지 않는다. 바깥이 롤백돼도 새 시도와 생성 사실이 따로 커밋된다.
      */
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
     fun retryAuthorization(command: PaymentCommand.RetryAuthorization): PaymentCommand.RetryAuthorization.Result {
-        val (result, retried) = Tx.masterTx { retry(command.paymentId) }
+        val (result, retried) = Tx.masterTx { retry(command) }
         if (retried) {
             log.info { "결제를 다시 시도한다 declinedPaymentId=${command.paymentId.value} paymentId=${result.paymentId.value}" }
         }
@@ -188,14 +189,27 @@ class PaymentManagement(
     }
 
     /**
-     * 거절된 시도의 행을 잠그고 그 회차의 최신 승인 시도를 읽는다. 최신이 아니면 이미 다시 시도한 것이라 최신 시도를 돌려준다.
+     * 거절된 시도의 행을 매장 조건으로 잠그고 그 회차의 최신 승인 시도를 읽는다. 최신이 아니면 이미 다시 시도한 것이라 최신 시도를 돌려준다.
      * 새 시도를 만들었으면 `true`를 함께 돌려준다.
      */
-    private fun retry(paymentId: PaymentId): Pair<PaymentCommand.RetryAuthorization.Result, Boolean> {
-        val target = repository.findByIdForUpdate(paymentId) ?: throw PaymentAttempt.notFound()
-        val latest = repository.findLatestAuthorization(target.orderId, target.checkoutNo)
-        if (latest != null && latest.id != target.id) {
-            return PaymentCommand.RetryAuthorization.Result(latest.id, latest.status) to false
+    private fun retry(command: PaymentCommand.RetryAuthorization): Pair<PaymentCommand.RetryAuthorization.Result, Boolean> {
+        val target = repository.findByIdAndStoreIdForUpdate(command.paymentId, command.storeId)
+        if (target == null) {
+            // 운영자가 구분할 수 있게 매장 불일치만 WARN으로 남긴다. 잠그지 않는 존재 확인이다. 토큰은 남기지 않는다.
+            if (repository.findById(command.paymentId) != null) {
+                log.warn {
+                    "다른 매장의 결제 시도 재결제 요청을 시도 없음으로 처리한다 paymentId=${command.paymentId.value} " +
+                        "storeId=${command.storeId.value}"
+                }
+            }
+            throw PaymentAttempt.notFound()
+        }
+        // 이미 다시 시도했는지는 승인 시도에만 뜻이 있다. 취소 시도는 aggregate의 `retry()`가 거절한다.
+        if (target.kind == PaymentAttemptKind.AUTHORIZATION) {
+            val latest = repository.findLatestAuthorization(target.orderId, target.checkoutNo)
+            if (latest != null && latest.id != target.id) {
+                return PaymentCommand.RetryAuthorization.Result(latest.id, latest.status) to false
+            }
         }
 
         val transition = target.retry(identifierGenerator, clock.instant())
