@@ -20,7 +20,7 @@ Kotlin으로 엔티티를 어떤 형태로 쓰는지(생성자 `private`, `var �
 | `FulfillmentEntity` | `t_fulfillment` | fulfillment | 루트 `Fulfillment` | `order_id` | 넣기만 한다 |
 | `WatermarkEntity` | `t_sync_watermark` | sync | 루트 `Watermark`(단말당 하나) | `terminal_id`가 PK | `last_acked_sequence`만 `apply`. 행을 잠그고 바꾼다 |
 | `SyncOperationEntity` | `t_sync_operation` | sync | `Watermark`와 같은 트랜잭션의 접수 기록 | `terminal_id`, `operation_id`(단말이 만든 값), `order_id` | 넣기만 한다 |
-| `TerminalEntity` | `t_terminal` | terminal | 루트 `Terminal` | `store_id`(가리킬 표가 없다) | `status`만 `applyStatus`(`ACTIVE`→`INACTIVE`). 행을 잠그고 바꾼다 |
+| `TerminalEntity` | `t_terminal` | terminal | 루트 `Terminal` | `store_id`(가리킬 표가 없다) | `status`만 `applyStatus`(`ACTIVE`→`INACTIVE`). 행을 잠그고 바꾼다. `terminal_code`는 바뀌지 않는다 |
 | `TerminalCredentialEntity` | `t_terminal_credential` | terminal | `Terminal`과 같은 트랜잭션의 credential 이력 | `terminal_id` | `revoked_at`만 `applyRevokedAt`(회전 때 한 번) |
 
 `event_publication`(Spring Modulith 발행 기록)은 우리 엔티티가 아니다. Modulith의 JPA 엔티티가 스키마를 정하고 `t_` 접두어 규칙의 예외다([도메인 모델 §4.3](domain-model.md)).
@@ -89,10 +89,10 @@ t_terminal_credential.terminal_id ───────────────�
 - 만드는 곳: `SyncCommandFacade`의 항목 트랜잭션. 바꾸지도 지우지도 않는다.
 
 ### `TerminalEntity` — 매장에 속한 단말 하나
-- 역할: 단말의 소속 매장(`store_id`)과 활성 상태(`ACTIVE`/`INACTIVE`)를 든다. 소속 매장의 정본이고 바뀌지 않는다. 단말 코드는 아직 없다.
+- 역할: 단말의 소속 매장(`store_id`), 매장 안의 단말 코드(`terminal_code`), 활성 상태(`ACTIVE`/`INACTIVE`)를 든다. 소속 매장과 코드의 정본이고 둘 다 바뀌지 않는다. V014 전에 있던 행의 코드는 매장별 `LEGACY-순번`이다.
 - 관계: `TerminalCredentialEntity`가 `terminal_id`로 가리킨다. `store_id`는 가리킬 표가 없다.
-- 방어선: 회전·비활성화는 이 행을 잠그고 시작한다(`for no key update`, 대기 3초). 잠금 없이 바꾸는 경로가 없어 `@Version`이 없다.
-- 만드는 곳: `TerminalManagement.register`(첫 credential과 한 커밋). 바꾸는 곳: `deactivate`(멱등, 되돌리지 않는다). HTTP endpoint는 없다.
+- 방어선: 회전·비활성화는 이 행을 잠그고 시작한다(`for no key update`, 대기 3초). 잠금 없이 바꾸는 경로가 없어 `@Version`이 없다. unique `ux_terminal_store_code`(`store_id`, `terminal_code`)가 매장 안 코드 유일의 유일한 방어선이다. 사전 조회가 없어 위반은 persistence adapter가 제약 이름으로 가려 `409 TERMINAL_CODE_DUPLICATED`로 바꾼다.
+- 만드는 곳: `TerminalManagement.register`(첫 credential과 한 커밋). 바꾸는 곳: `deactivate`(멱등, 되돌리지 않는다). HTTP 입구는 운영자 경로 `/admin/v1/terminals` 아래에 있다([operator-authentication](../spec/2026-10-06-operator-authentication.md)).
 
 ### `TerminalCredentialEntity` — 단말을 인증하는 비밀값 한 건
 - 역할: 토큰의 SHA-256 hex(`token_hash`)와 폐기 시각(`revoked_at`)을 든다. 평문 토큰은 저장하지 않는다. 폐기된 행도 이력으로 남는다. 만료는 없다.
