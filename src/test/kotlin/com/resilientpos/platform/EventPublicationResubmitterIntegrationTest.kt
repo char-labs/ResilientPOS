@@ -172,8 +172,8 @@ class EventPublicationResubmitterIntegrationTest(
         val freshPublished = insertRow("PUBLISHED", publishedAgo = Duration.ofMinutes(4))
         val staleResubmitted = insertRow("RESUBMITTED", publishedAgo = Duration.ofHours(1), resubmittedAgo = Duration.ofMinutes(6))
         val freshResubmitted = insertRow("RESUBMITTED", publishedAgo = Duration.ofHours(1), resubmittedAgo = Duration.ZERO)
-        // 락이 fail-open일 때 이미 완료된 행을 다른 pod가 다시 표시하면 이렇게 남는다. Modulith의 완료 표시는
-        // completion_date가 빈 행만 바꾸기 때문이다. 오래된 행이라 끊긴 기록 조건에서 완료 여부를 빼면 FAILED가 된다.
+        // 완료된 행을 다시 표시한 뒤 완료 표시 전에 프로세스가 죽으면 이렇게 남는다.
+        // 오래된 행이라 끊긴 기록 조건에서 완료 여부를 빼면 FAILED가 된다.
         val completedResubmitted = insertRow("RESUBMITTED", publishedAgo = Duration.ofHours(1), completedAgo = Duration.ZERO)
 
         resubmitter.markStalePublicationsFailed()
