@@ -30,9 +30,13 @@ class OperatorSecurityFilterChain(
 ) : SecurityFilterChain by chain(http, resolver, decoder) {
 
     private companion object {
+        val log by logger()
+
         fun chain(http: HttpSecurity, resolver: HandlerExceptionResolver, decoder: ObjectProvider<JwtDecoder>): SecurityFilterChain {
-            // 원인(서명·만료·iss·aud·토큰 없음)을 나누지 않고 모두 같은 401이다.
-            val entryPoint = AuthenticationEntryPoint { request, response, _ ->
+            // 원인(서명·만료·iss·aud·토큰 없음)을 나누지 않고 모두 같은 401이다. 응답과 advice 로그에는 원인이 없으므로
+            // iss·aud 설정 어긋남을 찾을 수 있게 원인 메시지만 DEBUG로 남긴다. Security 예외 메시지에는 토큰 값이 실리지 않는다.
+            val entryPoint = AuthenticationEntryPoint { request, response, cause ->
+                log.debug { "operator unauthenticated uri=${request.requestURI} cause=${cause.javaClass.simpleName}: ${cause.message}" }
                 resolver.resolveException(request, response, null, UnauthenticatedException())
             }
             val accessDenied = AccessDeniedHandler { request, response, e -> resolver.resolveException(request, response, null, e) }

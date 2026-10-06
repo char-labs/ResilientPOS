@@ -26,5 +26,7 @@ class TerminalQueries(
             selectFrom(TerminalEntity::class)
                 .where(path(TerminalEntity::storeId).eq(storeId.value))
                 .orderBy(path(TerminalEntity::terminalCode).asc())
-        }.map { TerminalView(TerminalId(it.id), TerminalCode(it.terminalCode), it.status) }
+        }.map { it.toView() }
 }
+
+private fun TerminalEntity.toView() = TerminalView(TerminalId(id), TerminalCode(terminalCode), status)

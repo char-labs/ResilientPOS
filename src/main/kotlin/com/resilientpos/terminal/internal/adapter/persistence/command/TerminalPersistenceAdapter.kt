@@ -3,13 +3,13 @@ package com.resilientpos.terminal.internal.adapter.persistence.command
 import com.resilientpos.platform.JdslQueryExecutor
 import com.resilientpos.platform.selectFrom
 import com.resilientpos.terminal.TerminalId
+import com.resilientpos.terminal.TerminalStatus
 import com.resilientpos.terminal.internal.domain.Terminal
 import com.resilientpos.terminal.internal.domain.TerminalCredential
 import com.resilientpos.terminal.internal.domain.TerminalRepository
-import com.resilientpos.terminal.TerminalStatus
 import jakarta.persistence.EntityManager
 import jakarta.persistence.PersistenceException
-import org.hibernate.exception.ConstraintViolationException
+import java.sql.SQLException
 import org.springframework.stereotype.Component
 import org.springframework.transaction.annotation.Transactional
 
@@ -62,7 +62,9 @@ class TerminalPersistenceAdapter(
             entityManager.flush()
         } catch (e: PersistenceException) {
             // 사전 조회 없이 unique가 막는다. 다른 제약 위반은 그대로 던진다. 예외 뒤 영속성 컨텍스트는 쓰지 않고 트랜잭션은 롤백된다.
-            if ((e as? ConstraintViolationException)?.constraintName == TERMINAL_CODE_CONSTRAINT) throw Terminal.codeDuplicated()
+            // Hibernate의 constraintName은 영어 메시지 템플릿에서 꺼내서 서버 lc_messages가 다르면 비어 있다.
+            // SQLState와, 어느 언어의 메시지에도 그대로 실리는 제약 이름으로 가린다.
+            if (e.isUniqueViolationOf(TERMINAL_CODE_CONSTRAINT)) throw Terminal.codeDuplicated()
             throw e
         }
         return terminal
@@ -95,5 +97,10 @@ class TerminalPersistenceAdapter(
 
     private companion object {
         const val TERMINAL_CODE_CONSTRAINT = "ux_terminal_store_code"
+        const val UNIQUE_VIOLATION = "23505"
+
+        fun Throwable.isUniqueViolationOf(constraint: String): Boolean =
+            generateSequence(this) { it.cause }.filterIsInstance<SQLException>()
+                .any { it.sqlState == UNIQUE_VIOLATION && it.message.orEmpty().contains("\"$constraint\"") }
     }
 }

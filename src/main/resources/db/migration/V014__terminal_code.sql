@@ -3,8 +3,12 @@
 -- ux_terminal_store_code는 "매장 안에서 코드 유일"의 유일한 방어선이다. 등록은 사전 조회 없이 INSERT만 하고
 -- 위반은 persistence adapter가 이 제약 이름으로 가려 TERMINAL_CODE_DUPLICATED로 바꾼다. soft delete된 행에도 걸린다.
 -- 인덱스의 앞이 store_id라 매장별 목록 조회도 탄다.
--- ADD COLUMN은 메타데이터 변경이고 UPDATE·SET NOT NULL·unique 생성은 행 수에 비례해 락을 잡는다. 배포 환경에는 등록 입구가 없어 행이 거의 없다.
+-- 한 트랜잭션이라 ADD COLUMN이 잡은 ACCESS EXCLUSIVE가 커밋까지 남고 그동안 t_terminal을 읽는 단말 인증이 기다린다.
+-- UPDATE·SET NOT NULL·unique 생성은 행 수에 비례하지만 배포 환경에는 등록 입구가 없어 행이 거의 없다.
+-- 긴 트랜잭션 뒤에서 락을 기다리며 인증을 세우지 않도록 lock_timeout을 둔다(V005·V008·V011과 같다).
 -- 이전 버전은 이 컬럼을 매핑하지 않아 validate가 통과하고, 이전 버전의 register만 NOT NULL에 걸린다(HTTP 등록 입구가 없어 받아들인다).
+
+set local lock_timeout = '5s';
 
 alter table t_terminal add column terminal_code varchar(32);
 
