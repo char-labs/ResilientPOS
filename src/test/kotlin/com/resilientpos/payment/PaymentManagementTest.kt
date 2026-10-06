@@ -65,6 +65,8 @@ class PaymentManagementTest {
         override fun findUnknownAuthorizationIds(after: PaymentId?, limit: Int) = emptyList<PaymentId>()
         override fun countUnknownAuthorizations() = 0L
         override fun findByIdForUpdate(paymentId: PaymentId) = lockedRead ?: stored[paymentId]
+        override fun findByIdAndStoreIdForUpdate(paymentId: PaymentId, storeId: StoreId) =
+            findByIdForUpdate(paymentId)?.takeIf { it.storeId == storeId }
         override fun update(attempt: PaymentAttempt) = attempt.also {
             updated += it
             stored[it.id] = it
@@ -262,6 +264,28 @@ class PaymentManagementTest {
         return created.paymentId
     }
 
+    /** 그 시도가 속한 매장의 단말이 보내는 재결제 요청. */
+    private fun retryCommand(repository: RecordingRepository, paymentId: PaymentId) =
+        PaymentCommand.RetryAuthorization(paymentId, repository.stored.getValue(paymentId).storeId)
+
+    @Test
+    fun `다른 매장의 재결제는 없는 시도와 같아 거절하고 새 시도도 이벤트도 만들지 않는다`() {
+        val repository = RecordingRepository()
+        val publisher = RecordingPublisher()
+        val management = management(repository, publisher, StubGateway(AuthorizationOutcome.Declined(null)))
+        val declined = declinedAttempt(repository, management)
+        repository.saved.clear()
+        publisher.published.clear()
+
+        val failure = assertFailsWith<DomainException> {
+            management.retryAuthorization(PaymentCommand.RetryAuthorization(declined, StoreId(UUID.randomUUID())))
+        }
+
+        assertEquals(PaymentAttempt.PAYMENT_ATTEMPT_NOT_FOUND, failure.code)
+        assertEquals(emptyList(), repository.saved)
+        assertEquals(emptyList(), publisher.published)
+    }
+
     @Test
     fun `최신 시도가 거절이면 같은 회차의 새 시도를 저장하고 생성 사실을 발행한다`() {
         val repository = RecordingRepository()
@@ -271,7 +295,7 @@ class PaymentManagementTest {
         repository.saved.clear()
         publisher.published.clear()
 
-        val result = management.retryAuthorization(PaymentCommand.RetryAuthorization(declined))
+        val result = management.retryAuthorization(retryCommand(repository, declined))
 
         val retried = repository.saved.single()
         assertEquals(retried.id, result.paymentId)
@@ -288,11 +312,11 @@ class PaymentManagementTest {
         val publisher = RecordingPublisher()
         val management = management(repository, publisher, StubGateway(AuthorizationOutcome.Declined(null)))
         val declined = declinedAttempt(repository, management)
-        val first = management.retryAuthorization(PaymentCommand.RetryAuthorization(declined))
+        val first = management.retryAuthorization(retryCommand(repository, declined))
         repository.saved.clear()
         publisher.published.clear()
 
-        val again = management.retryAuthorization(PaymentCommand.RetryAuthorization(declined))
+        val again = management.retryAuthorization(retryCommand(repository, declined))
 
         assertEquals(first.paymentId, again.paymentId)
         assertEquals(emptyList(), repository.saved)
@@ -309,7 +333,7 @@ class PaymentManagementTest {
         repository.saved.clear()
         publisher.published.clear()
 
-        val domain = assertFailsWith<DomainException> { management.retryAuthorization(PaymentCommand.RetryAuthorization(created.paymentId)) }
+        val domain = assertFailsWith<DomainException> { management.retryAuthorization(retryCommand(repository, created.paymentId)) }
         assertEquals(PaymentAttempt.PAYMENT_NOT_RETRYABLE, domain.code)
         assertEquals(emptyList(), repository.saved)
         assertEquals(emptyList(), publisher.published)
@@ -320,7 +344,7 @@ class PaymentManagementTest {
         val management = management(RecordingRepository(), RecordingPublisher())
 
         val failure = assertFailsWith<DomainException> {
-            management.retryAuthorization(PaymentCommand.RetryAuthorization(PaymentId(UUID.randomUUID())))
+            management.retryAuthorization(PaymentCommand.RetryAuthorization(PaymentId(UUID.randomUUID()), StoreId(UUID.randomUUID())))
         }
 
         assertEquals(PaymentAttempt.PAYMENT_ATTEMPT_NOT_FOUND, failure.code)

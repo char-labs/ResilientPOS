@@ -107,7 +107,7 @@ class PaymentUnknownToOrderIntegrationTest(
         assertEquals(listOf("DECLINED"), attempts(orderId).map { it["status"] })
         assertEquals("CHECKOUT_REQUESTED", jdbcTemplate.orderStatus(orderId))
 
-        val retried = paymentManagement.retryAuthorization(PaymentCommand.RetryAuthorization(unknown))
+        val retried = paymentManagement.retryAuthorization(PaymentCommand.RetryAuthorization(unknown, OrderFixtures.storeId))
 
         awaitUntil("주문이 PAID가 된다. 현재: ${jdbcTemplate.orderStatus(orderId)} ${attempts(orderId)}") {
             jdbcTemplate.orderStatus(orderId) == "PAID"
