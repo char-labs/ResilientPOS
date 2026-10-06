@@ -67,7 +67,7 @@ class PaymentAttemptApiIntegrationTest(
     @Test
     fun `거절된 주문은 조회에서 DECLINED 시도를 보이고 재결제하면 같은 회차에 시도가 둘이 되며 재요청은 같은 paymentId다`() {
         val orderId = checkoutDeclinedOrder()
-        awaitUntil("첫 시도가 DECLINED로 조회된다. 현재: ${attempts(orderId, terminal.bearer)}") {
+        awaitUntil("첫 시도가 DECLINED로 조회된다", diagnostics = { ". 현재: ${attempts(orderId, terminal.bearer)}" }) {
             attempts(orderId, terminal.bearer).singleOrNull()?.get("status")?.asString() == "DECLINED"
         }
         val declined = attempts(orderId, terminal.bearer).single()
@@ -90,7 +90,7 @@ class PaymentAttemptApiIntegrationTest(
     @Test
     fun `다른 매장의 단말은 조회가 200 빈 배열이고 재결제는 404 PAYMENT_ATTEMPT_NOT_FOUND이며 시도가 늘지 않는다`() {
         val orderId = checkoutDeclinedOrder()
-        awaitUntil("첫 시도가 DECLINED로 조회된다. 현재: ${attempts(orderId, terminal.bearer)}") {
+        awaitUntil("첫 시도가 DECLINED로 조회된다", diagnostics = { ". 현재: ${attempts(orderId, terminal.bearer)}" }) {
             attempts(orderId, terminal.bearer).singleOrNull()?.get("status")?.asString() == "DECLINED"
         }
         val declinedId = attempts(orderId, terminal.bearer).single().get("paymentId").asString()
