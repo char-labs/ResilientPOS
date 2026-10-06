@@ -6,9 +6,11 @@ import com.resilientpos.foundation.DomainException
 import com.resilientpos.platform.Tx
 import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.AuthenticatedTerminal
+import com.resilientpos.terminal.TerminalCode
 import com.resilientpos.terminal.TerminalCommand
 import com.resilientpos.terminal.TerminalId
 import com.resilientpos.terminal.TerminalManagement
+import com.resilientpos.terminal.uniqueTerminalCode
 import java.security.MessageDigest
 import java.util.UUID
 import java.util.concurrent.ExecutionException
@@ -30,7 +32,7 @@ class TerminalManagementIntegrationTest(
 
     private val storeId = StoreId(UUID.randomUUID())
 
-    private fun register() = terminals.register(TerminalCommand.Register(storeId))
+    private fun register(code: TerminalCode = uniqueTerminalCode()) = terminals.register(TerminalCommand.Register(storeId, code))
 
     private fun count(sql: String, vararg args: Any): Long = jdbcTemplate.queryForObject<Long>(sql, *args)!!
 
@@ -60,6 +62,35 @@ class TerminalManagementIntegrationTest(
             ),
         )
         assertEquals(0L, count("select count(*) from t_terminal_credential where token_hash = ?", registered.token))
+    }
+
+    @Test
+    fun `같은 매장에 같은 코드로 다시 등록하면 TERMINAL_CODE_DUPLICATED이고 단말과 credential이 늘지 않는다`() {
+        val code = uniqueTerminalCode()
+        register(code)
+        val terminals0 = count("select count(*) from t_terminal where store_id = ?", storeId.value)
+        val credentials0 = count("select count(*) from t_terminal_credential")
+
+        val failure = assertFailsWith<DomainException> { register(code) }
+
+        assertEquals("TERMINAL_CODE_DUPLICATED", failure.code)
+        assertEquals(DomainErrorKind.CONFLICT, failure.kind)
+        assertEquals(terminals0, count("select count(*) from t_terminal where store_id = ?", storeId.value))
+        assertEquals(credentials0, count("select count(*) from t_terminal_credential"))
+    }
+
+    @Test
+    fun `다른 매장은 같은 코드로 등록할 수 있다`() {
+        val code = uniqueTerminalCode()
+        register(code)
+
+        val other = terminals.register(TerminalCommand.Register(StoreId(UUID.randomUUID()), code))
+
+        assertEquals(code, other.terminalCode)
+        assertEquals(
+            2L,
+            count("select count(*) from t_terminal where terminal_code = ?", code.value),
+        )
     }
 
     @Test

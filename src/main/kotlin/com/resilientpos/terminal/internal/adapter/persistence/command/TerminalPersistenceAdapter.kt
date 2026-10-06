@@ -8,6 +8,8 @@ import com.resilientpos.terminal.internal.domain.TerminalCredential
 import com.resilientpos.terminal.internal.domain.TerminalRepository
 import com.resilientpos.terminal.internal.domain.TerminalStatus
 import jakarta.persistence.EntityManager
+import jakarta.persistence.PersistenceException
+import org.hibernate.exception.ConstraintViolationException
 import org.springframework.stereotype.Component
 import org.springframework.transaction.annotation.Transactional
 
@@ -56,6 +58,13 @@ class TerminalPersistenceAdapter(
     @Transactional
     override fun save(terminal: Terminal): Terminal {
         entityManager.persist(TerminalEntity.from(terminal))
+        try {
+            entityManager.flush()
+        } catch (e: PersistenceException) {
+            // 사전 조회 없이 unique가 막는다. 다른 제약 위반은 그대로 던진다. 예외 뒤 영속성 컨텍스트는 쓰지 않고 트랜잭션은 롤백된다.
+            if ((e as? ConstraintViolationException)?.constraintName == TERMINAL_CODE_CONSTRAINT) throw Terminal.codeDuplicated()
+            throw e
+        }
         return terminal
     }
 
@@ -82,5 +91,9 @@ class TerminalPersistenceAdapter(
         entity.applyRevokedAt(credential.revokedAt)
         entityManager.flush()
         return credential
+    }
+
+    private companion object {
+        const val TERMINAL_CODE_CONSTRAINT = "ux_terminal_store_code"
     }
 }

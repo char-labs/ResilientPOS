@@ -24,10 +24,10 @@ class TerminalManagement(
 
     /** 단말과 첫 credential을 한 트랜잭션에 넣고 평문 토큰을 돌려준다. 매장 존재는 확인하지 않는다. */
     fun register(command: TerminalCommand.Register): TerminalCommand.Register.Result = Tx.masterTx {
-        val terminal = repository.save(Terminal.register(command.storeId, identifierGenerator))
+        val terminal = repository.save(Terminal.register(command.storeId, command.terminalCode, identifierGenerator))
         val issued = TerminalCredential.issue(terminal.id, identifierGenerator)
         repository.save(issued.credential)
-        TerminalCommand.Register.Result(terminal.id, issued.token)
+        TerminalCommand.Register.Result(terminal.id, command.terminalCode, issued.token)
     }
 
     /** 유효한 토큰이면 단말과 매장을, 모르는 토큰·회전된 토큰·비활성 단말이면 null을 돌려준다. */

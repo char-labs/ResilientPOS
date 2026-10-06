@@ -153,7 +153,7 @@ alter table t_terminal add constraint ux_terminal_store_code unique (store_id, t
 ## TDD 검증 기록
 | 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
 |---|---|---|---|
-| 인수 4·9, `TerminalCode` 형식과 V014 채우기, 코드 중복 409 | 미실행 | 미실행 | 미실행 |
+| 인수 4·9, `TerminalCode` 형식과 V014 채우기, 코드 중복 409 (`TerminalCodeTest`, `TerminalManagementIntegrationTest`의 같은 매장 중복·다른 매장 허용, `SchemaMigrationTest`의 V014 채우기·baseline) | `./gradlew test --tests 'com.resilientpos.terminal.*' --tests 'com.resilientpos.SchemaMigrationTest'`. 형식 검사 없는 `TerminalCode`와 미매핑 상태에서 5건 실패: `TerminalCodeTest` 거절 사례 assertion 실패, 중복 등록이 예외 없이 성공해 `assertFailsWith` 실패, baseline 버전 목록에 014 없음, V014 채우기는 V013 적용·행 삽입 뒤 `No migration with a target version 014`(V014 파일 없음), 다른 매장 허용은 `terminal_code` 컬럼 없음 SQL 오류 | 같은 명령 통과(BUILD SUCCESSFUL). V014는 spec SQL 그대로, `TerminalCode` 정규식 검사, adapter가 persist 직후 flush해 `ConstraintViolationException`의 제약명 `ux_terminal_store_code`만 `TERMINAL_CODE_DUPLICATED`(CONFLICT)로 변환 | `./gradlew test --tests 'com.resilientpos.terminal.*' --tests 'com.resilientpos.SchemaMigrationTest' --tests 'com.resilientpos.ModuleStructureTest'` 통과, `./gradlew test` 전체 통과 |
 | 인수 1·2, 운영자 체인의 401·403과 다른 경로 무영향 | 미실행 | 미실행 | 미실행 |
 | 인수 3·5·6·8·10, 등록·회전·비활성화 API와 감사 로그 | 미실행 | 미실행 | 미실행 |
 | 인수 7, 매장별 목록 조회 | 미실행 | 미실행 | 미실행 |

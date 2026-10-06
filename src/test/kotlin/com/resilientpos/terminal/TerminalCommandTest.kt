@@ -11,7 +11,7 @@ class TerminalCommandTest {
 
     @Test
     fun `Register 결과의 toString에는 토큰이 없다`() {
-        val text = TerminalCommand.Register.Result(TerminalId(UUID.randomUUID()), secret).toString()
+        val text = TerminalCommand.Register.Result(TerminalId(UUID.randomUUID()), TerminalCode("POS-1"), secret).toString()
 
         assertFalse(text.contains(secret), text)
     }

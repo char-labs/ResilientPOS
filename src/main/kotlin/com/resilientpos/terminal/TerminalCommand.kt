@@ -8,10 +8,10 @@ import com.resilientpos.store.StoreId
 object TerminalCommand {
 
     /** 매장에 새 단말을 `ACTIVE`로 등록하고 첫 credential을 발급한다. 매장 존재는 확인하지 않는다. */
-    data class Register(val storeId: StoreId) {
+    data class Register(val storeId: StoreId, val terminalCode: TerminalCode) {
         /** [token]은 평문이고 저장하지 않으므로 이 결과가 유일한 기회다. */
-        data class Result(val terminalId: TerminalId, val token: String) {
-            override fun toString(): String = "Result(terminalId=$terminalId, token=***)"
+        data class Result(val terminalId: TerminalId, val terminalCode: TerminalCode, val token: String) {
+            override fun toString(): String = "Result(terminalId=$terminalId, terminalCode=$terminalCode, token=***)"
         }
     }
 
