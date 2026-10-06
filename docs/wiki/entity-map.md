@@ -68,7 +68,7 @@ t_terminal_credential.terminal_id ───────────────�
 - 역할: 결제 승인(`AUTHORIZATION`)이나 취소·환불(`CANCELLATION`) 요청 한 번과 그 결말(`REQUESTED`→`APPROVED`/`DECLINED`/`UNKNOWN`)을 든다. 금액·통화를 직접 가진다. 결제 정본은 이 표이고 Redis·Kafka는 정본이 아니다.
 - 관계: `order_id`·`checkout_no`로 어느 주문의 몇 회차인지, `retried_from`으로 재결제의 원래 시도를 가리킨다. `store_id`·`terminal_id`는 이벤트에서 받아 복사한다.
 - 방어선: partial unique `ux_payment_attempt_inflight_authorization`(진행 중인 승인은 회차당 하나), `ux_payment_attempt_first_authorization`(사실로 만든 첫 승인 시도는 회차당 하나, 재결제는 `retried_from`이 있어 술어 밖). 행 잠금 아래에서 결말을 적용한다. `PaymentId`(이 행의 `id`)가 provider 멱등 키다.
-- 만드는 곳: `PaymentManagement.createAttempt`(`OrderPaymentRequested` consumer, `Lock` 블록)·`retryAuthorization`. 바꾸는 곳: `authorize`의 결말 적용. 지우지 않는다(감사·reconciliation 근거).
+- 만드는 곳: `PaymentManagement.createAttempt`(`OrderPaymentRequested` consumer, `Lock` 블록)·`retryAuthorization`. 바꾸는 곳: `authorize`의 결말 적용, `resolveUnknown`의 `UNKNOWN` 확정(주기 작업이 provider 조회로 `APPROVED`·`DECLINED`로 바꾼다. 대상은 partial index `ix_payment_attempt_unknown_authorization`로 고른다). 지우지 않는다(감사·reconciliation 근거).
 
 ### `FulfillmentEntity` — 결제된 주문 하나를 이행하는 단위
 - 역할: "이 주문은 이행 대상이다"라는 사실 한 줄. 상태·품목·매장은 아직 없다(읽는 화면이 없다). 업종(주방·바·픽업)을 가리지 않는다.

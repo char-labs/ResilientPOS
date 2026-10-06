@@ -40,7 +40,7 @@ Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰�
 | `store` | `Store` | 판매 정책, 통화·반올림, 매장 설정 | 정책은 버전으로 관리하고 과거 주문 금액을 사후에 바꾸지 않는다 | `StoreManagement` |
 | `terminal` | `Terminal` | 단말 코드, 소속 매장, 활성화, credential rotation 이력 | 매장 안에서 코드 유일(아직 구현하지 않았다. 단말 코드를 읽는 코드가 없어 컬럼도 없다). 소속 매장은 바뀌지 않는다. 비활성 단말은 인증 불가. 이력 삭제 금지 | `TerminalManagement` |
 | `order` | `Order` | line, 할인, checkout 금액·통화, lifecycle | `OPEN`에서만 금액·line 변경. checkout 이후 금액·통화 불변. 결제 승인 금액은 checkout과 일치해야 한다 | `OrderManagement` |
-| `payment` | `PaymentAttempt` | provider 참조, provider idempotency, 승인·취소 시도, 결제 정본 상태 | 같은 checkout에 진행 중인 승인 시도는 하나. `UNKNOWN`은 실패가 아니다. provider 결과는 한 번만 적용한다 | `PaymentManagement` |
+| `payment` | `PaymentAttempt` | provider 참조, provider idempotency, 승인·취소 시도, 결제 정본 상태 | 같은 checkout에 진행 중인 승인 시도는 하나. `UNKNOWN`은 실패가 아니다. provider 결과는 한 번만 적용한다(`UNKNOWN`은 결과가 없다는 기록이라 provider 조회로 한 번 확정한다) | `PaymentManagement` |
 | `sync` | `Watermark` | 단말 watermark, operation 접수·중복 제거, gap·conflict | `lastAckedSequence`는 단조 증가. gap을 건너뛰어 전진하지 않는다 | 공개 Facade 없음(`internal`의 `SyncCommandFacade`, HTTP만 부른다) |
 | `reconciliation` | `ReconciliationCase` | 불일치 case의 근거, 규칙 버전, 승인·조치 감사 기록 | 근거·규칙·감사 없이 해결하지 않는다. 결제 상태를 직접 고치지 않는다 | `ReconciliationManagement` |
 | `fulfillment` | `Fulfillment`, `ReceiptDelivery` | 주문 이후의 이행과 영수증 전달 | 원본 주문당 natural key로 한 번만 생성. 재시도 side effect는 멱등 | 소비 이벤트만 |
@@ -48,7 +48,7 @@ Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰�
 컨텍스트 사이의 소유 규칙:
 - `payment`만 결제 정본 상태를 바꾼다. `reconciliation`은 case와 근거를 소유하고 결론을 `PaymentManagement.resolveFromReconciliation(command)` 같은 좁은 공개 command로 요청한다.
 - `order`와 `payment`는 서로의 테이블·엔티티·repository를 읽거나 쓰지 않는다. 사실은 이벤트로 건너간다(`OrderPaymentRequested` → payment, `PaymentApproved` → order·reconciliation, `OrderPaid` → fulfillment).
-- **결제 결말 셋 중 `PaymentApproved`만 `contract`에 있다.** 그것만 경계를 넘기 때문이다. `PaymentEvent.Declined`·`PaymentEvent.Unknown`은 받을 쪽이 아직 없어 `payment`의 sealed 계층에 남는다(§4.4). 소비자가 생기는 PR이 옮기고, 그 이동은 `event_publication`의 `event_type`을 바꾸므로 배포된 행이 있는지부터 본다.
+- **결제 결말 셋 중 `PaymentApproved`만 `contract`에 있다.** 그것만 경계를 넘기 때문이다. `PaymentEvent.Declined`·`PaymentEvent.Unknown`은 `payment`의 sealed 계층에 남는다(§4.4). 거절·불명이어도 주문은 `CHECKOUT_REQUESTED`에 머물고(그 회차의 결제가 아직 끝나지 않았다), 재결제는 같은 회차의 새 시도이며, `UNKNOWN`은 `payment`가 provider 조회로 확정하므로 `order`가 받을 일이 없다([payment-unknown-resolution](../spec/2026-10-01-payment-unknown-resolution.md)). 주문 취소처럼 주문이 거절을 알아야 하는 명령이 생기는 PR이 옮기고, 그 이동은 `event_publication`의 `event_type`을 바꾸므로 배포된 행이 있는지부터 본다.
 - **모듈을 건너가는 이벤트는 `contract` 모듈이 소유한다.** 두 모듈이 서로의 사실을 주고받으면 타입 의존이 양방향이 되어 Modulith의 순환 검사에 걸린다. 양쪽이 함께 의존하는 곳에 그 사실을 둔다. `contract`는 bounded context가 아니다 — 업무 규칙도 상태도 없고 계약만 있다. **다른 업무 모듈의 타입을 들지 않는다**(식별자를 raw `UUID`로 든다). 들면 그 방향으로 간선이 생겨 순환이 되돌아온다. 소비자가 없는 이벤트는 소유 모듈에 남는다 — 경계를 넘는 것만 공유한다.
 - `order`는 합계가 0원인 주문도 똑같이 checkout을 확정하고 `OrderPaymentRequested`를 낸다. 전액 할인·프로모션 주문이 거절되지 않고 주문·결제·영수증 조회가 같은 경로로 보이게 하려는 것이다. `payment`는 0원 attempt를 provider 호출 없이 승인으로 기록하고 `PaymentApproved`를 내야 한다.
 - `sync`는 접수·중복·순서만 판정하고, 받아들인 명령은 소유 컨텍스트의 Command Facade로 넘긴다. `SyncOperationApplied`는 기술 감사 이벤트이며 `OrderCreated`를 대체하지 않는다.
@@ -84,7 +84,7 @@ Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰�
 | `sequence` (terminal sequence) | 한 단말 안에서 단조 증가하는 명령 순번. 누락(gap) 탐지의 근거 | — | UUID 생성 순서, Kafka 순서, aggregate version과 다르다. 서로 대체하지 않는다 |
 | `checkout` | 결제 시도 회차에 대해 확정한 금액·통화·정책 버전(정책 버전은 store 정책이 생길 때 더한다) | `checkout snapshot` | snapshot은 구현 용어다. 이 값은 "N회차 결제 시도의 확정 금액"이라는 업무 사실이다. 테이블은 `t_order_checkout`. [청사진 §1.1](../references/05_Domain_Development_Blueprint.md)의 `CheckoutSnapshot`·`snapshotOf`는 `Checkout`·`checkoutOf`로 대체한다 |
 | `attempt` (payment) | 한 주문에 대한 provider 요청 1회. 식별은 `PaymentId`이고 회차 번호는 두지 않는다. 승인과 취소는 각각 별도 attempt다 | `payment`, `transaction` | 한 요청의 결과(승인·거절·`UNKNOWN`)를 한 회차에 담아야 한다. transaction은 DB 용어와 충돌한다 |
-| `UNKNOWN` | provider 결과를 아직 확인하지 못한 결제 상태. 실패가 아니다 | `FAILED`, `TIMEOUT` | timeout은 전송 관찰의 실패이고 결제 결과의 실패가 아니다. `UNKNOWN`에서 새 승인 요청을 재시도하지 않고 provider 조회 → reconciliation으로 수렴한다 |
+| `UNKNOWN` | provider 결과를 아직 확인하지 못한 결제 상태. 실패가 아니다 | `FAILED`, `TIMEOUT` | timeout은 전송 관찰의 실패이고 결제 결과의 실패가 아니다. `UNKNOWN`에서 새 승인 요청을 재시도하지 않고 provider 조회 → reconciliation으로 수렴한다. 조회 확정은 `payment`의 주기 작업이 하고(§4.3), 조회로도 확정되지 않는 건을 넘겨받을 reconciliation case는 아직 없다 |
 | `gap` / `duplicate` / `conflict` / `rejected` | sync 판정 결과. 순번 누락 / 이미 접수한 operation의 같은 내용 재전송 / 확정한 순번에 다른 내용이나 모르는 operation / 소유 컨텍스트가 도메인 규칙으로 거절한 operation(순번은 확정되고 단말은 버린다) | 일반 `error`, HTTP 500 | 네 가지는 각각 다른 복구 경로를 가진 업무 결과다. 항목 단위 결과로 돌려주고 부분 성공을 200 하나로 숨기지 않는다. 적용된 항목은 `applied`다([sync-intake](../spec/2026-09-30-sync-intake.md)) |
 | `case` (reconciliation) | 불일치 한 건의 근거·규칙 버전·조치·감사 기록 | `issue`, `ticket` | ticket은 KDS·프린터의 표시 매체(화면 카드, 종이 주문표)를 가리키는 업계 용어다 |
 | `evidence` | POS·서버·provider 각각이 말하는 사실의 기록 | `proof`, `log` | 세 출처를 나란히 비교하는 것이 reconciliation의 본질이다 |
@@ -163,6 +163,11 @@ Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰�
       1. 완료 행이 쌓여 한 번의 DELETE가 쿼리 상한(10초)이나 트랜잭션 상한(30초)을 넘는다.
       2. 우리 업무 테이블에 대량 변경 배치가 생긴다. 이때는 처음부터 JDBC로 쓰고 영속성 컨텍스트를 거치지 않는다.
     - `republish-outstanding-events-on-restart`는 끈 채로 둔다.
+- **결과 불명 결제는 `payment`의 주기 작업이 provider 조회로 확정한다**(`payment.internal.application.UnknownPaymentResolver`, [payment-unknown-resolution](../spec/2026-10-01-payment-unknown-resolution.md)).
+  - 1분(`resilientpos.payment.unknown-resolve-interval`)마다 모든 pod에서 돌고 `Lock.executeWithLockNoTx`(`payment:unknown-resolve`)로 줄 세운다. `UNKNOWN` 승인 시도를 오래된 것부터 최대 100건 골라 한 건씩 `PaymentManagement.resolveUnknown`을 부른다. 대상 조회는 V013의 partial index(`ix_payment_attempt_unknown_authorization`)를 쓰고, 술어를 리터럴로 렌더해 generic plan에서도 인덱스가 쓰이게 한다.
+  - `resolveUnknown`은 `authorize`와 같은 모양이다. provider 조회는 트랜잭션 밖이고, 확정은 행을 잠근 뒤 `UNKNOWN`을 다시 확인하고 적용한다. 승인이면 `PaymentApproved`가 나가 기존 consumer가 주문을 `PAID`로 넘기고, 거절이면 그 시도가 재결제 대상이 된다. 조회로도 불명이면 아무것도 쓰지 않는다(가짜 성공 금지).
+  - 락은 provider 중복 조회를 줄이는 완화 수단이다. fail-open이나 TTL 초과로 pod가 겹쳐도 조회는 읽기이고, 같은 확정이 두 번 적용되는 일은 잠근 뒤 재확인이 막는다. 이 블록은 `Lock` 안에서 행 잠금을 기다리는 예외다. 그 행을 잠그는 다른 경로(`authorize`의 적용, `retryAuthorization`)는 이 키를 잡지 않아 순환이 없다.
+  - 한 건이 던지면 ERROR 로그를 남기고 다음 건으로 간다. 조회 횟수 상한은 없어 영영 불명인 건이 100건을 넘게 쌓이면 새 건이 밀린다. 그 건들을 넘겨받을 reconciliation case가 생기면 해소한다.
 - `event_publication`의 인덱스는 V004가 만든 두 개(`serialized_event` hash, `completion_date`)와 V009의 `status`다. `status` 인덱스는 재전송 작업과 Modulith가 매분 status로 거르는 조회(`countByStatus`, `findFailedPublications`)를 위한 것이고, Modulith가 파라미터로 거는 조회의 generic plan에서도 쓰이도록 partial이 아닌 전체 인덱스로 두었다(실측은 [event-publication-resubmit](../spec/2026-09-29-event-publication-resubmit.md) 스키마 변경 검토).
 - `event_publication`은 테이블·컬럼 이름을 Modulith의 JPA 엔티티가 정한다. `t_` 접두어 규칙과 `BaseEntity` 공통 컬럼의 예외다. 엔티티가 라이브러리 안에 있어서 바꿀 수 없다. 스키마는 같은 버전 JDBC 모듈의 공식 PostgreSQL 스키마를 기준으로 Flyway 마이그레이션에 직접 쓴다. JPA가 `validate`라서 Modulith를 올릴 때 엔티티의 컬럼이 바뀌었는지 확인하고 마이그레이션을 함께 넣어야 한다([event-publication-registry](../spec/2026-09-21-event-publication-registry.md)).
 - **Modulith 버전을 올리는 PR의 절차.** 라이브러리는 이 테이블을 만들어 주지 않는다. JPA 모듈에는 스키마 SQL이 없고 스키마의 소유자는 Flyway다.
