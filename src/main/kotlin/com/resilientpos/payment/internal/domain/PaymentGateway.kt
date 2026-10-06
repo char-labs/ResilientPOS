@@ -29,6 +29,7 @@ interface PaymentGateway {
      * 이때 Unknown은 "조회로도 확인하지 못했다"이다.
      *
      * [AuthorizationOutcome.Declined]는 돈이 움직이지 않았다고 provider가 확인한 경우에만 쓴다.
+     * provider가 아직 처리 중이라고 답하면 Unknown이다. 처리 중을 거절로 접으면 재결제가 이중 청구가 된다.
      * provider의 "그런 요청 없음"을 어느 갈래로 접을지는 실제 PG 어댑터가 정한다.
      * [AuthorizationRequest.amount]는 조회에 필요 없지만 같은 요청 값을 그대로 넘기려고 싣는다.
      */

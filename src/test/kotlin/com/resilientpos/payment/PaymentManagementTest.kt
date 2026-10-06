@@ -52,6 +52,8 @@ class PaymentManagementTest {
     private val orderId: UUID = UUID.randomUUID()
 
     private class RecordingRepository(var existing: PaymentAttempt? = null) : PaymentAttemptRepository {
+        /** 주면 `findByIdForUpdate`가 저장된 값 대신 이것을 돌려준다. 읽은 뒤 다른 호출이 먼저 확정한 경우를 만든다. */
+        var lockedRead: PaymentAttempt? = null
         val saved = mutableListOf<PaymentAttempt>()
         val updated = mutableListOf<PaymentAttempt>()
         val stored = mutableMapOf<PaymentId, PaymentAttempt>()
@@ -61,7 +63,7 @@ class PaymentManagementTest {
         }
         override fun findById(paymentId: PaymentId) = stored[paymentId]
         override fun findUnknownAuthorizationIds(limit: Int) = emptyList<PaymentId>()
-        override fun findByIdForUpdate(paymentId: PaymentId) = stored[paymentId]
+        override fun findByIdForUpdate(paymentId: PaymentId) = lockedRead ?: stored[paymentId]
         override fun update(attempt: PaymentAttempt) = attempt.also {
             updated += it
             stored[it.id] = it
@@ -413,5 +415,51 @@ class PaymentManagementTest {
 
         assertEquals(PaymentAttempt.PAYMENT_ATTEMPT_NOT_FOUND, failure.code)
         assertEquals(0, gateway.queryCalls)
+    }
+
+    @Test
+    fun `UNKNOWN이어도 취소 시도는 provider를 조회하지 않고 지금 상태를 돌려준다`() {
+        val repository = RecordingRepository()
+        val publisher = RecordingPublisher()
+        val gateway = StubGateway(AuthorizationOutcome.Approved("PROVIDER-REF"))
+        val management = management(repository, publisher, gateway)
+        val cancellation = PaymentAttempt.restore(
+            id = PaymentId(UUID.randomUUID()),
+            orderId = orderId,
+            storeId = StoreId(UUID.randomUUID()),
+            terminalId = TerminalId(UUID.randomUUID()),
+            checkoutNo = 1,
+            kind = PaymentAttemptKind.CANCELLATION,
+            amount = Money.of("4500", krw),
+            status = PaymentAttemptStatus.UNKNOWN,
+            providerReference = null,
+            retriedFrom = null,
+        )
+        repository.stored[cancellation.id] = cancellation
+
+        val result = management.resolveUnknown(PaymentCommand.ResolveUnknown(cancellation.id))
+
+        assertEquals(PaymentCommand.ResolveUnknown.Result(cancellation.id, PaymentAttemptStatus.UNKNOWN), result)
+        assertEquals(0, gateway.queryCalls)
+        assertTrue(repository.updated.isEmpty())
+        assertTrue(publisher.published.isEmpty())
+    }
+
+    @Test
+    fun `조회하는 동안 다른 호출이 먼저 확정했으면 덮지 않고 그 결말을 돌려준다`() {
+        val repository = RecordingRepository()
+        val publisher = RecordingPublisher()
+        val gateway = StubGateway(AuthorizationOutcome.Unknown, AuthorizationOutcome.Declined("PROVIDER-REF"))
+        val management = management(repository, publisher, gateway)
+        val unknown = unknownAttempt(management, publisher, repository)
+        // findById는 UNKNOWN을 읽었지만 잠그고 다시 읽으면 이미 APPROVED다.
+        repository.lockedRead = repository.stored.getValue(unknown).confirmApproved("OTHER-REF", UuidV7IdentifierGenerator(), Instant.parse("2026-09-22T00:30:00Z")).aggregate
+
+        val result = management.resolveUnknown(PaymentCommand.ResolveUnknown(unknown))
+
+        assertEquals(PaymentCommand.ResolveUnknown.Result(unknown, PaymentAttemptStatus.APPROVED), result)
+        assertEquals(1, gateway.queryCalls)
+        assertTrue(repository.updated.isEmpty())
+        assertTrue(publisher.published.isEmpty())
     }
 }

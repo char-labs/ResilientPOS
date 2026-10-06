@@ -29,6 +29,7 @@ import org.springframework.jdbc.core.queryForObject
  *
  * provider가 두 조회에 **서로 다른** 답을 주게 만든다. 잠근 뒤 `UNKNOWN` 재확인이 없으면 둘 다 적용해
  * 승인이 거절로 조용히 바뀌고 이벤트가 둘 나간다. 시도는 SQL로 직접 넣는다. 이벤트로 만들면 승인 리스너가 끼어든다.
+ * 임의 order_id라 승인 쪽이 이기면 `PaymentApprovedListener`가 주문을 찾지 못해 DLT로 보낸다(테스트 잡음, 단언과 무관).
  */
 class PaymentUnknownResolutionConcurrencyIntegrationTest(
     @Autowired private val paymentManagement: PaymentManagement,

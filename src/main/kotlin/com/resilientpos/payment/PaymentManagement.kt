@@ -1,5 +1,6 @@
 package com.resilientpos.payment
 
+import com.resilientpos.contract.PaymentAttemptKind
 import com.resilientpos.foundation.DomainEvent
 import com.resilientpos.foundation.IdentifierGenerator
 import com.resilientpos.foundation.Transition
@@ -116,13 +117,14 @@ class PaymentManagement(
      * 확정은 `Tx.masterTx`가 따로 열어 반환 전에 커밋한다. 호출자 트랜잭션에 합류하지 않으므로 §4.6 sync intake의 한 커밋 안에서 부르지 않는다.
      * 그 안에서 부르면 바깥이 롤백돼도 확정 결과는 따로 커밋된다.
      *
-     * `UNKNOWN`이 아니면 provider를 부르지 않고 지금 상태를 돌려준다. 조회도 불명이면 아무것도 쓰지 않는다. 가짜 성공도 가짜 실패도 만들지 않는다.
+     * `UNKNOWN`이 아니거나 승인 시도가 아니면 provider를 부르지 않고 지금 상태를 돌려준다. 조회 요청은 승인 요청이라 취소 시도에 쓰면
+     * 취소를 승인 조회로 확정하게 된다. 조회도 불명이면 아무것도 쓰지 않는다. 가짜 성공도 가짜 실패도 만들지 않는다.
      * 정합성은 행을 잠근 뒤 `UNKNOWN`을 다시 확인하는 데서 나온다. 조회하는 동안 다른 호출이 먼저 확정했으면 덮지 않고 그 결말을 돌려준다.
      */
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
     fun resolveUnknown(command: PaymentCommand.ResolveUnknown): PaymentCommand.ResolveUnknown.Result {
         val attempt = Tx.masterTx { repository.findById(command.paymentId) } ?: throw PaymentAttempt.notFound()
-        if (attempt.status != PaymentAttemptStatus.UNKNOWN) {
+        if (attempt.status != PaymentAttemptStatus.UNKNOWN || attempt.kind != PaymentAttemptKind.AUTHORIZATION) {
             return PaymentCommand.ResolveUnknown.Result(attempt.id, attempt.status)
         }
 

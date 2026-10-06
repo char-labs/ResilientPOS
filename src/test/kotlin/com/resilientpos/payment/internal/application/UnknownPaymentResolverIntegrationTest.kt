@@ -10,8 +10,10 @@ import com.resilientpos.payment.PaymentId
 import com.resilientpos.payment.internal.adapter.gateway.FakePaymentGateway
 import com.resilientpos.payment.internal.domain.AuthorizationOutcome
 import com.resilientpos.payment.internal.domain.AuthorizationRequest
+import com.resilientpos.payment.internal.domain.PaymentAttemptRepository
 import com.resilientpos.payment.internal.domain.PaymentGateway
 import com.resilientpos.platform.DistributedLock
+import jakarta.persistence.EntityManagerFactory
 import java.util.UUID
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CopyOnWriteArraySet
@@ -19,10 +21,12 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
 import kotlin.test.AfterTest
+import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
+import org.hibernate.SessionFactory
 import org.springframework.beans.factory.ObjectProvider
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.TestConfiguration
@@ -43,6 +47,8 @@ class UnknownPaymentResolverIntegrationTest(
     @Autowired private val gateway: RecordingGateway,
     @Autowired private val distributedLock: DistributedLock,
     @Autowired private val scheduledTasks: ObjectProvider<ScheduledTaskHolder>,
+    @Autowired private val repository: PaymentAttemptRepository,
+    @Autowired entityManagerFactory: EntityManagerFactory,
 ) : PostgresIntegrationTest() {
 
     /**
@@ -72,14 +78,26 @@ class UnknownPaymentResolverIntegrationTest(
     }
 
     private val created = mutableListOf<PaymentId>()
+    private val statistics = entityManagerFactory.unwrap(SessionFactory::class.java).statistics
+    private var statisticsWereEnabled = false
+
+    @BeforeTest
+    fun enableStatistics() {
+        statisticsWereEnabled = statistics.isStatisticsEnabled
+        statistics.isStatisticsEnabled = true
+    }
 
     @AfterTest
     fun cleanUp() {
+        statistics.isStatisticsEnabled = statisticsWereEnabled
+        jdbcTemplate.update("delete from t_payment_attempt where id = ?", cancellationId)
         gateway.failFor.clear()
         gateway.queried.clear()
         // 계속 불명으로 남는 시도는 다른 테스트의 작업이 다시 집지 않게 닫아 둔다.
         created.forEach { jdbcTemplate.update("update t_payment_attempt set status = 'DECLINED' where id = ? and status = 'UNKNOWN'", it.value) }
     }
+
+    private val cancellationId = UUID.randomUUID()
 
     private fun status(paymentId: PaymentId): String =
         jdbcTemplate.queryForObject("select status from t_payment_attempt where id = ?", String::class.java, paymentId.value)!!
@@ -114,6 +132,36 @@ class UnknownPaymentResolverIntegrationTest(
     }
 
     @Test
+    fun `UNKNOWN 취소 시도는 조회하지 않고 그대로 둔다`() {
+        jdbcTemplate.update(
+            """
+            insert into t_payment_attempt
+                (id, order_id, store_id, terminal_id, checkout_no, kind, amount, currency, status,
+                 provider_reference, created_at, updated_at)
+            values (?, ?, ?, ?, 1, 'CANCELLATION', 4600, 'KRW', 'UNKNOWN', null, now(), now())
+            """.trimIndent(),
+            cancellationId, UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(),
+        )
+
+        resolver.resolveUnknown()
+
+        assertTrue(PaymentId(cancellationId) !in gateway.queried, "취소 시도를 조회했다")
+        assertEquals("UNKNOWN", status(PaymentId(cancellationId)))
+    }
+
+    @Test
+    fun `대상 조회는 kind와 status를 바인드 파라미터가 아니라 리터럴로 렌더한다`() {
+        statistics.clear()
+
+        repository.findUnknownAuthorizationIds(1)
+
+        val queries: Array<String> = statistics.queries
+        val rendered = queries.single { "PaymentAttemptEntity" in it }
+        assertTrue("PaymentAttemptStatus.UNKNOWN" in rendered && "PaymentAttemptKind.AUTHORIZATION" in rendered, "리터럴이 없다: $rendered")
+        assertTrue("?" !in rendered && ":" !in rendered, "바인드 파라미터가 있다: $rendered")
+    }
+
+    @Test
     fun `오래된 시도부터 조회한다`() {
         val first = attemptAt("4614", PaymentAttemptStatus.UNKNOWN)
         val second = attemptAt("4624", PaymentAttemptStatus.UNKNOWN)
@@ -143,15 +191,18 @@ class UnknownPaymentResolverIntegrationTest(
 
     @Test
     fun `다른 쪽이 락을 쥐고 있으면 풀릴 때까지 기다린다`() {
+        val waiting = attemptAt("4672", PaymentAttemptStatus.UNKNOWN)
         val token = checkNotNull(distributedLock.tryAcquire(UnknownPaymentResolver.LOCK_KEY))
         val executor = Executors.newSingleThreadExecutor()
         var released = false
         try {
             val run = executor.submit { resolver.resolveUnknown() }
             assertFailsWith<TimeoutException> { run.get(500, TimeUnit.MILLISECONDS) }
+            assertTrue(gateway.queried.isEmpty(), "락을 쥔 동안 조회했다: ${gateway.queried}")
             distributedLock.release(UnknownPaymentResolver.LOCK_KEY, token)
             released = true
             run.get(5, TimeUnit.SECONDS)
+            assertTrue(waiting in gateway.queried, "락이 풀린 뒤 조회하지 않았다")
         } finally {
             if (!released) distributedLock.release(UnknownPaymentResolver.LOCK_KEY, token)
             executor.shutdownNow()

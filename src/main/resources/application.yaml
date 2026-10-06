@@ -27,7 +27,7 @@ spring:
       transactional-lock: false
   data:
     redis:
-      # 결제 시도 생성·주문 생성의 중복 완화 잠금과 발행 기록 재전송의 pod 간 줄 세우기(platform.Lock)에만 쓴다. 정합성의 정본은 DB다.
+      # 결제 시도 생성·주문 생성의 중복 완화 잠금과 발행 기록 재전송·결과 불명 확정 작업의 pod 간 줄 세우기(platform.Lock)에만 쓴다. 정합성의 정본은 DB다.
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
       # 잠금은 Redis가 느리거나 없으면 잠금 없이 진행한다(fail-open). 기본 60초를 기다리면 그동안 결제와 주문 생성이 멈춘다.
@@ -55,6 +55,11 @@ spring:
     properties:
       # 쿼리 하나가 도는 시간(ms). 넘으면 그 쿼리만 실패한다.
       jakarta.persistence.query.timeout: 10000
+  task:
+    scheduling:
+      pool:
+        # 공용 스케줄러의 기본 스레드는 하나라 결과 불명 확정 작업이 길어지면 발행 기록 재전송과 Moments가 멈춘다. 실제 PG PR이 조회 타임아웃과 함께 다시 본다.
+        size: 2
   transaction:
     # 트랜잭션 하나가 도는 시간(초). 쿼리 여러 개로 나뉘어 각각은 상한 안이어도 전체가 길어질 수 있다.
     default-timeout: 30

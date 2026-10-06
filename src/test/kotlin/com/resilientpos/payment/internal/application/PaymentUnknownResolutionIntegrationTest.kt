@@ -132,7 +132,7 @@ class PaymentUnknownResolutionIntegrationTest(
     }
 
     @Test
-    fun `조회가 거절이면 시도가 DECLINED가 되고 거절 발행 기록이 생긴다`() {
+    fun `조회가 거절이면 시도가 DECLINED가 되고 거절 사실이 발행된다`() {
         val paymentId = unknownAttempt("4503")
 
         val result = paymentManagement.resolveUnknown(PaymentCommand.ResolveUnknown(paymentId))
