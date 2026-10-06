@@ -47,7 +47,7 @@ fun resolveUnknown() = Lock.executeWithLockNoTx(LOCK_KEY) {
 }
 ```
 
-- 대상은 `kind = AUTHORIZATION`이고 `status = UNKNOWN`인 시도다. 오래된 것(`id` 오름차순, UUID v7)부터 한 주기에 최대 100건이다.
+- 대상은 `kind = AUTHORIZATION`이고 `status = UNKNOWN`인 시도다. 오래된 것(`id` 오름차순, UUID v7)부터 한 주기에 최대 100건이다. 앞쪽 N건을 읽는 조회가 `JdslQueryExecutor`에 없어 `findAll(limit) { }` 오버로드를 더한다(`setMaxResults` 한 줄, 기존 호출은 그대로).
 - 한 건이 던지면(잠금 대기 초과, DB 오류) 그 건의 `paymentId`와 예외를 ERROR로 남기고 다음 건으로 간다. 한 건이 배치 전체를 막지 않게 하려는 것이다. 그 건은 `UNKNOWN`으로 남아 다음 주기에 다시 잡힌다. 대상 조회 자체가 던지면 그 주기를 건너뛰고 스케줄러가 로그를 남긴다.
 - 조회로도 확정되지 않은 건은 다음 주기에 다시 묻는다. 횟수 상한은 없다.
 
@@ -83,6 +83,7 @@ fun resolveUnknown() = Lock.executeWithLockNoTx(LOCK_KEY) {
 ## 변경 경로
 - src/main/kotlin/com/resilientpos/payment/**
 - src/main/kotlin/com/resilientpos/order/internal/domain/Order.kt
+- src/main/kotlin/com/resilientpos/platform/JdslQueryExecutor.kt
 - src/main/resources/application.yaml
 - src/main/resources/db/migration/**
 - src/test/kotlin/com/resilientpos/**
@@ -95,7 +96,7 @@ fun resolveUnknown() = Lock.executeWithLockNoTx(LOCK_KEY) {
 ## 인수 조건
 1. `FakePaymentGateway`가 위 표대로 답한다. 끝자리 1과 그 밖의 `authorize`는 지금과 같다.
 2. `PaymentAttempt`의 확정 전이는 `UNKNOWN`에서만 된다. 승인은 `APPROVED`·provider 참조·`PaymentApproved`를, 거절은 `DECLINED`·provider 참조·`PaymentEvent.Declined`를 낸다. `UNKNOWN`이 아니면 `PAYMENT_RESULT_ALREADY_APPLIED`로 거절한다.
-3. `resolveUnknown`이 `UNKNOWN` 시도를 조회 결과대로 확정하고 같은 커밋에 발행 기록을 남긴다. 조회 결과가 `Unknown`이면 행도 발행 기록도 바뀌지 않는다. `UNKNOWN`이 아닌 시도는 provider를 부르지 않고 지금 상태를 돌려준다.
+3. `resolveUnknown`이 `UNKNOWN` 시도를 조회 결과대로 확정하고 같은 커밋에서 발행한다. 승인은 `PaymentApproved`의 발행 기록이 같은 커밋에 남는다. 거절(`PaymentEvent.Declined`)은 받는 쪽이 없어 발행 기록이 생기지 않으므로 발행 자체를 관측한다. 조회 결과가 `Unknown`이면 행도 발행 기록도 바뀌지 않는다. `UNKNOWN`이 아닌 시도는 provider를 부르지 않고 지금 상태를 돌려준다.
 4. provider 조회 순간 그 스레드에 EntityManager와 커넥션이 묶여 있지 않다.
 5. 같은 시도의 `resolveUnknown`이 동시에 둘 와도 한 번만 적용되고 이벤트는 하나다.
 6. 주기 작업 한 번이 `UNKNOWN` 승인 시도만 오래된 순으로 최대 100건 처리한다. 한 건이 던져도 나머지는 처리된다. 작업은 `payment:unknown-resolve` 키의 `Lock` 블록 안에서 돈다.
