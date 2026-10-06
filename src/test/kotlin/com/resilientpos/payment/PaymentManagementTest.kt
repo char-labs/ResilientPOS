@@ -340,6 +340,39 @@ class PaymentManagementTest {
     }
 
     @Test
+    fun `취소 시도로 재결제하면 같은 회차에 승인 시도가 있어도 거절하고 아무것도 만들지 않는다`() {
+        val repository = RecordingRepository()
+        val publisher = RecordingPublisher()
+        val management = management(repository, publisher, StubGateway(AuthorizationOutcome.Declined(null)))
+        val declined = declinedAttempt(repository, management)
+        val authorization = repository.stored.getValue(declined)
+        val cancellation = PaymentAttempt.restore(
+            id = PaymentId(UUID.randomUUID()),
+            orderId = authorization.orderId,
+            storeId = authorization.storeId,
+            terminalId = authorization.terminalId,
+            checkoutNo = authorization.checkoutNo,
+            kind = PaymentAttemptKind.CANCELLATION,
+            amount = authorization.amount,
+            status = PaymentAttemptStatus.DECLINED,
+            providerReference = null,
+            retriedFrom = null,
+        )
+        repository.stored[cancellation.id] = cancellation
+        repository.saved.clear()
+        publisher.published.clear()
+
+        val failure = assertFailsWith<DomainException> {
+            management.retryAuthorization(PaymentCommand.RetryAuthorization(cancellation.id, cancellation.storeId))
+        }
+
+        assertEquals(PaymentAttempt.PAYMENT_NOT_RETRYABLE, failure.code)
+        assertEquals(DomainErrorKind.UNPROCESSABLE, failure.kind)
+        assertEquals(emptyList(), repository.saved)
+        assertEquals(emptyList(), publisher.published)
+    }
+
+    @Test
     fun `없는 시도를 재결제하려 하면 거절한다`() {
         val management = management(RecordingRepository(), RecordingPublisher())
 

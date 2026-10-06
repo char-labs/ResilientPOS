@@ -204,9 +204,12 @@ class PaymentManagement(
             }
             throw PaymentAttempt.notFound()
         }
-        val latest = repository.findLatestAuthorization(target.orderId, target.checkoutNo)
-        if (latest != null && latest.id != target.id) {
-            return PaymentCommand.RetryAuthorization.Result(latest.id, latest.status) to false
+        // 이미 다시 시도했는지는 승인 시도에만 뜻이 있다. 취소 시도는 aggregate의 `retry()`가 거절한다.
+        if (target.kind == PaymentAttemptKind.AUTHORIZATION) {
+            val latest = repository.findLatestAuthorization(target.orderId, target.checkoutNo)
+            if (latest != null && latest.id != target.id) {
+                return PaymentCommand.RetryAuthorization.Result(latest.id, latest.status) to false
+            }
         }
 
         val transition = target.retry(identifierGenerator, clock.instant())
