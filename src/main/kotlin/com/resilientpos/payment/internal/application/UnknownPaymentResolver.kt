@@ -6,6 +6,9 @@ import com.resilientpos.payment.PaymentManagement
 import com.resilientpos.payment.internal.domain.PaymentAttemptRepository
 import com.resilientpos.platform.Lock
 import com.resilientpos.platform.logger
+import io.micrometer.core.instrument.Gauge
+import io.micrometer.core.instrument.MeterRegistry
+import java.util.concurrent.atomic.AtomicLong
 import org.springframework.scheduling.annotation.Scheduled
 import org.springframework.stereotype.Component
 
@@ -21,20 +24,41 @@ import org.springframework.stereotype.Component
  * 한 건이 던지면(잠금 대기 초과, DB 오류) ERROR로 남기고 다음 건으로 간다. 그 건은 `UNKNOWN`으로 남아 다음 주기에 다시 잡힌다.
  * 대상 조회가 던지면 그 주기를 건너뛰고 Spring 스케줄러가 로그를 남긴다.
  *
- * ponytail: 조회로도 영영 확정되지 않는 건이 [BATCH_SIZE]를 넘게 쌓이면 그 뒤의 새 건이 밀린다. reconciliation case가 생기면 그쪽으로 넘겨 푼다.
+ * 영영 불명인 건이 새 건을 막지 않게 지난 주기에 읽은 마지막 `id` 다음부터 읽는다(keyset). 끝에 닿으면(읽은 건이 [BATCH_SIZE]보다 적으면) 다음 주기는 처음부터다.
+ * 새 건은 늦어도 ceil(불명 건수 / [BATCH_SIZE]) 주기 안에 조회된다. 커서는 pod마다 따로이고 재기동하면 처음부터라 조회가 겹치거나 늦어질 뿐 정합성에는 닿지 않는다.
+ * 스케줄러는 `Lock` 블록 안에서 줄 서므로 한 인스턴스의 커서가 동시에 바뀌지 않지만 테스트가 직접 부를 수 있어 `@Volatile`이다.
+ *
+ * 결과 불명 시도 수는 gauge `payment.attempt.unknown`으로 낸다. 한 주기의 시작(락 밖)에 세어 갱신하므로 scrape가 DB를 부르지 않는다.
+ * 세기가 던지면 그 주기를 건너뛰고 값은 마지막 성공값으로 남는다.
  */
 @Component
 class UnknownPaymentResolver(
     private val repository: PaymentAttemptRepository,
     private val paymentManagement: PaymentManagement,
+    meterRegistry: MeterRegistry,
 ) {
+    private val unknownCount = AtomicLong(0)
+
+    @Volatile
+    private var cursor: PaymentId? = null
+
+    init {
+        Gauge.builder("payment.attempt.unknown", unknownCount) { it.toDouble() }
+            .description("결과 불명 승인 시도 수, 작업 주기마다 갱신")
+            .register(meterRegistry)
+    }
 
     @Scheduled(
         fixedDelayString = "\${resilientpos.payment.unknown-resolve-interval}",
         initialDelayString = "\${resilientpos.payment.unknown-resolve-interval}",
     )
-    fun resolveUnknown() = Lock.executeWithLockNoTx(LOCK_KEY) {
-        repository.findUnknownAuthorizationIds(BATCH_SIZE).forEach { resolveOne(it) }
+    fun resolveUnknown() {
+        unknownCount.set(repository.countUnknownAuthorizations())
+        Lock.executeWithLockNoTx(LOCK_KEY) {
+            val ids = repository.findUnknownAuthorizationIds(cursor, BATCH_SIZE)
+            ids.forEach { resolveOne(it) }
+            cursor = if (ids.size < BATCH_SIZE) null else ids.last()
+        }
     }
 
     private fun resolveOne(paymentId: PaymentId) {

@@ -2,6 +2,7 @@ package com.resilientpos.payment.internal.application
 
 import com.resilientpos.PostgresIntegrationTest
 import com.resilientpos.awaitUntil
+import com.resilientpos.foundation.UuidV7IdentifierGenerator
 import com.resilientpos.order.OrderCommandFacade
 import com.resilientpos.order.OrderFixtures
 import com.resilientpos.order.createAndRequestCheckout
@@ -13,6 +14,7 @@ import com.resilientpos.payment.internal.domain.AuthorizationRequest
 import com.resilientpos.payment.internal.domain.PaymentAttemptRepository
 import com.resilientpos.payment.internal.domain.PaymentGateway
 import com.resilientpos.platform.DistributedLock
+import io.micrometer.core.instrument.MeterRegistry
 import jakarta.persistence.EntityManagerFactory
 import java.util.UUID
 import java.util.concurrent.CopyOnWriteArrayList
@@ -48,6 +50,7 @@ class UnknownPaymentResolverIntegrationTest(
     @Autowired private val distributedLock: DistributedLock,
     @Autowired private val scheduledTasks: ObjectProvider<ScheduledTaskHolder>,
     @Autowired private val repository: PaymentAttemptRepository,
+    @Autowired private val meterRegistry: MeterRegistry,
     @Autowired entityManagerFactory: EntityManagerFactory,
 ) : PostgresIntegrationTest() {
 
@@ -91,10 +94,12 @@ class UnknownPaymentResolverIntegrationTest(
     fun cleanUp() {
         statistics.isStatisticsEnabled = statisticsWereEnabled
         jdbcTemplate.update("delete from t_payment_attempt where id = ?", cancellationId)
-        gateway.failFor.clear()
-        gateway.queried.clear()
         // 계속 불명으로 남는 시도는 다른 테스트의 작업이 다시 집지 않게 닫아 둔다.
         created.forEach { jdbcTemplate.update("update t_payment_attempt set status = 'DECLINED' where id = ? and status = 'UNKNOWN'", it.value) }
+        // 커서가 이 테스트의 행 사이에 남지 않게 한 바퀴를 돌려 끝에 닿게 한다(닫은 행은 조회되지 않는다).
+        resolver.resolveUnknown()
+        gateway.failFor.clear()
+        gateway.queried.clear()
     }
 
     private val cancellationId = UUID.randomUUID()
@@ -131,6 +136,39 @@ class UnknownPaymentResolverIntegrationTest(
         assertTrue(approvedAtOnce !in gateway.queried && declinedAtOnce !in gateway.queried, "UNKNOWN이 아닌 시도는 조회하지 않는다")
     }
 
+    /** 주문 없이 승인 시도 행만 JDBC로 넣는다. 주문마다 새 `order_id`라 진행 중 승인 unique에 걸리지 않는다. */
+    private fun insertUnknownAuthorization(id: UUID, amount: Int) {
+        jdbcTemplate.update(
+            """
+            insert into t_payment_attempt
+                (id, order_id, store_id, terminal_id, checkout_no, kind, amount, currency, status,
+                 provider_reference, created_at, updated_at)
+            values (?, ?, ?, ?, 1, 'AUTHORIZATION', ?, 'KRW', 'UNKNOWN', null, now(), now())
+            """.trimIndent(),
+            id, UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), amount,
+        )
+        created += PaymentId(id)
+    }
+
+    private fun unknownCount(): Long = jdbcTemplate.queryForObject(
+        "select count(*) from t_payment_attempt where kind = 'AUTHORIZATION' and status = 'UNKNOWN' and deleted_at is null",
+        Long::class.java,
+    )!!
+
+    @Test
+    fun `영영 불명인 건이 100건을 넘어도 그 뒤의 새 건을 몇 주기 안에 확정한다`() {
+        // 가장 오래된 id부터 100건은 계속 불명(끝자리 4), 그보다 새 id 하나는 조회하면 승인(끝자리 2)이다.
+        val ids = List(101) { UuidV7IdentifierGenerator().next() }.sorted()
+        ids.take(100).forEach { insertUnknownAuthorization(it, 4004) }
+        val newest = PaymentId(ids.last())
+        insertUnknownAuthorization(newest.value, 4602)
+        val cycles = Math.ceilDiv(unknownCount(), 100L).toInt() + 1
+
+        repeat(cycles) { if (status(newest) == "UNKNOWN") resolver.resolveUnknown() }
+
+        assertEquals("APPROVED", status(newest), "$cycles 주기 안에 새 건이 조회되지 않았다")
+    }
+
     @Test
     fun `UNKNOWN 취소 시도는 조회하지 않고 그대로 둔다`() {
         jdbcTemplate.update(
@@ -153,7 +191,7 @@ class UnknownPaymentResolverIntegrationTest(
     fun `대상 조회는 kind와 status를 바인드 파라미터가 아니라 리터럴로 렌더한다`() {
         statistics.clear()
 
-        repository.findUnknownAuthorizationIds(1)
+        repository.findUnknownAuthorizationIds(null, 1)
 
         val queries: Array<String> = statistics.queries
         val rendered = queries.single { "PaymentAttemptEntity" in it }
@@ -207,6 +245,18 @@ class UnknownPaymentResolverIntegrationTest(
             if (!released) distributedLock.release(UnknownPaymentResolver.LOCK_KEY, token)
             executor.shutdownNow()
         }
+    }
+
+    @Test
+    fun `한 주기 뒤 gauge가 그때의 결과 불명 승인 시도 수와 같다`() {
+        attemptAt("4604", PaymentAttemptStatus.UNKNOWN)
+        attemptAt("4614", PaymentAttemptStatus.UNKNOWN)
+
+        // gauge는 한 주기의 시작에 센 값이다. 그 주기가 확정하는 건(끝자리 2·3)은 이 값에 아직 들어 있다.
+        val expectedAtStart = unknownCount()
+        resolver.resolveUnknown()
+
+        assertEquals(expectedAtStart.toDouble(), meterRegistry.get("payment.attempt.unknown").gauge().value())
     }
 
     @Test

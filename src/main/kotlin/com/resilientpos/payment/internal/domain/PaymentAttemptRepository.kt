@@ -26,8 +26,12 @@ interface PaymentAttemptRepository {
 
     /**
      * 결과를 모른 채 남은 승인 시도(kind=AUTHORIZATION, status=UNKNOWN)의 식별자를 오래된 순(`id` 오름차순)으로 최대 [limit]건 읽는다. 잠그지 않는다.
+     * [after]가 있으면 그 `id`보다 큰 것만 읽는다(keyset). 읽은 마지막 `id`를 다음 호출의 [after]로 넘겨 돌아가며 읽는다.
      */
-    fun findUnknownAuthorizationIds(limit: Int): List<PaymentId>
+    fun findUnknownAuthorizationIds(after: PaymentId?, limit: Int): List<PaymentId>
+
+    /** 결과를 모른 채 남은 승인 시도(kind=AUTHORIZATION, status=UNKNOWN)의 수. */
+    fun countUnknownAuthorizations(): Long
 
     /**
      * 시도 행을 잠그고 읽는다. 결과를 적용하는 전이가 같은 시도에서 겹치지 않게 한다. 트랜잭션 안에서만 부른다.

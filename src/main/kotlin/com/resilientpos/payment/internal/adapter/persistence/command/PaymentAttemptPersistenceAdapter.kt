@@ -55,18 +55,27 @@ class PaymentAttemptPersistenceAdapter(
      * partial 인덱스 `ix_payment_attempt_unknown_authorization`(V013)의 술어를 증명하지 못해 쓰지 못한다.
      */
     @ReadOnlyTransactional
-    override fun findUnknownAuthorizationIds(limit: Int): List<PaymentId> =
+    override fun findUnknownAuthorizationIds(after: PaymentId?, limit: Int): List<PaymentId> =
         queries.findAll(limit) {
             select(path(PaymentAttemptEntity::id))
                 .from(entity(PaymentAttemptEntity::class))
                 .where(
                     and(
-                        path(PaymentAttemptEntity::kind).eq(enumLiteral(PaymentAttemptKind.AUTHORIZATION)),
-                        path(PaymentAttemptEntity::status).eq(enumLiteral(PaymentAttemptStatus.UNKNOWN)),
+                        unknownAuthorization(),
+                        after?.let { path(PaymentAttemptEntity::id).gt(it.value) },
                     ),
                 )
                 .orderBy(path(PaymentAttemptEntity::id).asc())
         }.map(::PaymentId)
+
+    /** [findUnknownAuthorizationIds]와 같이 `kind`·`status`를 리터럴로 렌더해 partial 인덱스를 쓴다. */
+    @ReadOnlyTransactional
+    override fun countUnknownAuthorizations(): Long =
+        queries.findFirst {
+            select(count(PaymentAttemptEntity::id))
+                .from(entity(PaymentAttemptEntity::class))
+                .where(unknownAuthorization())
+        } ?: 0L
 
     override fun findByIdForUpdate(paymentId: PaymentId): PaymentAttempt? =
         queries.findFirstForUpdate {
@@ -91,6 +100,12 @@ class PaymentAttemptPersistenceAdapter(
         return attempt
     }
 }
+
+private fun Jpql.unknownAuthorization() =
+    and(
+        path(PaymentAttemptEntity::kind).eq(enumLiteral(PaymentAttemptKind.AUTHORIZATION)),
+        path(PaymentAttemptEntity::status).eq(enumLiteral(PaymentAttemptStatus.UNKNOWN)),
+    )
 
 private fun Jpql.authorizationOf(orderId: UUID, checkoutNo: Int) =
     and(
