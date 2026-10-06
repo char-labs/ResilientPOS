@@ -102,7 +102,7 @@ endpoint가 쓰기 세 개뿐이라 단말이 결제가 거절됐는지, 결과�
 | 거절 주문을 조회하고 HTTP로 재결제한다 (인수 9, HTTP 위의 2·5) `PaymentAttemptApiIntegrationTest`의 `거절된 주문은 조회에서 DECLINED 시도를 보이고 재결제하면 같은 회차에 시도가 둘이 되며 재요청은 같은 paymentId다`, `다른 매장의 단말은 조회가 200 빈 배열이고 재결제는 404 PAYMENT_ATTEMPT_NOT_FOUND이며 시도가 늘지 않는다` | 해당 없음. 앞 동작들로 이미 구현된 경로를 끝단에서 고정하는 characterization이다. 대신 동작을 지워 확인했다: Controller 조회에 인증 매장 대신 임의 StoreId를 넘기면 두 테스트가 `DECLINED` 대기 20초 `ConditionTimeoutException`으로 실패, 조회의 매장 조건을 지우면 다른 매장 테스트가 빈 배열 단언(`expected: 0`)에서 실패 | `./gradlew test --tests 'com.resilientpos.payment.internal.adapter.web.*IntegrationTest'`, 2개 통과(원복 뒤 재실행 포함) | `./gradlew test --tests 'com.resilientpos.payment.*' --tests 'com.resilientpos.order.*'` 243개 통과 |
 
 ## 결과
-`./gradlew test` 전체 476개 통과, 실패 0(HEAD 013165d, origin/main 581e6f2 기준). `python3 scripts/check_pr.py --base origin/main --worktree` PASS. 제출 전 `--worktree` 없는 실행 결과는 아래에 적는다.
+`./gradlew test` 전체 476개 통과, 실패 0(HEAD 013165d, origin/main 581e6f2 기준). `python3 scripts/check_pr.py --base origin/main --worktree` PASS. 제출 전 `python3 scripts/check_pr.py --base origin/main`(`--worktree` 없음) PASS. 제출 직전 origin/main은 그대로 581e6f2이고 열린 PR이 없어 변경 경로 겹침이 없다.
 
 - 조회는 `PaymentQueryFacade` → `PaymentAttemptQueries`(port 없음, Kotlin JDSL, `@ReadOnlyTransactional`) 한 쿼리다. 엔티티에서 View로의 변환은 조회 파일의 private 확장 함수다. 공개 View가 `internal` 엔티티를 알면 안 되어 View에 `from(entity)`를 두지 않았다.
 - 재결제는 `(id, store_id)` 잠금으로 다른 매장의 시도를 없는 시도로 만든다. 다른 트랜잭션이 그 행을 잠가도 다른 매장 요청은 2초 안에 404로 끝나는 것을 통합 테스트가 고정한다.
