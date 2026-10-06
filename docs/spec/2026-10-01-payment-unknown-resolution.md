@@ -171,9 +171,11 @@ fun resolveUnknown() = Lock.executeWithLockNoTx(LOCK_KEY) {
 | 리뷰 반영: 취소 시도는 결과 불명이어도 조회하지 않는다 / `PaymentManagementTest`의 `UNKNOWN이어도 취소 시도는 provider를 조회하지 않고 지금 상태를 돌려준다`, `UnknownPaymentResolverIntegrationTest`의 `UNKNOWN 취소 시도는 조회하지 않고 그대로 둔다` | `./gradlew test --tests 'com.resilientpos.payment.PaymentManagementTest'`에서 조회 횟수 0 단언이 실패했다. 작업 수준 테스트는 대상 조회가 이미 승인 시도만 골라 characterization이다 | 같은 명령 통과 | `./gradlew test` 전체 457건 통과 |
 | 리뷰 반영: 잠근 뒤 이미 확정됐으면 덮지 않는다, 락을 쥔 동안 조회하지 않는다 / `조회하는 동안 다른 호출이 먼저 확정했으면 덮지 않고 그 결말을 돌려준다`, `다른 쪽이 락을 쥐고 있으면 풀릴 때까지 기다린다`(조회 0건 단언 추가) | 이미 구현된 동작이라 characterization | 통과 | 위와 같다 |
 | 리뷰 반영: 대상 조회의 리터럴 렌더 고정 / `대상 조회는 kind와 status를 바인드 파라미터가 아니라 리터럴로 렌더한다` | 구현이 이미 리터럴이라 처음부터 통과했다. 어댑터의 status 조건을 바인드 값 비교로 잠시 바꾸면 `status = :param1`이 렌더되어 실패하는 것을 확인하고 되돌렸다 | Hibernate `Statistics`의 실행 쿼리 문자열로 확인, 통과 | 위와 같다 |
+| 위험 해소: 영영 불명인 건이 100건을 넘어도 새 건을 확정한다 / `영영 불명인 건이 100건을 넘어도 그 뒤의 새 건을 몇 주기 안에 확정한다` | `./gradlew test --tests 'com.resilientpos.payment.internal.application.UnknownPaymentResolver*'` 9건 중 2건 실패. 기존 구현은 늘 오래된 100건만 읽어 `3 주기 안에 새 건이 조회되지 않았다 ==> expected APPROVED but was UNKNOWN` | 같은 명령 9건 통과 | `./gradlew test` 전체 459건 통과 |
+| 위험 해소: 적체 gauge / `한 주기 뒤 gauge가 그때의 결과 불명 승인 시도 수와 같다` | 위 실행에서 `MeterNotFoundException: No meter with name 'payment.attempt.unknown'` | 통과 | 위와 같다. 정리 호출이 남긴 조회 기록 때문에 락 대기 테스트가 한 번 실패해 정리 순서를 고쳤다(구현 무관) |
 
 ## 결과
-- 인수 조건 1~10을 위 테스트로 확인했다. 리뷰 반영 뒤 전체 `./gradlew test`는 457건 통과다.
+- 인수 조건 1~10·12를 위 테스트로 확인했다. 위험 해소 뒤 전체 `./gradlew test`는 459건 통과다.
 - 대상 조회는 Hibernate가 `where (pae1_0.kind='AUTHORIZATION') and (pae1_0.status='UNKNOWN') and pae1_0.deleted_at is null order by pae1_0.id fetch first ? rows only`로 렌더한다(`enumLiteral`). PostgreSQL 18 컨테이너에 V001~V013을 적용하고 승인 시도 20만 건과 `UNKNOWN` 50건을 넣어 `analyze`했다. 그 뒤 이 문장을 prepare해 `plan_cache_mode = force_generic_plan`으로 실행 계획을 보면 `Index Scan using ix_payment_attempt_unknown_authorization`이다. `deleted_at is null`은 인덱스 술어에 없어 Filter로 남는다.
 - 앞쪽 N건 조회가 `JdslQueryExecutor`에 없어 `findAll(limit) { }`을 더했다. 범위 조정은 spec에 먼저 기록했다.
 - 거절(`PaymentEvent.Declined`)은 외부화되지 않고 받는 리스너도 없어 `event_publication`에 행이 생기지 않는다. 통합 테스트는 거절 발행을 테스트용 `@EventListener`로 관측한다.
