@@ -12,7 +12,7 @@ provider 결과를 확인하지 못한 결제 시도는 `UNKNOWN`에 머물고, 
 
 **`UNKNOWN`을 확정하는 일은 `payment`가 한다.** provider port와 결제 정본 상태가 모두 `payment`의 것이다(domain-model §2). `reconciliation`은 "결제 상태를 직접 고치지 않는다". 게다가 `reconciliation`에서 `payment`로 가는 동기 호출은 §4.6이 막는다. 조회로 결말이 나는 정상 경로에는 case가 필요 없다. case는 조회로도 확정되지 않는 시도를 위한 자리라서 그것을 해소할 명령·규칙 버전·승인 주체가 생길 때 연다(제외).
 
-**provider 조회 port.** `PaymentGateway`에 `query(request: AuthorizationRequest): AuthorizationOutcome`을 더한다. 승인 요청과 같은 요청(같은 `paymentId`, 곧 provider 멱등 키)의 결과를 묻는다. 결과 타입은 승인 요청과 같은 세 갈래다. `Unknown`은 "조회로도 확인하지 못했다"는 뜻이다. 계약은 `authorize`와 같아서 던지지 않고 `Unknown`을 돌려준다. `Declined`는 돈이 움직이지 않았다고 provider가 확인한 경우에만 쓴다. provider의 "그런 요청 없음"을 어느 갈래로 접을지는 실제 PG 어댑터 PR이 정한다. `amount`는 실제 조회에는 필요 없지만 같은 요청 값을 그대로 넘기려고 함께 싣는다.
+**provider 조회 port.** `PaymentGateway`에 `query(request: AuthorizationRequest): AuthorizationOutcome`을 더한다. 승인 요청과 같은 요청(같은 `paymentId`, 곧 provider 멱등 키)의 결과를 묻는다. 결과 타입은 승인 요청과 같은 세 갈래다. `Unknown`은 "조회로도 확인하지 못했다"는 뜻이다. 계약은 `authorize`와 같아서 던지지 않고 `Unknown`을 돌려준다. `Declined`는 돈이 움직이지 않았다고 provider가 확인한 경우에만 쓴다. provider가 아직 처리 중이라고 답하면 `Unknown`이다. 방금 `UNKNOWN`이 된 시도도 다음 주기에 조회되므로, 처리 중을 거절로 접으면 재결제가 이중 청구가 된다. provider의 "그런 요청 없음"을 어느 갈래로 접을지는 실제 PG 어댑터 PR이 정한다. `amount`는 실제 조회에는 필요 없지만 같은 요청 값을 그대로 넘기려고 함께 싣는다.
 
 **`FakePaymentGateway` 규칙.** 최소 단위 끝자리로 다섯 경로를 낸다. 통합 테스트와 compose가 스텁 없이 모든 경로를 밟게 하려는 것이다.
 
@@ -30,7 +30,7 @@ provider 결과를 확인하지 못한 결제 시도는 `UNKNOWN`에 머물고, 
 
 **Facade: `PaymentManagement.resolveUnknown(PaymentCommand.ResolveUnknown(paymentId))`.** 결과는 `PaymentCommand.ResolveUnknown.Result(paymentId, status)`다. `authorize`와 같은 모양이다.
 1. `@Transactional(propagation = NOT_SUPPORTED)`. 처음 읽는 `findById`는 `Tx.masterTx`로 감싸 provider를 부르는 동안 DB 자원을 쥐지 않는다.
-2. `UNKNOWN`이 아니면 provider를 부르지 않고 지금 상태를 돌려준다.
+2. `UNKNOWN`이 아니거나 승인 시도(`AUTHORIZATION`)가 아니면 provider를 부르지 않고 지금 상태를 돌려준다. 조회 요청은 승인 요청이라 취소 시도에 쓰면 취소를 승인 조회로 확정하게 된다. 취소 시도를 만드는 코드는 아직 없고, 생기는 PR이 취소 조회를 정한다.
 3. `gateway.query`를 트랜잭션 밖에서 부른다.
 4. 결과가 `Unknown`이면 아무것도 쓰지 않고 `UNKNOWN`을 돌려준다. 가짜 성공도 가짜 실패도 만들지 않는다.
 5. `Tx.masterTx`에서 `findByIdForUpdate`로 행을 잠그고 다시 읽는다. 여전히 `UNKNOWN`이면 확정 전이를 저장하고 같은 커밋에서 발행한다. 아니면 그 결말을 돌려준다.
@@ -51,7 +51,9 @@ fun resolveUnknown() = Lock.executeWithLockNoTx(LOCK_KEY) {
 - 한 건이 던지면(잠금 대기 초과, DB 오류) 그 건의 `paymentId`와 예외를 ERROR로 남기고 다음 건으로 간다. 한 건이 배치 전체를 막지 않게 하려는 것이다. 그 건은 `UNKNOWN`으로 남아 다음 주기에 다시 잡힌다. 대상 조회 자체가 던지면 그 주기를 건너뛰고 스케줄러가 로그를 남긴다.
 - 조회로도 확정되지 않은 건은 다음 주기에 다시 묻는다. 횟수 상한은 없다.
 
-**여러 pod와 재전달에서의 멱등.** 정합성은 행 잠금 뒤 `UNKNOWN`을 다시 확인하는 데서 나온다. 두 pod가 같은 시도를 함께 확정해도 하나만 적용하고 이벤트도 하나만 낸다. 락은 provider 중복 조회를 줄이는 완화 수단이다. Redis 장애나 대기 초과로 fail-open되거나 블록이 TTL(10초)을 넘겨 다른 pod가 들어와도, provider 조회는 읽기라 겹쳐도 해가 없다. 확정으로 난 `PaymentApproved`가 다시 배달되면 `markPaid`가 이미 `PAID`인 주문에 아무것도 하지 않는다(기존 멱등).
+**스케줄러 스레드.** Spring 공용 스케줄러는 기본 스레드가 하나다. 이 작업이 provider 조회로 길어지면 같은 스레드의 발행 기록 재전송(`EventPublicationResubmitter`)과 Modulith Moments가 그동안 멈추고, 재전송이 늦으면 확정한 `PaymentApproved`의 전달도 늦는다. `spring.task.scheduling.pool.size`를 2로 두어 두 작업이 서로를 막지 않게 한다. 실제 PG 어댑터 PR이 조회 타임아웃과 함께 다시 본다.
+
+**여러 pod와 재전달에서의 멱등.** 정합성은 행 잠금 뒤 `UNKNOWN`을 다시 확인하는 데서 나온다. 두 pod가 같은 시도를 함께 확정해도 하나만 적용하고 이벤트도 하나만 낸다. 락은 provider 중복 조회를 줄이는 완화 수단이다. Redis 장애나 대기 초과로 fail-open되거나 블록이 TTL(10초)을 넘겨 다른 pod가 들어와도(배치가 락 대기 한도 3초를 넘기면 늦게 온 pod는 fail-open으로 함께 돈다), provider 조회는 읽기라 겹쳐도 해가 없다. 확정으로 난 `PaymentApproved`가 다시 배달되면 `markPaid`가 이미 `PAID`인 주문에 아무것도 하지 않는다(기존 멱등).
 
 **`Lock` 블록 안의 행 잠금.** `Lock` KDoc과 §4.7 질문 6은 "블록 안에서 행 잠금을 기다리지 않는다"고 정한다. 막으려는 것은 락을 쥔 쪽은 행을, 행을 쥔 쪽은 락을 기다리는 교착이다. 이 블록에서 잠그는 `UNKNOWN` 시도 행을 잠그는 다른 경로는 `authorize`의 적용과 `retryAuthorization`이다. 둘 다 이 락 키를 잡지 않으므로 순환이 생기지 않는다. 이 예외와 근거를 작업 KDoc에 적는다.
 
@@ -84,6 +86,8 @@ fun resolveUnknown() = Lock.executeWithLockNoTx(LOCK_KEY) {
 - src/main/kotlin/com/resilientpos/payment/**
 - src/main/kotlin/com/resilientpos/order/internal/domain/Order.kt
 - src/main/kotlin/com/resilientpos/platform/JdslQueryExecutor.kt
+- src/main/kotlin/com/resilientpos/platform/Lock.kt
+- src/main/kotlin/com/resilientpos/platform/PlatformConfiguration.kt
 - src/main/resources/application.yaml
 - src/main/resources/db/migration/**
 - src/test/kotlin/com/resilientpos/**
@@ -99,7 +103,7 @@ fun resolveUnknown() = Lock.executeWithLockNoTx(LOCK_KEY) {
 3. `resolveUnknown`이 `UNKNOWN` 시도를 조회 결과대로 확정하고 같은 커밋에서 발행한다. 승인은 `PaymentApproved`의 발행 기록이 같은 커밋에 남는다. 거절(`PaymentEvent.Declined`)은 받는 쪽이 없어 발행 기록이 생기지 않으므로 발행 자체를 관측한다. 조회 결과가 `Unknown`이면 행도 발행 기록도 바뀌지 않는다. `UNKNOWN`이 아닌 시도는 provider를 부르지 않고 지금 상태를 돌려준다.
 4. provider 조회 순간 그 스레드에 EntityManager와 커넥션이 묶여 있지 않다.
 5. 같은 시도의 `resolveUnknown`이 동시에 둘 와도 한 번만 적용되고 이벤트는 하나다.
-6. 주기 작업 한 번이 `UNKNOWN` 승인 시도만 오래된 순으로 최대 100건 처리한다. 한 건이 던져도 나머지는 처리된다. 작업은 `payment:unknown-resolve` 키의 `Lock` 블록 안에서 돈다.
+6. 주기 작업 한 번이 `UNKNOWN` 승인 시도만 오래된 순으로 최대 100건 처리한다. 취소 시도는 고르지 않고, `resolveUnknown`에 직접 넘겨도 조회하지 않는다. 한 건이 던져도 나머지는 처리된다. 작업은 `payment:unknown-resolve` 키의 `Lock` 블록 안에서 돌고, 다른 쪽이 그 키를 쥔 동안에는 조회하지 않는다. 대상 조회의 `kind`·`status`는 리터럴로 렌더된다(테스트가 렌더된 쿼리를 확인한다).
 7. 끝자리 2인 주문을 checkout하면 결제가 `UNKNOWN`이 되고, 작업 한 번 뒤 시도는 `APPROVED`, 주문은 `PAID`가 된다(Kafka 포함 통합).
 8. 끝자리 3인 주문은 작업 뒤 시도가 `DECLINED`, 주문은 `CHECKOUT_REQUESTED`다. 그 시도에 `retryAuthorization`을 하면 새 시도가 생기고, 승인되면 주문이 `PAID`가 된다(재결제 승인은 테스트 전용 gateway).
 9. 끝자리 4인 주문은 작업 뒤에도 시도가 `UNKNOWN`, 주문은 `CHECKOUT_REQUESTED`다.
