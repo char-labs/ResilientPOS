@@ -41,6 +41,8 @@ endpoint가 쓰기 세 개뿐이라 단말이 결제가 거절됐는지, 결과�
 - 시연 단말 화면(`static/terminal`)이 이 API를 부르는 것. 화면 작업이 따로 한다.
 - 페이지네이션. 한 주문의 시도는 재결제 횟수만큼만 늘고 상한 근거가 없다. 늘어나는 근거가 생기면 그때 더한다.
 - 거절 사유 노출. 저장하지 않는다.
+- "최신 회차만 재결제할 수 있다"는 규칙. 재결제는 대상이 그 회차의 최신 승인 시도인지만 보고 주문이 다음 회차로 넘어갔는지는 보지 않는다. 지금은 주문이 `OPEN`으로 돌아가는 전이가 없어 회차가 하나뿐이다. 여러 회차를 여는 PR이 정한다.
+- 매장 불일치 WARN의 `terminalId`. 커맨드에 없고 advice 로그의 URI로 추적된다. 단말 단위 추적이 필요해지면 더한다.
 
 ## 관련 문서
 정본은 [도메인 모델](../wiki/domain-model.md) §2·§4.2·§4.3과 [README Engineering Principles](../../README.md#engineering-principles)의 CQRS 규약이다. 앞 PR은 [payment-retry-after-decline](2026-09-26-payment-retry-after-decline.md), [payment-unknown-resolution](2026-10-01-payment-unknown-resolution.md), [terminal-authentication](2026-10-05-terminal-authentication.md), [tx-convention-kotlin-jdsl](2026-09-28-tx-convention-kotlin-jdsl.md)다.
@@ -83,6 +85,7 @@ endpoint가 쓰기 세 개뿐이라 단말이 결제가 거절됐는지, 결과�
 - [README](../../README.md#engineering-principles): CQRS 규약의 읽기 줄을 확정한 규약으로 고친다("첫 조회 PR에서 정한다"를 지운다).
 - [도메인 모델](../wiki/domain-model.md): 용어표의 Facade·명령/조회/결과/뷰 예시를 `PaymentQueryFacade.findAttempts(PaymentQuery.FindAttempts)`와 `PaymentAttemptView`로 고치고, §4.2에 조회 구현의 위치(`persistence/query`, port 없음, aggregate를 거치지 않음)를 적는다. `payment` 행의 공개 Facade에 `PaymentQueryFacade`를 더한다.
 - [현재 상태](../wiki/current-state.md)는 볼트에서 갱신한다(두 endpoint, 단말이 거절을 아는 길, 재결제 입구).
+- 볼트 rules `domain-modeling-kotlin.md`(§5 읽기 projection, §6 이름공간과 예시)와 `kotlin-idioms-and-design-patterns.md`(§1 팩토리 대상과 예시)가 조회 안에 중첩한 `View`를 가르쳤다. 이번 규약(최상위 View, port 없는 조회 클래스, 엔티티에서 View로의 변환은 조회 파일의 private 확장 함수)으로 볼트 원본을 고치고 `make bootstrap`으로 다시 복사했다. 저장소에 추적되지 않는 경로라 커밋은 없다.
 - Kafka·Modulith 이벤트 작업이 아니라 [Modulith·Kafka 키워드](../wiki/modulith-kafka-keywords.md)는 바꾸지 않는다.
 - 요구사항 변화: 단말이 결제 시도와 거절을 조회하고 재결제를 요청할 수 있다. 정합성 요구는 그대로다.
 
@@ -92,10 +95,16 @@ endpoint가 쓰기 세 개뿐이라 단말이 결제가 거절됐는지, 결과�
 ## TDD 검증 기록
 | 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
 |---|---|---|---|
-| 같은 매장의 시도만 생성 순으로 조회한다 (인수 1~3) | 미실행 | 미실행 | 미실행 |
-| 재결제는 매장 조건으로 잠그고 다른 매장 시도는 없는 시도다 (인수 4~6) | 미실행 | 미실행 | 미실행 |
-| 두 endpoint의 HTTP 매핑·인증·오류 변환과 REST Docs (인수 7·8) | 미실행 | 미실행 | 미실행 |
-| 거절 주문을 조회하고 HTTP로 재결제한다 (인수 9) | 미실행 | 미실행 | 미실행 |
+| 같은 매장의 시도만 생성 순으로 조회한다 (인수 1~3) `PaymentQueryIntegrationTest`(회차·종류를 가리지 않고 생성 순으로 각 필드와 함께 / 다른 매장 storeId는 빈 목록 / 시도 없는 주문은 빈 목록 / 다른 주문의 시도는 섞이지 않음) | 조회가 빈 목록을 돌려주는 스텁에서 `./gradlew test --tests 'com.resilientpos.payment.*Query*'` — 4개 중 2개(첫째·넷째) assertion 실패, 기대 목록이 비어 나옴. 빈 목록이 기대값인 둘은 스텁에서도 통과했고, 매장 조건 제거로 따로 확인했다 | 같은 명령, 4개 통과 | `./gradlew test --tests 'com.resilientpos.payment.*'`과 구조 테스트 4종(Module·EntityVisibility·TransactionDeclaration·DependencyDirection) 119개 통과. 쿼리에서 매장 조건을 지우면 다른 매장 테스트 1개만 실패 |
+| 재결제는 매장 조건으로 잠그고 다른 매장 시도는 없는 시도다 (인수 4~6) `PaymentManagementTest`의 `다른 매장의 재결제는 없는 시도와 같아 거절하고 새 시도도 이벤트도 만들지 않는다`, `PaymentRetryIntegrationTest`의 `다른 매장의 재결제는 시도 행이 잠겨 있어도 기다리지 않고 PAYMENT_ATTEMPT_NOT_FOUND를 받는다`(2초 한도, 잠금 대기 세션 0). 같은 매장의 새 시도와 `UNKNOWN`의 `PAYMENT_NOT_RETRYABLE`은 기존 테스트가 시도의 storeId로 그대로 덮는다 | 커맨드·port에 storeId만 더하고 `retry`가 기존 `findByIdForUpdate`로 잠그는 상태에서 `./gradlew test --tests 'com.resilientpos.payment.PaymentManagementTest' --tests 'com.resilientpos.payment.internal.application.PaymentRetry*'` — 24개 중 2개 실패. 단위는 예외 없이 새 시도 Result가 나왔고, 통합은 매장을 무시하고 잠긴 행을 기다려 `TimeoutException` | 같은 명령, 24개 통과 | `./gradlew test --tests 'com.resilientpos.payment.*'`과 구조 테스트 4종 121개 통과. 잠금을 `findByIdForUpdate`로 되돌리면 같은 2개가 실패하고, 원복 뒤 24개 통과 |
+| 두 endpoint의 HTTP 매핑·인증·오류 변환과 REST Docs (인수 7·8) `PaymentAttemptControllerTest` 8개(조회 200과 항목 필드·인증 매장이 Query에 실림 / 빈 배열 / 재결제 커맨드에 경로 paymentId와 인증 매장 / 404·422·409 / 두 endpoint의 401 / 두 endpoint의 400). REST Docs `payment-attempts-list`·`-list-empty`·`-list-bad-request`·`payment-attempts-retry`·`-retry-not-found`·`-retry-not-retryable`·`-retry-concurrent-request`·`-retry-bad-request` | 매핑만 두고 조회는 빈 목록, 재결제는 입력 paymentId에 `UNKNOWN`을 돌려주는 스텁에서 `./gradlew test --tests 'com.resilientpos.payment.internal.adapter.web.*'` — 8개 중 5개 assertion 실패(조회 항목 필드, 재결제 본문, 404, 422, 409). 빈 배열·401·400은 스텁에서도 통과했다(Facade 앞에서 결정되는 동작) | 같은 명령, 8개 통과 | `./gradlew test --tests 'com.resilientpos.payment.*' --tests 'com.resilientpos.platform.*'`과 구조 테스트 4종 200개 통과. 스니펫 8개 디렉터리 생성 확인 |
+| 리뷰 반영, 취소 시도로 재결제하면 같은 회차에 승인 시도가 있어도 422다 (인수 6) `PaymentManagementTest`의 `취소 시도로 재결제하면 같은 회차에 승인 시도가 있어도 거절하고 아무것도 만들지 않는다` | `./gradlew test --tests 'com.resilientpos.payment.PaymentManagementTest'` — 21개 중 신규 1개 실패. 예외 없이 그 회차의 최신 승인 시도가 Result로 나왔다. "이미 재결제했다" 판정이 대상의 종류를 보지 않아 aggregate의 거절에 닿지 못했다(이전 PR부터 있던 경로를 이번 PR이 HTTP로 열었다) | 판정을 승인 시도에만 적용한 뒤 같은 명령 21개 통과 | `./gradlew test --tests 'com.resilientpos.payment.*'` 121개 통과 |
+| 거절 주문을 조회하고 HTTP로 재결제한다 (인수 9, HTTP 위의 2·5) `PaymentAttemptApiIntegrationTest`의 `거절된 주문은 조회에서 DECLINED 시도를 보이고 재결제하면 같은 회차에 시도가 둘이 되며 재요청은 같은 paymentId다`, `다른 매장의 단말은 조회가 200 빈 배열이고 재결제는 404 PAYMENT_ATTEMPT_NOT_FOUND이며 시도가 늘지 않는다` | 해당 없음. 앞 동작들로 이미 구현된 경로를 끝단에서 고정하는 characterization이다. 대신 동작을 지워 확인했다: Controller 조회에 인증 매장 대신 임의 StoreId를 넘기면 두 테스트가 `DECLINED` 대기 20초 `ConditionTimeoutException`으로 실패, 조회의 매장 조건을 지우면 다른 매장 테스트가 빈 배열 단언(`expected: 0`)에서 실패 | `./gradlew test --tests 'com.resilientpos.payment.internal.adapter.web.*IntegrationTest'`, 2개 통과(원복 뒤 재실행 포함) | `./gradlew test --tests 'com.resilientpos.payment.*' --tests 'com.resilientpos.order.*'` 243개 통과 |
 
 ## 결과
-개발 전 작성. 개발 후 실행 결과와 변경 이유를 추가한다.
+`./gradlew test` 전체 476개 통과, 실패 0(HEAD 013165d, origin/main 581e6f2 기준). `python3 scripts/check_pr.py --base origin/main --worktree` PASS. 제출 전 `--worktree` 없는 실행 결과는 아래에 적는다.
+
+- 조회는 `PaymentQueryFacade` → `PaymentAttemptQueries`(port 없음, Kotlin JDSL, `@ReadOnlyTransactional`) 한 쿼리다. 엔티티에서 View로의 변환은 조회 파일의 private 확장 함수다. 공개 View가 `internal` 엔티티를 알면 안 되어 View에 `from(entity)`를 두지 않았다.
+- 재결제는 `(id, store_id)` 잠금으로 다른 매장의 시도를 없는 시도로 만든다. 다른 트랜잭션이 그 행을 잠가도 다른 매장 요청은 2초 안에 404로 끝나는 것을 통합 테스트가 고정한다.
+- multi-review(Claude 85점, Codex 실행, Gemini는 CLI가 없어 미실행)를 반영했다. 두 리뷰어가 같이 지적한 것은 셋이다. ① 취소 시도로 재결제하면 그 회차의 최신 승인 시도가 200으로 나갔다. "이미 재결제했다" 판정을 승인 시도에만 적용해 aggregate의 거절(422)에 닿게 했다. ② 이 결과 절이 비어 있었다. ③ domain-model 공개 API 행에 조회 이름공간과 View가 빠져 있었다. Claude만 지적한 것 중 볼트 rules의 옛 View 규약(Wiki 영향 절), 대기 실패 메시지가 대기 전 상태를 찍던 문제, 이전 회차 재결제와 WARN의 `terminalId`(제외 절)를 반영했다. `PaymentRetryIntegrationTest`의 `pg_stat_activity` 단언은 #81 checkout 선례와 같은 모양이라 그대로 두었다. 401 응답에 REST Docs를 두지 않은 것도 checkout 선례와 같다.
+- 조회 경로의 테스트는 빈 목록 스텁에서 빈 목록이 기대값인 경우가 통과해서, 매장 조건을 지우는 동작 제거로 따로 확인했다.
