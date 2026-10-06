@@ -65,7 +65,7 @@ fun resolveUnknown() = Lock.executeWithLockNoTx(LOCK_KEY) {
 
 ## 제외
 - `reconciliation` case(`t_reconciliation_case`, `ReconciliationManagement`). 조회로도 확정되지 않는 시도를 넘겨받는 자리다. 해소할 명령·규칙 버전·승인 주체가 없으면 열기만 하는 표가 된다. 그것들을 정하는 PR이 만든다. 그 전까지는 WARN 로그가 단서다.
-- 재결제의 운영 호출자. 단말이 재결제를 요청하려면 거절된 시도의 `paymentId`가 필요한데 그 값을 알려 줄 조회 API가 #75이고, HTTP 노출은 단말 인증(#80) 뒤다. sync operation으로 받는 길은 단말이 `paymentId`를 모르고, `retryAuthorization`이 따로 커밋하는 구조라 sync의 한 커밋 안에서 부를 수 없다. #75가 endpoint로 만든다.
+- 재결제의 운영 호출자. 단말이 재결제를 요청하려면 거절된 시도의 `paymentId`가 필요한데 그 값을 알려 줄 조회 API가 #75다. 단말 토큰 인증은 #81로 들어왔지만 토큰을 발급할 HTTP 입구가 아직 없어 외부 노출 전이다. sync operation으로 받는 길은 단말이 `paymentId`를 모르고, `retryAuthorization`이 따로 커밋하는 구조라 sync의 한 커밋 안에서 부를 수 없다. #75가 endpoint로 만든다.
 - 거절·불명을 `order`가 받는 것과 `PaymentDeclined`·`PaymentUnknown`의 `contract` 이동. 위 범위의 결정이다. 주문 취소나 다른 결제 수단처럼 주문이 거절을 알아야 하는 명령이 생기면 그 PR이 옮긴다.
 - UNKNOWN 건수 gauge, 작업 생존 metric, 알림 규칙. [event-publication-resubmit](2026-09-29-event-publication-resubmit.md)과 같이 알림 규칙을 만드는 PR이 함께 정한다.
 - 조회 횟수·마지막 조회 시각 컬럼과 조회 상한. 상한에 걸린 건을 넘겨받을 case가 없고, 상한 값을 정할 실제 provider 근거도 없다.
@@ -102,7 +102,7 @@ fun resolveUnknown() = Lock.executeWithLockNoTx(LOCK_KEY) {
 7. 끝자리 2인 주문을 checkout하면 결제가 `UNKNOWN`이 되고, 작업 한 번 뒤 시도는 `APPROVED`, 주문은 `PAID`가 된다(Kafka 포함 통합).
 8. 끝자리 3인 주문은 작업 뒤 시도가 `DECLINED`, 주문은 `CHECKOUT_REQUESTED`다. 그 시도에 `retryAuthorization`을 하면 새 시도가 생기고, 승인되면 주문이 `PAID`가 된다(재결제 승인은 테스트 전용 gateway).
 9. 끝자리 4인 주문은 작업 뒤에도 시도가 `UNKNOWN`, 주문은 `CHECKOUT_REQUESTED`다.
-10. V012 인덱스가 유효한(`indisvalid`) 인덱스로 만들어진다.
+10. V013 인덱스가 유효한(`indisvalid`) 인덱스로 만들어진다.
 11. `./gradlew test` 전체와 `python3 scripts/check_pr.py --base origin/main --worktree`가 통과한다.
 
 ### Checkpoint와 검증 명령
@@ -117,7 +117,7 @@ fun resolveUnknown() = Lock.executeWithLockNoTx(LOCK_KEY) {
 | 전체 (11) | `./gradlew test` · `python3 scripts/check_pr.py --base origin/main --worktree` | 모두 |
 
 ## 스키마 변경 검토
-`t_payment_attempt`에 `create index concurrently ix_payment_attempt_unknown_authorization on t_payment_attempt (id) where kind = 'AUTHORIZATION' and status = 'UNKNOWN'`를 더한다(`V012`, 이 문장만 담은 마이그레이션).
+`t_payment_attempt`에 `create index concurrently ix_payment_attempt_unknown_authorization on t_payment_attempt (id) where kind = 'AUTHORIZATION' and status = 'UNKNOWN'`를 더한다(`V013`, 이 문장만 담은 마이그레이션).
 
 질문별 답(도메인 모델 §4.7):
 1. 새 값이 아니라 기존 컬럼의 인덱스다. 대체 수단이 없다. 기존 인덱스(`ix_payment_attempt_order`, 두 partial unique)는 `(order_id, ...)`로 시작하거나 `UNKNOWN`만 모으지 않아서 "모든 주문의 `UNKNOWN`"을 좁히지 못한다. 인덱스가 없으면 pod마다 매분 지우지 않는 결제 원장 전체를 순차 스캔한다.
@@ -147,7 +147,7 @@ fun resolveUnknown() = Lock.executeWithLockNoTx(LOCK_KEY) {
 - [current-state](../wiki/current-state.md)는 볼트 정본이라 이 저장소 diff에 들지 않는다. 머지 뒤 볼트에서 갱신한다.
 
 ## 분할 계획
-한 개발 컨텍스트("결제 결과가 주문까지 수렴")다. 조회 port·Fake·전이·Facade·작업·인덱스는 서로 없으면 검증할 수 없어 나누지 않는다. 재결제 HTTP endpoint와 조회 API는 #75, 단말 인증은 #80, reconciliation case는 후속이다. 2026-10-01 작업 시작 시 origin/main은 8133048이고 열린 PR이 없어 경로 겹침이 없다.
+한 개발 컨텍스트("결제 결과가 주문까지 수렴")다. 조회 port·Fake·전이·Facade·작업·인덱스는 서로 없으면 검증할 수 없어 나누지 않는다. 재결제 HTTP endpoint와 조회 API는 #75, reconciliation case는 후속이다. 2026-10-01 작업 시작 시 origin/main은 8133048이고 열린 PR이 없었다. 2026-10-06 구현 중에 #81(단말 인증, `V012__terminal_credential.sql`)과 #82(시연 화면)가 main에 들어와 origin/main 24b2728 위로 rebase했다. 마이그레이션 번호가 겹쳐 이 PR의 인덱스를 `V013`으로 옮겼다. 그 밖에 #81과 겹친 경로는 테스트 픽스처(`OrderFixtures` 등)뿐이고 rebase 충돌은 없었다. 열린 PR #83은 `static/terminal/index.html`과 자기 spec만 바꿔 겹치지 않는다.
 
 ## TDD 검증 기록
 
