@@ -96,6 +96,9 @@ resilientpos:
     retention: P7D
     # 재전송·정리 주기. 테스트가 늘려 작업이 스스로 돌지 않게 한다.
     resubmit-interval: PT1M
+  payment:
+    # 결과 불명 결제를 provider에 다시 묻는 주기.
+    unknown-resolve-interval: PT1M
   kafka:
     # 이름은 저장 형식이다. 이벤트 클래스의 TOPIC 상수와 같아야 한다(KafkaConfiguration).
     topics: order.payment-requested,payment.attempt-created,payment.approved,order.paid

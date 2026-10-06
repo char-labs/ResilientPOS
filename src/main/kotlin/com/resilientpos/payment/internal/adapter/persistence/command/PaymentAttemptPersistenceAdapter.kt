@@ -2,6 +2,7 @@ package com.resilientpos.payment.internal.adapter.persistence.command
 
 import com.linecorp.kotlinjdsl.dsl.jpql.Jpql
 import com.resilientpos.contract.PaymentAttemptKind
+import com.resilientpos.payment.PaymentAttemptStatus
 import com.resilientpos.payment.PaymentId
 import com.resilientpos.payment.internal.domain.PaymentAttempt
 import com.resilientpos.payment.internal.domain.PaymentAttemptRepository
@@ -48,6 +49,24 @@ class PaymentAttemptPersistenceAdapter(
             selectFrom(PaymentAttemptEntity::class)
                 .where(path(PaymentAttemptEntity::id).eq(paymentId.value))
         }?.toDomain()
+
+    /**
+     * `kind`·`status`를 바인드 파라미터가 아니라 리터럴로 렌더한다(`enumLiteral`). 바인드 파라미터의 generic plan은
+     * partial 인덱스 `ix_payment_attempt_unknown_authorization`(V013)의 술어를 증명하지 못해 쓰지 못한다.
+     */
+    @ReadOnlyTransactional
+    override fun findUnknownAuthorizationIds(limit: Int): List<PaymentId> =
+        queries.findAll(limit) {
+            select(path(PaymentAttemptEntity::id))
+                .from(entity(PaymentAttemptEntity::class))
+                .where(
+                    and(
+                        path(PaymentAttemptEntity::kind).eq(enumLiteral(PaymentAttemptKind.AUTHORIZATION)),
+                        path(PaymentAttemptEntity::status).eq(enumLiteral(PaymentAttemptStatus.UNKNOWN)),
+                    ),
+                )
+                .orderBy(path(PaymentAttemptEntity::id).asc())
+        }.map(::PaymentId)
 
     override fun findByIdForUpdate(paymentId: PaymentId): PaymentAttempt? =
         queries.findFirstForUpdate {

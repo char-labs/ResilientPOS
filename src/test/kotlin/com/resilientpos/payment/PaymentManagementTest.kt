@@ -60,6 +60,7 @@ class PaymentManagementTest {
             it.orderId == orderId && it.checkoutNo == checkoutNo && it.kind == PaymentAttemptKind.AUTHORIZATION
         }
         override fun findById(paymentId: PaymentId) = stored[paymentId]
+        override fun findUnknownAuthorizationIds(limit: Int) = emptyList<PaymentId>()
         override fun findByIdForUpdate(paymentId: PaymentId) = stored[paymentId]
         override fun update(attempt: PaymentAttempt) = attempt.also {
             updated += it
