@@ -134,7 +134,7 @@ fun resolveUnknown() = Lock.executeWithLockNoTx(LOCK_KEY) {
 7. `CREATE INDEX CONCURRENTLY`라 `SHARE UPDATE EXCLUSIVE`를 잡고 빌드 동안 읽기와 쓰기를 막지 않는다. 트랜잭션 밖에서 돌아야 해서 이 문장만 담은 마이그레이션으로 둔다. `spring.flyway.postgresql.transactional-lock=false`는 V009 때 이미 설정했다. 실패하면 INVALID 인덱스와 `flyway_schema_history`의 `success = false` 행이 남는다. 다시 배포하기 전에 `drop index concurrently if exists ix_payment_attempt_unknown_authorization`로 인덱스를 지우고 실패 행을 정리한다(`flyway repair` 또는 행 삭제). `if not exists`는 쓰지 않는다. 진행 중인 쓰기 트랜잭션을 기다리므로 이전 버전 pod의 긴 트랜잭션이 기동을 늦출 수 있고, 상한은 트랜잭션 상한 30초다. 제약이 아니라 위반 행 검사는 없다. partial 술어가 조회에 쓰이려면 플래너가 조회 조건에서 그 술어를 증명해야 한다. 바인드 파라미터의 generic plan은 그것을 증명하지 못한다(event-publication-resubmit 실측). 그래서 대상 조회는 `kind`·`status`를 리터럴로 렌더하고, 실행 계획에서 이 인덱스를 쓰는지 확인해 결과 절에 남긴다.
 8. 인덱스 추가라 이전 버전의 기동과 쓰기에 영향이 없다.
 9. payload나 캐시 DTO에 실리지 않는다.
-- 대조 기록: code-reviewer 에이전트(읽기 전용), 2026-10-06, 불일치 없음(V013·V006·V008·V009·application.yaml·PaymentAttemptEntity·PaymentAttemptPersistenceAdapter·JdslQueryExecutor·PaymentManagement·UnknownPaymentResolver·PaymentAttempt·SchemaMigrationTest와 대조, 실행 계획은 결과 절 실측으로 확인하고 재실행하지 않음). 참고 ① 질문 1이 PK 인덱스 전체 순회를 빠뜨려 문구를 보탰다 ② 리터럴 렌더를 고정하는 회귀 테스트는 없고 어댑터 KDoc이 이유를 적는다
+- 대조 기록: code-reviewer 에이전트(읽기 전용), 2026-10-06, 불일치 없음(V013·V006·V008·V009·application.yaml·PaymentAttemptEntity·PaymentAttemptPersistenceAdapter·JdslQueryExecutor·PaymentManagement·UnknownPaymentResolver·PaymentAttempt·SchemaMigrationTest와 대조, 실행 계획은 결과 절 실측으로 확인하고 재실행하지 않음). 참고 ① 질문 1이 PK 인덱스 전체 순회를 빠뜨려 문구를 보탰다 ② 리터럴 렌더를 고정하는 회귀 테스트가 없다는 지적은 multi-review 반영에서 테스트를 더해 해소했다
 
 ## 검증
 - 정상: 끝자리 2(조회 승인)는 주문 `PAID`, 끝자리 3(조회 거절)은 재결제로 `PAID`까지 간다.
@@ -166,11 +166,17 @@ fun resolveUnknown() = Lock.executeWithLockNoTx(LOCK_KEY) {
 | 주기 작업이 결과 불명 승인 시도를 오래된 순으로 처리하고 한 건 실패에 멈추지 않는다 / `UnknownPaymentResolverIntegrationTest` 5건, `SchemaMigrationTest`의 `결제 시도 UNKNOWN 인덱스가 유효하게 만들어진다` | `./gradlew test --tests 'com.resilientpos.payment.internal.application.UnknownPaymentResolver*'` 5건 모두 실패. 빈 작업이라 `expected APPROVED but was UNKNOWN`, 조회 순서가 빈 목록, 락을 기다리지 않음, 스케줄러에 작업 없음 | 같은 명령과 `SchemaMigrationTest` 함께 11건 통과 | payment·order·platform·`SchemaMigrationTest`·`ModuleStructureTest`·`TransactionDeclarationTest` 302건 통과 |
 | 결과 불명 결제가 조회 승인으로 주문 `PAID`까지 간다 / `PaymentUnknownToOrderIntegrationTest`의 `조회로 승인된 결과 불명 시도는 주문을 PAID로 만든다`, `조회로도 불명인 시도는 UNKNOWN으로 남고 주문은 CHECKOUT_REQUESTED에 머문다` | 앞 동작들로 경로가 이미 있어 처음부터 통과했다(characterization). 작업 호출을 잠시 빼면 주문 `PAID` 대기가 `ConditionTimeoutException`으로 실패하는 것을 확인하고 되돌렸다 | `./gradlew test --tests 'com.resilientpos.payment.internal.application.PaymentUnknownToOrder*'` 3건 통과 | `./gradlew test` 전체 453건 통과 |
 | 조회로 거절이 확정된 시도를 재결제해 주문 `PAID`까지 간다 / `조회로 거절된 시도를 재결제하면 새 시도가 승인되어 주문이 PAID가 된다` | 위와 같이 characterization | 위와 같다 | 위와 같다 |
+| 리뷰 반영: 취소 시도는 결과 불명이어도 조회하지 않는다 / `PaymentManagementTest`의 `UNKNOWN이어도 취소 시도는 provider를 조회하지 않고 지금 상태를 돌려준다`, `UnknownPaymentResolverIntegrationTest`의 `UNKNOWN 취소 시도는 조회하지 않고 그대로 둔다` | `./gradlew test --tests 'com.resilientpos.payment.PaymentManagementTest'`에서 조회 횟수 0 단언이 실패했다. 작업 수준 테스트는 대상 조회가 이미 승인 시도만 골라 characterization이다 | 같은 명령 통과 | `./gradlew test` 전체 457건 통과 |
+| 리뷰 반영: 잠근 뒤 이미 확정됐으면 덮지 않는다, 락을 쥔 동안 조회하지 않는다 / `조회하는 동안 다른 호출이 먼저 확정했으면 덮지 않고 그 결말을 돌려준다`, `다른 쪽이 락을 쥐고 있으면 풀릴 때까지 기다린다`(조회 0건 단언 추가) | 이미 구현된 동작이라 characterization | 통과 | 위와 같다 |
+| 리뷰 반영: 대상 조회의 리터럴 렌더 고정 / `대상 조회는 kind와 status를 바인드 파라미터가 아니라 리터럴로 렌더한다` | 구현이 이미 리터럴이라 처음부터 통과했다. 어댑터의 status 조건을 바인드 값 비교로 잠시 바꾸면 `status = :param1`이 렌더되어 실패하는 것을 확인하고 되돌렸다 | Hibernate `Statistics`의 실행 쿼리 문자열로 확인, 통과 | 위와 같다 |
 
 ## 결과
-- 인수 조건 1~10을 위 테스트로 확인했다. 전체 `./gradlew test`는 453건 통과다.
+- 인수 조건 1~10을 위 테스트로 확인했다. 리뷰 반영 뒤 전체 `./gradlew test`는 457건 통과다.
 - 대상 조회는 Hibernate가 `where (pae1_0.kind='AUTHORIZATION') and (pae1_0.status='UNKNOWN') and pae1_0.deleted_at is null order by pae1_0.id fetch first ? rows only`로 렌더한다(`enumLiteral`). PostgreSQL 18 컨테이너에 V001~V013을 적용하고 승인 시도 20만 건과 `UNKNOWN` 50건을 넣어 `analyze`했다. 그 뒤 이 문장을 prepare해 `plan_cache_mode = force_generic_plan`으로 실행 계획을 보면 `Index Scan using ix_payment_attempt_unknown_authorization`이다. `deleted_at is null`은 인덱스 술어에 없어 Filter로 남는다.
 - 앞쪽 N건 조회가 `JdslQueryExecutor`에 없어 `findAll(limit) { }`을 더했다. 범위 조정은 spec에 먼저 기록했다.
 - 거절(`PaymentEvent.Declined`)은 외부화되지 않고 받는 리스너도 없어 `event_publication`에 행이 생기지 않는다. 통합 테스트는 거절 발행을 테스트용 `@EventListener`로 관측한다.
 - Kafka·Modulith: 외부화 설정·토픽·consumer group·재시도·DLT는 바꾸지 않았다. 새 발행 지점(`resolveUnknown`)은 기존 Facade와 같이 업무 상태 저장과 같은 트랜잭션에서 발행하므로, [Spring Modulith 이벤트 문서](https://docs.spring.io/spring-modulith/reference/events.html)의 "발행 기록은 발행한 트랜잭션과 함께 커밋되고 커밋 뒤 외부화된다"는 계약을 그대로 따른다(domain-model §4.3). 외부 전달을 하지 않기로 한 결정은 볼트 `modulith-kafka-keywords` 8.28에 적었다.
 - 구현 중 main에 #81·#82가 들어와 rebase했고 인덱스 마이그레이션을 `V013`으로 옮겼다(분할 계획).
+- multi-review(2026-10-06): Claude 86점, Codex 79점(`codex exec` 직접 실행, reviewer-codex 에이전트는 CLI 실행에 실패해 버렸다), Gemini는 CLI가 없어 미실행.
+  - 반영: 공용 스케줄러 스레드 2개(Claude), 승인 시도만 확정(Codex), 리터럴 렌더 회귀 테스트(둘 다), 락 대기 테스트의 조회 0건 단언·재확인 분기 단위 테스트(Claude), entity-map §4.4·결말 화살표·마이그레이션 목록, domain-model의 `executeWithLockNoTx` 서술(바깥 트랜잭션 검사가 있다고 적힌 이전부터의 불일치), `PaymentGateway.query`의 "처리 중이면 Unknown", 낡은 KDoc·주석.
+  - 반영하지 않음: 영영 불명인 건 100건의 기아(Codex Important)는 사용자와 합의한 한계라 `ponytail:` 표식과 observability 단서로 둔다. `NOT_SUPPORTED` 직접 선언이 규칙 위반이라는 지적(Codex)은 리뷰 프롬프트가 규칙을 좁게 적은 탓이다. 규칙은 `@Transactional` 애너테이션만 허용하고 `authorize`·`retryAuthorization`이 같은 선언을 쓴다(domain-model §4.3). 101건 상한 테스트는 상수 하나를 위해 행 101개를 넣는 비용에 비해 얻는 것이 적어 두지 않았다. `findAll(limit)` 오버로드는 호출부가 명확해 그대로 둔다.
