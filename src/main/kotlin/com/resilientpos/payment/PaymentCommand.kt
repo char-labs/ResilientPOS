@@ -62,4 +62,19 @@ object PaymentCommand {
             val status: PaymentAttemptStatus,
         )
     }
+
+    /**
+     * 결과를 모른 채 남은([PaymentAttemptStatus.UNKNOWN]) 승인 시도를 provider 조회로 확정한다.
+     */
+    data class ResolveUnknown(
+        val paymentId: PaymentId,
+    ) {
+        /**
+         * 확정 결과. `UNKNOWN`이 아니었거나 조회로도 확인하지 못했으면 provider 결과를 적용하지 않고 지금 상태를 그대로 돌려준다.
+         */
+        data class Result(
+            val paymentId: PaymentId,
+            val status: PaymentAttemptStatus,
+        )
+    }
 }

@@ -72,14 +72,21 @@ class PaymentManagementTest {
     }
 
     /** 정해진 결말만 돌려주고 불린 횟수를 센다. */
-    private class StubGateway(private val outcome: AuthorizationOutcome) : PaymentGateway {
+    private class StubGateway(
+        private val outcome: AuthorizationOutcome,
+        private val queryOutcome: AuthorizationOutcome = outcome,
+    ) : PaymentGateway {
         var calls = 0
+        var queryCalls = 0
         override fun authorize(request: AuthorizationRequest): AuthorizationOutcome {
             calls++
             return outcome
         }
 
-        override fun query(request: AuthorizationRequest): AuthorizationOutcome = outcome
+        override fun query(request: AuthorizationRequest): AuthorizationOutcome {
+            queryCalls++
+            return queryOutcome
+        }
     }
 
     /** `repository`를 주면 발행하는 순간까지 몇 번 갱신했는지도 적는다. 저장 → 발행 순서를 본다. */
@@ -313,5 +320,97 @@ class PaymentManagementTest {
         }
 
         assertEquals(PaymentAttempt.PAYMENT_ATTEMPT_NOT_FOUND, failure.code)
+    }
+
+    /** 승인 요청이 결과를 모른 채 끝난 시도 하나를 저장소에 둔다. 발행 기록은 비운다. */
+    private fun unknownAttempt(management: PaymentManagement, publisher: RecordingPublisher, repository: RecordingRepository): PaymentId {
+        val created = management.createAttempt(command("4502"))
+        management.authorize(PaymentCommand.Authorize(created.paymentId))
+        assertEquals(PaymentAttemptStatus.UNKNOWN, repository.stored.getValue(created.paymentId).status)
+        publisher.published.clear()
+        repository.updated.clear()
+        return created.paymentId
+    }
+
+    @Test
+    fun `조회가 승인이면 시도를 승인으로 확정하고 저장한 뒤 승인 사실을 발행한다`() {
+        val repository = RecordingRepository()
+        val publisher = RecordingPublisher(repository)
+        val gateway = StubGateway(AuthorizationOutcome.Unknown, AuthorizationOutcome.Approved("PROVIDER-REF"))
+        val management = management(repository, publisher, gateway)
+        val unknown = unknownAttempt(management, publisher, repository)
+        publisher.updatedBeforePublish.clear()
+
+        val result = management.resolveUnknown(PaymentCommand.ResolveUnknown(unknown))
+
+        assertEquals(PaymentCommand.ResolveUnknown.Result(unknown, PaymentAttemptStatus.APPROVED), result)
+        val approved = publisher.published.single() as PaymentApproved
+        assertEquals(unknown.value, approved.paymentId)
+        assertEquals("PROVIDER-REF", approved.providerReference)
+        assertEquals(listOf(1), publisher.updatedBeforePublish)
+        assertEquals(1, gateway.queryCalls)
+    }
+
+    @Test
+    fun `조회가 거절이면 시도를 거절로 확정하고 거절 사실을 발행한다`() {
+        val repository = RecordingRepository()
+        val publisher = RecordingPublisher()
+        val gateway = StubGateway(AuthorizationOutcome.Unknown, AuthorizationOutcome.Declined("PROVIDER-REF"))
+        val management = management(repository, publisher, gateway)
+        val unknown = unknownAttempt(management, publisher, repository)
+
+        val result = management.resolveUnknown(PaymentCommand.ResolveUnknown(unknown))
+
+        assertEquals(PaymentCommand.ResolveUnknown.Result(unknown, PaymentAttemptStatus.DECLINED), result)
+        val declined = publisher.published.single() as PaymentEvent.Declined
+        assertEquals(unknown, declined.paymentId)
+    }
+
+    @Test
+    fun `조회로도 불명이면 아무것도 저장하지도 발행하지도 않고 UNKNOWN을 돌려준다`() {
+        val repository = RecordingRepository()
+        val publisher = RecordingPublisher()
+        val gateway = StubGateway(AuthorizationOutcome.Unknown)
+        val management = management(repository, publisher, gateway)
+        val unknown = unknownAttempt(management, publisher, repository)
+
+        val result = management.resolveUnknown(PaymentCommand.ResolveUnknown(unknown))
+
+        assertEquals(PaymentCommand.ResolveUnknown.Result(unknown, PaymentAttemptStatus.UNKNOWN), result)
+        assertEquals(1, gateway.queryCalls)
+        assertTrue(repository.updated.isEmpty())
+        assertTrue(publisher.published.isEmpty())
+    }
+
+    @Test
+    fun `UNKNOWN이 아닌 시도는 provider를 조회하지 않고 지금 상태를 돌려준다`() {
+        val repository = RecordingRepository()
+        val publisher = RecordingPublisher()
+        val gateway = StubGateway(AuthorizationOutcome.Approved("PROVIDER-REF"))
+        val management = management(repository, publisher, gateway)
+        val approved = management.createAttempt(command("4500"))
+        management.authorize(PaymentCommand.Authorize(approved.paymentId))
+        publisher.published.clear()
+        repository.updated.clear()
+
+        val result = management.resolveUnknown(PaymentCommand.ResolveUnknown(approved.paymentId))
+
+        assertEquals(PaymentCommand.ResolveUnknown.Result(approved.paymentId, PaymentAttemptStatus.APPROVED), result)
+        assertEquals(0, gateway.queryCalls)
+        assertTrue(repository.updated.isEmpty())
+        assertTrue(publisher.published.isEmpty())
+    }
+
+    @Test
+    fun `없는 시도를 확정하려 하면 거절하고 provider를 조회하지 않는다`() {
+        val gateway = StubGateway(AuthorizationOutcome.Approved("PROVIDER-REF"))
+        val management = management(RecordingRepository(), RecordingPublisher(), gateway)
+
+        val failure = assertFailsWith<DomainException> {
+            management.resolveUnknown(PaymentCommand.ResolveUnknown(PaymentId(UUID.randomUUID())))
+        }
+
+        assertEquals(PaymentAttempt.PAYMENT_ATTEMPT_NOT_FOUND, failure.code)
+        assertEquals(0, gateway.queryCalls)
     }
 }
