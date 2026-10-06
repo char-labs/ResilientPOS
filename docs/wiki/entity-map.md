@@ -149,7 +149,7 @@ provider 응답이 끊기면 `t_payment_attempt.status`가 `UNKNOWN`으로 남�
 
 | 단계 | 보이는 것 | 표 |
 |---|---|---|
-| 1. 주기 작업(1분)이 `UNKNOWN` 승인 시도를 오래된 순으로 최대 100건 고른다 | — | partial index `ix_payment_attempt_unknown_authorization`(V013) |
+| 1. 주기 작업(1분)이 `UNKNOWN` 승인 시도를 지난 주기의 마지막 `id` 다음부터 최대 100건 고른다(끝에 닿으면 처음부터) | gauge `payment_attempt_unknown` | partial index `ix_payment_attempt_unknown_authorization`(V013) |
 | 2. provider 조회가 승인 | INFO `결과 불명 결제를 확정했다` | 행을 잠그고 `UNKNOWN`을 다시 확인한 뒤 `APPROVED`. 4.1의 6단계(주문 `PAID`)로 이어진다 |
 | 2'. provider 조회가 거절 | INFO 같은 줄 | `DECLINED`. 주문은 `CHECKOUT_REQUESTED`에 머물고 4.3의 재결제 대상이 된다 |
 | 2''. 조회로도 불명 | WARN `조회로도 결과를 확인하지 못했다` | 아무것도 바뀌지 않고 다음 주기에 다시 묻는다. 넘겨받을 `ReconciliationCase`는 아직 없다 |

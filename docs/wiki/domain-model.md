@@ -164,12 +164,14 @@ Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰�
       2. 우리 업무 테이블에 대량 변경 배치가 생긴다. 이때는 처음부터 JDBC로 쓰고 영속성 컨텍스트를 거치지 않는다.
     - `republish-outstanding-events-on-restart`는 끈 채로 둔다.
 - **결과 불명 결제는 `payment`의 주기 작업이 provider 조회로 확정한다**(`payment.internal.application.UnknownPaymentResolver`, [payment-unknown-resolution](../spec/2026-10-01-payment-unknown-resolution.md)).
-  - 1분(`resilientpos.payment.unknown-resolve-interval`)마다 모든 pod에서 돌고 `Lock.executeWithLockNoTx`(`payment:unknown-resolve`)로 줄 세운다. `UNKNOWN` 승인 시도를 오래된 것부터 최대 100건 골라 한 건씩 `PaymentManagement.resolveUnknown`을 부른다. 대상 조회는 V013의 partial index(`ix_payment_attempt_unknown_authorization`)를 쓰고, 술어를 리터럴로 렌더해 generic plan에서도 인덱스가 쓰이게 한다.
+  - 1분(`resilientpos.payment.unknown-resolve-interval`)마다 모든 pod에서 돌고 `Lock.executeWithLockNoTx`(`payment:unknown-resolve`)로 줄 세운다. `UNKNOWN` 승인 시도를 `id` 순으로 최대 100건 골라 한 건씩 `PaymentManagement.resolveUnknown`을 부른다. 대상 조회는 V013의 partial index(`ix_payment_attempt_unknown_authorization`)를 쓰고, 술어를 리터럴로 렌더해 generic plan에서도 인덱스가 쓰이게 한다.
   - 승인 시도만 다룬다. 취소 시도는 고르지 않고 `resolveUnknown`에 직접 넘겨도 조회하지 않는다. provider가 아직 처리 중이라고 답하면 `Unknown`이다(어댑터 계약). 처리 중을 거절로 접으면 재결제가 이중 청구가 된다.
   - Spring 공용 스케줄러를 쓰고 `spring.task.scheduling.pool.size`를 2로 두었다. 기본값(스레드 하나)이면 이 작업이 provider 조회로 길어질 때 발행 기록 재전송과 Moments가 멈춘다.
   - `resolveUnknown`은 `authorize`와 같은 모양이다. provider 조회는 트랜잭션 밖이고, 확정은 행을 잠근 뒤 `UNKNOWN`을 다시 확인하고 적용한다. 승인이면 `PaymentApproved`가 나가 기존 consumer가 주문을 `PAID`로 넘기고, 거절이면 그 시도가 재결제 대상이 된다. 조회로도 불명이면 아무것도 쓰지 않는다(가짜 성공 금지).
   - 락은 provider 중복 조회를 줄이는 완화 수단이다. 배치가 락 대기 한도(3초)를 넘기면 늦게 온 pod는 fail-open으로 함께 돈다. fail-open이나 TTL 초과로 pod가 겹쳐도 조회는 읽기이고, 같은 확정이 두 번 적용되는 일은 잠근 뒤 재확인이 막는다. 이 블록은 `Lock` 안에서 행 잠금을 기다리는 예외다. 그 행을 잠그는 다른 경로(`authorize`의 적용, `retryAuthorization`)는 이 키를 잡지 않아 순환이 없다.
-  - 한 건이 던지면 ERROR 로그를 남기고 다음 건으로 간다. 조회 횟수 상한은 없어 영영 불명인 건이 100건을 넘게 쌓이면 새 건이 밀린다. 그 건들을 넘겨받을 reconciliation case가 생기면 해소한다.
+  - 지난 주기에 읽은 마지막 `id` 다음부터 읽고(pod 메모리의 keyset 커서), 100건보다 적게 읽히면 다음 주기는 처음부터 읽는다. 그래서 영영 불명인 건이 100건을 넘어도 새 건은 늦어도 `ceil(불명 건수 / 100)` 주기 안에 조회된다. 커서는 pod마다 따로이고 재기동하면 처음부터다. 조회가 겹치거나 늦어질 뿐 정합성에는 닿지 않는다.
+  - 한 건이 던지면 ERROR 로그를 남기고 다음 건으로 간다. 조회 횟수 상한은 없다. 조회로도 확정되지 않는 건을 넘겨받을 reconciliation case는 아직 없다.
+  - 주기마다 결과 불명 승인 시도 수를 세어 gauge `payment.attempt.unknown`에 둔다(observability).
 - `event_publication`의 인덱스는 V004가 만든 두 개(`serialized_event` hash, `completion_date`)와 V009의 `status`다. `status` 인덱스는 재전송 작업과 Modulith가 매분 status로 거르는 조회(`countByStatus`, `findFailedPublications`)를 위한 것이고, Modulith가 파라미터로 거는 조회의 generic plan에서도 쓰이도록 partial이 아닌 전체 인덱스로 두었다(실측은 [event-publication-resubmit](../spec/2026-09-29-event-publication-resubmit.md) 스키마 변경 검토).
 - `event_publication`은 테이블·컬럼 이름을 Modulith의 JPA 엔티티가 정한다. `t_` 접두어 규칙과 `BaseEntity` 공통 컬럼의 예외다. 엔티티가 라이브러리 안에 있어서 바꿀 수 없다. 스키마는 같은 버전 JDBC 모듈의 공식 PostgreSQL 스키마를 기준으로 Flyway 마이그레이션에 직접 쓴다. JPA가 `validate`라서 Modulith를 올릴 때 엔티티의 컬럼이 바뀌었는지 확인하고 마이그레이션을 함께 넣어야 한다([event-publication-registry](../spec/2026-09-21-event-publication-registry.md)).
 - **Modulith 버전을 올리는 PR의 절차.** 라이브러리는 이 테이블을 만들어 주지 않는다. JPA 모듈에는 스키마 SQL이 없고 스키마의 소유자는 Flyway다.
