@@ -121,8 +121,8 @@ class Order private constructor(
      */
     fun markPaid(checkoutNo: Int, amount: Money, ids: IdentifierGenerator, now: Instant): Transition<Order, OrderPaid> {
         // ponytail: 같은 회차의 두 번째 승인은 payment의 partial unique가 막아 PAID 뒤의 같은 승인은 재배달뿐이다.
-        // 거절 뒤 재결제도 같은 회차에 새 시도를 넣을 뿐이고 DECLINED는 다시 승인되지 않으며 UNKNOWN은 재결제를 막는다.
-        // UNKNOWN 재결제를 허용하거나 결말이 난 시도를 바꾸는 경로(reconciliation)가 생기면 checkout에 승인 paymentId를 두고 대조한다.
+        // UNKNOWN 확정(조회)도 UNKNOWN이 partial unique 술어 안이라 확정 전에 같은 회차 새 시도가 없고, APPROVED·DECLINED는 다시 바뀌지 않아 한 회차 승인은 하나로 유지된다.
+        // UNKNOWN에서 재결제를 허용하거나 APPROVED·DECLINED를 바꾸는 경로(reconciliation 해소)가 생기면 checkout에 승인 paymentId를 두고 대조한다.
         val latest = checkouts.lastOrNull()
         if (latest?.checkoutNo != checkoutNo || latest.amount != amount) {
             throw DomainException(
