@@ -56,6 +56,7 @@ class SchemaMigrationTest(
                 "t_order_line",
                 "t_owner",
                 "t_payment_attempt",
+                "t_store",
                 "t_sync_operation",
                 "t_sync_watermark",
                 "t_terminal",
