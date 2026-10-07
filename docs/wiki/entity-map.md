@@ -1,6 +1,6 @@
 # 엔티티 지도
 
-JPA 엔티티 9개가 각각 무엇을 맡고, 서로를 어떻게 가리키며, 단말과 운영자가 쓰는 흐름에서 어느 순서로 생기고 바뀌는지를 한곳에 모은 문서다.
+JPA 엔티티 11개가 각각 무엇을 맡고, 서로를 어떻게 가리키며, 단말·점주·운영자가 쓰는 흐름에서 어느 순서로 생기고 바뀌는지를 한곳에 모은 문서다.
 엔티티 클래스의 KDoc 첫 문단이 같은 내용을 짧게 갖고, 여기가 전체 그림이다. 용어·aggregate 경계는 [도메인 모델](domain-model.md)이 정본이고,
 Kotlin으로 엔티티를 어떤 형태로 쓰는지(생성자 `private`, `var … protected set`, `from`/`apply`/`toDomain`)는 볼트 규칙 `domain-modeling-kotlin.md` §5가 정본이다.
 
@@ -20,8 +20,10 @@ Kotlin으로 엔티티를 어떤 형태로 쓰는지(생성자 `private`, `var �
 | `FulfillmentEntity` | `t_fulfillment` | fulfillment | 루트 `Fulfillment` | `order_id` | 넣기만 한다 |
 | `WatermarkEntity` | `t_sync_watermark` | sync | 루트 `Watermark`(단말당 하나) | `terminal_id`가 PK | `last_acked_sequence`만 `apply`. 행을 잠그고 바꾼다 |
 | `SyncOperationEntity` | `t_sync_operation` | sync | `Watermark`와 같은 트랜잭션의 접수 기록 | `terminal_id`, `operation_id`(단말이 만든 값), `order_id` | 넣기만 한다 |
-| `TerminalEntity` | `t_terminal` | terminal | 루트 `Terminal` | `store_id`(가리킬 표가 없다) | `status`만 `applyStatus`(`ACTIVE`→`INACTIVE`). 행을 잠그고 바꾼다. `terminal_code`는 바뀌지 않는다 |
+| `TerminalEntity` | `t_terminal` | terminal | 루트 `Terminal` | `store_id`(`t_store`. 매장 행이 없는 옛 단말도 있다) | `status`만 `applyStatus`(`ACTIVE`→`INACTIVE`). 행을 잠그고 바꾼다. `terminal_code`는 바뀌지 않는다 |
 | `TerminalCredentialEntity` | `t_terminal_credential` | terminal | `Terminal`과 같은 트랜잭션의 credential 이력 | `terminal_id` | `revoked_at`만 `applyRevokedAt`(회전 때 한 번) |
+| `OwnerEntity` | `t_owner` | owner | 루트 `Owner`(점주 계정) | — | 넣기만 한다 |
+| `StoreEntity` | `t_store` | store | 루트 `Store` | `owner_id` | 넣기만 한다 |
 
 `event_publication`(Spring Modulith 발행 기록)은 우리 엔티티가 아니다. Modulith의 JPA 엔티티가 스키마를 정하고 `t_` 접두어 규칙의 예외다([도메인 모델 §4.3](domain-model.md)).
 
@@ -38,11 +40,13 @@ t_payment_attempt.checkout_no ──(회차 번호, ID가 아니다)──► t_
 t_payment_attempt.retried_from ────────────────────────────────────────────────────────────► t_payment_attempt.id
 t_fulfillment.order_id ─────────────────────────────────────────────────────────────────────► t_order.id
 t_terminal_credential.terminal_id ─────────────────────────────────────────────────────────► t_terminal.id
+t_terminal.store_id ───────────────────────────────────────────────────────────────────────► t_store.id
+t_store.owner_id ──────────────────────────────────────────────────────────────────────────► t_owner.id
 ```
 
 - 화살표는 "값이 저 행의 ID다"라는 뜻이고 DB가 검사하지 않는다. `t_order.id`를 가리키는 표가 다섯(line·checkout·payment·fulfillment·sync)이지만 서로 조인하는 코드는 없다. 모듈 경계 밖의 값은 이벤트로 건너간다(`OrderPaymentRequested`·`PaymentApproved`·`OrderPaid`).
 - `t_payment_attempt`는 checkout 회차를 `checkout_no`(1, 2, …)로 가리킨다. `t_order_checkout.id`가 아니다. 결제 승인을 주문에 대조할 때 `order.markPaid`가 최신 회차 번호·금액과 비교한다.
-- `t_terminal`이 생겼지만 `t_order`·`t_sync_*`·`t_payment_attempt`의 `terminal_id`는 그 표와 FK·조인이 없다. 대신 요청을 받을 때 인증된 단말과 대조한다. 주문 생성은 본문의 `terminalId`·`storeId`를, sync는 경로의 `terminalId`와 `CREATE_ORDER` 항목의 `storeId`를 본다. `store` 모듈에는 아직 표가 없어 `store_id`(`t_terminal.store_id` 포함)가 가리키는 행은 없다.
+- `t_terminal`이 생겼지만 `t_order`·`t_sync_*`·`t_payment_attempt`의 `terminal_id`는 그 표와 FK·조인이 없다. 대신 요청을 받을 때 인증된 단말과 대조한다. 주문 생성은 본문의 `terminalId`·`storeId`를, sync는 경로의 `terminalId`와 `CREATE_ORDER` 항목의 `storeId`를 본다. `t_store`는 점주가 만든 매장의 표다. 단말 관리 API만 `t_terminal.store_id`를 `t_store`의 소유와 대조한다. 주문·결제의 `store_id`와 V015 전에 등록된 단말의 `store_id`는 매장 행과 대조하지 않는다.
 
 ## 3. 엔티티별 역할
 
@@ -90,15 +94,27 @@ t_terminal_credential.terminal_id ───────────────�
 
 ### `TerminalEntity` — 매장에 속한 단말 하나
 - 역할: 단말의 소속 매장(`store_id`), 매장 안의 단말 코드(`terminal_code`), 활성 상태(`ACTIVE`/`INACTIVE`)를 든다. 소속 매장과 코드의 정본이고 둘 다 바뀌지 않는다. V014 전에 있던 행의 코드는 매장별 `LEGACY-순번`이다.
-- 관계: `TerminalCredentialEntity`가 `terminal_id`로 가리킨다. `store_id`는 가리킬 표가 없다.
+- 관계: `TerminalCredentialEntity`가 `terminal_id`로 가리킨다. `store_id`는 `t_store.id`다. 단말 관리 API는 그 매장이 로그인한 점주의 것인지 먼저 확인한다.
 - 방어선: 회전·비활성화는 이 행을 잠그고 시작한다(`for no key update`, 대기 3초). 잠금 없이 바꾸는 경로가 없어 `@Version`이 없다. unique `ux_terminal_store_code`(`store_id`, `terminal_code`)가 매장 안 코드 유일의 유일한 방어선이다. 사전 조회가 없어 위반은 persistence adapter가 제약 이름으로 가려 `409 TERMINAL_CODE_DUPLICATED`로 바꾼다.
-- 만드는 곳: `TerminalManagement.register`(첫 credential과 한 커밋). 바꾸는 곳: `deactivate`(멱등, 되돌리지 않는다). HTTP 입구는 운영자 경로 `/admin/v1/terminals` 아래에 있다([operator-authentication](../spec/2026-10-06-operator-authentication.md)).
+- 만드는 곳: `TerminalManagement.register`(첫 credential과 한 커밋). 바꾸는 곳: `deactivate`(멱등, 되돌리지 않는다). HTTP 입구는 점주 경로 `/owner/v1/stores/{storeId}/terminals` 아래에 있다([operator-authentication](../spec/2026-10-06-operator-authentication.md)).
 
 ### `TerminalCredentialEntity` — 단말을 인증하는 비밀값 한 건
 - 역할: 토큰의 SHA-256 hex(`token_hash`)와 폐기 시각(`revoked_at`)을 든다. 평문 토큰은 저장하지 않는다. 폐기된 행도 이력으로 남는다. 만료는 없다.
 - 관계: `terminal_id`로 단말을 가리킨다. 인증은 이 표와 `t_terminal`을 한 조회로 읽는다(해시가 같고 폐기되지 않았으며 단말이 `ACTIVE`).
 - 방어선: unique `ux_terminal_credential_token_hash`(해시 하나가 두 단말을 가리키지 않는다), partial unique `ux_terminal_credential_active`(`revoked_at is null`인 행은 단말당 하나). 둘 다 삭제 행에도 걸린다.
 - 만드는 곳: `register`와 `rotateCredential`. 회전은 옛 행에 `revoked_at`을 찍고 flush한 뒤 새 행을 넣는다. 먼저 내보내지 않으면 Hibernate가 INSERT를 먼저 보내 partial unique에 걸린다.
+
+### `OwnerEntity` — 점주 계정 하나
+- 역할: 점주(SaaS 고객)의 로그인 이메일과 비밀번호 해시(`{bcrypt}` 접두어)를 든다. 이메일은 앱이 소문자로 정규화해 넣는다. 평문 비밀번호는 저장하지 않는다. 로그인 실패 횟수와 세션은 Redis에 있고 이 표에 없다.
+- 관계: `StoreEntity`가 `owner_id`로 가리킨다.
+- 방어선: unique `ux_owner_email`이 "이메일은 계정 하나"의 유일한 방어선이다. 사전 조회가 없어 위반은 persistence adapter가 제약 이름으로 가려 `409 OWNER_EMAIL_DUPLICATED`로 바꾼다.
+- 만드는 곳: `OwnerManagement.signUp`. 바꾸는 명령은 없다(비밀번호 변경·재설정은 #92).
+
+### `StoreEntity` — 점주가 만든 매장 하나
+- 역할: 매장 이름과 소유 점주(`owner_id`)를 든다. `owner_id`가 "이 매장은 누구 것인가"의 정본이다. 판매 정책·통화는 아직 없다.
+- 관계: `t_terminal.store_id`가 이 행을 가리킨다. `owner_id`에 인덱스 `ix_store_owner_id`가 있다(내 매장 목록, 소유 확인).
+- 방어선: 없다(PK뿐). 이름 중복을 허용하고, 소유자를 바꾸는 명령이 없어 소유 확인과 단말 변경 사이에 경합이 없다.
+- 만드는 곳: `StoreManagement.create`(`POST /owner/v1/stores`). 바꾸는 명령은 없다.
 
 ## 4. UX 흐름별 엔티티 동작
 
@@ -174,12 +190,24 @@ provider 응답이 끊기면 `t_payment_attempt.status`가 `UNKNOWN`으로 남�
 | 단말이 같은 배치를 계속 보낸다 | `t_sync_watermark.last_acked_sequence`와 `t_sync_operation`의 마지막 `sequence` | `sync 충돌` WARN 로그(`terminalId`·`operationId`·`sequence`). `CONFLICT`는 단말 상태가 서버와 갈라진 것이라 사람이 본다 |
 | 이벤트가 나가지 않았다 | `event_publication`에서 `completion_date`가 빈 행 | 매분 도는 재전송과 `event.publication.incomplete` gauge |
 
+### 4.7 점주가 단말을 들일 때
+
+점주 경로(`/owner/**`)는 세션 쿠키(Spring Session Redis)로 인증하고, 상태 변경 요청은 CSRF 토큰(`X-XSRF-TOKEN`)이 있어야 한다. 남의 매장 경로는 `404 STORE_NOT_FOUND`이고 어느 행도 바뀌지 않는다.
+
+| 단계 | 점주에게 보이는 것 | 표 | 트랜잭션·전달 |
+|---|---|---|---|
+| 1. `POST /owner/v1/signup` | 201, `ownerId` | `t_owner` 1행 | **한 커밋**(unique `ux_owner_email`) |
+| 2. `POST /owner/v1/login` | 200과 세션 쿠키 | 없음(세션은 Redis, 실패 횟수도 Redis) | — |
+| 3. `POST /owner/v1/stores` | 201, `storeId` | `t_store` 1행 | **한 커밋** |
+| 4. `POST /owner/v1/stores/{storeId}/terminals` | 201, `terminalId`와 평문 토큰(이때 한 번만) | `t_store` 읽기(소유 확인) 뒤 `t_terminal` 1행 + `t_terminal_credential` 1행 | **한 커밋**(unique `ux_terminal_store_code`) |
+| 5. 회전·비활성화 | 200, 새 토큰 또는 `INACTIVE` | `t_terminal` 행 잠금 뒤 `t_terminal_credential`·`t_terminal.status` 갱신 | **한 커밋**. 단말의 매장이 경로와 다르면 `404 TERMINAL_NOT_FOUND` |
+
 ## 5. 아직 엔티티가 없는 것
 
-`Store`(정책·통화), `ReconciliationCase`(불일치 근거·조치), `ReceiptDelivery`(영수증 전달)는 [도메인 모델 §2](domain-model.md)에 자리만 있고 표와 엔티티는 없다. `store_id`는 인증된 단말의 매장과 대조할 뿐 매장 표로 검증하지 않는다([현재 상태](current-state.md)).
+`Store`의 판매 정책·통화, `ReconciliationCase`(불일치 근거·조치), `ReceiptDelivery`(영수증 전달)는 [도메인 모델 §2](domain-model.md)에 자리만 있고 표와 엔티티는 없다. 주문의 `store_id`는 인증된 단말의 매장과 대조할 뿐 매장 표로 검증하지 않는다([현재 상태](current-state.md)).
 
 ## 관련 문서
 - [도메인 모델](domain-model.md) — aggregate 경계(§2), 용어집(§3), 스키마 변경 검토(§4.7)
 - [현재 상태](current-state.md) — 모듈별 구현 상태와 알려진 빈틈
 - 볼트 규칙 `domain-modeling-kotlin.md` §5 — 엔티티 작성 규칙(`.claude/rules`로 복사된다)
-- 마이그레이션 `src/main/resources/db/migration/V002`·`V003`·`V005`~`V008`·`V010`~`V013` — 각 표의 DDL과 주석
+- 마이그레이션 `src/main/resources/db/migration/V002`·`V003`·`V005`~`V008`·`V010`~`V015` — 각 표의 DDL과 주석

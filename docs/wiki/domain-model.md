@@ -1,6 +1,6 @@
 # 도메인 모델과 유비쿼터스 언어
 
-이 프로젝트가 쓰는 DDD 용어의 정의, bounded context 7개의 요약, 코드·스키마·문서가 함께 쓰는 단어 목록이다.
+이 프로젝트가 쓰는 DDD 용어의 정의, bounded context 8개의 요약, 코드·스키마·문서가 함께 쓰는 단어 목록이다.
 업무 기능 spec을 쓰거나 새 도메인 타입·테이블·이벤트 이름을 만들 때 먼저 읽는다. Facade/Service/Aggregate의
 책임 분리 표는 [README의 Engineering Principles](../../README.md#engineering-principles)가 정본이며 여기서 반복하지 않는다.
 Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰는지는 볼트 규칙 `rules/domain-modeling-kotlin.md`가
@@ -19,7 +19,7 @@ Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰�
 |---|---|---|---|
 | 도메인 (Domain) | 소프트웨어가 해결하려는 문제 영역 | — | 네트워크 단절과 부분 실패 속에서도 주문·결제 상태가 중복 없이 수렴하는 매장 판매 운영 |
 | 유비쿼터스 언어 (Ubiquitous Language) | 기획·개발·문서·코드·스키마가 같은 뜻으로 쓰는 단어 집합 | 한 단어가 두 뜻이면 둘 중 하나를 바꾼다 | §3 용어집. `terminal`(단말)을 코드·테이블·spec이 모두 쓰고 `pos`는 쓰지 않는다 |
-| 바운디드 컨텍스트 (Bounded Context) | 한 모델과 그 용어가 유효한 명시적 경계. 경계 밖과는 공개 계약(Facade·이벤트)으로만 통한다 | 같은 단어가 다른 뜻이거나 데이터 소유자가 다르면 경계가 다르다 | Spring Modulith application module 7개 `com.resilientpos.{store,terminal,order,payment,sync,reconciliation,fulfillment}`. `ModuleStructureTest`가 경계를 검사한다. Gradle 모듈이 아니다 |
+| 바운디드 컨텍스트 (Bounded Context) | 한 모델과 그 용어가 유효한 명시적 경계. 경계 밖과는 공개 계약(Facade·이벤트)으로만 통한다 | 같은 단어가 다른 뜻이거나 데이터 소유자가 다르면 경계가 다르다 | Spring Modulith application module 8개 `com.resilientpos.{owner,store,terminal,order,payment,sync,reconciliation,fulfillment}`. `ModuleStructureTest`가 경계를 검사한다. Gradle 모듈이 아니다 |
 | 애그리거트 (Aggregate) / 루트 | 한 트랜잭션에서 함께 일관성을 지켜야 하는 객체 묶음. 루트 하나만 외부에 노출되고 루트가 불변식을 소유한다 | "이 둘이 한 트랜잭션에서 반드시 함께 맞아야 하는가?" 예면 같은 aggregate, 아니면 별도 aggregate이고 ID로만 참조한다 | `Order`(루트) + `OrderLine` + checkout 금액. `OrderLine`을 밖에서 바꾸지 않고 `order.changeLine(...)`으로 바꾼다. `Order`와 `PaymentAttempt`는 별개 aggregate라 `orderId`로 참조하고 이벤트로 연결한다 |
 | 엔티티 (Entity) | 식별자로 구별되고 생명주기가 있는 객체 | 속성이 모두 같아도 식별자가 다르면 다른 것 | `Order`, `PaymentAttempt`, `Watermark`, `ReconciliationCase`, `Fulfillment`. 식별자는 UUID v7을 애플리케이션이 저장 전에 만든다 |
 | 값 객체 (Value Object) | 식별자가 없고 속성이 같으면 같은 것. 불변 | "두 인스턴스의 모든 속성이 같으면 같은 것인가?" 예면 값 객체 | `Money`, `OrderId`, `TerminalCode`, checkout 확정 금액. Kotlin `data class` + `of`/`from` 팩토리 |
@@ -37,7 +37,8 @@ Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰�
 
 | Context | Aggregate 루트 | 소유하는 것 | 핵심 불변식 | 공개 Facade |
 |---|---|---|---|---|
-| `store` | `Store` | 판매 정책, 통화·반올림, 매장 설정 | 정책은 버전으로 관리하고 과거 주문 금액을 사후에 바꾸지 않는다 | `StoreManagement` |
+| `owner` | `Owner` | 점주 계정(이메일, 비밀번호 해시), 가입, 로그인 자격 확인, 로그인 실패 제한 | 이메일은 계정 하나(unique `t_owner.email`, 소문자 정규화). 평문 비밀번호는 저장하지 않는다 | `OwnerManagement` |
+| `store` | `Store` | 매장 이름과 소유 점주, 판매 정책, 통화·반올림, 매장 설정 | 매장의 소유 점주는 바뀌지 않고 점주는 자기 매장만 다룬다(소속 정본은 `t_store.owner_id`). 정책은 버전으로 관리하고 과거 주문 금액을 사후에 바꾸지 않는다(정책은 아직 없다) | `StoreManagement` |
 | `terminal` | `Terminal` | 단말 코드, 소속 매장, 활성화, credential rotation 이력 | 매장 안에서 코드 유일(unique `(store_id, terminal_code)`). 코드와 소속 매장은 바뀌지 않는다. 비활성 단말은 인증 불가. 이력 삭제 금지 | `TerminalManagement` |
 | `order` | `Order` | line, 할인, checkout 금액·통화, lifecycle | `OPEN`에서만 금액·line 변경. checkout 이후 금액·통화 불변. 결제 승인 금액은 checkout과 일치해야 한다 | `OrderManagement` |
 | `payment` | `PaymentAttempt` | provider 참조, provider idempotency, 승인·취소 시도, 결제 정본 상태 | 같은 checkout에 진행 중인 승인 시도는 하나. `UNKNOWN`은 실패가 아니다. provider 결과는 한 번만 적용한다(`UNKNOWN`은 결과가 없다는 기록이라 provider 조회로 한 번 확정한다) | `PaymentManagement`(쓰기), `PaymentQueryFacade`(조회) |
@@ -79,7 +80,8 @@ Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰�
 |---|---|---|---|
 | `terminal` | 매장에 설치된 판매 단말 | `pos` | 제품 전체가 POS라 자기 참조다. 코드에서 `pos`는 position으로 읽힌다. 원문 요구사항과 오프라인 명령 봉투(`terminalId`)가 이미 `terminal`을 쓴다 |
 | `credential` (terminal) | 단말을 인증하는 비밀값과 그 이력. 평문은 저장하지 않고 해시만 둔다. 유효한 것은 단말당 하나이고 폐기된 것도 지우지 않는다 | `token` | 코드에서 `token`은 단말이 드는 평문 하나만 가리킨다. 폐기 상태와 이력을 담는 행은 `credential`이다. 테이블은 `t_terminal_credential` |
-| `operator` | 단말 관리 같은 운영 작업을 하는 사람. IdP가 발급한 JWT의 `OPERATOR` 역할로 인증하고 앱은 운영자를 저장하지 않는다 | `admin`, `manager` | `admin`은 경로(`/admin`) 이름으로만 쓰고 주체는 참고 문서의 operator를 따른다. `manager`는 매장 점주로 읽혀 전체 관리자와 섞인다 |
+| `owner` | 점주. 매장을 소유하고 자기 매장의 단말을 관리하는 SaaS 고객. 앱 자체 계정(이메일·비밀번호)으로 로그인하고 경로는 `/owner/**`다 | `merchant`, `manager`, `operator` | `merchant`는 payment의 PG 가맹점과 뜻이 겹친다. `manager`는 매장 직원 관리자로도 읽힌다. `operator`는 매장을 넘나드는 플랫폼 운영자에 남겨 둔다 |
+| `operator` | 플랫폼 운영자. 우리 조직에서 매장을 넘나드는 운영 작업(DLT 재투입 등)을 하는 사람. 아직 주체가 없다(#91) | `admin` | `admin`은 경로(`/admin`) 이름으로만 쓰고 주체는 참고 문서의 operator를 따른다. 점주와 섞지 않는다 |
 | `operation` (sync) | 단말이 오프라인에서 만든 명령 한 건. 식별자는 `operationId`(UUID v7) | `receipt` | 한 스키마에서 receipt가 접수증과 고객 영수증 두 뜻으로 쓰였다. 봉투의 `operationId`와 어휘를 맞췄다. 테이블은 `t_sync_operation` |
 | `watermark` | 단말별로 서버가 확정한 마지막 sequence(`lastAckedSequence`) | `terminal sync state` | state는 모든 테이블에 해당해 아무 말도 하지 않는다. 기획 문서가 이미 쓰는 단어다. 테이블은 `t_sync_watermark` |
 | `sequence` (terminal sequence) | 한 단말 안에서 단조 증가하는 명령 순번. 누락(gap) 탐지의 근거 | — | UUID 생성 순서, Kafka 순서, aggregate version과 다르다. 서로 대체하지 않는다 |
@@ -254,7 +256,8 @@ Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰�
 - `t_order_checkout`은 통화 컬럼을 두지 않았다(질문 1, `t_order.currency`에서 읽는다). `amount`는 지금은 line 합계와 같아도 확정 시점에만 알 수 있는 값이라 둔다(질문 3·4). 읽고 판단한 뒤 쓰는 `RequestCheckout`의 경합은 주문 행 잠금(`PESSIMISTIC_WRITE`, PostgreSQL에서는 `for no key update`, 대기 3초 제한)이 막고, unique `(order_id, checkout_no)`와 `@Version`이 그 뒤의 방어선이다(질문 6). Hibernate가 INSERT를 UPDATE보다 먼저 flush해서 잠금이 없으면 `@Version`보다 unique 제약이 먼저 걸린다([order-request-checkout-persistence](../spec/2026-09-21-order-request-checkout-persistence.md)).
 - `t_order_line.version`과 `t_order_checkout.version`은 질문 2·4에서 걸려 없앴다. 업무 코드가 읽지 않았고, 행 단위 version은 서로 다른 line을 고치는 두 트랜잭션을 막지 못해 aggregate의 방어선이 아니었다. 대신 같은 line 행을 동시에 고치는 경우의 충돌 감지는 포기했다. 지금 기존 주문의 line을 고치는 명령이 없다는 것이 그 전제이고, 명령을 넣는 PR이 루트 잠금이나 루트 version 증가를 함께 정한다. 방어선은 루트(`t_order`의 행 잠금과 `@Version`)와 unique `(order_id, checkout_no)`다. 배포된 환경이 없던 시점이라 질문 8의 순서를 밟지 않고 코드 제거와 컬럼 삭제를 한 PR로 했다([base-entity-explicit-version](../spec/2026-09-21-base-entity-explicit-version.md)).
 - `t_order`의 unique `(terminal_id, client_order_id)`는 질문 4·6의 답이다. 같은 키의 생성이 동시에 오면 `Lock`이 줄 세워 늦은 요청이 기존 주문을 받고, 락이 통하지 않으면 이 제약이 막는다([shared-distributed-lock](../spec/2026-09-28-shared-distributed-lock.md)). 멱등 키는 삭제 뒤에도 재사용하면 안 되므로 partial unique로 바꾸지 않는다. 주문을 soft delete하는 명령이 생기면 `findByClientOrderId`가 삭제된 주문도 찾게 해야 한다. 지금은 주문을 삭제하는 코드가 없다.
-- `t_terminal`·`t_terminal_credential`은 단말 인증의 표다. 토큰 평문은 저장하지 않고 SHA-256 hex(`token_hash`)만 둔다(질문 9). unique `ux_terminal_credential_token_hash`는 해시 하나가 두 단말을 가리키지 않게 한다. 인증 조회가 한 행을 전제하기 때문이다. partial unique `ux_terminal_credential_active`(`terminal_id`, `revoked_at is null`)는 "유효 credential은 단말당 하나"의 마지막 방어선이다. 평소에는 terminal 행 잠금(`PESSIMISTIC_WRITE`, 대기 3초)이 회전을 직렬화하므로 `@Version`은 두지 않는다(질문 4·6). 둘 다 soft delete된 행에도 걸린다. 회전은 옛 credential의 폐기 UPDATE를 먼저 flush한다. Hibernate는 한 flush에서 INSERT를 UPDATE보다 먼저 보내서, flush하지 않으면 새 유효 행의 INSERT가 partial unique에 걸린다. 인증 결과는 캐시하지 않는다. 정본은 `revoked_at is null`인 행이고 Redis는 정본이 될 수 없다(질문 5)([terminal-authentication](../spec/2026-10-05-terminal-authentication.md)). 단말 코드 `terminal_code`는 운영자가 단말을 고르는 목록 조회가 읽어서 들였다(질문 2). unique `ux_terminal_store_code`(`store_id`, `terminal_code`)가 매장 안 코드 유일의 유일한 방어선이고 사전 조회는 없다(질문 4·6). 지우는 명령이 없어 삭제 행에도 걸리게 두었다. 기존 행은 매장별 `LEGACY-순번`으로 채운 뒤 NOT NULL로 바꿨다(질문 3)([operator-authentication](../spec/2026-10-06-operator-authentication.md)).
+- `t_terminal`·`t_terminal_credential`은 단말 인증의 표다. 토큰 평문은 저장하지 않고 SHA-256 hex(`token_hash`)만 둔다(질문 9). unique `ux_terminal_credential_token_hash`는 해시 하나가 두 단말을 가리키지 않게 한다. 인증 조회가 한 행을 전제하기 때문이다. partial unique `ux_terminal_credential_active`(`terminal_id`, `revoked_at is null`)는 "유효 credential은 단말당 하나"의 마지막 방어선이다. 평소에는 terminal 행 잠금(`PESSIMISTIC_WRITE`, 대기 3초)이 회전을 직렬화하므로 `@Version`은 두지 않는다(질문 4·6). 둘 다 soft delete된 행에도 걸린다. 회전은 옛 credential의 폐기 UPDATE를 먼저 flush한다. Hibernate는 한 flush에서 INSERT를 UPDATE보다 먼저 보내서, flush하지 않으면 새 유효 행의 INSERT가 partial unique에 걸린다. 인증 결과는 캐시하지 않는다. 정본은 `revoked_at is null`인 행이고 Redis는 정본이 될 수 없다(질문 5)([terminal-authentication](../spec/2026-10-05-terminal-authentication.md)). 단말 코드 `terminal_code`는 점주가 단말을 고르는 목록 조회가 읽어서 들였다(질문 2). unique `ux_terminal_store_code`(`store_id`, `terminal_code`)가 매장 안 코드 유일의 유일한 방어선이고 사전 조회는 없다(질문 4·6). 지우는 명령이 없어 삭제 행에도 걸리게 두었다. 기존 행은 매장별 `LEGACY-순번`으로 채운 뒤 NOT NULL로 바꿨다(질문 3)([operator-authentication](../spec/2026-10-06-operator-authentication.md)).
+- `t_owner`·`t_store`는 점주 계정과 매장의 표다. 로그인 실패 횟수와 세션은 업무 사실이 아니라 시한이 있는 장치라 Redis에 두고 컬럼을 만들지 않았다(질문 1). unique `ux_owner_email`이 이메일 중복 가입의 유일한 방어선이고, 이메일은 애플리케이션이 소문자로 정규화해 넣는다(질문 4). 매장과 점주의 소속은 `t_store.owner_id` 한 컬럼이다. 한 매장을 여러 계정이 관리하는 기능이 없어 소속 표를 두지 않았고, 세션에 매장 목록을 담지 않아 소속의 정본이 하나다(질문 5)([operator-authentication](../spec/2026-10-06-operator-authentication.md)).
 - `t_fulfillment`의 unique는 청사진의 `(orderId, ticketType)`이 아니라 `(order_id)`다. 이행 방식이 하나뿐이고 `type`을 읽는 코드가 없어 질문 2에서 걸렸다. 방식이 늘면 지금의 유일한 종류를 뜻하는 상수 기본값 컬럼을 더하고 unique를 바꾼다(질문 3). "주문당 한 번"의 마지막 방어선이라 soft delete된 행에도 걸리는 전체 unique로 둔다(질문 4). 상태·매장·품목 snapshot도 읽는 명령·조회가 생길 때 더한다([fulfillment-kitchen-ticket](../spec/2026-09-24-fulfillment.md)).
 
 기술 근거(2026-09-20 확인, PostgreSQL 18·Flyway 12.4.0·Hibernate 7.4.5): [ALTER TABLE](https://www.postgresql.org/docs/18/sql-altertable.html), [CREATE INDEX](https://www.postgresql.org/docs/18/sql-createindex.html), [Explicit Locking](https://www.postgresql.org/docs/18/explicit-locking.html), [Transaction Isolation](https://www.postgresql.org/docs/18/transaction-iso.html), [Flyway 트랜잭션 처리](https://documentation.red-gate.com/fd/migration-transaction-handling-273973399.html), [Flyway PostgreSQL 락](https://documentation.red-gate.com/fd/postgresql-database-277579325.html). Hibernate `validate`가 매핑된 컬럼만 검사한다는 점은 사용자 가이드에 없어서 `AbstractSchemaValidator` 소스로 확인했다.
@@ -305,7 +308,7 @@ grill 심문과 업무 기능 spec의 "소유 모듈 / Command·Query·Event / �
 
 | 사례 | 이 저장소 | 이유 |
 |---|---|---|
-| bounded context = Gradle 모듈 | Spring Modulith 패키지 모듈. Gradle 분할은 [현재 상태](current-state.md)의 조건이 충족될 때만 | 모듈 7개가 비어 있는 지금 나누면 담길 코드보다 빌드 코드가 많다. 경계는 Modulith 검증이 이미 막는다 |
+| bounded context = Gradle 모듈 | Spring Modulith 패키지 모듈. Gradle 분할은 [현재 상태](current-state.md)의 조건이 충족될 때만 | 모듈 8개가 비어 있는 지금 나누면 담길 코드보다 빌드 코드가 많다. 경계는 Modulith 검증이 이미 막는다 |
 | Kotlin `internal` 가시성으로 JPA 엔티티를 숨김 | 목적은 같고 수단이 둘로 갈린다. 모듈 경계는 `internal` **패키지** + Modulith 검증, 엔티티를 밖에서 만들거나 바꾸지 못하게 하는 것은 `private` 생성자와 전 필드 `var … protected set`이고, `EntityVisibilityTest`가 그 형태를 고정한다([entity-property-visibility](../spec/2026-09-22-entity-property-visibility.md)) | 단일 Gradle 프로젝트에서 Kotlin `internal`은 전체에 보여 경계가 되지 않는다. 사례 스스로 배치용 JPA 엔티티를 중복 생성한 부작용을 기록했다. 생성·변경을 `from`·`apply`로 묶는 일은 키워드 없이 생성자와 setter 가시성만으로 된다. `private set`이 아닌 이유는 `allOpen`이 `@Entity`에 걸려 있어 멤버가 open이고 Kotlin이 open 프로퍼티의 `private set`을 금지하기 때문이다. 바뀌지 않는 필드를 `val`로 좁히지 않는 이유는 그것이 JVM final 영속 필드가 되어 Jakarta Persistence 3.2 §2.2 금지와 bytecode enhancement 비호환에 걸리기 때문이다 |
 | Command를 aggregate 안의 중첩 클래스로, 상태는 `var … internal set` | Command는 Facade의 공개 입력, aggregate는 불변(§4.1) | CQRS 규약상 Command는 모듈 공개 계약이다. 불변 전이는 기존 Kotlin 규칙과 일치한다 |
 | API·배치 공통 로직을 Biz-component 패키지로 | Controller·이벤트 리스너·스케줄러가 같은 Command Facade를 호출 | Facade가 이미 use case 단위의 공통 진입점이다. 별도 레이어를 두지 않는다 |
