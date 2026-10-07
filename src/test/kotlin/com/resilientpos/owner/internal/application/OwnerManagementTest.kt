@@ -37,7 +37,8 @@ class OwnerManagementTest {
     private fun signUp() = management.signUp(OwnerCommand.SignUp(email, password))
 
     private fun logInFails(pw: String = "wrong-password-value", mail: String = email) {
-        assertFailsWith<UnauthenticatedException> { management.logIn(OwnerCommand.LogIn(mail, pw)) }
+        val e = assertFailsWith<UnauthenticatedException> { management.logIn(OwnerCommand.LogIn(mail, pw)) }
+        assertEquals(null, e.challenge)
     }
 
     @Test
@@ -59,10 +60,13 @@ class OwnerManagementTest {
     }
 
     @Test
-    fun `맞는 비밀번호로 로그인하면 가입한 점주의 id를 돌려준다`() {
+    fun `맞는 비밀번호로 로그인하면 가입한 점주의 id와 정규화한 이메일을 돌려준다`() {
         val signedUp = signUp()
 
-        assertEquals(signedUp.ownerId, management.logIn(OwnerCommand.LogIn("OWNER@example.com", password)))
+        val result = management.logIn(OwnerCommand.LogIn("  OWNER@example.com ", password))
+
+        assertEquals(signedUp.ownerId, result.ownerId)
+        assertEquals(email, result.email)
     }
 
     @Test
@@ -116,7 +120,7 @@ class OwnerManagementTest {
 
         repeat(10) { assertFailsWith<UnauthenticatedException> { failOpen.logIn(OwnerCommand.LogIn(email, "wrong-password-value")) } }
 
-        assertEquals(signedUp.ownerId, failOpen.logIn(OwnerCommand.LogIn(email, password)))
+        assertEquals(signedUp.ownerId, failOpen.logIn(OwnerCommand.LogIn(email, password)).ownerId)
     }
 
     @Test

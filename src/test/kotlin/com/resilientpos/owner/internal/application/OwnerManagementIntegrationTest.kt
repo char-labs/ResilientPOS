@@ -59,7 +59,7 @@ class OwnerManagementIntegrationTest(
     fun `로그인은 맞는 비밀번호에 점주 id를 돌려주고 틀린 비밀번호와 없는 계정은 UnauthenticatedException이다`() {
         val signedUp = owners.signUp(OwnerCommand.SignUp(email, password))
 
-        assertEquals(signedUp.ownerId, owners.logIn(OwnerCommand.LogIn(email.uppercase(), password)))
+        assertEquals(signedUp.ownerId, owners.logIn(OwnerCommand.LogIn(email.uppercase(), password)).ownerId)
         assertFailsWith<UnauthenticatedException> { owners.logIn(OwnerCommand.LogIn(email, "wrong-password-value")) }
         assertFailsWith<UnauthenticatedException> { owners.logIn(OwnerCommand.LogIn("nobody-$email", password)) }
     }
@@ -74,7 +74,7 @@ class OwnerManagementIntegrationTest(
         val ttl = assertNotNull(redis.getExpire(key))
         assertTrue(ttl in (Duration.ofMinutes(14).seconds)..(Duration.ofMinutes(15).seconds), "ttl=$ttl")
 
-        assertEquals(signedUp.ownerId, owners.logIn(OwnerCommand.LogIn(email, password)))
+        assertEquals(signedUp.ownerId, owners.logIn(OwnerCommand.LogIn(email, password)).ownerId)
         assertNull(redis.opsForValue().get(key))
 
         repeat(5) { assertFailsWith<UnauthenticatedException> { owners.logIn(OwnerCommand.LogIn(email, "wrong-password-value")) } }

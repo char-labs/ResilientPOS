@@ -39,10 +39,10 @@ class OwnerManagement(
     }
 
     /**
-     * 자격을 확인한다. 없는 계정·틀린 비밀번호·잠김은 모두 같은 [UnauthenticatedException]이다.
+     * 자격을 확인한다. 없는 계정·틀린 비밀번호·잠김은 모두 같은 [UnauthenticatedException]이다. 쿠키 세션 로그인이라 `WWW-Authenticate`를 싣지 않는다.
      * 실패가 [MAX_FAILURES]번 쌓인 이메일은 비밀번호를 비교하지 않고 거절한다. 잠금은 횟수의 창이 끝나면 풀린다.
      */
-    fun logIn(command: OwnerCommand.LogIn): OwnerId {
+    fun logIn(command: OwnerCommand.LogIn): OwnerCommand.LogIn.Result {
         val email = try {
             OwnerEmail.of(command.email)
         } catch (e: DomainException) {
@@ -59,7 +59,7 @@ class OwnerManagement(
             throw UnauthenticatedException()
         }
         failures.clear(email)
-        return owner.id
+        return OwnerCommand.LogIn.Result(owner.id, email.value)
     }
 
     private companion object {

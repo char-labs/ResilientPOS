@@ -2,6 +2,7 @@ package com.resilientpos.terminal.internal.adapter.web
 
 import com.resilientpos.foundation.DomainErrorKind
 import com.resilientpos.foundation.DomainException
+import com.resilientpos.platform.withCsrf
 import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.TerminalCode
 import com.resilientpos.terminal.TerminalCommand
@@ -26,8 +27,6 @@ import org.springframework.restdocs.headers.HeaderDocumentation.requestHeaders
 import org.springframework.restdocs.mockmvc.MockMvcRestDocumentation.document
 import org.springframework.restdocs.mockmvc.RestDocumentationRequestBuilders.get
 import org.springframework.restdocs.mockmvc.RestDocumentationRequestBuilders.post
-import org.springframework.restdocs.operation.preprocess.Preprocessors.modifyHeaders
-import org.springframework.restdocs.operation.preprocess.Preprocessors.preprocessRequest
 import org.springframework.restdocs.payload.FieldDescriptor
 import org.springframework.restdocs.payload.JsonFieldType
 import org.springframework.restdocs.payload.PayloadDocumentation.fieldWithPath
@@ -35,8 +34,8 @@ import org.springframework.restdocs.payload.PayloadDocumentation.requestFields
 import org.springframework.restdocs.payload.PayloadDocumentation.responseFields
 import org.springframework.restdocs.request.RequestDocumentation.parameterWithName
 import org.springframework.restdocs.request.RequestDocumentation.pathParameters
-import org.springframework.security.core.authority.SimpleGrantedAuthority
-import org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken
+import org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.authentication
 import org.springframework.test.context.bean.override.mockito.MockitoBean
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.ResultActions
@@ -47,8 +46,9 @@ import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
 
 /**
  * 단말 관리 API 웹 슬라이스. Facade는 [MockitoBean]으로 대체하고 HTTP 매핑·직렬화·오류 변환·문서 계약만 검사한다.
- * 슬라이스에는 resource server 자동 구성이 없어서 운영자 인증은 `jwt()` post-processor로 주고(ROLE_OPERATOR),
- * `Authorization` 헤더는 REST Docs의 요청 전처리로 문서 예시에만 붙인다. 실제 JWT 검증은 `OperatorAuthenticationIntegrationTest`가 본다.
+ * 슬라이스에는 Spring Session이 없어서 점주 인증은 UUID principal의 `authentication()` post-processor로 주고,
+ * 상태 변경 요청에는 운영과 같은 CSRF 쿠키·헤더를 싣는다(`withCsrf`).
+ * 실제 세션·CSRF 검증은 `OwnerAuthenticationIntegrationTest`가 본다.
  */
 @WebMvcTest(TerminalAdminController::class)
 @AutoConfigureRestDocs
@@ -62,13 +62,13 @@ class TerminalAdminControllerTest(
     @MockitoBean
     private lateinit var queryFacade: TerminalQueryFacade
 
-    private val operator: RequestPostProcessor = jwt().authorities(SimpleGrantedAuthority("ROLE_OPERATOR"))
+    private val owner: RequestPostProcessor = authentication(UsernamePasswordAuthenticationToken.authenticated(UUID.fromString(OWNER_ID), null, emptyList()))
 
     private fun postJson(url: String, body: String?, vararg vars: Any): ResultActions =
-        mockMvc.perform(post(url, *vars).with(operator).contentType(MediaType.APPLICATION_JSON).apply { body?.let { content(it) } })
+        mockMvc.perform(post(url, *vars).with(owner).withCsrf().contentType(MediaType.APPLICATION_JSON).apply { body?.let { content(it) } })
 
     private fun register(code: String = CODE): ResultActions =
-        postJson("/admin/v1/terminals", """{ "storeId": "$STORE_ID", "terminalCode": "$code" }""")
+        postJson("/owner/v1/terminals", """{ "storeId": "$STORE_ID", "terminalCode": "$code" }""")
 
     @Test
     fun `등록하면 201과 terminalId terminalCode token을 돌려주고 커맨드로 옮긴다`() {
@@ -83,7 +83,7 @@ class TerminalAdminControllerTest(
             .andExpect(jsonPath("$.error").value(null))
             .andDo(
                 document(
-                    "terminals-register", AUTHORIZATION_PREPROCESSOR, AUTHORIZATION_HEADER,
+                    "terminals-register", CSRF_HEADER,
                     requestFields(
                         fieldWithPath("storeId").type(JsonFieldType.STRING).description("단말이 속할 매장 ID(UUID). 매장 존재는 확인하지 않는다"),
                         fieldWithPath("terminalCode").type(JsonFieldType.STRING).description("매장 안에서 유일한 단말 코드. 영대문자·숫자·하이픈 1~32자이며 소문자는 거절한다"),
@@ -107,7 +107,7 @@ class TerminalAdminControllerTest(
             .andExpect(status().isBadRequest)
             .andExpect(jsonPath("$.result").value("FAIL"))
             .andExpect(jsonPath("$.error.errorCode").value("INVALID_TERMINAL_CODE"))
-            .andDo(document("terminals-register-invalid-code", AUTHORIZATION_PREPROCESSOR, AUTHORIZATION_HEADER, responseFields(failFields("INVALID_TERMINAL_CODE. 영대문자·숫자·하이픈 1~32자가 아니다"))))
+            .andDo(document("terminals-register-invalid-code", CSRF_HEADER, responseFields(failFields("INVALID_TERMINAL_CODE. 영대문자·숫자·하이픈 1~32자가 아니다"))))
 
         verifyNoInteractions(management)
     }
@@ -119,20 +119,20 @@ class TerminalAdminControllerTest(
         register()
             .andExpect(status().isConflict)
             .andExpect(jsonPath("$.error.errorCode").value("TERMINAL_CODE_DUPLICATED"))
-            .andDo(document("terminals-register-duplicated", AUTHORIZATION_PREPROCESSOR, AUTHORIZATION_HEADER, responseFields(failFields("TERMINAL_CODE_DUPLICATED. 같은 매장에 같은 코드가 있다. 다른 매장은 같은 코드를 쓸 수 있다"))))
+            .andDo(document("terminals-register-duplicated", CSRF_HEADER, responseFields(failFields("TERMINAL_CODE_DUPLICATED. 같은 매장에 같은 코드가 있다. 다른 매장은 같은 코드를 쓸 수 있다"))))
     }
 
     @Test
     fun `회전하면 200과 새 token을 돌려준다`() {
         given(management.rotateCredential(TerminalCommand.RotateCredential(TerminalId(UUID.fromString(TERMINAL_ID))))).willReturn(TerminalCommand.RotateCredential.Result(TOKEN))
 
-        postJson("/admin/v1/terminals/{terminalId}/credential/rotate", null, TERMINAL_ID)
+        postJson("/owner/v1/terminals/{terminalId}/credential/rotate", null, TERMINAL_ID)
             .andExpect(status().isOk)
             .andExpect(jsonPath("$.data.token").value(TOKEN))
             .andExpect(jsonPath("$.error").value(null))
             .andDo(
                 document(
-                    "terminals-rotate", AUTHORIZATION_PREPROCESSOR, AUTHORIZATION_HEADER, TERMINAL_PATH,
+                    "terminals-rotate", CSRF_HEADER, TERMINAL_PATH,
                     responseFields(
                         fieldWithPath("result").type(JsonFieldType.STRING).description("SUCCESS 또는 FAIL"),
                         fieldWithPath("data.token").type(JsonFieldType.STRING).description("새 평문 토큰. 옛 토큰은 회전 커밋부터 401이다. 응답을 잃으면 다시 회전한다"),
@@ -147,10 +147,10 @@ class TerminalAdminControllerTest(
         given(management.rotateCredential(TerminalCommand.RotateCredential(TerminalId(UUID.fromString(TERMINAL_ID)))))
             .willThrow(DomainException("TERMINAL_NOT_FOUND", "단말을 찾을 수 없습니다", DomainErrorKind.NOT_FOUND))
 
-        postJson("/admin/v1/terminals/{terminalId}/credential/rotate", null, TERMINAL_ID)
+        postJson("/owner/v1/terminals/{terminalId}/credential/rotate", null, TERMINAL_ID)
             .andExpect(status().isNotFound)
             .andExpect(jsonPath("$.error.errorCode").value("TERMINAL_NOT_FOUND"))
-            .andDo(document("terminals-rotate-not-found", AUTHORIZATION_PREPROCESSOR, AUTHORIZATION_HEADER, TERMINAL_PATH, responseFields(failFields("TERMINAL_NOT_FOUND"))))
+            .andDo(document("terminals-rotate-not-found", CSRF_HEADER, TERMINAL_PATH, responseFields(failFields("TERMINAL_NOT_FOUND"))))
     }
 
     @Test
@@ -158,10 +158,10 @@ class TerminalAdminControllerTest(
         given(management.rotateCredential(TerminalCommand.RotateCredential(TerminalId(UUID.fromString(TERMINAL_ID)))))
             .willThrow(DomainException("TERMINAL_INACTIVE", "비활성 단말입니다", DomainErrorKind.CONFLICT))
 
-        postJson("/admin/v1/terminals/{terminalId}/credential/rotate", null, TERMINAL_ID)
+        postJson("/owner/v1/terminals/{terminalId}/credential/rotate", null, TERMINAL_ID)
             .andExpect(status().isConflict)
             .andExpect(jsonPath("$.error.errorCode").value("TERMINAL_INACTIVE"))
-            .andDo(document("terminals-rotate-inactive", AUTHORIZATION_PREPROCESSOR, AUTHORIZATION_HEADER, TERMINAL_PATH, responseFields(failFields("TERMINAL_INACTIVE. 비활성 단말은 되살리지 않는다"))))
+            .andDo(document("terminals-rotate-inactive", CSRF_HEADER, TERMINAL_PATH, responseFields(failFields("TERMINAL_INACTIVE. 비활성 단말은 되살리지 않는다"))))
     }
 
     @Test
@@ -171,7 +171,7 @@ class TerminalAdminControllerTest(
             .willReturn(TerminalCommand.Deactivate.Result(id, TerminalStatus.ACTIVE, TerminalStatus.INACTIVE))
             .willReturn(TerminalCommand.Deactivate.Result(id, TerminalStatus.INACTIVE, TerminalStatus.INACTIVE))
 
-        fun deactivate(): ResultActions = postJson("/admin/v1/terminals/{terminalId}/deactivate", null, TERMINAL_ID)
+        fun deactivate(): ResultActions = postJson("/owner/v1/terminals/{terminalId}/deactivate", null, TERMINAL_ID)
             .andExpect(status().isOk)
             .andExpect(jsonPath("$.data.terminalId").value(TERMINAL_ID))
             .andExpect(jsonPath("$.data.status").value("INACTIVE"))
@@ -179,7 +179,7 @@ class TerminalAdminControllerTest(
 
         deactivate().andDo(
             document(
-                "terminals-deactivate", AUTHORIZATION_PREPROCESSOR, AUTHORIZATION_HEADER, TERMINAL_PATH,
+                "terminals-deactivate", CSRF_HEADER, TERMINAL_PATH,
                 responseFields(
                     fieldWithPath("result").type(JsonFieldType.STRING).description("SUCCESS 또는 FAIL"),
                     fieldWithPath("data.terminalId").type(JsonFieldType.STRING).description("단말 ID(UUID)"),
@@ -196,10 +196,10 @@ class TerminalAdminControllerTest(
         given(management.deactivate(TerminalCommand.Deactivate(TerminalId(UUID.fromString(TERMINAL_ID)))))
             .willThrow(DomainException("TERMINAL_NOT_FOUND", "단말을 찾을 수 없습니다", DomainErrorKind.NOT_FOUND))
 
-        postJson("/admin/v1/terminals/{terminalId}/deactivate", null, TERMINAL_ID)
+        postJson("/owner/v1/terminals/{terminalId}/deactivate", null, TERMINAL_ID)
             .andExpect(status().isNotFound)
             .andExpect(jsonPath("$.error.errorCode").value("TERMINAL_NOT_FOUND"))
-            .andDo(document("terminals-deactivate-not-found", AUTHORIZATION_PREPROCESSOR, AUTHORIZATION_HEADER, TERMINAL_PATH, responseFields(failFields("TERMINAL_NOT_FOUND"))))
+            .andDo(document("terminals-deactivate-not-found", CSRF_HEADER, TERMINAL_PATH, responseFields(failFields("TERMINAL_NOT_FOUND"))))
     }
 
     @Test
@@ -211,7 +211,7 @@ class TerminalAdminControllerTest(
             ),
         )
 
-        val body = mockMvc.perform(get("/admin/v1/stores/{storeId}/terminals", STORE_ID).with(operator))
+        val body = mockMvc.perform(get("/owner/v1/stores/{storeId}/terminals", STORE_ID).with(owner))
             .andExpect(status().isOk)
             .andExpect(jsonPath("$.data.length()").value(2))
             .andExpect(jsonPath("$.data[0].terminalId").value(TERMINAL_ID))
@@ -221,7 +221,7 @@ class TerminalAdminControllerTest(
             .andExpect(jsonPath("$.data[1].status").value("INACTIVE"))
             .andDo(
                 document(
-                    "terminals-list", AUTHORIZATION_PREPROCESSOR, AUTHORIZATION_HEADER,
+                    "terminals-list",
                     pathParameters(parameterWithName("storeId").description("단말을 조회할 매장 ID(UUID)")),
                     responseFields(
                         fieldWithPath("result").type(JsonFieldType.STRING).description("SUCCESS 또는 FAIL"),
@@ -239,7 +239,7 @@ class TerminalAdminControllerTest(
 
     @Test
     fun `경로 식별자가 UUID 형식이 아니면 400 BAD_REQUEST이고 Facade를 부르지 않는다`() {
-        postJson("/admin/v1/terminals/{terminalId}/deactivate", null, "not-a-uuid")
+        postJson("/owner/v1/terminals/{terminalId}/deactivate", null, "not-a-uuid")
             .andExpect(status().isBadRequest)
             .andExpect(jsonPath("$.error.errorCode").value("BAD_REQUEST"))
 
@@ -247,27 +247,28 @@ class TerminalAdminControllerTest(
     }
 
     @Test
-    fun `운영자 토큰이 없으면 401 UNAUTHENTICATED와 WWW-Authenticate이고 Facade를 부르지 않는다`() {
-        mockMvc.perform(get("/admin/v1/stores/{storeId}/terminals", STORE_ID))
+    fun `로그인하지 않으면 401 UNAUTHENTICATED이고 WWW-Authenticate가 없으며 Facade를 부르지 않는다`() {
+        mockMvc.perform(get("/owner/v1/stores/{storeId}/terminals", STORE_ID))
             .andExpect(status().isUnauthorized)
-            .andExpect(header().string("WWW-Authenticate", "Bearer"))
+            .andExpect(header().doesNotExist("WWW-Authenticate"))
             .andExpect(jsonPath("$.error.errorCode").value("UNAUTHENTICATED"))
-            .andDo(document("terminals-unauthenticated", responseFields(failFields("UNAUTHENTICATED. 토큰 없음·서명·만료·iss·aud 오류를 나누지 않는다"))))
+            .andDo(document("terminals-unauthenticated", responseFields(failFields("UNAUTHENTICATED. 세션 쿠키가 없거나 만료됐거나 로그아웃했다. 원인을 나누지 않는다"))))
 
         verifyNoInteractions(queryFacade)
     }
 
     @Test
-    fun `OPERATOR 역할이 없으면 403 ACCESS_DENIED이고 Facade를 부르지 않는다`() {
-        mockMvc.perform(get("/admin/v1/stores/{storeId}/terminals", STORE_ID).with(jwt()))
+    fun `CSRF 토큰이 없는 상태 변경 요청은 403 ACCESS_DENIED이고 Facade를 부르지 않는다`() {
+        mockMvc.perform(post("/owner/v1/terminals/{terminalId}/deactivate", TERMINAL_ID).with(owner))
             .andExpect(status().isForbidden)
             .andExpect(jsonPath("$.error.errorCode").value("ACCESS_DENIED"))
-            .andDo(document("terminals-access-denied", AUTHORIZATION_PREPROCESSOR, AUTHORIZATION_HEADER, responseFields(failFields("ACCESS_DENIED. 토큰은 유효하지만 roles claim에 OPERATOR가 없다"))))
+            .andDo(document("terminals-access-denied", responseFields(failFields("ACCESS_DENIED. 상태 변경 요청에 `X-XSRF-TOKEN` 헤더가 없거나 `XSRF-TOKEN` 쿠키와 다르다"))))
 
-        verifyNoInteractions(queryFacade)
+        verifyNoInteractions(management)
     }
 
     companion object {
+        private const val OWNER_ID = "018f6b1a-0000-7000-8000-0000000000b1"
         private const val STORE_ID = "018f6b1a-0000-7000-8000-0000000000a1"
         private const val TERMINAL_ID = "018f6b1a-0000-7000-8000-0000000000a2"
         private const val OTHER_TERMINAL_ID = "018f6b1a-0000-7000-8000-0000000000a3"
@@ -275,9 +276,8 @@ class TerminalAdminControllerTest(
         private const val TOKEN = "dGVzdC10ZXJtaW5hbC10b2tlbi1maXh0dXJlLTAwMDA"
         private val REGISTER = TerminalCommand.Register(StoreId(UUID.fromString(STORE_ID)), TerminalCode(CODE))
 
-        private val AUTHORIZATION_PREPROCESSOR = preprocessRequest(modifyHeaders().set("Authorization", "Bearer eyJhbGciOiJSUzI1NiJ9.운영자-JWT"))
-        private val AUTHORIZATION_HEADER = requestHeaders(
-            headerWithName("Authorization").description("운영자 OIDC JWT. Bearer 형식이며 없거나 유효하지 않으면 401 UNAUTHENTICATED, OPERATOR 역할이 없으면 403 ACCESS_DENIED"),
+        private val CSRF_HEADER = requestHeaders(
+            headerWithName("X-XSRF-TOKEN").description("`GET /owner/v1/csrf`가 심은 `XSRF-TOKEN` 쿠키의 값. 없거나 쿠키와 다르면 403 ACCESS_DENIED. 세션 쿠키가 없거나 만료되면 401 UNAUTHENTICATED"),
         )
         private val TERMINAL_PATH = pathParameters(parameterWithName("terminalId").description("대상 단말 ID(UUID)"))
 

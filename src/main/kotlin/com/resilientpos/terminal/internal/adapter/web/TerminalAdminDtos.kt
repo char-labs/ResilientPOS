@@ -3,7 +3,7 @@ package com.resilientpos.terminal.internal.adapter.web
 import com.resilientpos.terminal.TerminalStatus
 import java.util.UUID
 
-/** `POST /admin/v1/terminals` 요청. 코드 형식은 [com.resilientpos.terminal.TerminalCode]가 검사한다. */
+/** `POST /owner/v1/terminals` 요청. 코드 형식은 [com.resilientpos.terminal.TerminalCode]가 검사한다. */
 data class RegisterTerminalRequest(val storeId: UUID, val terminalCode: String)
 
 /** [token]은 평문이고 이 응답이 유일한 기회다. `toString`이 가린다. */

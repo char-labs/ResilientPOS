@@ -46,14 +46,20 @@ class ApiControllerAdvice : ResponseEntityExceptionHandler() {
         return ResponseEntity.status(e.kind.toHttpStatus()).body(ApiResponse.fail(ErrorResponse(e.code, e.message)))
     }
 
-    /** 원인에 관계없이 같은 응답이다. 원인을 나누면 토큰 추측에 단서를 준다. */
+    /**
+     * 원인에 관계없이 같은 응답이다. 원인을 나누면 토큰·계정 추측에 단서를 준다.
+     * `WWW-Authenticate`는 예외의 challenge가 있을 때만 붙인다(단말 토큰은 `Bearer`, 쿠키 세션인 점주 경로는 없다).
+     */
     @ExceptionHandler(UnauthenticatedException::class)
     fun handleUnauthenticated(e: UnauthenticatedException, request: HttpServletRequest): ResponseEntity<ApiResponse<Nothing>> =
         ResponseEntity.status(ErrorType.UNAUTHENTICATED.status)
-            .header(HttpHeaders.WWW_AUTHENTICATE, "Bearer")
+            .headers { headers -> e.challenge?.let { headers.set(HttpHeaders.WWW_AUTHENTICATE, it) } }
             .body(failBody(ErrorType.UNAUTHENTICATED, e, request.describe()))
 
-    /** 유효한 토큰이지만 역할이 없다. 예외 메시지는 로그에만 남기고 응답은 고정 문구다. */
+    /**
+     * 점주 경로의 CSRF 토큰이 없거나 쿠키와 다르다(`CsrfException`). 인증과 달리 권한 역할은 두지 않는다.
+     * 예외 메시지는 로그에만 남기고 응답은 고정 문구다.
+     */
     @ExceptionHandler(AccessDeniedException::class)
     fun handleAccessDenied(e: AccessDeniedException, request: HttpServletRequest): ResponseEntity<ApiResponse<Nothing>> =
         ResponseEntity.status(ErrorType.ACCESS_DENIED.status)

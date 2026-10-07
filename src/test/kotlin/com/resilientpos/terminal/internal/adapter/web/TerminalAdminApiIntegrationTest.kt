@@ -2,7 +2,9 @@ package com.resilientpos.terminal.internal.adapter.web
 
 import com.jayway.jsonpath.JsonPath
 import com.resilientpos.PostgresIntegrationTest
-import com.resilientpos.platform.OperatorJwt
+import com.resilientpos.platform.OwnerSession
+import com.resilientpos.platform.asOwner
+import com.resilientpos.platform.logInNewOwner
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -14,15 +16,13 @@ import org.springframework.boot.test.system.CapturedOutput
 import org.springframework.boot.test.system.OutputCaptureExtension
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc
 import org.springframework.http.MediaType
-import org.springframework.test.context.DynamicPropertyRegistry
-import org.springframework.test.context.DynamicPropertySource
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.ResultActionsDsl
 import org.springframework.test.web.servlet.get
 import org.springframework.test.web.servlet.post
 
 /**
- * 실제 운영자 JWT 검증, 단말 관리 API, 단말 인터셉터, 감사 로그를 한 흐름으로 잇는다. Docker가 필요하다.
+ * 실제 점주 세션·CSRF 체인, 단말 관리 API, 단말 인터셉터, 감사 로그를 한 흐름으로 잇는다. Docker가 필요하다.
  * 주문 생성(`POST /v1/orders`)이 단말 토큰이 유효한지의 대표다.
  */
 @AutoConfigureMockMvc
@@ -31,17 +31,17 @@ class TerminalAdminApiIntegrationTest(
     @Autowired private val mockMvc: MockMvc,
 ) : PostgresIntegrationTest() {
 
-    private val operator = "Bearer ${OperatorJwt.token(preferredUsername = "kim.operator")}"
+    private val owner: OwnerSession by lazy { mockMvc.logInNewOwner() }
     private val storeId = UUID.randomUUID()
 
     private fun adminPost(url: String, body: String? = null): ResultActionsDsl = mockMvc.post(url) {
-        header("Authorization", operator)
+        asOwner(owner)
         contentType = MediaType.APPLICATION_JSON
         body?.let { content = it }
     }
 
     private fun register(code: String, store: UUID = storeId): ResultActionsDsl =
-        adminPost("/admin/v1/terminals", """{ "storeId": "$store", "terminalCode": "$code" }""")
+        adminPost("/owner/v1/terminals", """{ "storeId": "$store", "terminalCode": "$code" }""")
 
     private fun ResultActionsDsl.field(path: String): String = JsonPath.read(andReturn().response.contentAsString, path)
 
@@ -66,25 +66,25 @@ class TerminalAdminApiIntegrationTest(
         register("POS-A", UUID.randomUUID()).andExpect { status { isCreated() } }
         createOrder(firstToken, terminalId).andExpect { status { isCreated() } }
 
-        val rotated = adminPost("/admin/v1/terminals/$terminalId/credential/rotate").andExpect { status { isOk() } }
+        val rotated = adminPost("/owner/v1/terminals/$terminalId/credential/rotate").andExpect { status { isOk() } }
         val secondToken = rotated.field("$.data.token")
         createOrder(firstToken, terminalId).andExpect { status { isUnauthorized() } }
         createOrder(secondToken, terminalId).andExpect { status { isCreated() } }
 
         repeat(2) {
-            adminPost("/admin/v1/terminals/$terminalId/deactivate").andExpect {
+            adminPost("/owner/v1/terminals/$terminalId/deactivate").andExpect {
                 status { isOk() }
                 jsonPath("$.data.terminalId") { value(terminalId) }
                 jsonPath("$.data.status") { value("INACTIVE") }
             }
         }
         createOrder(secondToken, terminalId).andExpect { status { isUnauthorized() } }
-        adminPost("/admin/v1/terminals/$terminalId/credential/rotate").andExpect {
+        adminPost("/owner/v1/terminals/$terminalId/credential/rotate").andExpect {
             status { isConflict() }
             jsonPath("$.error.errorCode") { value("TERMINAL_INACTIVE") }
         }
 
-        mockMvc.get("/admin/v1/stores/$storeId/terminals") { header("Authorization", operator) }.andExpect {
+        mockMvc.get("/owner/v1/stores/$storeId/terminals") { asOwner(owner) }.andExpect {
             status { isOk() }
             jsonPath("$.data.length()") { value(2) }
             jsonPath("$.data[0].terminalCode") { value("POS-A") }
@@ -98,25 +98,14 @@ class TerminalAdminApiIntegrationTest(
         val audit = output.all.lines().filter { "action=TERMINAL_" in it }
         assertEquals(listOf("TERMINAL_REGISTERED", "TERMINAL_REGISTERED", "TERMINAL_REGISTERED", "TERMINAL_CREDENTIAL_ROTATED", "TERMINAL_DEACTIVATED", "TERMINAL_DEACTIVATED"),
             audit.map { Regex("action=(\\w+)").find(it)!!.groupValues[1] })
-        assertTrue(audit.all { "operatorSub=operator-1" in it && "operatorName=kim.operator" in it }, audit.toString())
+        assertTrue(audit.all { "ownerId=${owner.ownerId}" in it }, audit.toString())
+        assertFalse(output.all.contains(owner.email), "이메일이 출력에 남았다")
         assertTrue(audit[0].contains("terminalId=$terminalId") && audit[0].contains("storeId=$storeId") && audit[0].contains("terminalCode=POS-B"), audit[0])
         assertTrue(audit[3].contains("terminalId=$terminalId"), audit[3])
         assertTrue(audit[4].contains("before=ACTIVE") && audit[4].contains("after=INACTIVE"), audit[4])
         assertTrue(audit[5].contains("before=INACTIVE") && audit[5].contains("after=INACTIVE"), audit[5])
         assertFalse(output.all.contains(firstToken), "등록 토큰이 출력에 남았다")
         assertFalse(output.all.contains(secondToken), "회전 토큰이 출력에 남았다")
-    }
-
-    @Test
-    fun `preferred_username이 없으면 감사 로그는 operatorName을 생략한다`(output: CapturedOutput) {
-        mockMvc.post("/admin/v1/terminals") {
-            header("Authorization", "Bearer ${OperatorJwt.token()}")
-            contentType = MediaType.APPLICATION_JSON
-            content = """{ "storeId": "$storeId", "terminalCode": "NO-NAME" }"""
-        }.andExpect { status { isCreated() } }
-
-        val line = output.all.lines().single { "terminalCode=NO-NAME" in it }
-        assertTrue("operatorSub=operator-1" in line && "operatorName" !in line, line)
     }
 
     @Test
@@ -134,13 +123,5 @@ class TerminalAdminApiIntegrationTest(
 
         assertEquals(1, output.all.lines().count { "action=TERMINAL_REGISTERED" in it && "terminalCode=DUP-1" in it })
         assertFalse(output.all.lines().any { "action=TERMINAL_REGISTERED" in it && "dup-2" in it })
-    }
-
-    companion object {
-        @JvmStatic
-        @DynamicPropertySource
-        fun jwks(registry: DynamicPropertyRegistry) {
-            registry.add("spring.security.oauth2.resourceserver.jwt.jwk-set-uri") { OperatorJwt.jwksUri }
-        }
     }
 }
