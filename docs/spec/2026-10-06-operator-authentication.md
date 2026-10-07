@@ -29,12 +29,13 @@
 **결정 3: 로그인 뒤 인증은 서버 세션 쿠키다. 세션은 Spring Session Redis에 둔다.**
 - `POST /owner/v1/login` 본문 `{email, password}` → `200 {ownerId, email}`와 세션 쿠키다. 로그인할 때 세션 ID를 새로 만들어 세션 고정을 막는다. 세션에는 `SecurityContext`(점주 ID)만 둔다.
 - `POST /owner/v1/logout` → `204`. 세션을 지운다.
-- 쿠키는 `HttpOnly`, `Secure`, `SameSite=Lax`다. 유휴 만료는 30분(Spring Session 기본)이다. 세션은 Redis에 있어 인스턴스가 여러 대여도 같다. 저장소는 색인 없는 기본 저장소(`RedisSessionRepository`)다. 점주별 세션 목록이 필요한 기능(비밀번호를 바꾸면 다른 세션 폐기)이 없어서다.
-- 비용: 세션 하나는 Redis hash 하나(JDK 직렬화 1~2KB, 추정)이고, 유휴 만료로 지금 로그인해 있는 점주 수만큼만 쌓인다. 요청마다 Redis 왕복이 1~2회 생긴다. 단말 경로(`/v1/**`)는 세션을 거치지 않는다. 실측은 부하테스트에서 한다(결과의 한계).
-- Redis 장애 때 점주 요청은 세션을 읽지 못해 실패한다(fail-closed). 단말 인증은 영향이 없다.
+- 쿠키는 `__Host-SESSION`이고 `HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/`, Domain 없음이다. `__Host-` 접두어는 형제 서브도메인이 같은 이름의 쿠키를 심지 못하게 한다. 유휴 만료는 30분(Spring Session 기본)이고 절대 수명은 없다(제외). 세션은 Redis에 있어 인스턴스가 여러 대여도 같다. 저장소는 색인 없는 기본 저장소(`RedisSessionRepository`)다. 점주별 세션 목록이 필요한 기능(비밀번호를 바꾸면 다른 세션 폐기)이 없어서다.
+- 비용: 세션 하나는 Redis hash 하나(JDK 직렬화 1~2KB, 추정)이고, 유휴 만료로 지금 로그인해 있는 점주 수만큼만 쌓인다. 요청마다 Redis 왕복이 1~2회 생긴다. Spring Session 필터는 모든 요청에 걸리지만 세션을 지연 로딩해서, 세션을 읽지 않는 단말 경로(`/v1/**`)는 Redis에 닿지 않는다. 실측은 부하테스트에서 한다(결과의 한계).
+- Redis 장애 때 점주 요청은 세션을 읽지 못해 실패한다(fail-closed). 단말 인증은 영향이 없다. health는 Redis를 보지 않는다. 보게 하면 Redis 장애 때 readiness가 빠져 단말 핫패스까지 막힌다. 감지는 `/owner/**` 5xx와 Redis 모니터링으로 한다([관측성](../wiki/observability.md)).
+- 세션은 Spring Session 기본 JDK 직렬화다. Spring Security를 올리면 기존 세션을 읽지 못할 수 있고 그때 점주는 다시 로그인한다. Redis에 쓸 수 있는 주체는 역직렬화 공격면이 되므로 운영 Redis의 인증·TLS가 외부 노출의 전제다(결과의 한계).
 - 버린 것: 불투명 Bearer 토큰은 요청마다 Postgres를 조회하고 콘솔 JS가 토큰을 들고 있어 XSS에 노출된다. 자체 발급 JWT는 만료 전 폐기가 안 되고 서명 키 관리와 refresh 토큰 표가 따라온다.
 
-**결정 4: CSRF는 SPA 방식이다.** 쿠키로 인증하므로 CSRF를 막아야 한다. Spring Security 7의 `csrf.spa()`(쿠키 `XSRF-TOKEN`, 헤더 `X-XSRF-TOKEN`)를 쓴다. 가입·로그인·로그아웃을 포함한 `/owner/**`의 모든 상태 변경 요청에 토큰이 필요하다. 로그인 CSRF도 막기 위해서다. 클라이언트가 첫 토큰을 받는 `GET /owner/v1/csrf`(`204`, 쿠키를 심는다)를 둔다. 토큰이 없거나 틀리면 `403 ACCESS_DENIED`다.
+**결정 4: CSRF는 SPA 방식이다.** 쿠키로 인증하므로 CSRF를 막아야 한다. Spring Security 7의 `csrf.spa()`를 쓰고, 토큰 쿠키는 `__Host-XSRF-TOKEN`(`Secure`, `Path=/`, JavaScript가 읽도록 HttpOnly 아님), 헤더는 `X-XSRF-TOKEN`이다. 체인과 로그인 Controller는 같은 저장소 인스턴스(`platform.OwnerCsrfTokens`)를 쓴다. 이중 제출 토큰은 세션에 묶이지 않으므로 쿠키를 심을 수 없게 하는 `__Host-` 접두어가 방어의 일부다. 가입·로그인·로그아웃을 포함한 `/owner/**`의 모든 상태 변경 요청에 토큰이 필요하다. 로그인 CSRF도 막기 위해서다. 클라이언트가 첫 토큰을 받는 `GET /owner/v1/csrf`(`204`, 쿠키를 심는다)를 둔다. 토큰이 없거나 틀리면 `403 ACCESS_DENIED`다. CSRF 필터가 인증보다 먼저라, 세션 없이 토큰도 없는 상태 변경 요청은 401이 아니라 403이다. 거절 로그에는 코드만 남긴다. `InvalidCsrfTokenException`의 메시지가 제출 토큰을 담기 때문이다.
 
 **결정 5: 비밀번호.**
 - 해시는 Spring Security `PasswordEncoderFactories.createDelegatingPasswordEncoder()`다(기본 bcrypt). 저장값에 `{bcrypt}` 접두어가 있어 나중에 다른 알고리즘으로 옮길 수 있다.
@@ -42,7 +43,8 @@
 - 평문 비밀번호는 로그, 예외 메시지, 요청 DTO의 `toString` 어디에도 남지 않는다.
 
 **결정 6: 로그인 실패 제한은 Redis 카운터다.**
-- 키는 정규화한 이메일의 SHA-256이다. 실패하면 INCR하고, 첫 실패에 15분 TTL을 건다. 카운터가 5 이상이면 비밀번호를 비교하지 않고 거절한다. 로그인에 성공하면 키를 지운다. 잠금은 창이 끝나면 저절로 풀린다.
+- 키는 정규화한 이메일의 SHA-256이다. 형식이 맞는 이메일의 로그인 시도는 비교 전에 먼저 센다(INCR). 센 값이 5를 넘으면 비밀번호를 비교하지 않고 거절한다. 로그인에 성공하면 키를 지운다. 창은 첫 시도부터 15분이고, 창이 끝나면 저절로 풀린다.
+- 증가와 TTL은 Lua 스크립트 하나로 한다(INCR, TTL이 없으면 PEXPIRE). 동시에 들어온 시도도 각자 하나씩 세므로 창 안의 비교는 정확히 5번이다. 따로 보내면 EXPIRE만 빠진 키가 TTL 없이 남아 영구 잠금이 될 수 있고, 스크립트는 어떤 경로로 생긴 TTL 없는 키도 다음 시도에서 TTL을 얻게 한다.
 - 응답은 원인(없는 계정, 틀린 비밀번호, 잠김)과 무관하게 같은 `401 UNAUTHENTICATED`다. 계정 존재를 알리지 않으려고 없는 계정에도 카운터를 올리고, 더미 해시와 비교해 응답 시간을 맞춘다.
 - Redis 장애 때는 제한 없이 비밀번호를 비교한다(fail-open). 분산 락과 같은 정책이다. 잠금 상태는 업무 사실이 아니라 DB에 두지 않는다(스키마 변경 검토 질문 1).
 - 공격자가 점주 계정을 15분씩 막을 수 있다는 것은 받아들인다.
@@ -89,7 +91,7 @@
 - `RotateCredential`과 `Deactivate`가 `storeId`를 받는다.
 - `deactivate`는 전후 상태를 담은 `TerminalCommand.Deactivate.Result`를 돌려준다.
 
-새 오류 code는 `ACCESS_DENIED`(`ErrorType`), `INVALID_EMAIL`, `INVALID_PASSWORD`, `OWNER_EMAIL_DUPLICATED`, `INVALID_STORE_NAME`, `STORE_NOT_FOUND`, `INVALID_TERMINAL_CODE`, `TERMINAL_CODE_DUPLICATED`다. 이벤트와 `event_publication`은 바뀌지 않는다. 모듈 의존은 `terminal → store → owner`다.
+새 오류 code는 `ACCESS_DENIED`(`ErrorType`), `INVALID_EMAIL`, `INVALID_PASSWORD`, `OWNER_EMAIL_DUPLICATED`, `INVALID_STORE_NAME`, `STORE_NOT_FOUND`, `INVALID_TERMINAL_CODE`, `TERMINAL_CODE_DUPLICATED`다. 이벤트와 `event_publication`은 바뀌지 않는다. 모듈 의존은 `terminal → store`, `terminal → owner`(`OwnerId`), `store → owner`다.
 
 불변식:
 - 점주 경로는 유효한 세션 없이 부를 수 없다. 점주는 자기 매장과 그 단말만 다룬다.
@@ -109,7 +111,8 @@
 - 플랫폼 운영자 주체와 그 위의 DLT 재투입 API([kafka-event-redelivery](2026-09-26-kafka-event-redelivery.md) 제외 절). 결정 1. #91
 - 이메일 인증, 잊은 비밀번호 재설정, 로그인 중 비밀번호 변경(과 그때의 다른 세션 폐기). 모두 메일 인프라나 색인 세션 저장소가 필요해 한 후속 PR로 묶는다. 결정 2·3. #92
 - MFA(TOTP). #93
-- 유출 비밀번호 목록 대조, 가입·로그인의 IP별 rate limit. 결정 5·6.
+- 유출 비밀번호 목록 대조, 가입·로그인의 IP별 rate limit. 결정 5·6. rate limit이 없으면 무작위 이메일 로그인과 가입이 요청마다 bcrypt를 돌려 CPU를 고갈시킬 수 있다. 외부 노출 전에 #87과 함께 정한다.
+- 세션 절대 수명, 비밀번호 Unicode 정규화(NFKC). 결정 3·5.
 - 매장 하나를 여러 계정이 관리하는 기능(직원 초대·역할), 매장 소유자 변경, 매장 이름 변경·삭제.
 - 단말 인증의 Spring Security 이관. 결정 7.
 - 감사 표. 결정 11.
@@ -143,8 +146,8 @@
 ## 인수 조건
 1. 가입은 `201 {ownerId, email}`이고 이메일은 소문자로 정규화된다. 같은 이메일(대소문자만 다른 것 포함)은 `409 OWNER_EMAIL_DUPLICATED`, 형식이 틀린 이메일은 `400 INVALID_EMAIL`, 15자 미만이나 72바이트 초과 비밀번호는 `400 INVALID_PASSWORD`다. 저장된 비밀번호는 `{bcrypt}` 해시다.
 2. 로그인은 `200`과 세션 쿠키이고, 로그인 전 세션 ID와 다른 ID다. 그 쿠키로 인증 경로를 부를 수 있다. 없는 계정·틀린 비밀번호는 같은 `401 UNAUTHENTICATED`다. 로그아웃(`204`) 뒤 같은 쿠키는 401이다.
-3. 같은 이메일로 5번 실패하면, 맞는 비밀번호로도 15분 동안 401이다. 그 전에 성공하면 카운터가 지워진다. Redis 카운터가 실패하면 비밀번호를 비교해 로그인된다.
-4. `/owner/**`의 상태 변경 요청은 CSRF 토큰이 없거나 틀리면 `403 ACCESS_DENIED`이고 Facade를 부르지 않는다. `GET /owner/v1/csrf`가 준 토큰을 헤더에 실으면 통과한다. 세션 없이 인증 경로를 부르면 `401 UNAUTHENTICATED`다.
+3. 같은 이메일의 로그인 시도가 첫 시도부터 15분 창 안에서 5번을 넘으면, 그 창이 끝날 때까지 맞는 비밀번호로도 401이고 비밀번호를 비교하지 않는다. 그 전에 성공하면 카운터가 지워진다. 동시에 보낸 시도도 각자 세어진다. Redis 카운터가 실패하면 비밀번호를 비교해 로그인된다.
+4. `/owner/**`의 상태 변경 요청은 CSRF 토큰이 없거나 틀리면 `403 ACCESS_DENIED`이고 Facade를 부르지 않는다. `GET /owner/v1/csrf`가 준 토큰을 헤더에 실으면 통과한다. 세션 없이 인증 경로를 부르면 `401 UNAUTHENTICATED`다(상태 변경 요청은 CSRF 검사가 먼저라 토큰이 맞을 때만 401이다).
 5. `/v1/**`의 단말 인증, `/actuator/health`, 시연 정적 자원의 동작은 바뀌지 않는다. 단말 토큰으로 `/owner/**`를 부르면 401이고, 점주 세션으로 `/v1/**`를 부르면 401이다.
 6. 매장 생성은 `201 {storeId, name}`이고 목록은 내 매장만 생성 순으로 돌려준다. 빈 이름이나 100자 초과는 `400 INVALID_STORE_NAME`이다.
 7. 남의 매장 또는 없는 매장으로 단말 endpoint를 부르면 `404 STORE_NOT_FOUND`이고 단말이 바뀌지 않는다. 내 매장 경로에 다른 매장의 단말 ID를 넣으면 `404 TERMINAL_NOT_FOUND`다.
@@ -219,7 +222,8 @@ create index ix_store_owner_id on t_store (owner_id);
 - 질문 2(읽는 코드):
   - 단말 목록 조회가 `terminal_code`를 읽어 응답하고 정렬한다. 인증·회전·비활성화도 `TerminalEntity.toDomain()`에서 `TerminalCode`를 만들며 읽는다. 그래서 수동 수정으로 형식에 맞지 않는 코드가 들어가면, 그 단말의 `/v1` 인증이 401이 아니라 400 `INVALID_TERMINAL_CODE`가 된다. 코드를 쓰는 경로는 형식을 검사하는 등록 하나라 이를 받아들인다.
   - 로그인이 `email`로 행을 찾아 `password_hash`를 비교한다.
-  - 소유 확인과 내 매장 목록이 `owner_id`를 읽고, 목록이 `name`을 응답한다.
+  - 소유 확인과 내 매장 목록이 `owner_id`를 읽고, 목록이 `name`을 응답하며 `created_at, id`로 정렬한다.
+  - `OwnerEntity.toDomain()`은 저장된 이메일을 `OwnerEmail` 형식 검사로 다시 만든다. 쓰는 경로가 같은 검사를 거치므로 걸리지 않는다. 수동 수정으로 형식에 맞지 않는 값이 들어가면 그 계정의 로그인이 401이 아니라 400이 된다.
 - 질문 3(나중에 채우기): 모두 이 PR에서 읽으므로 해당 없다. `terminal_code` 기존 행은 위 UPDATE로 채운다. `t_owner`·`t_store`는 새 표다.
 - 질문 4(마지막 방어선):
   - `ux_terminal_store_code`가 "매장 안에서 코드 유일"의 유일한 방어선이다. 사전 조회를 하지 않으므로 순차 등록과 동시 등록 모두 여기서 걸린다.
@@ -234,7 +238,7 @@ create index ix_store_owner_id on t_store (owner_id);
 - 질문 6(check-then-act):
   - 단말 등록과 가입은 읽고 판단하지 않고 INSERT만 한다. 경합은 unique가 막고 adapter가 409로 바꾼다.
   - 소유 확인은 읽은 뒤 단말을 바꾸지만 `owner_id`를 바꾸는 명령이 없어서 그 사이에 결과가 달라지지 않는다.
-  - 실패 카운터는 Redis INCR이 원자적이다. 문턱 근처의 동시 시도 몇 번이 더 통과할 수 있는 것은 받아들인다.
+  - 실패 카운터는 판단 전에 먼저 센다. INCR과 TTL은 Lua 스크립트 하나라 원자적이고, 동시 시도도 각자 세어져 창 안의 비교는 5번을 넘지 않는다(결정 6).
 - 질문 7(락):
   - V014: `ALTER TABLE … ADD COLUMN`(nullable, 기본값 없음)은 메타데이터 변경이지만 `ACCESS EXCLUSIVE`를 잡는다. V014가 한 트랜잭션이라 그 락이 커밋까지 남는다. `SET NOT NULL`의 전체 검사와 `ADD CONSTRAINT UNIQUE`(역시 `ACCESS EXCLUSIVE`)는 행 수에 비례한다. 그동안 `t_terminal`을 읽는 단말 인증이 기다린다.
   - 배포 환경에는 등록 입구가 없어 행이 없거나 몇 개뿐이다. 즉시 끝나므로 `CONCURRENTLY`로 나누지 않는다.
@@ -244,8 +248,8 @@ create index ix_store_owner_id on t_store (owner_id);
 - 질문 8(이전 버전):
   - 이전 버전은 새 컬럼과 새 표를 매핑하지 않아 `validate`가 통과한다. 인증·회전·비활성화는 그대로 동작한다.
   - 이전 버전의 `register`는 `terminal_code` 없이 INSERT해서 NOT NULL에 걸린다. 이전 버전에는 HTTP 등록 입구가 없고 main 코드에 Facade 호출자도 없어 받아들인다.
-- 질문 9(payload): 이벤트 payload와 캐시되는 DTO에 실리지 않는다. 비밀번호 해시는 어떤 응답·로그에도 나가지 않는다.
-- 대조 기록: code-reviewer(읽기 전용 에이전트, 구현자 아님), 2026-10-06. V014__terminal_code.sql, TerminalEntity, TerminalPersistenceAdapter, TerminalQueries, TerminalManagement, Terminal, SchemaMigrationTest를 질문 1~9의 V014 답과 대조했다. 불일치 2건을 받아 V014와 위 답에 반영했다. 하나는 질문 7이다. V014에 `lock_timeout`이 없었고, unique 추가의 락을 `SHARE`로 적었으며, 위반 행 확인이 없었다. 다른 하나는 질문 2로, 인증·회전·비활성화의 `toDomain` 읽기가 빠져 있었다. V015 대조는 구현 뒤 리뷰어가 더한다.
+- 질문 9(payload): 이벤트 payload와 캐시되는 DTO에 실리지 않는다. 비밀번호 해시는 어떤 응답·로그에도 나가지 않는다. unique 위반 때 PostgreSQL이 보내는 상세(`Key (email)=(…)`)가 Hibernate WARN 로그에 이메일을 남겨서(실측), pgjdbc `logServerErrorDetail=false`로 예외 메시지와 로그에서 상세를 뺀다. 제약 이름은 상세가 아니라 메시지 본문에 있어 409 판정은 그대로다. 세션에는 점주 UUID를 principal로 하는 인증 객체만 JDK 직렬화로 들어간다(결정 3).
+- 대조 기록: code-reviewer(읽기 전용 에이전트, 구현자 아님), 2026-10-06. V014__terminal_code.sql, TerminalEntity, TerminalPersistenceAdapter, TerminalQueries, TerminalManagement, Terminal, SchemaMigrationTest를 질문 1~9의 V014 답과 대조했다. 불일치 2건을 받아 V014와 위 답에 반영했다. 하나는 질문 7이다. V014에 `lock_timeout`이 없었고, unique 추가의 락을 `SHARE`로 적었으며, 위반 행 확인이 없었다. 다른 하나는 질문 2로, 인증·회전·비활성화의 `toDomain` 읽기가 빠져 있었다. V015: reviewer-claude(읽기 전용 에이전트, 구현자 아님), 2026-10-07. V015__owner_store.sql, OwnerEntity, OwnerPersistenceAdapter, StoreEntity, StorePersistenceAdapter, StoreQueries, OwnerManagement, StoreManagement를 질문 1~9의 답과 대조했다. 불일치 4건을 받아 코드와 위 답에 반영했다. 질문 2는 `OwnerEntity.toDomain`의 이메일 재검사와 매장 목록의 `created_at, id` 정렬 읽기가 빠져 있었다. 질문 6은 카운터가 비교 뒤에 세고 INCR·EXPIRE가 따로라 동시 시도와 영구 잠금이 열려 있었다(증가 먼저와 Lua로 고쳤다). 질문 9는 unique 위반 상세의 이메일이 로그에 남았다(`logServerErrorDetail=false`로 고쳤다).
 
 ## 검증
 - `./gradlew test`. 통합 테스트는 Testcontainers의 PostgreSQL·Redis·Kafka를 쓰고, 세션은 그 Redis에 저장된다.
@@ -283,7 +287,9 @@ create index ix_store_owner_id on t_store (owner_id);
 | 인수 2·4·5, 점주 체인·세션·CSRF와 다른 경로 무영향. `OwnerAuthenticationIntegrationTest`(가입→CSRF→로그인→세션 쿠키로 200, 로그인 전 세션 ID 폐기와 새 ID, 로그아웃 204 뒤 401, 세션 없음·모르는 쿠키 401에 WWW-Authenticate 없음, CSRF 없음·불일치 403 ACCESS_DENIED와 계정 미생성, 틀린 비밀번호·없는 계정 같은 401, 단말 토큰으로 owner 401, 점주 세션으로 v1 401 Bearer, actuator health 200, 쿠키 설정 바인딩), `OwnerControllerTest`(REST Docs: 가입 201·400 둘·409, 로그인 200·401, 로그아웃 204, csrf 204, CSRF 누락 403), `OwnerRequestsTest`, `UnauthenticatedExceptionTest`의 challenge, `OwnerManagementTest`의 정규화 이메일, `TerminalAdminControllerTest`·`TerminalAdminApiIntegrationTest`를 점주 세션 기준으로 맞춤 | `./gradlew test --tests 'com.resilientpos.owner.*' --tests 'com.resilientpos.platform.*Owner*' --tests 'com.resilientpos.platform.UnauthenticatedExceptionTest' --tests 'com.resilientpos.terminal.internal.adapter.web.TerminalAdmin*'`. 체인이 default CSRF만 켠 최소 스텁이고 Controller 본문이 `TODO()`인 상태에서 61건 중 24건 실패: 가입·로그인·CSRF 토큰 요청이 permitAll이 아니라 403, 로그아웃 경로 404, CSRF 거절 응답이 envelope 없는 빈 본문(`$.result` 없음), 로그인 뒤 XSRF-TOKEN 쿠키 없음, 통합 테스트는 `GET /owner/v1/csrf`에 쿠키가 없어 `XSRF-TOKEN 쿠키가 없다`, 세션 없음 요청이 401이 아니라 403, `SessionRepository` 제네릭 주입 실패(테스트 오류라 고침) | 같은 명령에서 체인(`csrf.spa()`, permitAll 셋, logout 204, 요청 캐시 끔, entry point·access denied는 `HandlerExceptionResolver`), `OwnerController`, `UnauthenticatedException.challenge`, advice의 조건부 `WWW-Authenticate`를 넣고 `application.yaml`에 쿠키 설정을 둔 뒤 통과. 쿠키 속성은 MOCK 웹 환경이 서블릿 컨텍스트 경로(`WarDeploymentConfiguration`)로 쿠키를 만들어 MockMvc에서 볼 수 없어, 일회용 RANDOM_PORT 프로브(삭제함)로 가입→로그인을 실제 서버에 보내 `SESSION=…; Path=/; Secure; HttpOnly; SameSite=Lax`를 관측했고 테스트는 `ServerProperties` 바인딩만 검사한다. 슬라이스 CSRF는 `csrf()` post-processor가 `csrf.spa()`와 맞지 않아(헤더에 인코딩된 값이 실려 403) 운영과 같은 쿠키·헤더 고정 토큰으로 재현했다 | `./gradlew test` 전체 542건 통과, 실패 0, 건너뜀 0. 이번 동작에서 로그인 응답 이메일 때문에 `OwnerManagement.logIn`의 반환을 `OwnerCommand.LogIn.Result`로 바꿨고 그 단위·통합 테스트를 같이 고쳤다 |
 | 인수 6, 매장 생성과 내 매장 목록. `StoreTest`(이름 trim·0자·공백만·1자·100자·101자·code point), `StoreManagementIntegrationTest`(저장·내 매장만 생성 순과 이름 중복·requireOwned가 남의 매장과 없는 매장에 같은 STORE_NOT_FOUND), `StoreControllerTest`(REST Docs: 201, 400 INVALID_STORE_NAME, 목록 200, 401, CSRF 없음 403, 감사 로그 로그 캡처), `SchemaMigrationTest`의 표 목록에 `t_store` | `./gradlew test --tests 'com.resilientpos.store.*' --tests 'com.resilientpos.SchemaMigrationTest'`. V015에 `t_store`·`ix_store_owner_id`와 엔티티·adapter·queries를 두고 `Store.create`·Facade·Controller 본문을 `TODO()`로 둔 상태에서 20건 중 11건 실패: 도메인·통합 사례는 `NotImplementedError`, 이름 거절 기대는 `assertFailsWith`가 `NotImplementedError`를 받아 실패, 슬라이스 3건은 상태 500(201·200·400 기대). 401·403 슬라이스와 표 목록 사례는 기존 체인·V015로 통과(characterization). 슬라이스 첫 실행의 `ParameterResolutionException`은 `TerminalManagement` mock 누락이라는 테스트 오류여서 `OwnerControllerTest`처럼 mock을 더해 고쳤다 | 같은 명령에 `ModuleStructureTest`·`DependencyDirectionTest`를 더해 통과(27건). `Store.create`가 trim 뒤 code point 1~100을 검사하고 `StoreManagement`가 `Tx.masterTx`로 저장하며, 읽기(`findByOwner`·소유 확인)는 `StoreQueries`(Kotlin JDSL, `@ReadOnlyTransactional`)가 맡는다. 읽기용 Facade는 따로 두지 않고 `StoreManagement` 하나로 했다 | `./gradlew test` 전체 555건 통과, 실패 0, 건너뜀 0 |
 | 인수 7·8·10~13·15, 매장 아래 단말 관리 API·소유 확인·감사 로그·REST Docs. `TerminalManagementIntegrationTest`(다른 매장 ID로 회전·비활성화 시 TERMINAL_NOT_FOUND, credential·상태·인증 불변), `TerminalTest`(`requireStore`), `TerminalOwnerControllerTest`(REST Docs: 등록 201·400·409, 회전 200·404·409, 비활성화 200 멱등·404, 목록 200 코드 순, 남의 매장 404 STORE_NOT_FOUND와 단말 Facade 미호출, 401, CSRF 없음 403, 경로 UUID 오류 400), `TerminalOwnerApiIntegrationTest`(가입→로그인→매장 생성→등록→토큰으로 주문→회전→비활성화 멱등→목록, 다른 점주의 등록·목록·회전·비활성화 404와 단말 불변, 내 매장 경로에 다른 매장 단말 ID면 404, 감사 로그와 평문 토큰 부재) | `./gradlew test --tests 'com.resilientpos.terminal.internal.application.TerminalManagementIntegrationTest' --tests 'com.resilientpos.terminal.internal.adapter.web.TerminalOwnerControllerTest'`. 커맨드에 `storeId`를 더하고 컨트롤러를 새 경로로 옮기되 소유 확인과 매장 대조가 없는 상태에서 3건 실패: Facade 사례는 다른 매장 단말이 회전·비활성화되어 TERMINAL_NOT_FOUND 기대가 `assertFailsWith`에서 실패, 슬라이스는 `requireOwned` 호출이 없어 `WantedButNotInvoked`와 404 기대 `AssertionError` | 같은 명령에 `TerminalTest`를 더해 통과. `Terminal.requireStore`(다른 매장이면 `Terminal.notFound()`, 잠근 뒤 `requireActive` 앞에서 호출)와 컨트롤러가 모든 endpoint에서 `StoreManagement.requireOwned`를 먼저 호출한다. 소유 확인 뒤 단말 Facade를 부르므로 다른 매장 ID는 단말 Facade에 닿지 않는다. 컨트롤러·DTO·테스트 이름의 `Admin`을 `Owner`로 바꿨다. HTTP 통합 테스트는 구현 뒤에 작성해 바로 통과(characterization) | `./gradlew test --tests 'com.resilientpos.terminal.*' --tests 'com.resilientpos.platform.*Owner*' --tests 'com.resilientpos.ModuleStructureTest' --tests 'com.resilientpos.DependencyDirectionTest'` 통과, `./gradlew test` 전체 560건 통과, 실패 0, 건너뜀 0. `OwnerAuthenticationIntegrationTest`는 유효 세션 200 확인이 소유 매장을 요구하게 되어 `GET /owner/v1/stores`로 바꿨다 |
-| 인수 14·16, V015와 모듈 8개 | 미실행 | 미실행 | 미실행 |
+| 인수 14·16, V015와 모듈 8개 (`SchemaMigrationTest`의 baseline 015·표 목록 `t_owner`·`t_store`, `OwnerManagementIntegrationTest`의 대소문자 중복 409, `ModuleStructureTest`의 `owner` 인식) | 별도 RED 없음. V015는 인수 1·6 동작의 GREEN에서 들어왔다. `t_owner`를 둔 뒤 `./gradlew test` 전체 회귀에서 `SchemaMigrationTest`의 "테이블은 마이그레이션이 만든 것뿐이다"가 기대 목록에 없는 `t_owner`로 실패해 목록을 고쳤다(인수 1 행). `ModuleStructureTest`는 `owner` 패키지와 함께 목록을 고쳐 바로 통과했다(characterization) | `./gradlew test --tests 'com.resilientpos.SchemaMigrationTest' --tests 'com.resilientpos.ModuleStructureTest' --tests 'com.resilientpos.DependencyDirectionTest'` 통과 | `./gradlew test` 전체 통과(결과 절) |
+| 리뷰 반영(2차): 항목 1 로그인 시도 증가 먼저·Lua 원자화, 2 unique 상세 로그 차단, 3 `__Host-` 쿠키와 실제 응답 속성, 4 제어·서식 문자 거절, 5 CSRF 거절 로그, 6 Boot 기본 사용자 제거, 7 정리. `OwnerManagementTest`(6번째 시도 거절·시도를 비교 전에 셈·fail-open을 `IllegalStateException`과 `RedisConnectionFailureException`으로), `OwnerManagementIntegrationTest`(시도마다 TTL·카운터 4에서 병렬 8개 중 성공 1개·중복 가입 출력에 이메일·비밀번호 없음), `OwnerEmailTest`·`StoreTest`(제어·서식 문자), `ApiAdviceTest`(CSRF 거절 로그), `OwnerAuthenticationIntegrationTest`(`UserDetailsService` 빈 없음), `OwnerCookieIntegrationTest`(RANDOM_PORT 실제 `Set-Cookie`와 출력에 평문 비밀번호 없음) | 항목별로 클래스를 좁혀 `./gradlew test --tests 'com.resilientpos.owner.*' --tests 'com.resilientpos.store.*' --tests 'com.resilientpos.platform.*'` 형태로 관측했다. 항목 1: 포트에서 `count`를 둔 채 `increment`가 값을 돌려주게만 바꾼 상태에서 4건 실패(6번째 시도 뒤 카운터가 6이 아니라 5, 비교 전 증가 없음, 통합의 카운터 기대 `6`이 `5`, 병렬 8개가 모두 성공해 성공 `1` 기대 실패). fail-open 사례의 실패는 테스트가 저장소를 재사용한 오류라 고쳤다. 항목 2: 중복 가입 출력에 이메일이 남아 `assertFalse` 실패. 항목 3: `__Host-XSRF-TOKEN` 쿠키가 없어 실제 응답 테스트 실패. 항목 4: 제어·서식 문자 사례가 예외 없이 통과해 실패. 항목 5: 로그에 제출 토큰 문자열이 남아 실패. 항목 6: `UserDetailsService` 빈이 있어 실패. 항목 7은 삭제·주석이라 RED 미실행. `증가 뒤 키에는 시도마다 TTL이 있다`는 EXPIRE가 빠지는 장애를 주입하지 못해 RED를 만들지 못한 characterization이다 | 같은 명령 통과. 항목 1: `LoginFailureCounter.increment`가 증가 뒤 값을 돌려주고(`count` 삭제) Redis 구현이 Lua 스크립트 한 번으로 INCR·첫 증가 PEXPIRE, `OwnerManagement.logIn`이 이메일 형식 확인 직후 증가해 5 초과면 비교 없이 거절. 항목 2: `application.yaml`의 pgjdbc `logServerErrorDetail: false`(제약 이름은 메시지 본문에 남아 중복 409 판정이 그대로 통과). 항목 3: `server.servlet.session.cookie.name`과 `OwnerCsrfTokens`(체인과 `OwnerController`가 공유하는 저장소, `__Host-XSRF-TOKEN`·`Path=/`·Secure). MockMvc는 세션 쿠키 설정을 적용하지 않아 이름 `SESSION`을 헬퍼 상수로 두고 실제 이름·속성은 RANDOM_PORT 테스트가 고정. 항목 4: `\p{Cc}`·`\p{Cf}` 정규식. 항목 5: `handleAccessDenied`가 예외를 로그에 싣지 않음. 항목 6: `spring.autoconfigure.exclude`에 `org.springframework.boot.security.autoconfigure.UserDetailsServiceAutoConfiguration`. 항목 7: `Store.restore`·`OwnerEmail.normalize` 삭제와 Redis 주석 | `./gradlew test` 전체 567건 통과, 실패 0, 건너뜀 0 |
+| 리뷰 반영(3차): Lua 스크립트가 TTL 없는 키에도 TTL을 건다(`n == 1`에서 `PTTL < 0`으로). `OwnerManagementIntegrationTest`의 `TTL 없이 남은 키는 다음 시도에서 TTL을 얻어 영구 잠금이 되지 않는다` | `./gradlew test --tests '*OwnerManagementIntegrationTest'`. 옛 조건(`n == 1`)에서 TTL 없이 값 9를 둔 키로 로그인하자 `ttl=-1`로 assertion 실패 | 같은 명령과 `*OwnerManagementTest` 통과 | `./gradlew test` 전체(결과 절) |
 
 ## 결과
 범위 조정(2026-10-07) 뒤 개발 중이다. 단말 코드와 V014는 앞 범위에서 구현해 TDD 기록 첫 두 행에 남겼다. 나머지는 개발 뒤 채운다.
