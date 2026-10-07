@@ -292,4 +292,27 @@ create index ix_store_owner_id on t_store (owner_id);
 | 리뷰 반영(3차): Lua 스크립트가 TTL 없는 키에도 TTL을 건다(`n == 1`에서 `PTTL < 0`으로). `OwnerManagementIntegrationTest`의 `TTL 없이 남은 키는 다음 시도에서 TTL을 얻어 영구 잠금이 되지 않는다` | `./gradlew test --tests '*OwnerManagementIntegrationTest'`. 옛 조건(`n == 1`)에서 TTL 없이 값 9를 둔 키로 로그인하자 `ttl=-1`로 assertion 실패 | 같은 명령과 `*OwnerManagementTest` 통과 | `./gradlew test` 전체(결과 절) |
 
 ## 결과
-범위 조정(2026-10-07) 뒤 개발 중이다. 단말 코드와 V014는 앞 범위에서 구현해 TDD 기록 첫 두 행에 남겼다. 나머지는 개발 뒤 채운다.
+- `./gradlew test` 전체 568건 통과(실패 0, 건너뜀 0). 인수 조건 1~16을 구현했다. 각 동작의 RED·GREEN 관측은 TDD 검증 기록에 있다.
+- 수동 확인(2026-10-07, compose의 PostgreSQL·Redis·Kafka와 `bootRun`, curl 쿠키 jar). 첫 실행은 리뷰 반영 전(05a9b43), 둘째 실행은 반영 뒤(4966d92)다.
+  - 첫 실행: CSRF 토큰 없는 가입은 403 `ACCESS_DENIED`다. 대문자 이메일로 가입하면 소문자로 저장되고, 같은 이메일은 409 `OWNER_EMAIL_DUPLICATED`다. 로그인 전 매장 목록은 401이다.
+  - 둘째 실행: 기동 로그에 Boot 기본 사용자 비밀번호가 없다. 로그인 응답의 쿠키는 `__Host-SESSION=…; Path=/; Secure; HttpOnly; SameSite=Lax`와 `__Host-XSRF-TOKEN=…; Path=/; Secure`였다.
+  - 첫 실행: 매장 생성(이름 앞뒤 공백 제거) → 단말 등록 201 → 그 토큰으로 빈 배치 sync 200 → 목록 → 비활성화 200 `INACTIVE` → 같은 토큰의 sync 401 순서로 동작했다. 모르는 매장은 404 `STORE_NOT_FOUND`다. 로그아웃 204 뒤에는 401이고 `WWW-Authenticate`가 없다.
+  - 첫 실행: 틀린 비밀번호 5번 뒤 맞는 비밀번호도 401이었다. 감사 로그는 가입·로그인·매장 생성·등록·비활성화 다섯 줄이었다. 로그 파일에서 평문 토큰·비밀번호는 0건이었다. 이메일은 중복 가입의 Hibernate WARN(PostgreSQL 상세)에서 1건 나왔고, 그것이 리뷰 반영 2차의 근거다. 둘째 실행에서는 가입·중복 가입 409·로그인·매장·등록·sync 200 뒤 로그 파일의 이메일이 0건이었다.
+  - 둘째 실행: Redis 컨테이너를 멈추자 점주 요청은 Tomcat 기본 HTML 500이었고, 같은 시각 단말 sync는 200이었다. Redis를 다시 띄우자 점주 요청이 200으로 돌아왔다.
+- 구현 중 판단:
+  - 로그인은 form login이 아니라 Controller가 자격을 확인한 뒤 세션 ID를 바꾸고, CSRF 토큰을 다시 만들고, `SecurityContext`를 세션에 저장한다. CSRF 저장소는 체인과 같은 인스턴스(`OwnerCsrfTokens`)다.
+  - `UnauthenticatedException`의 `WWW-Authenticate` 기본값은 없음이고 단말 인터셉터만 `Bearer`를 넘긴다. 비즈니스 계층(`OwnerManagement`)이 HTTP 헤더를 알지 않게 하려는 것이다.
+  - 소유 확인은 Controller가 먼저 부르고(`StoreManagement.requireOwned`), 회전·비활성화는 Facade가 행을 잠근 뒤 `Terminal.requireStore`로 다시 확인한다. 그래서 남의 매장에 형식이 틀린 코드를 보내도 400이 아니라 404다. `TerminalManagement.register`는 매장 존재·소유를 확인하지 않으므로 다른 호출자가 생기면 같은 확인을 먼저 부른다.
+  - MockMvc(MOCK 환경)는 `server.servlet.session.cookie.*`를 적용하지 않아 테스트 헬퍼의 세션 쿠키 이름은 `SESSION`이다. 운영 이름과 속성은 RANDOM_PORT 테스트(`OwnerCookieIntegrationTest`)가 고정한다.
+  - Boot 4.1.1의 `UserDetailsServiceAutoConfiguration`은 어떤 체인도 쓰지 않는 기본 사용자를 만들고 비밀번호를 WARN으로 남겨서 `spring.autoconfigure.exclude`로 껐다.
+- 한계:
+  - 세션 크기(추정 1~2KB)와 요청당 Redis 왕복은 실측하지 않았다. 부하테스트(#77)에서 본다.
+  - Redis 장애 때 점주 응답은 envelope가 아닌 Tomcat HTML 500이다. 세션 필터가 MVC 밖에 있기 때문이다.
+  - 세션은 JDK 직렬화라 Spring Security를 올리면 기존 세션을 읽지 못할 수 있다. 운영 Redis의 인증·TLS가 외부 노출의 전제다.
+  - 이메일 SHA-256 키는 알려진 이메일 목록으로 되돌릴 수 있는 가명화 수준이다.
+  - 단말·매장 목록 정렬은 DB collation의 문자열 순이라 `LEGACY-10`이 `LEGACY-2`보다 앞에 온다.
+  - 가입 409가 계정 존재를 알리므로 로그인의 더미 해시 비교는 보조 수단이다.
+- 리뷰(resilientpos-multi-review, Claude·Codex 실행, Gemini는 CLI가 없어 미실행): Claude 82점, Codex는 변경 요청이었고 P0은 없었다.
+  - 둘이 함께 지적한 항목은 반영했다. 비교 뒤에 세던 실패 카운터(동시 시도 통과)와 INCR·EXPIRE 분리(영구 잠금), 세션 쿠키 속성을 바인딩만 보던 테스트, 결과 절과 V015 대조가 그것이다.
+  - 한쪽만 지적한 항목 중 반영한 것: unique 상세의 이메일 로그, `__Host-` 쿠키, 제어·서식 문자, CSRF 거절 로그의 토큰, Boot 기본 사용자, 체인과 Controller의 CSRF 저장소 공유, 쓰이지 않는 코드, Redis 주석, spec 문구(의존 방향, 인수 3·4, 질문 2·6·9).
+  - 반영하지 않은 것: 제약 이름 판정의 locale 의존은 PostgreSQL 번역 메시지도 제약 이름을 큰따옴표로 감싸고 앞 리뷰에서 다뤘다. Redis health는 켜면 단말 핫패스까지 막혀 문서로 대신했다. Facade가 platform 예외를 던지는 것은 사용처가 하나라 두었다. 세션 절대 수명과 NFKC는 제외 절로 보냈다. bcrypt CPU 고갈은 rate limit 제외 항목에 근거로 적었다.
