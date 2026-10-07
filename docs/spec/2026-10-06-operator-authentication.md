@@ -31,8 +31,8 @@
 - `POST /owner/v1/logout` → `204`. 세션을 지운다.
 - 쿠키는 `__Host-SESSION`이고 `HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/`, Domain 없음이다. `__Host-` 접두어는 형제 서브도메인이 같은 이름의 쿠키를 심지 못하게 한다. 유휴 만료는 30분(Spring Session 기본)이고 절대 수명은 없다(제외). 세션은 Redis에 있어 인스턴스가 여러 대여도 같다. 저장소는 색인 없는 기본 저장소(`RedisSessionRepository`)다. 점주별 세션 목록이 필요한 기능(비밀번호를 바꾸면 다른 세션 폐기)이 없어서다.
 - 비용: 세션 하나는 Redis hash 하나(JDK 직렬화 1~2KB, 추정)이고, 유휴 만료로 지금 로그인해 있는 점주 수만큼만 쌓인다. 요청마다 Redis 왕복이 1~2회 생긴다. Spring Session 필터는 모든 요청에 걸리지만 세션을 지연 로딩해서, 세션을 읽지 않는 단말 경로(`/v1/**`)는 Redis에 닿지 않는다. 실측은 부하테스트에서 한다(결과의 한계).
-- Redis 장애 때 점주 요청은 세션을 읽지 못해 실패한다(fail-closed). 단말 인증은 영향이 없다. health는 Redis를 보지 않는다. 보게 하면 Redis 장애 때 readiness가 빠져 단말 핫패스까지 막힌다. 감지는 `/owner/**` 5xx와 Redis 모니터링으로 한다([관측성](../wiki/observability.md)).
-- 세션은 Spring Session 기본 JDK 직렬화다. Spring Security를 올리면 기존 세션을 읽지 못할 수 있고 그때 점주는 다시 로그인한다. Redis에 쓸 수 있는 주체는 역직렬화 공격면이 되므로 운영 Redis의 인증·TLS가 외부 노출의 전제다(결과의 한계).
+- Redis 장애 때 점주 요청은 세션을 읽거나 쓰지 못해 실패한다(fail-closed). 응답은 envelope의 `503`이다(결정 12). 단말 인증은 영향이 없다. health는 Redis를 보지 않는다. 보게 하면 Redis 장애 때 readiness가 빠져 단말 핫패스까지 막힌다. 감지는 `/owner/**` 5xx와 Redis 모니터링으로 한다([관측성](../wiki/observability.md)).
+- 세션 속성은 JSON으로 직렬화한다(결정 13). 운영 Redis의 인증·TLS는 그래도 외부 노출의 전제다. Redis에 쓸 수 있는 주체는 세션을 위조할 수 있기 때문이다.
 - 버린 것: 불투명 Bearer 토큰은 요청마다 Postgres를 조회하고 콘솔 JS가 토큰을 들고 있어 XSS에 노출된다. 자체 발급 JWT는 만료 전 폐기가 안 되고 서명 키 관리와 refresh 토큰 표가 따라온다.
 
 **결정 4: CSRF는 SPA 방식이다.** 쿠키로 인증하므로 CSRF를 막아야 한다. Spring Security 7의 `csrf.spa()`를 쓰고, 토큰 쿠키는 `__Host-XSRF-TOKEN`(`Secure`, `Path=/`, JavaScript가 읽도록 HttpOnly 아님), 헤더는 `X-XSRF-TOKEN`이다. 체인과 로그인 Controller는 같은 저장소 인스턴스(`platform.OwnerCsrfTokens`)를 쓴다. 이중 제출 토큰은 세션에 묶이지 않으므로 쿠키를 심을 수 없게 하는 `__Host-` 접두어가 방어의 일부다. 가입·로그인·로그아웃을 포함한 `/owner/**`의 모든 상태 변경 요청에 토큰이 필요하다. 로그인 CSRF도 막기 위해서다. 클라이언트가 첫 토큰을 받는 `GET /owner/v1/csrf`(`204`, 쿠키를 심는다)를 둔다. 토큰이 없거나 틀리면 `403 ACCESS_DENIED`다. CSRF 필터가 인증보다 먼저라, 세션 없이 토큰도 없는 상태 변경 요청은 401이 아니라 403이다. 거절 로그에는 코드만 남긴다. `InvalidCsrfTokenException`의 메시지가 제출 토큰을 담기 때문이다.
@@ -80,6 +80,17 @@
 
 **결정 11: 감사 로그.** Facade가 커밋한 뒤 Controller가 INFO 한 줄을 남긴다. 항목은 `ownerId`, `action`(`STORE_CREATED`·`TERMINAL_REGISTERED`·`TERMINAL_CREDENTIAL_ROTATED`·`TERMINAL_DEACTIVATED`), 대상 ID다. 매장 생성이면 `storeId`, 단말이면 `storeId`·`terminalId`이고, 등록이면 `terminalCode`, 비활성화면 전후 `status`를 더한다. 토큰, 비밀번호, 세션 ID, 이메일은 남기지 않는다. 가입은 `OWNER_SIGNED_UP`(`ownerId`)으로 남긴다. 로그인 성공은 `OWNER_LOGGED_IN`(`ownerId`) INFO이고, 실패는 advice의 기존 401 WARN만 남긴다. 사유·증거를 담는 감사 표는 그것이 필요한 PR이 만든다.
 
+**결정 12: 세션 저장소(Redis) 장애는 envelope의 `503 SERVICE_UNAVAILABLE`로 답한다.** (2026-10-07 범위 조정)
+- 문제: Spring Session 필터는 MVC 밖의 서블릿 필터라, Redis 오류가 `ApiControllerAdvice`를 거치지 않고 Tomcat 기본 HTML 500으로 나간다(실측). 클라이언트가 envelope의 `errorCode`로 분기하지 못하고, 서버 버그(500)와 일시 장애가 구분되지 않는다.
+- 수단: `platform`의 서블릿 필터 하나를 `/owner/*`에만 걸고 Spring Session 필터보다 앞에 둔다. 체인 안에서 Redis 오류(`DataAccessException`)가 올라오고 응답이 아직 커밋되지 않았으면, 응답을 비우고 `handlerExceptionResolver`로 넘긴다. 그러면 `ApiControllerAdvice`가 `503 SERVICE_UNAVAILABLE`(`ErrorType`, ERROR 로그)을 쓴다. 세션 읽기(요청 처리 중)와 세션 저장(응답 커밋 때) 실패를 모두 덮는다. 응답이 이미 커밋됐으면 바꿀 수 없으므로 다시 던진다.
+- 단말 경로와 다른 경로는 이 필터를 지나지 않는다. 로그인 실패 카운터와 분산 락은 지금처럼 fail-open이다. 이들은 자기 adapter에서 Redis 오류를 삼키므로 이 필터에 닿지 않는다.
+- 한계: 로그인 감사 로그(`OWNER_LOGGED_IN`)는 세션 저장보다 먼저 남으므로, 저장이 실패해 503이 나가도 로그는 남는다.
+
+**결정 13: 세션 속성은 JSON으로 직렬화한다.** (2026-10-07 범위 조정)
+- 문제: Spring Session 기본 JDK 직렬화에는 두 가지 문제가 있다. Spring Security 버전을 올리면 `serialVersionUID`가 바뀌어 기존 세션을 읽지 못한다. 또 Redis에 쓸 수 있는 주체가 역직렬화 gadget으로 코드를 실행할 수 있다. 프로젝트 규칙도 `java.io.Serializable` 직렬화를 쓰지 않는다.
+- 수단: Spring Session의 Redis serializer 빈을 Spring Data Redis의 `GenericJacksonJsonRedisSerializer`(Jackson 3)로 바꾼다. 다형성 타입은 Spring Security의 `SecurityJacksonModules`가 허용하는 타입만 받는다(allowlist). 세션 principal(점주 UUID)이 허용 목록에 없으면 가장 작은 변경으로 맞춘다. 예를 들면 principal을 문자열로 두거나, 그 타입 하나만 허용 목록에 더한다.
+- 기존 세션: 배포된 점주 세션이 없어 형식 전환 비용이 없다. 전환 뒤 JDK 형식으로 남은 세션을 읽지 못하면 그 요청은 다시 로그인하게 한다(503이 아니라 401).
+
 계약: 공개 타입이 생긴다.
 - `owner`: `OwnerId`, `OwnerManagement`, `OwnerCommand`.
 - `store`: `StoreManagement`(생성·내 매장 목록·소유 확인), `StoreCommand`, `StoreView`.
@@ -91,7 +102,7 @@
 - `RotateCredential`과 `Deactivate`가 `storeId`를 받는다.
 - `deactivate`는 전후 상태를 담은 `TerminalCommand.Deactivate.Result`를 돌려준다.
 
-새 오류 code는 `ACCESS_DENIED`(`ErrorType`), `INVALID_EMAIL`, `INVALID_PASSWORD`, `OWNER_EMAIL_DUPLICATED`, `INVALID_STORE_NAME`, `STORE_NOT_FOUND`, `INVALID_TERMINAL_CODE`, `TERMINAL_CODE_DUPLICATED`다. 이벤트와 `event_publication`은 바뀌지 않는다. 모듈 의존은 `terminal → store`, `terminal → owner`(`OwnerId`), `store → owner`다.
+새 오류 code는 `ACCESS_DENIED`·`SERVICE_UNAVAILABLE`(`ErrorType`), `INVALID_EMAIL`, `INVALID_PASSWORD`, `OWNER_EMAIL_DUPLICATED`, `INVALID_STORE_NAME`, `STORE_NOT_FOUND`, `INVALID_TERMINAL_CODE`, `TERMINAL_CODE_DUPLICATED`다. 이벤트와 `event_publication`은 바뀌지 않는다. 모듈 의존은 `terminal → store`, `terminal → owner`(`OwnerId`), `store → owner`다.
 
 불변식:
 - 점주 경로는 유효한 세션 없이 부를 수 없다. 점주는 자기 매장과 그 단말만 다룬다.
@@ -160,6 +171,8 @@
 14. V014가 기존 행을 매장별 `LEGACY-1`, `LEGACY-2`…로 채운다. 그 뒤 `terminal_code`는 NOT NULL이고 `(store_id, terminal_code)`가 unique다. V015 뒤 `t_owner.email`이 unique다.
 15. REST Docs 스니펫(`build/generated-snippets`)이 가입·로그인·로그아웃·CSRF·매장 2개·단말 4개 endpoint의 요청·응답 필드를 문서화한다. 401·403·404·409 예도 담는다.
 16. `ModuleStructureTest`가 `owner`를 포함한 모듈 8개를 인식하고 통과한다.
+17. 세션 저장소(Redis)에 닿지 못하면 세션 쿠키가 있는 점주 요청과 로그인은 envelope의 `503 SERVICE_UNAVAILABLE`이고 HTML이 아니다. 같은 상태에서 단말 요청(`/v1/**`)은 영향이 없다.
+18. Redis에 저장된 세션 속성은 JSON이고 JDK 직렬화 바이트가 아니다. 로그인 → 인증 경로 → 로그아웃이 JSON 세션으로 동작한다. 허용 목록 밖의 타입이 든 세션은 역직렬화하지 않는다.
 
 ### Checkpoint와 검증 명령 (선택)
 | Checkpoint | 검증 명령 | 의존 |
@@ -290,6 +303,8 @@ create index ix_store_owner_id on t_store (owner_id);
 | 인수 14·16, V015와 모듈 8개 (`SchemaMigrationTest`의 baseline 015·표 목록 `t_owner`·`t_store`, `OwnerManagementIntegrationTest`의 대소문자 중복 409, `ModuleStructureTest`의 `owner` 인식) | 별도 RED 없음. V015는 인수 1·6 동작의 GREEN에서 들어왔다. `t_owner`를 둔 뒤 `./gradlew test` 전체 회귀에서 `SchemaMigrationTest`의 "테이블은 마이그레이션이 만든 것뿐이다"가 기대 목록에 없는 `t_owner`로 실패해 목록을 고쳤다(인수 1 행). `ModuleStructureTest`는 `owner` 패키지와 함께 목록을 고쳐 바로 통과했다(characterization) | `./gradlew test --tests 'com.resilientpos.SchemaMigrationTest' --tests 'com.resilientpos.ModuleStructureTest' --tests 'com.resilientpos.DependencyDirectionTest'` 통과 | `./gradlew test` 전체 통과(결과 절) |
 | 리뷰 반영(2차): 항목 1 로그인 시도 증가 먼저·Lua 원자화, 2 unique 상세 로그 차단, 3 `__Host-` 쿠키와 실제 응답 속성, 4 제어·서식 문자 거절, 5 CSRF 거절 로그, 6 Boot 기본 사용자 제거, 7 정리. `OwnerManagementTest`(6번째 시도 거절·시도를 비교 전에 셈·fail-open을 `IllegalStateException`과 `RedisConnectionFailureException`으로), `OwnerManagementIntegrationTest`(시도마다 TTL·카운터 4에서 병렬 8개 중 성공 1개·중복 가입 출력에 이메일·비밀번호 없음), `OwnerEmailTest`·`StoreTest`(제어·서식 문자), `ApiAdviceTest`(CSRF 거절 로그), `OwnerAuthenticationIntegrationTest`(`UserDetailsService` 빈 없음), `OwnerCookieIntegrationTest`(RANDOM_PORT 실제 `Set-Cookie`와 출력에 평문 비밀번호 없음) | 항목별로 클래스를 좁혀 `./gradlew test --tests 'com.resilientpos.owner.*' --tests 'com.resilientpos.store.*' --tests 'com.resilientpos.platform.*'` 형태로 관측했다. 항목 1: 포트에서 `count`를 둔 채 `increment`가 값을 돌려주게만 바꾼 상태에서 4건 실패(6번째 시도 뒤 카운터가 6이 아니라 5, 비교 전 증가 없음, 통합의 카운터 기대 `6`이 `5`, 병렬 8개가 모두 성공해 성공 `1` 기대 실패). fail-open 사례의 실패는 테스트가 저장소를 재사용한 오류라 고쳤다. 항목 2: 중복 가입 출력에 이메일이 남아 `assertFalse` 실패. 항목 3: `__Host-XSRF-TOKEN` 쿠키가 없어 실제 응답 테스트 실패. 항목 4: 제어·서식 문자 사례가 예외 없이 통과해 실패. 항목 5: 로그에 제출 토큰 문자열이 남아 실패. 항목 6: `UserDetailsService` 빈이 있어 실패. 항목 7은 삭제·주석이라 RED 미실행. `증가 뒤 키에는 시도마다 TTL이 있다`는 EXPIRE가 빠지는 장애를 주입하지 못해 RED를 만들지 못한 characterization이다 | 같은 명령 통과. 항목 1: `LoginFailureCounter.increment`가 증가 뒤 값을 돌려주고(`count` 삭제) Redis 구현이 Lua 스크립트 한 번으로 INCR·첫 증가 PEXPIRE, `OwnerManagement.logIn`이 이메일 형식 확인 직후 증가해 5 초과면 비교 없이 거절. 항목 2: `application.yaml`의 pgjdbc `logServerErrorDetail: false`(제약 이름은 메시지 본문에 남아 중복 409 판정이 그대로 통과). 항목 3: `server.servlet.session.cookie.name`과 `OwnerCsrfTokens`(체인과 `OwnerController`가 공유하는 저장소, `__Host-XSRF-TOKEN`·`Path=/`·Secure). MockMvc는 세션 쿠키 설정을 적용하지 않아 이름 `SESSION`을 헬퍼 상수로 두고 실제 이름·속성은 RANDOM_PORT 테스트가 고정. 항목 4: `\p{Cc}`·`\p{Cf}` 정규식. 항목 5: `handleAccessDenied`가 예외를 로그에 싣지 않음. 항목 6: `spring.autoconfigure.exclude`에 `org.springframework.boot.security.autoconfigure.UserDetailsServiceAutoConfiguration`. 항목 7: `Store.restore`·`OwnerEmail.normalize` 삭제와 Redis 주석 | `./gradlew test` 전체 567건 통과, 실패 0, 건너뜀 0 |
 | 리뷰 반영(3차): Lua 스크립트가 TTL 없는 키에도 TTL을 건다(`n == 1`에서 `PTTL < 0`으로). `OwnerManagementIntegrationTest`의 `TTL 없이 남은 키는 다음 시도에서 TTL을 얻어 영구 잠금이 되지 않는다` | `./gradlew test --tests '*OwnerManagementIntegrationTest'`. 옛 조건(`n == 1`)에서 TTL 없이 값 9를 둔 키로 로그인하자 `ttl=-1`로 assertion 실패 | 같은 명령과 `*OwnerManagementTest` 통과 | `./gradlew test` 전체(결과 절) |
+| 결정 12·13, 인수 17·18: 세션 저장소 장애 503과 세션 JSON 직렬화 | 미실행 | 미실행 | 미실행 |
+| 🔴 리뷰 포인트 행별 점검 반영 | 미실행 | 미실행 | 미실행 |
 
 ## 결과
 - `./gradlew test` 전체 568건 통과(실패 0, 건너뜀 0). 인수 조건 1~16을 구현했다. 각 동작의 RED·GREEN 관측은 TDD 검증 기록에 있다.
@@ -307,8 +322,7 @@ create index ix_store_owner_id on t_store (owner_id);
   - Boot 4.1.1의 `UserDetailsServiceAutoConfiguration`은 어떤 체인도 쓰지 않는 기본 사용자를 만들고 비밀번호를 WARN으로 남겨서 `spring.autoconfigure.exclude`로 껐다.
 - 한계:
   - 세션 크기(추정 1~2KB)와 요청당 Redis 왕복은 실측하지 않았다. 부하테스트(#77)에서 본다.
-  - Redis 장애 때 점주 응답은 envelope가 아닌 Tomcat HTML 500이다. 세션 필터가 MVC 밖에 있기 때문이다.
-  - 세션은 JDK 직렬화라 Spring Security를 올리면 기존 세션을 읽지 못할 수 있다. 운영 Redis의 인증·TLS가 외부 노출의 전제다.
+  - 운영 Redis의 인증·TLS가 외부 노출의 전제다. Redis에 쓸 수 있는 주체는 세션을 위조할 수 있다.
   - 이메일 SHA-256 키는 알려진 이메일 목록으로 되돌릴 수 있는 가명화 수준이다.
   - 단말·매장 목록 정렬은 DB collation의 문자열 순이라 `LEGACY-10`이 `LEGACY-2`보다 앞에 온다.
   - 가입 409가 계정 존재를 알리므로 로그인의 더미 해시 비교는 보조 수단이다.
