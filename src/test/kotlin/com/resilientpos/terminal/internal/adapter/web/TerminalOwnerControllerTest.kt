@@ -287,7 +287,7 @@ class TerminalOwnerControllerTest(
         mockMvc.perform(post("/owner/v1/stores/{storeId}/terminals/{terminalId}/deactivate", STORE_ID, TERMINAL_ID).with(owner))
             .andExpect(status().isForbidden)
             .andExpect(jsonPath("$.error.errorCode").value("ACCESS_DENIED"))
-            .andDo(document("terminals-access-denied", responseFields(failFields("ACCESS_DENIED. 상태 변경 요청에 `X-XSRF-TOKEN` 헤더가 없거나 `XSRF-TOKEN` 쿠키와 다르다"))))
+            .andDo(document("terminals-access-denied", responseFields(failFields("ACCESS_DENIED. 상태 변경 요청에 `X-XSRF-TOKEN` 헤더가 없거나 `__Host-XSRF-TOKEN` 쿠키와 다르다"))))
 
         verifyNoInteractions(management, stores)
     }
@@ -302,7 +302,7 @@ class TerminalOwnerControllerTest(
         private val REGISTER = TerminalCommand.Register(StoreId(UUID.fromString(STORE_ID)), TerminalCode(CODE))
 
         private val CSRF_HEADER = requestHeaders(
-            headerWithName("X-XSRF-TOKEN").description("`GET /owner/v1/csrf`가 심은 `XSRF-TOKEN` 쿠키의 값. 없거나 쿠키와 다르면 403 ACCESS_DENIED. 세션 쿠키가 없거나 만료되면 401 UNAUTHENTICATED"),
+            headerWithName("X-XSRF-TOKEN").description("`GET /owner/v1/csrf`가 심은 `__Host-XSRF-TOKEN` 쿠키의 값. 없거나 쿠키와 다르면 403 ACCESS_DENIED. 세션 쿠키가 없거나 만료되면 401 UNAUTHENTICATED"),
         )
         private val STORE_PARAMETER = parameterWithName("storeId").description("매장 ID(UUID). 로그인한 점주의 매장이 아니거나 없으면 404 STORE_NOT_FOUND")
         private val STORE_PATH = pathParameters(STORE_PARAMETER)

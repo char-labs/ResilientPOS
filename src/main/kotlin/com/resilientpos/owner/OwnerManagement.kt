@@ -40,7 +40,8 @@ class OwnerManagement(
 
     /**
      * 자격을 확인한다. 없는 계정·틀린 비밀번호·잠김은 모두 같은 [UnauthenticatedException]이다. 쿠키 세션 로그인이라 `WWW-Authenticate`를 싣지 않는다.
-     * 실패가 [MAX_FAILURES]번 쌓인 이메일은 비밀번호를 비교하지 않고 거절한다. 잠금은 횟수의 창이 끝나면 풀린다.
+     * 시도를 비교보다 먼저 센다(정책 위반 비밀번호도 센다). 창 안의 [MAX_FAILURES]번을 넘긴 시도는 비밀번호를 비교하지 않고 거절한다.
+     * 동시 요청은 서로 다른 횟수를 받으므로 비교까지 가는 요청이 한도를 넘지 않는다. 성공하면 횟수를 지우고, 잠금은 창이 끝나면 풀린다.
      */
     fun logIn(command: OwnerCommand.LogIn): OwnerCommand.LogIn.Result {
         val email = try {
@@ -48,16 +49,13 @@ class OwnerManagement(
         } catch (e: DomainException) {
             throw UnauthenticatedException()
         }
-        if (failures.count(email) >= MAX_FAILURES) throw UnauthenticatedException()
+        if (failures.increment(email) > MAX_FAILURES) throw UnauthenticatedException()
 
         val owner = Tx.readOnlyTx { repository.findByEmail(email) }
         // 정책을 못 맞춘 입력은 저장된 어떤 비밀번호와도 같을 수 없고, bcrypt가 72바이트 초과를 거절하므로 비교하지 않는다.
         val matched = OwnerPassword.isValid(command.password) &&
             passwordEncoder.matches(command.password, owner?.passwordHash ?: dummyHash)
-        if (owner == null || !matched) {
-            failures.increment(email)
-            throw UnauthenticatedException()
-        }
+        if (owner == null || !matched) throw UnauthenticatedException()
         failures.clear(email)
         return OwnerCommand.LogIn.Result(owner.id, email.value)
     }

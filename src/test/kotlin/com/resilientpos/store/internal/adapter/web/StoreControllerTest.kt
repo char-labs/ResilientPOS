@@ -145,7 +145,7 @@ class StoreControllerTest(
         mockMvc.perform(post("/owner/v1/stores").with(owner).contentType(MediaType.APPLICATION_JSON).content("""{ "name": "강남점" }"""))
             .andExpect(status().isForbidden)
             .andExpect(jsonPath("$.error.errorCode").value("ACCESS_DENIED"))
-            .andDo(document("stores-access-denied", responseFields(failFields("ACCESS_DENIED. 상태 변경 요청에 `X-XSRF-TOKEN` 헤더가 없거나 `XSRF-TOKEN` 쿠키와 다르다"))))
+            .andDo(document("stores-access-denied", responseFields(failFields("ACCESS_DENIED. 상태 변경 요청에 `X-XSRF-TOKEN` 헤더가 없거나 `__Host-XSRF-TOKEN` 쿠키와 다르다"))))
 
         verifyNoInteractions(management)
     }
@@ -156,7 +156,7 @@ class StoreControllerTest(
         private val OTHER_STORE_ID: UUID = UUID.fromString("018f6b1a-0000-7000-8000-0000000000c2")
 
         private val CSRF_HEADER = requestHeaders(
-            headerWithName("X-XSRF-TOKEN").description("`GET /owner/v1/csrf`가 심은 `XSRF-TOKEN` 쿠키의 값. 없거나 쿠키와 다르면 403 ACCESS_DENIED"),
+            headerWithName("X-XSRF-TOKEN").description("`GET /owner/v1/csrf`가 심은 `__Host-XSRF-TOKEN` 쿠키의 값. 없거나 쿠키와 다르면 403 ACCESS_DENIED"),
         )
 
         private fun failFields(errorCodeDescription: String): List<FieldDescriptor> = listOf(

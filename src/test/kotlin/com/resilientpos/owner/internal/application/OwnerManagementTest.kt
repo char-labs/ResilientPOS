@@ -19,6 +19,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 import org.mockito.Mockito.mock
+import org.springframework.data.redis.RedisConnectionFailureException
 import org.springframework.data.redis.core.StringRedisTemplate
 
 /** 실제 Facade와 도메인에 저장소·횟수 port만 메모리 fake로 바꾼 단위 테스트. 제한 경계는 Facade가 정한다. */
@@ -89,15 +90,25 @@ class OwnerManagementTest {
     }
 
     @Test
-    fun `5번 실패하면 맞는 비밀번호도 거절하고 비밀번호를 비교하지 않는다`() {
+    fun `6번째 시도는 맞는 비밀번호도 거절하고 비밀번호를 비교하지 않는다`() {
         signUp()
         repeat(5) { logInFails() }
         val lookups = owners.lookups
 
         logInFails(pw = password)
 
-        assertEquals(lookups, owners.lookups, "잠긴 계정은 조회도 비교도 하지 않는다")
-        assertEquals(5, counter.counts[email], "잠금 중의 시도는 횟수를 늘리지 않는다")
+        assertEquals(lookups, owners.lookups, "한도를 넘긴 시도는 조회도 비교도 하지 않는다")
+        assertEquals(6, counter.counts[email], "시도는 비교 전에 센다")
+    }
+
+    @Test
+    fun `시도를 비교보다 먼저 센다`() {
+        signUp()
+        counter.counts[email] = 5
+
+        logInFails(pw = password)
+        assertEquals(0, owners.lookups)
+        assertEquals(6, counter.counts[email])
     }
 
     @Test
@@ -114,8 +125,15 @@ class OwnerManagementTest {
 
     @Test
     fun `Redis가 죽어 있어도 던지지 않고 비밀번호만으로 판정한다`() {
-        val closed = mock(StringRedisTemplate::class.java) { throw IllegalStateException("LettuceConnectionFactory was destroyed") }
-        val failOpen = OwnerManagement(owners, RedisLoginFailureCounter(closed), UuidV7IdentifierGenerator())
+        listOf<RuntimeException>(
+            IllegalStateException("LettuceConnectionFactory was destroyed"),
+            RedisConnectionFailureException("Unable to connect to Redis"),
+        ).forEach(::failsOpenWhenRedisThrows)
+    }
+
+    private fun failsOpenWhenRedisThrows(error: RuntimeException) {
+        val closed = mock(StringRedisTemplate::class.java) { throw error }
+        val failOpen = OwnerManagement(InMemoryOwners(), RedisLoginFailureCounter(closed), UuidV7IdentifierGenerator())
         val signedUp = failOpen.signUp(OwnerCommand.SignUp(email, password))
 
         repeat(10) { assertFailsWith<UnauthenticatedException> { failOpen.logIn(OwnerCommand.LogIn(email, "wrong-password-value")) } }
@@ -145,8 +163,7 @@ class OwnerManagementTest {
 
     private class InMemoryCounter : LoginFailureCounter {
         val counts = mutableMapOf<String, Long>()
-        override fun count(email: OwnerEmail) = counts[email.value] ?: 0
-        override fun increment(email: OwnerEmail) { counts.merge(email.value, 1, Long::plus) }
+        override fun increment(email: OwnerEmail): Long = checkNotNull(counts.merge(email.value, 1, Long::plus))
         override fun clear(email: OwnerEmail) { counts.remove(email.value) }
     }
 }

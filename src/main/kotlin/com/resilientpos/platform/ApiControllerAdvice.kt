@@ -58,12 +58,12 @@ class ApiControllerAdvice : ResponseEntityExceptionHandler() {
 
     /**
      * 점주 경로의 CSRF 토큰이 없거나 쿠키와 다르다(`CsrfException`). 인증과 달리 권한 역할은 두지 않는다.
-     * 예외 메시지는 로그에만 남기고 응답은 고정 문구다.
+     * `InvalidCsrfTokenException`의 메시지에 제출된 토큰 값이 실리므로 예외 메시지와 스택은 로그에도 남기지 않고 code만 남긴다.
      */
     @ExceptionHandler(AccessDeniedException::class)
-    fun handleAccessDenied(e: AccessDeniedException, request: HttpServletRequest): ResponseEntity<ApiResponse<Nothing>> =
+    fun handleAccessDenied(request: HttpServletRequest): ResponseEntity<ApiResponse<Nothing>> =
         ResponseEntity.status(ErrorType.ACCESS_DENIED.status)
-            .body(failBody(ErrorType.ACCESS_DENIED, e, request.describe()))
+            .body(failBody(ErrorType.ACCESS_DENIED, null, request.describe()))
 
     /**
      * 같은 대상에 요청이 겹쳐서 난 잠금 대기 초과와 조회 시점의 버전 충돌. 서버 오류로 집계하지 않는다.
@@ -88,10 +88,10 @@ class ApiControllerAdvice : ResponseEntityExceptionHandler() {
         DomainErrorKind.FORBIDDEN -> HttpStatus.FORBIDDEN
     }
 
-    private fun failBody(errorType: ErrorType, e: Exception, request: String): ApiResponse<Nothing> {
+    private fun failBody(errorType: ErrorType, e: Exception?, request: String): ApiResponse<Nothing> {
         // marker를 생략하면 기본 인자 브리지(`KLogger.at$default`)를 거쳐 로그의 호출 위치가 그 브리지로 찍힌다.
         log.at(errorType.level, marker = null) {
-            message = "$request errorCode=${errorType.name} : ${e.message}"
+            message = "$request errorCode=${errorType.name}" + (e?.let { " : ${it.message}" } ?: "")
             cause = e
         }
         return ApiResponse.fail(ErrorResponse(errorType.name, errorType.message))

@@ -32,7 +32,17 @@ class OwnerEmailTest {
     }
 
     @Test
-    fun `normalize는 검증 없이 같은 정규화만 한다`() {
-        assertEquals("not an email", OwnerEmail.normalize(" Not An Email "))
+    fun `제어 문자와 서식 문자가 있으면 INVALID_EMAIL이다`() {
+        listOf("ow\u0000ner@example.com", "owner@example.com\u0000", "ow\u200Bner@example.com", "owner@exam\u200Dple.com", "ow\u0080ner@example.com", "ow\u007Fner@example.com")
+            .forEach {
+                val e = assertFailsWith<DomainException>(it.toByteArray().toList().toString()) { OwnerEmail.of(it) }
+                assertEquals(Owner.INVALID_EMAIL, e.code)
+                assertEquals(DomainErrorKind.INVALID, e.kind)
+            }
+    }
+
+    @Test
+    fun `일반 유니코드 문자는 받는다`() {
+        assertEquals("소유자@example.com", OwnerEmail.of("소유자@Example.com").value)
     }
 }

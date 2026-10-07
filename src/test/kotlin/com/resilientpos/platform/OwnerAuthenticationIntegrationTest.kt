@@ -13,8 +13,8 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import org.springframework.beans.factory.annotation.Autowired
-import org.springframework.boot.web.server.Cookie.SameSite
-import org.springframework.boot.web.server.autoconfigure.ServerProperties
+import org.springframework.context.ApplicationContext
+import org.springframework.security.core.userdetails.UserDetailsService
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc
 import org.springframework.http.HttpHeaders
 import org.springframework.http.MediaType
@@ -38,7 +38,7 @@ class OwnerAuthenticationIntegrationTest(
     @Autowired private val terminals: TerminalManagement,
     @Autowired private val sessionRepository: SessionRepository<*>,
     @Autowired private val jdbcTemplate: JdbcTemplate,
-    @Autowired private val serverProperties: ServerProperties,
+    @Autowired private val context: ApplicationContext,
 ) : PostgresIntegrationTest() {
 
     // Redis 저장소는 SessionRepository<RedisSession>이라 제네릭 주입이 맞지 않는다. 이 테스트는 Session 계약만 쓴다.
@@ -79,33 +79,19 @@ class OwnerAuthenticationIntegrationTest(
             status { isCreated() }
             jsonPath("$.data.email") { value(email) }
         }.andReturn().response
-        assertNull(signUp.getCookie("SESSION"), "가입은 로그인시키지 않는다")
+        assertNull(signUp.getCookie(SESSION_COOKIE), "가입은 로그인시키지 않는다")
 
         val login = logIn("  ${email.uppercase()} ", OWNER_PASSWORD, csrf).andExpect {
             status { isOk() }
             jsonPath("$.data.email") { value(email) }
         }.andReturn().response
-        val sessionCookie = assertNotNull(login.getCookie("SESSION"))
-        assertNotEquals(csrf, assertNotNull(login.getCookie("XSRF-TOKEN")).value, "로그인 뒤 CSRF 토큰이 새로 만들어진다")
+        val sessionCookie = assertNotNull(login.getCookie(SESSION_COOKIE))
+        assertNotEquals(csrf, assertNotNull(login.getCookie("__Host-XSRF-TOKEN")).value, "로그인 뒤 CSRF 토큰이 새로 만들어진다")
 
         listStores(sessionCookie).andExpect {
             status { isOk() }
             jsonPath("$.result") { value("SUCCESS") }
         }
-    }
-
-    /**
-     * MOCK 웹 환경은 내장 서버가 아니라 서블릿 컨텍스트 설정을 쓰는 경로(`WarDeploymentConfiguration`)로 쿠키를 만들어
-     * `Set-Cookie` 속성을 여기서 볼 수 없다. 내장 서버에서 Boot가 이 값을 Spring Session 쿠키에 옮긴다는 것은
-     * `SessionAutoConfiguration` 소스와 RANDOM_PORT 실행으로 확인했다(spec 기록). 여기서는 설정 값이 바인딩됐는지만 본다.
-     */
-    @Test
-    fun `세션 쿠키 설정은 HttpOnly Secure SameSite Lax다`() {
-        val cookie = serverProperties.servlet.session.cookie
-
-        assertEquals(true, cookie.httpOnly)
-        assertEquals(true, cookie.secure)
-        assertEquals(SameSite.LAX, cookie.sameSite)
     }
 
     @Test
@@ -118,11 +104,11 @@ class OwnerAuthenticationIntegrationTest(
             withCsrf(csrf)
         }.andExpect { status { isCreated() } }
         val before = sessions.createSession().also { sessions.save(it) }
-        val beforeCookie = Cookie("SESSION", Base64.getEncoder().encodeToString(before.id.toByteArray()))
+        val beforeCookie = Cookie(SESSION_COOKIE, Base64.getEncoder().encodeToString(before.id.toByteArray()))
 
         val login = logIn(email, OWNER_PASSWORD, csrf, beforeCookie).andExpect { status { isOk() } }.andReturn().response
 
-        val afterId = sessionId(assertNotNull(login.getCookie("SESSION")))
+        val afterId = sessionId(assertNotNull(login.getCookie(SESSION_COOKIE)))
         assertNotEquals(before.id, afterId)
         assertNull(sessions.findById(before.id), "세션 고정을 막으려면 로그인 전 ID는 폐기돼야 한다")
         assertNotNull(sessions.findById(afterId))
@@ -146,12 +132,12 @@ class OwnerAuthenticationIntegrationTest(
     fun `세션이 없으면 401 UNAUTHENTICATED이고 WWW-Authenticate가 없으며 세션을 만들지 않는다`() {
         val response = listStores().andExpect { unauthenticatedEnvelope(null) }.andReturn().response
 
-        assertNull(response.getCookie("SESSION"))
+        assertNull(response.getCookie(SESSION_COOKIE))
     }
 
     @Test
     fun `모르는 세션 쿠키도 401이다`() {
-        listStores(Cookie("SESSION", Base64.getEncoder().encodeToString("no-such-session".toByteArray())))
+        listStores(Cookie(SESSION_COOKIE, Base64.getEncoder().encodeToString("no-such-session".toByteArray())))
             .andExpect { unauthenticatedEnvelope(null) }
     }
 
@@ -172,7 +158,7 @@ class OwnerAuthenticationIntegrationTest(
         mockMvc.post("/owner/v1/signup") {
             contentType = MediaType.APPLICATION_JSON
             content = body
-            cookie(Cookie("XSRF-TOKEN", mockMvc.issueCsrfToken()))
+            cookie(Cookie("__Host-XSRF-TOKEN", mockMvc.issueCsrfToken()))
             header("X-XSRF-TOKEN", mockMvc.issueCsrfToken())
         }.andExpect {
             status { isForbidden() }
@@ -202,7 +188,7 @@ class OwnerAuthenticationIntegrationTest(
         val wrong = logIn(owner.email, "wrong-password-value", csrf).andExpect { unauthenticatedEnvelope(null) }.andReturn().response
         val unknown = logIn(uniqueOwnerEmail(), OWNER_PASSWORD, csrf).andExpect { unauthenticatedEnvelope(null) }.andReturn().response
 
-        assertNull(wrong.getCookie("SESSION"))
+        assertNull(wrong.getCookie(SESSION_COOKIE))
         assertEquals(wrong.contentAsString, unknown.contentAsString)
     }
 
@@ -226,5 +212,10 @@ class OwnerAuthenticationIntegrationTest(
     @Test
     fun `actuator health는 세션 없이 200이다`() {
         mockMvc.get("/actuator/health").andExpect { status { isOk() } }
+    }
+
+    @Test
+    fun `Boot 기본 사용자를 만들지 않는다`() {
+        assertEquals(emptyList(), context.getBeanNamesForType(UserDetailsService::class.java).toList())
     }
 }

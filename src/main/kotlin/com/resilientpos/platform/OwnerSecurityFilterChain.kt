@@ -19,7 +19,7 @@ import org.springframework.web.servlet.HandlerExceptionResolver
  *
  * 인증은 Spring Session(Redis)의 세션 쿠키다. 가입·로그인·CSRF 토큰 발급만 누구나 부르고 나머지는 로그인한 점주만 부른다.
  * 로그인은 form login이 아니라 `OwnerController`가 자격을 확인해 세션에 `SecurityContext`를 저장한다.
- * 쿠키로 인증하므로 CSRF는 SPA 방식(`csrf.spa()`: 쿠키 `XSRF-TOKEN`, 헤더 `X-XSRF-TOKEN`)으로 가입·로그인·로그아웃 포함
+ * 쿠키로 인증하므로 CSRF는 SPA 방식(`csrf.spa()`: 쿠키 `__Host-XSRF-TOKEN`, 헤더 `X-XSRF-TOKEN`)으로 가입·로그인·로그아웃 포함
  * 모든 상태 변경 요청에 요구한다. 로그아웃은 Security의 logout 필터가 세션을 지우고 `204`를 쓴다.
  * 요청 캐시는 끈다. 로그인 전 요청을 세션에 저장하면 인증 없는 요청이 Redis 세션을 만든다.
  *
@@ -45,8 +45,9 @@ class OwnerSecurityFilterChain(
                 resolver.resolveException(request, response, null, UnauthenticatedException())
             }
             val accessDenied = AccessDeniedHandler { request, response, e -> resolver.resolveException(request, response, null, e) }
-            // Kotlin DSL에는 spa()가 없어 Java API로 건다. OwnerController가 로그인 뒤 토큰을 다시 만들 때 같은 쿠키 방식을 쓴다.
-            http.csrf { it.spa() }
+            // Kotlin DSL에는 spa()가 없어 Java API로 건다. spa()가 만드는 저장소를 `__Host-` 쿠키 저장소로 바꾼다.
+            // OwnerController가 로그인 뒤 토큰을 다시 만들 때 같은 인스턴스를 쓴다.
+            http.csrf { it.spa().csrfTokenRepository(OwnerCsrfTokens.repository) }
             http {
                 securityMatcher("/owner/**")
                 authorizeHttpRequests {

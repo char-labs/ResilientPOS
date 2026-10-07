@@ -155,7 +155,7 @@ class OwnerControllerTest(
             .andExpect(jsonPath("$.result").value("SUCCESS"))
             .andExpect(jsonPath("$.data.ownerId").value(OWNER_ID.toString()))
             .andExpect(jsonPath("$.data.email").value(EMAIL))
-            .andExpect(header().string(HttpHeaders.SET_COOKIE, org.hamcrest.Matchers.startsWith("XSRF-TOKEN=")))
+            .andExpect(header().string(HttpHeaders.SET_COOKIE, org.hamcrest.Matchers.startsWith("__Host-XSRF-TOKEN=")))
             .andDo(
                 document(
                     "owner-login", FIXED_SET_COOKIE, CSRF_HEADER,
@@ -164,7 +164,7 @@ class OwnerControllerTest(
                         fieldWithPath("password").type(JsonFieldType.STRING).description("비밀번호"),
                     ),
                     responseHeaders(
-                        headerWithName("Set-Cookie").description("`SESSION` 세션 쿠키(HttpOnly, Secure, SameSite=Lax. 세션 ID는 로그인할 때마다 새로 만든다)와 새 `XSRF-TOKEN` 쿠키. 이후 상태 변경 요청은 새 토큰을 `X-XSRF-TOKEN` 헤더에 싣는다"),
+                        headerWithName("Set-Cookie").description("`__Host-SESSION` 세션 쿠키(HttpOnly, Secure, SameSite=Lax. 세션 ID는 로그인할 때마다 새로 만든다)와 새 `__Host-XSRF-TOKEN` 쿠키. 이후 상태 변경 요청은 새 토큰을 `X-XSRF-TOKEN` 헤더에 싣는다"),
                     ),
                     responseFields(
                         fieldWithPath("result").type(JsonFieldType.STRING).description("SUCCESS 또는 FAIL"),
@@ -211,15 +211,15 @@ class OwnerControllerTest(
     }
 
     @Test
-    fun `CSRF 토큰 요청은 204이고 XSRF-TOKEN 쿠키를 심는다`() {
+    fun `CSRF 토큰 요청은 204이고 __Host-XSRF-TOKEN 쿠키를 심는다`() {
         mockMvc.perform(get("/owner/v1/csrf"))
             .andExpect(status().isNoContent)
             .andExpect(content().string(""))
-            .andExpect(header().string(HttpHeaders.SET_COOKIE, org.hamcrest.Matchers.startsWith("XSRF-TOKEN=")))
+            .andExpect(header().string(HttpHeaders.SET_COOKIE, org.hamcrest.Matchers.startsWith("__Host-XSRF-TOKEN=")))
             .andDo(
                 document(
                     "owner-csrf", FIXED_SET_COOKIE,
-                    responseHeaders(headerWithName("Set-Cookie").description("`XSRF-TOKEN` 쿠키(JavaScript가 읽을 수 있다). 상태 변경 요청마다 값을 `X-XSRF-TOKEN` 헤더에 싣는다")),
+                    responseHeaders(headerWithName("Set-Cookie").description("`__Host-XSRF-TOKEN` 쿠키(JavaScript가 읽을 수 있다). 상태 변경 요청마다 값을 `X-XSRF-TOKEN` 헤더에 싣는다")),
                 ),
             )
     }
@@ -230,7 +230,7 @@ class OwnerControllerTest(
             .andExpect(status().isForbidden)
             .andExpect(jsonPath("$.result").value("FAIL"))
             .andExpect(jsonPath("$.error.errorCode").value("ACCESS_DENIED"))
-            .andDo(document("owner-csrf-missing", responseFields(failFields("ACCESS_DENIED. 상태 변경 요청에 `X-XSRF-TOKEN` 헤더가 없거나 `XSRF-TOKEN` 쿠키와 다르다"))))
+            .andDo(document("owner-csrf-missing", responseFields(failFields("ACCESS_DENIED. 상태 변경 요청에 `X-XSRF-TOKEN` 헤더가 없거나 `__Host-XSRF-TOKEN` 쿠키와 다르다"))))
 
         verifyNoInteractions(management)
     }
@@ -243,9 +243,9 @@ class OwnerControllerTest(
         private const val PASSWORD = "correct-horse-battery"
 
         /** 응답마다 달라지는 토큰 값을 문서 예시에서는 고정한다. */
-        private val FIXED_SET_COOKIE = preprocessResponse(modifyHeaders().set("Set-Cookie", "XSRF-TOKEN=3f1c9a52-7d0e-4c1b-9a6e-0b2d8f4e5a71; Path=/"))
+        private val FIXED_SET_COOKIE = preprocessResponse(modifyHeaders().set("Set-Cookie", "__Host-XSRF-TOKEN=3f1c9a52-7d0e-4c1b-9a6e-0b2d8f4e5a71; Path=/"))
         private val CSRF_HEADER = requestHeaders(
-            headerWithName("X-XSRF-TOKEN").description("`GET /owner/v1/csrf`가 심은 `XSRF-TOKEN` 쿠키의 값. 없거나 쿠키와 다르면 403 ACCESS_DENIED"),
+            headerWithName("X-XSRF-TOKEN").description("`GET /owner/v1/csrf`가 심은 `__Host-XSRF-TOKEN` 쿠키의 값. 없거나 쿠키와 다르면 403 ACCESS_DENIED"),
         )
 
         private fun failFields(errorCodeDescription: String): List<FieldDescriptor> = listOf(

@@ -48,4 +48,13 @@ class StoreTest {
     fun `앞뒤 공백을 뗀 뒤 100자이면 통과한다`() {
         assertEquals(100, Store.create(ownerId, " " + "a".repeat(100) + " ", ids).name.length)
     }
+
+    @Test
+    fun `제어 문자와 서식 문자가 있으면 INVALID_STORE_NAME이다`() {
+        listOf("강\u0000남점", "강남점\u0000", "강\u200B남점", "강\u0080남점", "강\u007F남점", "강\n남점").forEach { name ->
+            val e = assertFailsWith<DomainException>(name.toByteArray().toList().toString()) { Store.create(ownerId, name, ids) }
+            assertEquals(Store.INVALID_STORE_NAME, e.code)
+            assertEquals(DomainErrorKind.INVALID, e.kind)
+        }
+    }
 }

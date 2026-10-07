@@ -10,17 +10,25 @@ import com.resilientpos.platform.UnauthenticatedException
 import java.security.MessageDigest
 import java.time.Duration
 import java.util.UUID
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import org.junit.jupiter.api.extension.ExtendWith
 import org.springframework.beans.factory.annotation.Autowired
+import org.springframework.boot.test.system.CapturedOutput
+import org.springframework.boot.test.system.OutputCaptureExtension
 import org.springframework.data.redis.core.StringRedisTemplate
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.jdbc.core.queryForObject
 
+@ExtendWith(OutputCaptureExtension::class)
 class OwnerManagementIntegrationTest(
     @Autowired private val owners: OwnerManagement,
     @Autowired private val jdbcTemplate: JdbcTemplate,
@@ -45,7 +53,7 @@ class OwnerManagementIntegrationTest(
     }
 
     @Test
-    fun `대소문자만 다른 같은 이메일은 OWNER_EMAIL_DUPLICATED이고 계정이 늘지 않는다`() {
+    fun `대소문자만 다른 같은 이메일은 OWNER_EMAIL_DUPLICATED이고 계정이 늘지 않으며 이메일과 비밀번호가 출력에 남지 않는다`(output: CapturedOutput) {
         owners.signUp(OwnerCommand.SignUp(email, password))
 
         val e = assertFailsWith<DomainException> { owners.signUp(OwnerCommand.SignUp(email.uppercase(), password)) }
@@ -53,6 +61,8 @@ class OwnerManagementIntegrationTest(
         assertEquals(Owner.OWNER_EMAIL_DUPLICATED, e.code)
         assertEquals(DomainErrorKind.CONFLICT, e.kind)
         assertEquals(1, jdbcTemplate.queryForObject<Long>("select count(*) from t_owner where email = ?", email))
+        assertFalse(output.all.contains(email), "unique 위반 상세의 이메일이 출력에 남았다")
+        assertFalse(output.all.contains(password), "평문 비밀번호가 출력에 남았다")
     }
 
     @Test
@@ -79,6 +89,49 @@ class OwnerManagementIntegrationTest(
 
         repeat(5) { assertFailsWith<UnauthenticatedException> { owners.logIn(OwnerCommand.LogIn(email, "wrong-password-value")) } }
         assertFailsWith<UnauthenticatedException> { owners.logIn(OwnerCommand.LogIn(email, password)) }
-        assertEquals("5", redis.opsForValue().get(key))
+        assertEquals("6", redis.opsForValue().get(key), "한도를 넘긴 시도도 센다")
+    }
+
+    @Test
+    fun `증가 뒤 키에는 시도마다 TTL이 있다`() {
+        owners.signUp(OwnerCommand.SignUp(email, password))
+        val key = failureKey(email)
+
+        repeat(7) {
+            assertFailsWith<UnauthenticatedException> { owners.logIn(OwnerCommand.LogIn(email, "wrong-password-value")) }
+            assertTrue(redis.getExpire(key) > 0, "attempt=${it + 1} ttl=${redis.getExpire(key)}")
+        }
+    }
+
+    @Test
+    fun `TTL 없이 남은 키는 다음 시도에서 TTL을 얻어 영구 잠금이 되지 않는다`() {
+        owners.signUp(OwnerCommand.SignUp(email, password))
+        val key = failureKey(email)
+        redis.opsForValue().set(key, "9")
+
+        assertFailsWith<UnauthenticatedException> { owners.logIn(OwnerCommand.LogIn(email, password)) }
+
+        assertTrue(redis.getExpire(key) > 0, "ttl=${redis.getExpire(key)}")
+    }
+
+    @Test
+    fun `카운터 4에서 같은 이메일로 맞는 비밀번호 로그인을 동시에 보내도 성공은 하나다`() {
+        owners.signUp(OwnerCommand.SignUp(email, password))
+        redis.opsForValue().set(failureKey(email), "4", Duration.ofMinutes(15))
+        val parallel = 8
+        val start = CountDownLatch(1)
+        val pool = Executors.newFixedThreadPool(parallel)
+        try {
+            val results = (1..parallel).map {
+                pool.submit<Boolean> {
+                    start.await()
+                    runCatching { owners.logIn(OwnerCommand.LogIn(email, password)) }.isSuccess
+                }
+            }
+            start.countDown()
+            assertEquals(1, results.count { it.get(30, TimeUnit.SECONDS) })
+        } finally {
+            pool.shutdownNow()
+        }
     }
 }

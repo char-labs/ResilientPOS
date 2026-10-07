@@ -1,6 +1,7 @@
 package com.resilientpos.owner.internal.adapter.web
 
 import com.resilientpos.owner.OwnerManagement
+import com.resilientpos.platform.OwnerCsrfTokens
 import com.resilientpos.platform.logger
 import jakarta.servlet.http.HttpServletRequest
 import jakarta.servlet.http.HttpServletResponse
@@ -9,7 +10,6 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 import org.springframework.security.core.context.SecurityContextHolder
 import org.springframework.security.web.authentication.session.ChangeSessionIdAuthenticationStrategy
 import org.springframework.security.web.context.HttpSessionSecurityContextRepository
-import org.springframework.security.web.csrf.CookieCsrfTokenRepository
 import org.springframework.security.web.csrf.CsrfToken
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PostMapping
@@ -39,7 +39,7 @@ class OwnerController(private val management: OwnerManagement) {
     /**
      * 자격을 확인한 뒤 principal이 점주 UUID인 인증을 세션에 저장한다. form login을 쓰지 않는다(JSON·envelope 응답).
      * 세션 고정을 막으려고 로그인 전 세션이 있으면 ID를 바꾸고, 로그인 전 CSRF 토큰은 새 값으로 교체한다.
-     * CSRF 쿠키 저장소는 체인의 `csrf.spa()`와 같은 설정이다.
+     * CSRF 쿠키 저장소는 체인과 공유하는 [OwnerCsrfTokens]다.
      */
     @PostMapping("/login")
     fun logIn(@RequestBody request: LogInRequest, httpRequest: HttpServletRequest, httpResponse: HttpServletResponse): OwnerResponse {
@@ -47,13 +47,13 @@ class OwnerController(private val management: OwnerManagement) {
         val authentication = UsernamePasswordAuthenticationToken.authenticated(result.ownerId.value, null, emptyList())
         val context = SecurityContextHolder.createEmptyContext().apply { this.authentication = authentication }
         sessionFixation.onAuthentication(authentication, httpRequest, httpResponse)
-        csrfTokens.saveToken(csrfTokens.generateToken(httpRequest), httpRequest, httpResponse)
+        OwnerCsrfTokens.repository.let { it.saveToken(it.generateToken(httpRequest), httpRequest, httpResponse) }
         securityContexts.saveContext(context, httpRequest, httpResponse)
         log.info { "audit action=OWNER_LOGGED_IN ownerId=${result.ownerId.value}" }
         return OwnerResponse.from(result)
     }
 
-    /** 토큰을 꺼내는 순간 `XSRF-TOKEN` 쿠키가 심긴다. 토큰을 읽지 않으면 쿠키가 만들어지지 않는다(지연 토큰). */
+    /** 토큰을 꺼내는 순간 `__Host-XSRF-TOKEN` 쿠키가 심긴다. 토큰을 읽지 않으면 쿠키가 만들어지지 않는다(지연 토큰). */
     @GetMapping("/csrf")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     fun csrf(csrfToken: CsrfToken) {
@@ -63,7 +63,6 @@ class OwnerController(private val management: OwnerManagement) {
     private companion object {
         val log by logger()
         val sessionFixation = ChangeSessionIdAuthenticationStrategy()
-        val csrfTokens = CookieCsrfTokenRepository.withHttpOnlyFalse()
         val securityContexts = HttpSessionSecurityContextRepository()
     }
 }

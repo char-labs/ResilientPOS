@@ -10,6 +10,12 @@ import org.springframework.test.web.servlet.get
 import org.springframework.test.web.servlet.post
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder
 
+/**
+ * MockMvc(MOCK 웹 환경)의 세션 쿠키 이름. 이 환경은 내장 서버가 아니라 서블릿 컨테이너 설정으로 쿠키를 만들어
+ * `server.servlet.session.cookie.*`가 적용되지 않는다. 운영 이름과 속성은 `OwnerCookieIntegrationTest`(RANDOM_PORT)가 고정한다.
+ */
+const val SESSION_COOKIE = "SESSION"
+
 /** 점주 통합 테스트의 공용 비밀번호. 정책(15자 이상)을 맞춘다. */
 const val OWNER_PASSWORD = "correct-horse-battery"
 
@@ -18,7 +24,7 @@ data class OwnerSession(val session: Cookie, val xsrf: String, val ownerId: UUID
 
 /** `X-XSRF-TOKEN` 헤더와 같은 값의 `XSRF-TOKEN` 쿠키를 요청에 싣는다(CSRF 쿠키 방식의 통과 조건). */
 fun MockHttpServletRequestDsl.withCsrf(token: String) {
-    cookie(Cookie("XSRF-TOKEN", token))
+    cookie(Cookie("__Host-XSRF-TOKEN", token))
     header("X-XSRF-TOKEN", token)
 }
 
@@ -30,7 +36,7 @@ const val SLICE_CSRF_TOKEN = "3f1c9a52-7d0e-4c1b-9a6e-0b2d8f4e5a71"
  * 맞지 않는 인코딩된 값을 헤더에 넣으므로, 운영과 같은 쿠키 방식을 고정 토큰으로 직접 재현한다.
  */
 fun MockHttpServletRequestBuilder.withCsrf(token: String = SLICE_CSRF_TOKEN): MockHttpServletRequestBuilder =
-    cookie(Cookie("XSRF-TOKEN", token)).header("X-XSRF-TOKEN", token)
+    cookie(Cookie("__Host-XSRF-TOKEN", token)).header("X-XSRF-TOKEN", token)
 
 /** 로그인한 점주로 요청한다. 상태 변경 요청에도 통과하도록 CSRF 토큰을 함께 싣는다. */
 fun MockHttpServletRequestDsl.asOwner(owner: OwnerSession) {
@@ -39,7 +45,7 @@ fun MockHttpServletRequestDsl.asOwner(owner: OwnerSession) {
 }
 
 fun MockMvc.issueCsrfToken(): String =
-    checkNotNull(get("/owner/v1/csrf").andReturn().response.getCookie("XSRF-TOKEN")) { "XSRF-TOKEN 쿠키가 없다" }.value
+    checkNotNull(get("/owner/v1/csrf").andReturn().response.getCookie("__Host-XSRF-TOKEN")) { "XSRF-TOKEN 쿠키가 없다" }.value
 
 fun uniqueOwnerEmail(): String = "owner-${UUID.randomUUID()}@example.com"
 
@@ -58,8 +64,8 @@ fun MockMvc.logInNewOwner(email: String = uniqueOwnerEmail()): OwnerSession {
         withCsrf(csrf)
     }.andExpect { status { isOk() } }.andReturn().response
     return OwnerSession(
-        session = checkNotNull(login.getCookie("SESSION")) { "SESSION 쿠키가 없다" },
-        xsrf = checkNotNull(login.getCookie("XSRF-TOKEN")) { "로그인 응답에 새 XSRF-TOKEN 쿠키가 없다" }.value,
+        session = checkNotNull(login.getCookie(SESSION_COOKIE)) { "SESSION 쿠키가 없다" },
+        xsrf = checkNotNull(login.getCookie("__Host-XSRF-TOKEN")) { "로그인 응답에 새 XSRF-TOKEN 쿠키가 없다" }.value,
         ownerId = UUID.fromString(JsonPath.read(login.contentAsString, "$.data.ownerId")),
         email = email,
     )

@@ -5,6 +5,13 @@ import com.resilientpos.foundation.DomainException
 import com.resilientpos.terminal.TerminalManagement
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
+import org.junit.jupiter.api.extension.ExtendWith
+import org.springframework.boot.test.system.CapturedOutput
+import org.springframework.boot.test.system.OutputCaptureExtension
+import org.springframework.security.web.csrf.DefaultCsrfToken
+import org.springframework.security.web.csrf.InvalidCsrfTokenException
 import org.hamcrest.Matchers.containsString
 import org.hamcrest.Matchers.not
 import org.springframework.beans.factory.annotation.Autowired
@@ -24,6 +31,7 @@ import org.springframework.web.bind.annotation.RestController
 /**
  * 공개 endpoint가 아직 없어서 테스트 전용 Controller로 응답 envelope와 오류 변환 계약을 고정한다.
  */
+@ExtendWith(OutputCaptureExtension::class)
 @WebMvcTest(ApiAdviceTestController::class)
 class ApiAdviceTest(@Autowired private val mockMvc: MockMvc) {
 
@@ -133,7 +141,20 @@ class ApiAdviceTest(@Autowired private val mockMvc: MockMvc) {
         }
     }
 
+    @Test
+    fun `CSRF 거절은 403 ACCESS_DENIED이고 로그에 제출된 토큰도 스택도 남기지 않는다`(output: CapturedOutput) {
+        mockMvc.get("/test-advice/csrf").andExpect {
+            status { isForbidden() }
+            jsonPath("$.error.errorCode") { value("ACCESS_DENIED") }
+        }
+
+        assertTrue(output.all.contains("errorCode=ACCESS_DENIED"), output.all)
+        assertFalse(output.all.contains(SUBMITTED_TOKEN), "제출 토큰이 로그에 남았다")
+        assertFalse(output.all.contains("InvalidCsrfTokenException"), "예외 스택이 로그에 남았다")
+    }
+
     companion object {
+        const val SUBMITTED_TOKEN = "submitted-csrf-token-value"
         const val SECRET = "secret-internal-detail"
     }
 }
@@ -166,6 +187,9 @@ class ApiAdviceTestController {
     @GetMapping("/domain/{kind}")
     fun domainKind(@PathVariable kind: DomainErrorKind): Sample =
         throw DomainException("SAMPLE_$kind", "$kind 사례", kind)
+
+    @GetMapping("/csrf")
+    fun csrf(): Sample = throw InvalidCsrfTokenException(DefaultCsrfToken("X-XSRF-TOKEN", "_csrf", "expected"), ApiAdviceTest.SUBMITTED_TOKEN)
 
     @GetMapping("/number")
     fun number(@RequestParam n: Int): Sample = Sample(n.toString())
