@@ -45,8 +45,8 @@ class OwnerAuthenticationIntegrationTest(
     @Suppress("UNCHECKED_CAST")
     private val sessions get() = sessionRepository as SessionRepository<Session>
 
-    private fun listTerminals(cookie: Cookie? = null): ResultActionsDsl =
-        mockMvc.get("/owner/v1/stores/${UUID.randomUUID()}/terminals") { cookie?.let { cookie(it) } }
+    private fun listStores(cookie: Cookie? = null): ResultActionsDsl =
+        mockMvc.get("/owner/v1/stores") { cookie?.let { cookie(it) } }
 
     private fun MockMvcResultMatchersDsl.unauthenticatedEnvelope(challenge: String?) {
         status { isUnauthorized() }
@@ -88,7 +88,7 @@ class OwnerAuthenticationIntegrationTest(
         val sessionCookie = assertNotNull(login.getCookie("SESSION"))
         assertNotEquals(csrf, assertNotNull(login.getCookie("XSRF-TOKEN")).value, "로그인 뒤 CSRF 토큰이 새로 만들어진다")
 
-        listTerminals(sessionCookie).andExpect {
+        listStores(sessionCookie).andExpect {
             status { isOk() }
             jsonPath("$.result") { value("SUCCESS") }
         }
@@ -131,27 +131,27 @@ class OwnerAuthenticationIntegrationTest(
     @Test
     fun `로그아웃은 204이고 같은 쿠키는 그 뒤 401이며 세션이 삭제된다`() {
         val owner = mockMvc.logInNewOwner()
-        listTerminals(owner.session).andExpect { status { isOk() } }
+        listStores(owner.session).andExpect { status { isOk() } }
 
         mockMvc.post("/owner/v1/logout") { asOwner(owner) }.andExpect {
             status { isNoContent() }
             content { string("") }
         }
 
-        listTerminals(owner.session).andExpect { unauthenticatedEnvelope(null) }
+        listStores(owner.session).andExpect { unauthenticatedEnvelope(null) }
         assertNull(sessions.findById(sessionId(owner.session)))
     }
 
     @Test
     fun `세션이 없으면 401 UNAUTHENTICATED이고 WWW-Authenticate가 없으며 세션을 만들지 않는다`() {
-        val response = listTerminals().andExpect { unauthenticatedEnvelope(null) }.andReturn().response
+        val response = listStores().andExpect { unauthenticatedEnvelope(null) }.andReturn().response
 
         assertNull(response.getCookie("SESSION"))
     }
 
     @Test
     fun `모르는 세션 쿠키도 401이다`() {
-        listTerminals(Cookie("SESSION", Base64.getEncoder().encodeToString("no-such-session".toByteArray())))
+        listStores(Cookie("SESSION", Base64.getEncoder().encodeToString("no-such-session".toByteArray())))
             .andExpect { unauthenticatedEnvelope(null) }
     }
 
@@ -191,7 +191,7 @@ class OwnerAuthenticationIntegrationTest(
             jsonPath("$.error.errorCode") { value("ACCESS_DENIED") }
         }
 
-        listTerminals(owner.session).andExpect { status { isOk() } }
+        listStores(owner.session).andExpect { status { isOk() } }
     }
 
     @Test
@@ -208,7 +208,7 @@ class OwnerAuthenticationIntegrationTest(
 
     @Test
     fun `단말 토큰으로 owner를 부르면 401이다`() {
-        mockMvc.get("/owner/v1/stores/${UUID.randomUUID()}/terminals") { header("Authorization", terminals.registerTerminal().bearer) }
+        mockMvc.get("/owner/v1/stores") { header("Authorization", terminals.registerTerminal().bearer) }
             .andExpect { unauthenticatedEnvelope(null) }
     }
 

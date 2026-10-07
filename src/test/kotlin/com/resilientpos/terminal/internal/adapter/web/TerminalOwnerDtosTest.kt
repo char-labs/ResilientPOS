@@ -4,7 +4,7 @@ import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertFalse
 
-class TerminalAdminDtosTest {
+class TerminalOwnerDtosTest {
 
     @Test
     fun `토큰이 있는 응답 DTO의 toString은 평문 토큰을 가린다`() {

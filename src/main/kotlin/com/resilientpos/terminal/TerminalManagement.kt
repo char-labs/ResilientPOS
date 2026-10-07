@@ -35,9 +35,10 @@ class TerminalManagement(
         repository.findActiveByTokenHash(TerminalCredential.hash(token))?.let { AuthenticatedTerminal(it.id, it.storeId) }
     }
 
-    /** 유효 credential을 폐기하고 새로 발급한다. 옛 행은 이력으로 남는다. 비활성 단말은 거절한다. */
+    /** 유효 credential을 폐기하고 새로 발급한다. 옛 행은 이력으로 남는다. 다른 매장의 단말은 `TERMINAL_NOT_FOUND`, 비활성 단말은 `TERMINAL_INACTIVE`로 거절한다. */
     fun rotateCredential(command: TerminalCommand.RotateCredential): TerminalCommand.RotateCredential.Result = Tx.masterTx {
         val terminal = repository.findByIdForUpdate(command.terminalId) ?: throw Terminal.notFound()
+        terminal.requireStore(command.storeId)
         terminal.requireActive()
         repository.findActiveCredential(terminal.id)?.let { repository.update(it.revoke(clock.instant())) }
         val issued = TerminalCredential.issue(terminal.id, identifierGenerator)
@@ -48,6 +49,7 @@ class TerminalManagement(
     /** 단말을 비활성화한다. 이미 비활성이면 그대로이고 전후 상태가 모두 `INACTIVE`다. */
     fun deactivate(command: TerminalCommand.Deactivate): TerminalCommand.Deactivate.Result = Tx.masterTx {
         val terminal = repository.findByIdForUpdate(command.terminalId) ?: throw Terminal.notFound()
+        terminal.requireStore(command.storeId)
         val after = repository.update(terminal.deactivate())
         TerminalCommand.Deactivate.Result(terminal.id, terminal.status, after.status)
     }

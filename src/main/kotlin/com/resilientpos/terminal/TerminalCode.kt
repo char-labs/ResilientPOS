@@ -4,7 +4,7 @@ import com.resilientpos.foundation.DomainErrorKind
 import com.resilientpos.foundation.DomainException
 
 /**
- * 단말 코드. 운영자가 현장에서 단말을 부르는 이름이고 매장 안에서 유일하다(유일성은 DB unique가 지킨다).
+ * 단말 코드. 점주가 현장에서 단말을 부르는 이름이고 매장 안에서 유일하다(유일성은 DB unique가 지킨다).
  * 영대문자·숫자·하이픈 1~32자다. 소문자를 대문자로 바꾸지 않고 거절해 요청과 응답의 값이 같게 한다.
  */
 @JvmInline

@@ -32,6 +32,17 @@ class TerminalTest {
     }
 
     @Test
+    fun `다른 매장 ID를 확인하면 TERMINAL_NOT_FOUND이고 같은 매장이면 통과한다`() {
+        val terminal = Terminal.register(storeId, code, ids)
+
+        terminal.requireStore(storeId)
+        val failure = assertFailsWith<DomainException> { terminal.requireStore(StoreId(UUID.randomUUID())) }
+
+        assertEquals("TERMINAL_NOT_FOUND", failure.code)
+        assertEquals(DomainErrorKind.NOT_FOUND, failure.kind)
+    }
+
+    @Test
     fun `비활성화는 새 인스턴스를 돌려주고 원본은 그대로다`() {
         val active = Terminal.register(storeId, code, ids)
 
