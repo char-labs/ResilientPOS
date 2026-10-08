@@ -2,9 +2,11 @@ package com.resilientpos.owner.internal.adapter.web
 
 import com.resilientpos.owner.OwnerManagement
 import com.resilientpos.platform.OwnerCsrfTokens
+import com.resilientpos.platform.SessionStoreUnavailableException
 import com.resilientpos.platform.logger
 import jakarta.servlet.http.HttpServletRequest
 import jakarta.servlet.http.HttpServletResponse
+import org.springframework.dao.DataAccessException
 import org.springframework.http.HttpStatus
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken
 import org.springframework.security.core.context.SecurityContextHolder
@@ -47,9 +49,13 @@ class OwnerController(private val management: OwnerManagement) {
         val result = management.logIn(request.toCommand())
         val authentication = UsernamePasswordAuthenticationToken.authenticated(result.ownerId.value.toString(), null, emptyList())
         val context = SecurityContextHolder.createEmptyContext().apply { this.authentication = authentication }
-        sessionFixation.onAuthentication(authentication, httpRequest, httpResponse)
+        try {
+            sessionFixation.onAuthentication(authentication, httpRequest, httpResponse)
+            securityContexts.saveContext(context, httpRequest, httpResponse)
+        } catch (e: DataAccessException) {
+            throw SessionStoreUnavailableException(e)
+        }
         OwnerCsrfTokens.repository.let { it.saveToken(it.generateToken(httpRequest), httpRequest, httpResponse) }
-        securityContexts.saveContext(context, httpRequest, httpResponse)
         log.info { "audit action=OWNER_LOGGED_IN ownerId=${result.ownerId.value}" }
         return OwnerResponse.from(result)
     }

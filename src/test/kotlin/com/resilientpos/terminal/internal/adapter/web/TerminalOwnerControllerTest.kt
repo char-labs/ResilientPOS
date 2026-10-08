@@ -99,7 +99,7 @@ class TerminalOwnerControllerTest(
                         fieldWithPath("result").type(JsonFieldType.STRING).description("SUCCESS 또는 FAIL"),
                         fieldWithPath("data.terminalId").type(JsonFieldType.STRING).description("단말 ID(UUID)"),
                         fieldWithPath("data.terminalCode").type(JsonFieldType.STRING).description("요청한 코드 그대로"),
-                        fieldWithPath("data.token").type(JsonFieldType.STRING).description("평문 단말 토큰. 저장하지 않으므로 이 응답이 유일한 기회다. 잃으면 회전한다"),
+                        fieldWithPath("data.token").type(JsonFieldType.STRING).description("평문 단말 토큰. 저장하지 않으므로 이 응답이 유일한 기회다. 잃으면 회전한다. 503이어도 변경이 커밋됐을 수 있다. 등록·회전 뒤 503이면 목록으로 확인하고 토큰이 없으면 회전한다"),
                         fieldWithPath("error").type(JsonFieldType.NULL).description("성공 응답에서는 null"),
                     ),
                 ),
@@ -143,7 +143,7 @@ class TerminalOwnerControllerTest(
                     "terminals-rotate", CSRF_HEADER, TERMINAL_PATH,
                     responseFields(
                         fieldWithPath("result").type(JsonFieldType.STRING).description("SUCCESS 또는 FAIL"),
-                        fieldWithPath("data.token").type(JsonFieldType.STRING).description("새 평문 토큰. 옛 토큰은 회전 커밋부터 401이다. 응답을 잃으면 다시 회전한다"),
+                        fieldWithPath("data.token").type(JsonFieldType.STRING).description("새 평문 토큰. 옛 토큰은 회전 커밋부터 401이다. 응답을 잃으면 다시 회전한다. 503이어도 변경이 커밋됐을 수 있다. 등록·회전 뒤 503이면 목록으로 확인하고 토큰이 없으면 회전한다"),
                         fieldWithPath("error").type(JsonFieldType.NULL).description("성공 응답에서는 null"),
                     ),
                 ),

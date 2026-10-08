@@ -49,6 +49,10 @@ spring:
       # 정적 파일을 서빙하지 않는다. `static/terminal`의 시연 화면은 인증 없이 열리고 sync endpoint를 부르므로
       # 운영 jar에 실려도 기본값에서는 404여야 한다. `demo` 프로필만 켠다(이 파일 맨 아래).
       add-mappings: false
+  mvc:
+    # FrameworkServlet이 요청 끝마다 ServletRequestHandledEvent를 만들며 request.getSession(false)로 세션 ID를 읽는다.
+    # 세션 쿠키가 있으면 Spring Session이 Redis를 읽어, Redis 장애 때 단말 `/v1` 요청과 오류 응답까지 깨진다. 이 이벤트의 구독자는 없다.
+    publish-request-handled-events: false
   jackson:
     factory:
       constraints:
@@ -108,6 +112,7 @@ server:
       # 점주 세션(Spring Session Redis) 쿠키. Boot가 이 값을 Spring Session의 쿠키 직렬화기(DefaultCookieSerializer)에 옮긴다
       # (SessionAutoConfiguration). 유휴 만료(timeout)는 기본 30분을 그대로 쓴다.
       # secure: HTTPS에서만 전송한다. 로컬 HTTP(IDE·bootRun)에서 브라우저가 쿠키를 보내지 않으면 localhost는 예외로 보낸다.
+      # context-path를 두면 쿠키 Path가 바뀌어 `__Host-` 규칙이 깨지고 브라우저가 쿠키를 버린다.
       # name: `__Host-` 접두어는 브라우저가 Secure·Path=/·Domain 없음을 강제해, 하위 도메인이 쿠키를 덮어쓰지 못하게 한다.
       cookie:
         name: __Host-SESSION

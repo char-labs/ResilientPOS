@@ -9,6 +9,7 @@ import com.resilientpos.owner.internal.domain.LoginFailureCounter
 import com.resilientpos.owner.internal.domain.Owner
 import com.resilientpos.owner.internal.domain.OwnerEmail
 import com.resilientpos.owner.internal.domain.OwnerRepository
+import com.resilientpos.platform.SessionStoreUnavailableException
 import com.resilientpos.platform.Tx
 import com.resilientpos.platform.TxRunner
 import com.resilientpos.platform.UnauthenticatedException
@@ -17,6 +18,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotEquals
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import org.mockito.Mockito.mock
 import org.springframework.data.redis.RedisConnectionFailureException
@@ -124,21 +126,39 @@ class OwnerManagementTest {
     }
 
     @Test
-    fun `Redis가 죽어 있어도 던지지 않고 비밀번호만으로 판정한다`() {
+    fun `Redis 오류면 비밀번호를 비교하지 않고 503 예외를 던진다`() {
         listOf<RuntimeException>(
             IllegalStateException("LettuceConnectionFactory was destroyed"),
             RedisConnectionFailureException("Unable to connect to Redis"),
-        ).forEach(::failsOpenWhenRedisThrows)
+        ).forEach(::failsClosedWhenRedisThrows)
     }
 
-    private fun failsOpenWhenRedisThrows(error: RuntimeException) {
+    private fun failsClosedWhenRedisThrows(error: RuntimeException) {
         val closed = mock(StringRedisTemplate::class.java) { throw error }
-        val failOpen = OwnerManagement(InMemoryOwners(), RedisLoginFailureCounter(closed), UuidV7IdentifierGenerator())
-        val signedUp = failOpen.signUp(OwnerCommand.SignUp(email, password))
+        val owners = InMemoryOwners()
+        val failClosed = OwnerManagement(owners, RedisLoginFailureCounter(closed), UuidV7IdentifierGenerator())
+        failClosed.signUp(OwnerCommand.SignUp(email, password))
+        val lookupsBefore = owners.lookups
 
-        repeat(10) { assertFailsWith<UnauthenticatedException> { failOpen.logIn(OwnerCommand.LogIn(email, "wrong-password-value")) } }
+        listOf(password, "wrong-password-value").forEach { pw ->
+            val thrown = assertFailsWith<SessionStoreUnavailableException> { failClosed.logIn(OwnerCommand.LogIn(email, pw)) }
+            assertSame(error, thrown.cause)
+        }
+        assertEquals(lookupsBefore, owners.lookups)
+    }
 
-        assertEquals(signedUp.ownerId, failOpen.logIn(OwnerCommand.LogIn(email, password)).ownerId)
+    @Test
+    fun `로그인 성공 뒤 횟수를 지우지 못해도 로그인은 성공한다`() {
+        val template = mock(StringRedisTemplate::class.java) { inv ->
+            when (inv.method.name) {
+                "execute" -> 1L
+                else -> throw RedisConnectionFailureException("Unable to connect to Redis")
+            }
+        }
+        val failingClear = OwnerManagement(InMemoryOwners(), RedisLoginFailureCounter(template), UuidV7IdentifierGenerator())
+        val signedUp = failingClear.signUp(OwnerCommand.SignUp(email, password))
+
+        assertEquals(signedUp.ownerId, failingClear.logIn(OwnerCommand.LogIn(email, password)).ownerId)
     }
 
     @Test

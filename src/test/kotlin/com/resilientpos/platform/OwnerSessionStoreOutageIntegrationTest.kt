@@ -79,6 +79,47 @@ class OwnerSessionStoreOutageIntegrationTest(
         send("POST", "/owner/v1/login", credentials, cookie, csrf).assertServiceUnavailableEnvelope()
     }
 
+    private fun csrfToken(): String = send("GET", "/owner/v1/csrf").headers().allValues("Set-Cookie")
+        .first { it.startsWith("__Host-XSRF-TOKEN=") }.substringBefore(";").substringAfter("=")
+
+    private fun unknownSessionCookie(): String =
+        "__Host-SESSION=" + Base64.getEncoder().encodeToString(UUID.randomUUID().toString().toByteArray())
+
+    @Test
+    fun `세션 쿠키가 있는 로그인은 Redis를 읽지 못하면 503 envelope다`() {
+        val csrf = csrfToken()
+        val credentials = """{ "email": "${uniqueOwnerEmail()}", "password": "$OWNER_PASSWORD" }"""
+
+        send("POST", "/owner/v1/login", credentials, "__Host-XSRF-TOKEN=$csrf; ${unknownSessionCookie()}", csrf).assertServiceUnavailableEnvelope()
+    }
+
+    @Test
+    fun `세션 쿠키가 있어도 csrf 토큰 발급은 세션 저장소가 필요 없어 204다`() {
+        val response = send("GET", "/owner/v1/csrf", cookie = unknownSessionCookie())
+
+        assertEquals(204, response.statusCode(), response.body())
+    }
+
+    @Test
+    fun `세션 쿠키가 있는 단말 요청도 영향이 없다`() {
+        val terminal = terminals.registerTerminal()
+
+        val response = send("POST", "/v1/terminals/${terminal.terminalId.value}/sync", """{ "operations": [] }""", unknownSessionCookie(), bearer = terminal.bearer)
+
+        assertEquals(200, response.statusCode(), response.body())
+    }
+
+    @Test
+    fun `로그인 시도 카운터를 쓰지 못하면 맞는 비밀번호도 틀린 비밀번호도 503 envelope다`() {
+        val csrf = csrfToken()
+        val cookie = "__Host-XSRF-TOKEN=$csrf"
+        val email = uniqueOwnerEmail()
+        assertEquals(201, send("POST", "/owner/v1/signup", """{ "email": "$email", "password": "$OWNER_PASSWORD" }""", cookie, csrf).statusCode())
+
+        send("POST", "/owner/v1/login", """{ "email": "$email", "password": "$OWNER_PASSWORD" }""", cookie, csrf).assertServiceUnavailableEnvelope()
+        send("POST", "/owner/v1/login", """{ "email": "$email", "password": "wrong-password-value" }""", cookie, csrf).assertServiceUnavailableEnvelope()
+    }
+
     @Test
     fun `같은 상태에서 단말 요청은 영향이 없다`() {
         val terminal = terminals.registerTerminal()

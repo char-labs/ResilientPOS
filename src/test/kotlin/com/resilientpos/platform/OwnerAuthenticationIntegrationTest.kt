@@ -119,11 +119,12 @@ class OwnerAuthenticationIntegrationTest(
         val owner = mockMvc.logInNewOwner()
         listStores(owner.session).andExpect { status { isOk() } }
 
-        mockMvc.post("/owner/v1/logout") { asOwner(owner) }.andExpect {
+        val logout = mockMvc.post("/owner/v1/logout") { asOwner(owner) }.andExpect {
             status { isNoContent() }
             content { string("") }
-        }
+        }.andReturn().response
 
+        assertEquals(0, logout.getCookie("__Host-XSRF-TOKEN")?.maxAge, "로그아웃은 CSRF 쿠키를 만료시킨다: ${logout.getHeaders("Set-Cookie")}")
         listStores(owner.session).andExpect { unauthenticatedEnvelope(null) }
         assertNull(sessions.findById(sessionId(owner.session)))
     }

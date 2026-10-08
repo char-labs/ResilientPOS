@@ -2,6 +2,7 @@ package com.resilientpos.owner.internal.adapter.redis
 
 import com.resilientpos.owner.internal.domain.LoginFailureCounter
 import com.resilientpos.owner.internal.domain.OwnerEmail
+import com.resilientpos.platform.SessionStoreUnavailableException
 import com.resilientpos.platform.logger
 import java.security.MessageDigest
 import java.time.Duration
@@ -15,29 +16,33 @@ import org.springframework.stereotype.Component
  * 계정 존재와 무관하게 센다. 정규화한 이메일을 해시해 키에 평문 이메일을 남기지 않는다.
  *
  * Redis 오류로 보는 예외는 `DataAccessException`과 `IllegalStateException`(종료 중이라 닫힌 커넥션 팩토리)뿐이다.
- * 오류면 WARN만 남기고 제한 없이 진행한다(fail-open, `RedisDistributedLock`과 같은 정책).
+ * [increment]의 오류는 [SessionStoreUnavailableException]으로 던진다(fail-closed). 시도를 셀 수 없으면 비밀번호를 비교하지 않아 무제한 대입을 열지 않는다.
+ * [clear]는 로그인 성공 뒤라 WARN만 남기고 진행한다. 카운터가 창 끝까지 남을 뿐이다.
  * 그 밖의 예외는 프로그래밍 오류라 삼키지 않는다.
  */
 @Component
 class RedisLoginFailureCounter(private val redis: StringRedisTemplate) : LoginFailureCounter {
 
-    override fun increment(email: OwnerEmail): Long =
-        failOpen(email, 0L) { redis.execute(INCREMENT, listOf(key(email)), WINDOW.toMillis().toString()) ?: 0L }
+    override fun increment(email: OwnerEmail): Long = try {
+        redis.execute(INCREMENT, listOf(key(email)), WINDOW.toMillis().toString()) ?: 0L
+    } catch (e: DataAccessException) {
+        throw SessionStoreUnavailableException(e)
+    } catch (e: IllegalStateException) {
+        throw SessionStoreUnavailableException(e)
+    }
 
     override fun clear(email: OwnerEmail) {
-        failOpen(email, Unit) { redis.delete(key(email)) }
+        try {
+            redis.delete(key(email))
+        } catch (e: DataAccessException) {
+            warnClearFailed(email, e)
+        } catch (e: IllegalStateException) {
+            warnClearFailed(email, e)
+        }
     }
 
-    private fun <T> failOpen(email: OwnerEmail, fallback: T, action: () -> T): T = try {
-        action()
-    } catch (e: DataAccessException) {
-        warn(email, e).let { fallback }
-    } catch (e: IllegalStateException) {
-        warn(email, e).let { fallback }
-    }
-
-    private fun warn(email: OwnerEmail, e: RuntimeException) =
-        log.warn(e) { "로그인 실패 제한 없이 진행한다(Redis 오류) key=${key(email)}" }
+    private fun warnClearFailed(email: OwnerEmail, e: RuntimeException) =
+        log.warn(e) { "로그인 성공 뒤 실패 횟수를 지우지 못했다(Redis 오류) key=${key(email)}" }
 
     private fun key(email: OwnerEmail): String =
         KEY_PREFIX + MessageDigest.getInstance("SHA-256").digest(email.value.toByteArray(Charsets.UTF_8))
