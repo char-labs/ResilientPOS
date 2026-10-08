@@ -8,6 +8,7 @@ import org.springframework.http.HttpHeaders
 import org.springframework.http.HttpStatus
 import org.springframework.http.HttpStatusCode
 import org.springframework.http.ResponseEntity
+import org.springframework.http.converter.HttpMessageNotReadableException
 import org.springframework.security.access.AccessDeniedException
 import org.springframework.web.bind.annotation.ExceptionHandler
 import org.springframework.web.bind.annotation.RestControllerAdvice
@@ -36,7 +37,13 @@ class ApiControllerAdvice : ResponseEntityExceptionHandler() {
             statusCode.is4xxClientError -> ErrorType.BAD_REQUEST
             else -> ErrorType.INTERNAL_ERROR
         }
-        return super.handleExceptionInternal(ex, failBody(errorType, ex, request.describe()), headers, statusCode, request)
+        // 본문 변환 실패 메시지는 입력 조각(예: 따옴표 없는 비밀번호)을 담으므로 메시지와 스택 없이 클래스 이름만 남긴다.
+        val body = if (ex is HttpMessageNotReadableException) {
+            failBody(errorType, null, "${request.describe()} cause=${ex.javaClass.simpleName}")
+        } else {
+            failBody(errorType, ex, request.describe())
+        }
+        return super.handleExceptionInternal(ex, body, headers, statusCode, request)
     }
 
     /** 도메인 규칙 위반은 예외의 `code`와 응답용 `message`를 그대로 내보내고 `kind`가 상태 코드를 정한다. */
@@ -73,6 +80,12 @@ class ApiControllerAdvice : ResponseEntityExceptionHandler() {
     fun handleConcurrency(e: ConcurrencyFailureException, request: HttpServletRequest): ResponseEntity<ApiResponse<Nothing>> =
         ResponseEntity.status(ErrorType.CONCURRENT_REQUEST.status)
             .body(failBody(ErrorType.CONCURRENT_REQUEST, e, request.describe()))
+
+    /** 세션 저장소(Redis) 장애. 원인 예외는 로그에만 남기고 응답은 고정 문구다. */
+    @ExceptionHandler(SessionStoreUnavailableException::class)
+    fun handleSessionStoreUnavailable(e: SessionStoreUnavailableException, request: HttpServletRequest): ResponseEntity<ApiResponse<Nothing>> =
+        ResponseEntity.status(ErrorType.SERVICE_UNAVAILABLE.status)
+            .body(failBody(ErrorType.SERVICE_UNAVAILABLE, e, request.describe()))
 
     @ExceptionHandler(Exception::class)
     fun handleUnexpected(e: Exception, request: HttpServletRequest): ResponseEntity<ApiResponse<Nothing>> =

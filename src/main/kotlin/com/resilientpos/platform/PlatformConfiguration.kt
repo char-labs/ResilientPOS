@@ -4,9 +4,14 @@ import com.resilientpos.foundation.IdentifierGenerator
 import com.resilientpos.foundation.UuidV7IdentifierGenerator
 import java.time.Clock
 import org.springframework.beans.factory.InitializingBean
+import org.springframework.beans.factory.ObjectProvider
+import org.springframework.beans.factory.annotation.Qualifier
+import org.springframework.boot.web.servlet.FilterRegistrationBean
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
 import org.springframework.scheduling.annotation.EnableScheduling
+import org.springframework.session.web.http.SessionRepositoryFilter
+import org.springframework.web.servlet.HandlerExceptionResolver
 
 /**
  * `foundation`은 프레임워크를 모르므로 Spring 빈 등록은 여기서 한다.
@@ -29,4 +34,15 @@ class PlatformConfiguration {
 
     @Bean
     fun lockInitializer(distributedLock: DistributedLock) = InitializingBean { Lock.initialize(distributedLock) }
+
+    /**
+     * owner 아래 경로만 맡는다. Spring Session 필터보다 앞이어야 그 필터가 던지는 Redis 오류를 잡는다.
+     * 서블릿 필터는 웹 서버를 만들 때 일찍 뜨므로 resolver를 바로 주입하면 MVC 설정과 JPA 빈이 그 전에 만들어져 기동이 실패한다. 오류 때 꺼낸다.
+     */
+    @Bean
+    fun ownerSessionStoreFilter(@Qualifier("handlerExceptionResolver") resolver: ObjectProvider<HandlerExceptionResolver>) =
+        FilterRegistrationBean(OwnerSessionStoreFilter(resolver::getObject)).apply {
+            addUrlPatterns("/owner/*")
+            order = SessionRepositoryFilter.DEFAULT_ORDER - 1
+        }
 }

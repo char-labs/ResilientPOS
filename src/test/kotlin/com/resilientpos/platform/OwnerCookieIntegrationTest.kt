@@ -53,6 +53,7 @@ class OwnerCookieIntegrationTest(@LocalServerPort private val port: Int) : Postg
 
     @Test
     fun `CSRF 발급과 로그인 응답의 쿠키는 __Host- 접두어와 Secure Path 속성을 가지고 평문 비밀번호는 출력에 없다`(output: CapturedOutput) {
+        val mark = output.all.length // 이 테스트가 낸 출력만 본다. 클래스 단위 캡처에는 앞 테스트의 출력도 남는다
         val email = uniqueOwnerEmail()
         val credentials = """{ "email": "$email", "password": "$OWNER_PASSWORD" }"""
 
@@ -76,6 +77,6 @@ class OwnerCookieIntegrationTest(@LocalServerPort private val port: Int) : Postg
 
         val me = send("GET", "/owner/v1/stores", cookie = "__Host-SESSION=${session.value()}")
         assertEquals(200, me.statusCode())
-        assertFalse(output.all.contains(OWNER_PASSWORD), "평문 비밀번호가 출력에 남았다")
+        assertFalse(output.all.substring(mark).contains(OWNER_PASSWORD), "평문 비밀번호가 출력에 남았다")
     }
 }

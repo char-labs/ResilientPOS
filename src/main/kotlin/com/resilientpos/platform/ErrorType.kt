@@ -15,4 +15,5 @@ enum class ErrorType(val status: HttpStatus, val message: String, val level: Lev
     UNAUTHENTICATED(HttpStatus.UNAUTHORIZED, "인증이 필요합니다.", Level.WARN),
     ACCESS_DENIED(HttpStatus.FORBIDDEN, "접근 권한이 없습니다.", Level.WARN),
     CONCURRENT_REQUEST(HttpStatus.CONFLICT, "동시 처리 충돌로 요청을 완료하지 못했습니다.", Level.WARN),
+    SERVICE_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "일시적으로 요청을 처리할 수 없습니다.", Level.ERROR),
 }

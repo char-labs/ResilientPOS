@@ -49,7 +49,7 @@ import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
 
 /**
  * 점주 단말 관리 API 웹 슬라이스. Facade는 [MockitoBean]으로 대체하고 HTTP 매핑·직렬화·오류 변환·문서 계약만 검사한다.
- * 슬라이스에는 Spring Session이 없어서 점주 인증은 UUID principal의 `authentication()` post-processor로 주고,
+ * 슬라이스에는 Spring Session이 없어서 점주 인증은 UUID 문자열 principal의 `authentication()` post-processor로 주고,
  * 상태 변경 요청에는 운영과 같은 CSRF 쿠키·헤더를 싣는다(`withCsrf`).
  * 실제 세션·CSRF 검증은 `OwnerAuthenticationIntegrationTest`가 본다.
  */
@@ -68,7 +68,7 @@ class TerminalOwnerControllerTest(
     @MockitoBean
     private lateinit var stores: StoreManagement
 
-    private val owner: RequestPostProcessor = authentication(UsernamePasswordAuthenticationToken.authenticated(UUID.fromString(OWNER_ID), null, emptyList()))
+    private val owner: RequestPostProcessor = authentication(UsernamePasswordAuthenticationToken.authenticated(OWNER_ID, null, emptyList()))
 
     private fun postJson(url: String, body: String?, vararg vars: Any): ResultActions =
         mockMvc.perform(post(url, *vars).with(owner).withCsrf().contentType(MediaType.APPLICATION_JSON).apply { body?.let { content(it) } })

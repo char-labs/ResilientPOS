@@ -54,6 +54,7 @@ class OwnerManagementIntegrationTest(
 
     @Test
     fun `대소문자만 다른 같은 이메일은 OWNER_EMAIL_DUPLICATED이고 계정이 늘지 않으며 이메일과 비밀번호가 출력에 남지 않는다`(output: CapturedOutput) {
+        val mark = output.all.length // 이 테스트가 낸 출력만 본다. 클래스 단위 캡처에는 앞 테스트의 출력도 남는다
         owners.signUp(OwnerCommand.SignUp(email, password))
 
         val e = assertFailsWith<DomainException> { owners.signUp(OwnerCommand.SignUp(email.uppercase(), password)) }
@@ -61,8 +62,8 @@ class OwnerManagementIntegrationTest(
         assertEquals(Owner.OWNER_EMAIL_DUPLICATED, e.code)
         assertEquals(DomainErrorKind.CONFLICT, e.kind)
         assertEquals(1, jdbcTemplate.queryForObject<Long>("select count(*) from t_owner where email = ?", email))
-        assertFalse(output.all.contains(email), "unique 위반 상세의 이메일이 출력에 남았다")
-        assertFalse(output.all.contains(password), "평문 비밀번호가 출력에 남았다")
+        assertFalse(output.all.substring(mark).contains(email), "unique 위반 상세의 이메일이 출력에 남았다")
+        assertFalse(output.all.substring(mark).contains(password), "평문 비밀번호가 출력에 남았다")
     }
 
     @Test

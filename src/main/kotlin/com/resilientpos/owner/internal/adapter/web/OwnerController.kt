@@ -37,14 +37,15 @@ class OwnerController(private val management: OwnerManagement) {
     }
 
     /**
-     * 자격을 확인한 뒤 principal이 점주 UUID인 인증을 세션에 저장한다. form login을 쓰지 않는다(JSON·envelope 응답).
+     * 자격을 확인한 뒤 principal이 점주 UUID 문자열인 인증을 세션에 저장한다. form login을 쓰지 않는다(JSON·envelope 응답).
+     * principal을 UUID 객체로 두지 않는 이유: 세션 JSON의 Security 역직렬화기가 객체가 아닌 principal은 문자열로만 읽는다.
      * 세션 고정을 막으려고 로그인 전 세션이 있으면 ID를 바꾸고, 로그인 전 CSRF 토큰은 새 값으로 교체한다.
      * CSRF 쿠키 저장소는 체인과 공유하는 [OwnerCsrfTokens]다.
      */
     @PostMapping("/login")
     fun logIn(@RequestBody request: LogInRequest, httpRequest: HttpServletRequest, httpResponse: HttpServletResponse): OwnerResponse {
         val result = management.logIn(request.toCommand())
-        val authentication = UsernamePasswordAuthenticationToken.authenticated(result.ownerId.value, null, emptyList())
+        val authentication = UsernamePasswordAuthenticationToken.authenticated(result.ownerId.value.toString(), null, emptyList())
         val context = SecurityContextHolder.createEmptyContext().apply { this.authentication = authentication }
         sessionFixation.onAuthentication(authentication, httpRequest, httpResponse)
         OwnerCsrfTokens.repository.let { it.saveToken(it.generateToken(httpRequest), httpRequest, httpResponse) }

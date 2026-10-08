@@ -80,6 +80,7 @@ class OwnerControllerTest(
 
     @Test
     fun `가입하면 201과 ownerId email을 돌려주고 로그인시키지 않으며 감사 로그에 비밀번호와 이메일이 없다`(output: CapturedOutput) {
+        val mark = output.all.length // 이 테스트가 낸 출력만 본다. 클래스 단위 캡처에는 앞 테스트의 출력도 남는다
         given(management.signUp(OwnerCommand.SignUp(EMAIL, PASSWORD))).willReturn(OwnerCommand.SignUp.Result(OwnerId(OWNER_ID), EMAIL))
 
         val result = signUp()
@@ -108,7 +109,7 @@ class OwnerControllerTest(
         assertNull(result.request.getSession(false), "가입은 세션을 만들지 않는다")
         val audit = output.all.lines().single { "action=OWNER_SIGNED_UP" in it }
         assertTrue("ownerId=$OWNER_ID" in audit, audit)
-        assertFalse(output.all.contains(PASSWORD) || audit.contains(EMAIL), audit)
+        assertFalse(output.all.substring(mark).contains(PASSWORD) || audit.contains(EMAIL), audit)
     }
 
     @Test
@@ -122,6 +123,20 @@ class OwnerControllerTest(
             .andDo(document("owner-signup-invalid-email", CSRF_HEADER, responseFields(failFields("INVALID_EMAIL. 이메일 형식이 틀리다"))))
 
         assertFalse(output.all.contains("action=OWNER_SIGNED_UP"))
+    }
+
+    @Test
+    fun `본문을 읽지 못하면 400 BAD_REQUEST이고 로그에 본문 조각이 남지 않는다`(output: CapturedOutput) {
+        val mark = output.all.length
+
+        postJson("/owner/v1/login", """{ "email": "$EMAIL", "password": $PASSWORD }""")
+            .andExpect(status().isBadRequest)
+            .andExpect(jsonPath("$.error.errorCode").value("BAD_REQUEST"))
+
+        val logged = output.all.substring(mark)
+        assertTrue("errorCode=BAD_REQUEST" in logged, logged)
+        assertFalse("correct" in logged, logged)
+        verifyNoInteractions(management)
     }
 
     @Test
@@ -148,6 +163,7 @@ class OwnerControllerTest(
 
     @Test
     fun `로그인하면 200과 ownerId email을 돌려주고 세션에 점주 ID 인증을 저장하며 새 CSRF 토큰 쿠키를 심는다`(output: CapturedOutput) {
+        val mark = output.all.length // 이 테스트가 낸 출력만 본다. 클래스 단위 캡처에는 앞 테스트의 출력도 남는다
         given(management.logIn(OwnerCommand.LogIn(EMAIL, PASSWORD))).willReturn(OwnerCommand.LogIn.Result(OwnerId(OWNER_ID), EMAIL))
 
         val result = logIn()
@@ -176,11 +192,11 @@ class OwnerControllerTest(
             ).andReturn()
 
         val context = assertNotNull(result.request.getSession(false)?.getAttribute("SPRING_SECURITY_CONTEXT") as? org.springframework.security.core.context.SecurityContext)
-        assertEquals(OWNER_ID, context.authentication?.principal, "principal은 점주 UUID다")
+        assertEquals(OWNER_ID.toString(), context.authentication?.principal, "principal은 점주 UUID 문자열이다(세션 JSON이 UUID 객체 principal을 읽지 못한다)")
         assertTrue(context.authentication?.isAuthenticated == true)
         val audit = output.all.lines().single { "action=OWNER_LOGGED_IN" in it }
         assertTrue("ownerId=$OWNER_ID" in audit, audit)
-        assertFalse(output.all.contains(PASSWORD) || audit.contains(EMAIL), audit)
+        assertFalse(output.all.substring(mark).contains(PASSWORD) || audit.contains(EMAIL), audit)
     }
 
     @Test
@@ -235,7 +251,7 @@ class OwnerControllerTest(
         verifyNoInteractions(management)
     }
 
-    private fun ownerAuthentication() = UsernamePasswordAuthenticationToken.authenticated(OWNER_ID, null, emptyList())
+    private fun ownerAuthentication() = UsernamePasswordAuthenticationToken.authenticated(OWNER_ID.toString(), null, emptyList())
 
     companion object {
         private val OWNER_ID: UUID = UUID.fromString("018f6b1a-0000-7000-8000-0000000000b1")

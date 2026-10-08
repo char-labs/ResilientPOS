@@ -18,6 +18,7 @@ import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest
 import org.springframework.dao.CannotAcquireLockException
 import org.springframework.dao.OptimisticLockingFailureException
+import org.springframework.data.redis.RedisConnectionFailureException
 import org.springframework.test.context.bean.override.mockito.MockitoBean
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.get
@@ -79,6 +80,28 @@ class ApiAdviceTest(@Autowired private val mockMvc: MockMvc) {
                 jsonPath("$.error.errorCode") { value("CONCURRENT_REQUEST") }
                 jsonPath("$.error.message") { value(not(containsString(SECRET))) }
             }
+        }
+    }
+
+    @Test
+    fun `세션 저장소 장애는 원인 메시지를 노출하지 않는 503 SERVICE_UNAVAILABLE이고 ERROR로 남는다`(output: CapturedOutput) {
+        mockMvc.get("/test-advice/session-store").andExpect {
+            status { isServiceUnavailable() }
+            jsonPath("$.result") { value("FAIL") }
+            jsonPath("$.data") { value(null) }
+            jsonPath("$.error.errorCode") { value("SERVICE_UNAVAILABLE") }
+            jsonPath("$.error.message") { value(not(containsString(SECRET))) }
+        }
+
+        assertTrue(output.all.contains("ERROR"), output.all)
+        assertTrue(output.all.contains("errorCode=SERVICE_UNAVAILABLE"), output.all)
+    }
+
+    @Test
+    fun `일반 DataAccessException은 그대로 500 INTERNAL_ERROR다`() {
+        mockMvc.get("/test-advice/data-access").andExpect {
+            status { isInternalServerError() }
+            jsonPath("$.error.errorCode") { value("INTERNAL_ERROR") }
         }
     }
 
@@ -180,6 +203,12 @@ class ApiAdviceTestController {
         "pessimistic" -> CannotAcquireLockException(ApiAdviceTest.SECRET)
         else -> OptimisticLockingFailureException(ApiAdviceTest.SECRET)
     }
+
+    @GetMapping("/session-store")
+    fun sessionStore(): Sample = throw SessionStoreUnavailableException(RedisConnectionFailureException(ApiAdviceTest.SECRET))
+
+    @GetMapping("/data-access")
+    fun dataAccess(): Sample = throw RedisConnectionFailureException(ApiAdviceTest.SECRET)
 
     @GetMapping("/domain")
     fun domain(): Sample = throw DomainException("EMPTY_ORDER", "주문에는 line이 1개 이상 필요합니다")

@@ -58,7 +58,7 @@ class StoreControllerTest(
     @MockitoBean
     private lateinit var terminals: TerminalManagement
 
-    private val owner: RequestPostProcessor = authentication(UsernamePasswordAuthenticationToken.authenticated(OWNER_ID, null, emptyList()))
+    private val owner: RequestPostProcessor = authentication(UsernamePasswordAuthenticationToken.authenticated(OWNER_ID.toString(), null, emptyList()))
 
     private fun create(name: String) = mockMvc.perform(
         post("/owner/v1/stores").with(owner).withCsrf().contentType(MediaType.APPLICATION_JSON).content("""{ "name": "$name" }"""),
