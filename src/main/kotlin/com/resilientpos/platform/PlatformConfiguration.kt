@@ -2,11 +2,20 @@ package com.resilientpos.platform
 
 import com.resilientpos.foundation.IdentifierGenerator
 import com.resilientpos.foundation.UuidV7IdentifierGenerator
+import jakarta.servlet.http.HttpServletRequest
+import jakarta.servlet.http.HttpServletResponse
 import java.time.Clock
 import org.springframework.beans.factory.InitializingBean
+import org.springframework.beans.factory.ObjectProvider
+import org.springframework.beans.factory.annotation.Qualifier
+import org.springframework.boot.web.servlet.FilterRegistrationBean
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
 import org.springframework.scheduling.annotation.EnableScheduling
+import org.springframework.session.web.http.SessionRepositoryFilter
+import org.springframework.web.servlet.FlashMap
+import org.springframework.web.servlet.FlashMapManager
+import org.springframework.web.servlet.HandlerExceptionResolver
 
 /**
  * `foundation`은 프레임워크를 모르므로 Spring 빈 등록은 여기서 한다.
@@ -24,9 +33,30 @@ class PlatformConfiguration {
     @Bean
     fun clock(): Clock = Clock.systemUTC()
 
+    /**
+     * 기본 `SessionFlashMapManager`는 DispatcherServlet이 요청마다 `getSession(false)`로 세션을 읽게 해, 세션 쿠키만 있으면 단말 API(`/v1` 아래)까지 Redis를 읽는다.
+     * 이 API는 redirect 속성을 쓰지 않으므로 아무것도 하지 않는 구현으로 바꾼다. 빈 이름 `flashMapManager`는 DispatcherServlet이 찾는 이름이다.
+     */
+    @Bean
+    fun flashMapManager(): FlashMapManager = object : FlashMapManager {
+        override fun retrieveAndUpdate(request: HttpServletRequest, response: HttpServletResponse): FlashMap? = null
+        override fun saveOutputFlashMap(flashMap: FlashMap, request: HttpServletRequest, response: HttpServletResponse) = Unit
+    }
+
     @Bean
     fun txInitializer(txRunner: TxRunner) = InitializingBean { Tx.initialize(txRunner) }
 
     @Bean
     fun lockInitializer(distributedLock: DistributedLock) = InitializingBean { Lock.initialize(distributedLock) }
+
+    /**
+     * owner 아래 경로만 맡는다. Spring Session 필터보다 앞이어야 그 필터가 던지는 Redis 오류를 잡는다.
+     * 서블릿 필터는 웹 서버를 만들 때 일찍 뜨므로 resolver를 바로 주입하면 MVC 설정과 JPA 빈이 그 전에 만들어져 기동이 실패한다. 오류 때 꺼낸다.
+     */
+    @Bean
+    fun ownerSessionStoreFilter(@Qualifier("handlerExceptionResolver") resolver: ObjectProvider<HandlerExceptionResolver>) =
+        FilterRegistrationBean(OwnerSessionStoreFilter(resolver::getObject)).apply {
+            addUrlPatterns("/owner/*")
+            order = SessionRepositoryFilter.DEFAULT_ORDER - 1
+        }
 }

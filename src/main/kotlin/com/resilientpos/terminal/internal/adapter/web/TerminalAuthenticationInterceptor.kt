@@ -20,8 +20,8 @@ class TerminalAuthenticationInterceptor(private val terminals: TerminalManagemen
         val token = request.getHeader(HttpHeaders.AUTHORIZATION)
             ?.takeIf { it.regionMatches(0, BEARER_PREFIX, 0, BEARER_PREFIX.length, ignoreCase = true) }
             ?.substring(BEARER_PREFIX.length)?.takeIf { TOKEN_FORMAT.matches(it) }
-            ?: throw UnauthenticatedException()
-        request.setAttribute(ATTRIBUTE, terminals.authenticate(token) ?: throw UnauthenticatedException())
+            ?: throw UnauthenticatedException(UnauthenticatedException.BEARER)
+        request.setAttribute(ATTRIBUTE, terminals.authenticate(token) ?: throw UnauthenticatedException(UnauthenticatedException.BEARER))
         return true
     }
 

@@ -22,7 +22,10 @@ data class RegisteredTerminal(val terminalId: TerminalId, val storeId: StoreId, 
     val bearer: String get() = "Bearer $token"
 }
 
+/** 코드는 매장 안에서 유일해야 하므로 호출마다 새 값을 만든다. */
+fun uniqueTerminalCode(): TerminalCode = TerminalCode("T-" + UUID.randomUUID().toString().take(8).uppercase())
+
 fun TerminalManagement.registerTerminal(storeId: StoreId = StoreId(UUID.randomUUID())): RegisteredTerminal {
-    val registered = register(TerminalCommand.Register(storeId))
+    val registered = register(TerminalCommand.Register(storeId, uniqueTerminalCode()))
     return RegisteredTerminal(registered.terminalId, storeId, registered.token)
 }

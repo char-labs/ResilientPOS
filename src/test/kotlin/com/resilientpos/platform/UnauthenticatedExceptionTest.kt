@@ -14,4 +14,10 @@ class UnauthenticatedExceptionTest {
         assertEquals("unauthenticated", e.message)
         assertEquals(null, e.cause)
     }
+
+    @Test
+    fun `challenge 기본값은 null이라 헤더를 붙이지 않고 단말은 Bearer를 넘긴다`() {
+        assertEquals(null, UnauthenticatedException().challenge)
+        assertEquals("Bearer", UnauthenticatedException(UnauthenticatedException.BEARER).challenge)
+    }
 }

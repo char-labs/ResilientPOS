@@ -1,6 +1,11 @@
 spring:
   application:
     name: ResilientPOS
+  autoconfigure:
+    exclude:
+      # 점주 체인이 자격을 직접 확인하고 다른 체인은 Security를 쓰지 않아 UserDetailsService를 아무도 쓰지 않는다.
+      # 두면 기동 때마다 임시 비밀번호 "Using generated security password"를 WARN으로 로그에 남긴다.
+      - org.springframework.boot.security.autoconfigure.UserDetailsServiceAutoConfiguration
   datasource:
     url: ${POSTGRES_URL:jdbc:postgresql://localhost:5432/resilientpos}
     username: ${POSTGRES_USER:resilientpos}
@@ -20,6 +25,9 @@ spring:
         # 아래 쿼리·트랜잭션 타임아웃이 돌기 전에 소켓에서 무기한 묶인다.
         connectTimeout: 3
         socketTimeout: 30
+        # unique 위반 등의 서버 오류 상세("Key (email)=(...) already exists")를 예외 메시지에서 뺀다. 안 그러면 Hibernate가 WARN으로
+        # 점주 이메일을 로그에 남긴다. 제약 이름은 메시지 본문에 남아 adapter의 판정에 쓸 수 있다.
+        logServerErrorDetail: false
   flyway:
     enabled: true
     postgresql:
@@ -27,10 +35,13 @@ spring:
       transactional-lock: false
   data:
     redis:
-      # 결제 시도 생성·주문 생성의 중복 완화 잠금과 발행 기록 재전송·결과 불명 확정 작업의 pod 간 줄 세우기(platform.Lock)에만 쓴다. 정합성의 정본은 DB다.
+      # 쓰는 곳: (1) 결제 시도 생성·주문 생성의 중복 완화 잠금과 발행 기록 재전송·결과 불명 확정 작업의 pod 간 줄 세우기(platform.Lock),
+      # (2) 점주 세션(Spring Session), (3) 점주 로그인 실패 카운터. 정합성의 정본은 DB다.
+      # 세션은 필수다. Redis가 죽으면 점주 요청(/owner)이 실패하고 단말 경로(/v1)는 영향이 없다.
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
       # 잠금은 Redis가 느리거나 없으면 잠금 없이 진행한다(fail-open). 기본 60초를 기다리면 그동안 결제와 주문 생성이 멈춘다.
+      # 세션과 로그인 실패 카운터는 fail-closed다. 이 시간 안에 응답이 없으면 그 점주 요청은 503이고, 로그인은 비밀번호를 비교하지 않는다.
       timeout: 1s
       connect-timeout: 1s
   web:
@@ -38,6 +49,10 @@ spring:
       # 정적 파일을 서빙하지 않는다. `static/terminal`의 시연 화면은 인증 없이 열리고 sync endpoint를 부르므로
       # 운영 jar에 실려도 기본값에서는 404여야 한다. `demo` 프로필만 켠다(이 파일 맨 아래).
       add-mappings: false
+  mvc:
+    # FrameworkServlet이 요청 끝마다 ServletRequestHandledEvent를 만들며 request.getSession(false)로 세션 ID를 읽는다.
+    # 세션 쿠키가 있으면 Spring Session이 Redis를 읽어, Redis 장애 때 단말 `/v1` 요청과 오류 응답까지 깨진다. 이 이벤트의 구독자는 없다.
+    publish-request-handled-events: false
   jackson:
     factory:
       constraints:
@@ -91,6 +106,20 @@ spring:
         # consumer가 순서에 기대지 않고 멱등이라 끈다(kafka-event-redelivery spec의 공식 문서 점검).
         serialize-externalization: false
 
+server:
+  servlet:
+    session:
+      # 점주 세션(Spring Session Redis) 쿠키. Boot가 이 값을 Spring Session의 쿠키 직렬화기(DefaultCookieSerializer)에 옮긴다
+      # (SessionAutoConfiguration). 유휴 만료(timeout)는 기본 30분을 그대로 쓴다.
+      # secure: HTTPS에서만 전송한다. 로컬 HTTP(IDE·bootRun)에서 브라우저가 쿠키를 보내지 않으면 localhost는 예외로 보낸다.
+      # context-path를 두면 쿠키 Path가 바뀌어 `__Host-` 규칙이 깨지고 브라우저가 쿠키를 버린다.
+      # name: `__Host-` 접두어는 브라우저가 Secure·Path=/·Domain 없음을 강제해, 하위 도메인이 쿠키를 덮어쓰지 못하게 한다.
+      cookie:
+        name: __Host-SESSION
+        http-only: true
+        secure: true
+        same-site: lax
+
 resilientpos:
   event-publication:
     # 마지막 시도부터 이 시간이 지나도 끝나지 않은 기록을 끊긴 것으로 본다. metric의 stale과 재전송 작업이 함께 쓴다.
@@ -121,7 +150,8 @@ resilientpos:
 management:
   health:
     redis:
-      # Redis는 보조 잠금이라 장애여도 결제와 주문 생성은 계속된다. 켜 두면 Redis 장애에 모든 pod가 DOWN이 되어 트래픽에서 빠진다.
+      # 켜면 Redis 장애에 모든 pod의 readiness가 빠져 Redis를 쓰지 않는 단말 핫패스(/v1)까지 막힌다. 점주 요청만 실패하는 편이 낫다.
+      # 잠금은 fail-open이라 결제와 주문 생성은 Redis 없이도 계속된다. 세션과 로그인 카운터는 fail-closed라 점주 요청만 503이다.
       enabled: false
   endpoints:
     web:

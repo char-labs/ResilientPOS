@@ -1,6 +1,8 @@
 package com.resilientpos
 
+import java.util.UUID
 import javax.sql.DataSource
+import org.flywaydb.core.Flyway
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -16,7 +18,7 @@ class SchemaMigrationTest(
             "select version, success from flyway_schema_history order by installed_rank",
         ) { it.getString("version") to it.getBoolean("success") }
 
-        assertEquals(listOf("001" to true, "002" to true, "003" to true, "004" to true, "005" to true, "006" to true, "007" to true, "008" to true, "009" to true, "010" to true, "011" to true, "012" to true, "013" to true), applied)
+        assertEquals(listOf("001" to true, "002" to true, "003" to true, "004" to true, "005" to true, "006" to true, "007" to true, "008" to true, "009" to true, "010" to true, "011" to true, "012" to true, "013" to true, "014" to true, "015" to true), applied)
     }
 
     @Test
@@ -52,7 +54,9 @@ class SchemaMigrationTest(
                 "t_order",
                 "t_order_checkout",
                 "t_order_line",
+                "t_owner",
                 "t_payment_attempt",
+                "t_store",
                 "t_sync_operation",
                 "t_sync_watermark",
                 "t_terminal",
@@ -71,6 +75,51 @@ class SchemaMigrationTest(
         ) { it.getString("table_name") }
 
         assertEquals(listOf("t_order"), tables)
+    }
+
+    @Test
+    fun `V014는 기존 단말 행을 매장별 LEGACY 순번으로 채우고 NOT NULL과 unique를 건다`() {
+        // 앱이 쓰는 public 스키마와 분리한 스키마에서 V013까지 적용 -> 행 삽입 -> V014 적용 순으로 돌린다.
+        val schema = "v014_fill"
+        fun flyway(target: String) = Flyway.configure().dataSource(dataSource).schemas(schema).createSchemas(true)
+            .configuration(mapOf("flyway.postgresql.transactional.lock" to "false")).target(target).load()
+        val storeA = UUID.randomUUID()
+        val storeB = UUID.randomUUID()
+        try {
+            flyway("013").migrate()
+            dataSource.connection.use { c ->
+                c.createStatement().use { s ->
+                    listOf(storeA to "2026-10-01T00:00:01Z", storeA to "2026-10-01T00:00:02Z", storeB to "2026-10-01T00:00:03Z").forEach { (store, at) ->
+                        s.executeUpdate(
+                            "insert into $schema.t_terminal (id, store_id, status, created_at, updated_at) values ('${UUID.randomUUID()}', '$store', 'ACTIVE', '$at', '$at')",
+                        )
+                    }
+                }
+            }
+
+            flyway("014").migrate()
+
+            val filled = query("select store_id, terminal_code from $schema.t_terminal order by created_at") {
+                it.getString("store_id") to it.getString("terminal_code")
+            }
+            assertEquals(
+                listOf(storeA.toString() to "LEGACY-1", storeA.toString() to "LEGACY-2", storeB.toString() to "LEGACY-1"),
+                filled,
+            )
+            assertEquals(
+                listOf("NO"),
+                query(
+                    "select is_nullable from information_schema.columns " +
+                        "where table_schema = '$schema' and table_name = 't_terminal' and column_name = 'terminal_code'",
+                ) { it.getString("is_nullable") },
+            )
+            val unique = query(
+                "select conname from pg_constraint where conrelid = '$schema.t_terminal'::regclass and contype = 'u'",
+            ) { it.getString("conname") }
+            assertEquals(listOf("ux_terminal_store_code"), unique)
+        } finally {
+            dataSource.connection.use { c -> c.createStatement().use { it.execute("drop schema if exists $schema cascade") } }
+        }
     }
 
     @Test

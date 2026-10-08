@@ -2,9 +2,10 @@ package com.resilientpos.terminal.internal.adapter.persistence.command
 
 import com.resilientpos.platform.BaseEntity
 import com.resilientpos.store.StoreId
+import com.resilientpos.terminal.TerminalCode
 import com.resilientpos.terminal.TerminalId
+import com.resilientpos.terminal.TerminalStatus
 import com.resilientpos.terminal.internal.domain.Terminal
-import com.resilientpos.terminal.internal.domain.TerminalStatus
 import jakarta.persistence.Entity
 import jakarta.persistence.EnumType
 import jakarta.persistence.Enumerated
@@ -13,7 +14,7 @@ import jakarta.persistence.Table
 import java.util.UUID
 
 /**
- * 역할: 매장에 속한 단말 하나와 그 활성 상태. 소속 매장의 정본이다.
+ * 역할: 매장에 속한 단말 하나와 그 활성 상태. 소속 매장과 매장 안 단말 코드의 정본이다.
  * 관계: credential은 [TerminalCredentialEntity]가 `terminalId`로 가리킨다. 연관관계 매핑 없이 컬럼만 가진다.
  * 흐름: 등록이 만들고(`ACTIVE`), 비활성화가 상태만 바꾼다. 회전·비활성화는 이 행을 `for no key update`로 잠그고 시작한다. 전체 지도는 `docs/wiki/entity-map.md`.
  *
@@ -25,6 +26,7 @@ import java.util.UUID
 class TerminalEntity private constructor(
     id: UUID,
     storeId: UUID,
+    terminalCode: String,
     status: TerminalStatus,
 ) : BaseEntity() {
 
@@ -33,6 +35,9 @@ class TerminalEntity private constructor(
         protected set
 
     var storeId: UUID = storeId
+        protected set
+
+    var terminalCode: String = terminalCode
         protected set
 
     @Enumerated(EnumType.STRING)
@@ -44,10 +49,10 @@ class TerminalEntity private constructor(
         this.status = status
     }
 
-    fun toDomain(): Terminal = Terminal.restore(TerminalId(id), StoreId(storeId), status)
+    fun toDomain(): Terminal = Terminal.restore(TerminalId(id), StoreId(storeId), TerminalCode(terminalCode), status)
 
     companion object {
         fun from(terminal: Terminal): TerminalEntity =
-            TerminalEntity(terminal.id.value, terminal.storeId.value, terminal.status)
+            TerminalEntity(terminal.id.value, terminal.storeId.value, terminal.terminalCode.value, terminal.status)
     }
 }

@@ -6,9 +6,12 @@ import com.resilientpos.foundation.DomainException
 import com.resilientpos.platform.Tx
 import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.AuthenticatedTerminal
+import com.resilientpos.terminal.TerminalCode
 import com.resilientpos.terminal.TerminalCommand
 import com.resilientpos.terminal.TerminalId
 import com.resilientpos.terminal.TerminalManagement
+import com.resilientpos.terminal.TerminalStatus
+import com.resilientpos.terminal.uniqueTerminalCode
 import java.security.MessageDigest
 import java.util.UUID
 import java.util.concurrent.ExecutionException
@@ -30,7 +33,7 @@ class TerminalManagementIntegrationTest(
 
     private val storeId = StoreId(UUID.randomUUID())
 
-    private fun register() = terminals.register(TerminalCommand.Register(storeId))
+    private fun register(code: TerminalCode = uniqueTerminalCode()) = terminals.register(TerminalCommand.Register(storeId, code))
 
     private fun count(sql: String, vararg args: Any): Long = jdbcTemplate.queryForObject<Long>(sql, *args)!!
 
@@ -63,6 +66,35 @@ class TerminalManagementIntegrationTest(
     }
 
     @Test
+    fun `같은 매장에 같은 코드로 다시 등록하면 TERMINAL_CODE_DUPLICATED이고 단말과 credential이 늘지 않는다`() {
+        val code = uniqueTerminalCode()
+        register(code)
+        val terminals0 = count("select count(*) from t_terminal where store_id = ?", storeId.value)
+        val credentials0 = count("select count(*) from t_terminal_credential")
+
+        val failure = assertFailsWith<DomainException> { register(code) }
+
+        assertEquals("TERMINAL_CODE_DUPLICATED", failure.code)
+        assertEquals(DomainErrorKind.CONFLICT, failure.kind)
+        assertEquals(terminals0, count("select count(*) from t_terminal where store_id = ?", storeId.value))
+        assertEquals(credentials0, count("select count(*) from t_terminal_credential"))
+    }
+
+    @Test
+    fun `다른 매장은 같은 코드로 등록할 수 있다`() {
+        val code = uniqueTerminalCode()
+        register(code)
+
+        val other = terminals.register(TerminalCommand.Register(StoreId(UUID.randomUUID()), code))
+
+        assertEquals(code, other.terminalCode)
+        assertEquals(
+            2L,
+            count("select count(*) from t_terminal where terminal_code = ?", code.value),
+        )
+    }
+
+    @Test
     fun `유효한 토큰은 단말과 매장을 돌려주고 모르는 토큰은 없음이다`() {
         val registered = register()
 
@@ -74,7 +106,7 @@ class TerminalManagementIntegrationTest(
     fun `회전하면 새 토큰만 인증되고 옛 credential 행은 폐기된 채 남는다`() {
         val registered = register()
 
-        val rotated = terminals.rotateCredential(TerminalCommand.RotateCredential(registered.terminalId))
+        val rotated = terminals.rotateCredential(TerminalCommand.RotateCredential(storeId, registered.terminalId))
 
         assertNull(terminals.authenticate(registered.token))
         assertEquals(AuthenticatedTerminal(registered.terminalId, storeId), terminals.authenticate(rotated.token))
@@ -95,7 +127,7 @@ class TerminalManagementIntegrationTest(
         val executor = Executors.newFixedThreadPool(2)
 
         val tokens = try {
-            List(2) { executor.submit<String> { terminals.rotateCredential(TerminalCommand.RotateCredential(registered.terminalId)).token } }
+            List(2) { executor.submit<String> { terminals.rotateCredential(TerminalCommand.RotateCredential(storeId, registered.terminalId)).token } }
                 .map { it.get(15, TimeUnit.SECONDS) }
         } finally {
             executor.shutdownNow()
@@ -116,7 +148,7 @@ class TerminalManagementIntegrationTest(
             val late = Tx.masterTx {
                 jdbcTemplate.queryForObject<UUID>("select id from t_terminal where id = ? for update", registered.terminalId.value)
                 val late = executor.submit<TerminalCommand.RotateCredential.Result> {
-                    terminals.rotateCredential(TerminalCommand.RotateCredential(registered.terminalId))
+                    terminals.rotateCredential(TerminalCommand.RotateCredential(storeId, registered.terminalId))
                 }
                 runCatching { late.get(500, TimeUnit.MILLISECONDS) }
                 assertFalse(late.isDone, "회전이 단말 행 잠금을 기다리지 않았다")
@@ -134,9 +166,11 @@ class TerminalManagementIntegrationTest(
     fun `비활성화는 멱등이고 그 단말의 토큰은 인증되지 않는다`() {
         val registered = register()
 
-        terminals.deactivate(TerminalCommand.Deactivate(registered.terminalId))
-        terminals.deactivate(TerminalCommand.Deactivate(registered.terminalId))
+        val first = terminals.deactivate(TerminalCommand.Deactivate(storeId, registered.terminalId))
+        val second = terminals.deactivate(TerminalCommand.Deactivate(storeId, registered.terminalId))
 
+        assertEquals(TerminalCommand.Deactivate.Result(registered.terminalId, TerminalStatus.ACTIVE, TerminalStatus.INACTIVE), first)
+        assertEquals(TerminalCommand.Deactivate.Result(registered.terminalId, TerminalStatus.INACTIVE, TerminalStatus.INACTIVE), second)
         assertEquals(
             "INACTIVE",
             jdbcTemplate.queryForObject<String>("select status from t_terminal where id = ?", registered.terminalId.value),
@@ -147,10 +181,10 @@ class TerminalManagementIntegrationTest(
     @Test
     fun `비활성 단말의 회전은 TERMINAL_INACTIVE이고 credential이 늘지 않는다`() {
         val registered = register()
-        terminals.deactivate(TerminalCommand.Deactivate(registered.terminalId))
+        terminals.deactivate(TerminalCommand.Deactivate(storeId, registered.terminalId))
 
         val failure = assertFailsWith<DomainException> {
-            terminals.rotateCredential(TerminalCommand.RotateCredential(registered.terminalId))
+            terminals.rotateCredential(TerminalCommand.RotateCredential(storeId, registered.terminalId))
         }
 
         assertEquals("TERMINAL_INACTIVE", failure.code)
@@ -167,7 +201,7 @@ class TerminalManagementIntegrationTest(
             val rotation = Tx.masterTx {
                 jdbcTemplate.queryForObject<UUID>("select id from t_terminal where id = ? for update", registered.terminalId.value)
                 val rotation = executor.submit<TerminalCommand.RotateCredential.Result> {
-                    terminals.rotateCredential(TerminalCommand.RotateCredential(registered.terminalId))
+                    terminals.rotateCredential(TerminalCommand.RotateCredential(storeId, registered.terminalId))
                 }
                 runCatching { rotation.get(500, TimeUnit.MILLISECONDS) }
                 assertFalse(rotation.isDone, "회전이 단말 행 잠금을 기다리지 않았다")
@@ -190,12 +224,30 @@ class TerminalManagementIntegrationTest(
     fun `모르는 단말의 회전과 비활성화는 TERMINAL_NOT_FOUND다`() {
         val unknown = TerminalId(UUID.randomUUID())
 
-        val rotate = assertFailsWith<DomainException> { terminals.rotateCredential(TerminalCommand.RotateCredential(unknown)) }
-        val deactivate = assertFailsWith<DomainException> { terminals.deactivate(TerminalCommand.Deactivate(unknown)) }
+        val rotate = assertFailsWith<DomainException> { terminals.rotateCredential(TerminalCommand.RotateCredential(storeId, unknown)) }
+        val deactivate = assertFailsWith<DomainException> { terminals.deactivate(TerminalCommand.Deactivate(storeId, unknown)) }
 
         listOf(rotate, deactivate).forEach {
             assertEquals("TERMINAL_NOT_FOUND", it.code)
             assertEquals(DomainErrorKind.NOT_FOUND, it.kind)
         }
+    }
+
+    @Test
+    fun `다른 매장 ID로 회전하거나 비활성화하면 TERMINAL_NOT_FOUND이고 credential과 상태가 바뀌지 않는다`() {
+        val registered = register()
+        val otherStore = StoreId(UUID.randomUUID())
+
+        val rotate = assertFailsWith<DomainException> { terminals.rotateCredential(TerminalCommand.RotateCredential(otherStore, registered.terminalId)) }
+        val deactivate = assertFailsWith<DomainException> { terminals.deactivate(TerminalCommand.Deactivate(otherStore, registered.terminalId)) }
+
+        listOf(rotate, deactivate).forEach {
+            assertEquals("TERMINAL_NOT_FOUND", it.code)
+            assertEquals(DomainErrorKind.NOT_FOUND, it.kind)
+        }
+        assertEquals(1L, count("select count(*) from t_terminal_credential where terminal_id = ?", registered.terminalId.value))
+        assertEquals(1L, activeCredentials(registered.terminalId))
+        assertEquals("ACTIVE", jdbcTemplate.queryForObject<String>("select status from t_terminal where id = ?", registered.terminalId.value))
+        assertEquals(AuthenticatedTerminal(registered.terminalId, storeId), terminals.authenticate(registered.token))
     }
 }

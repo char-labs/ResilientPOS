@@ -150,7 +150,7 @@ class TerminalAuthenticationIntegrationTest(
     @Test
     fun `회전된 옛 토큰은 401이고 새 토큰은 통과한다`() {
         val terminal = terminals.registerTerminal()
-        val rotated = terminals.rotateCredential(TerminalCommand.RotateCredential(terminal.terminalId))
+        val rotated = terminals.rotateCredential(TerminalCommand.RotateCredential(terminal.storeId, terminal.terminalId))
 
         assertUnauthenticatedAndNothingWritten(createOrder(terminal, terminal.bearer))
         createOrder(terminal, "Bearer ${rotated.token}").andExpect { status { isCreated() } }
@@ -159,7 +159,7 @@ class TerminalAuthenticationIntegrationTest(
     @Test
     fun `비활성 단말의 토큰은 401이고 주문이 생기지 않는다`() {
         val terminal = terminals.registerTerminal()
-        terminals.deactivate(TerminalCommand.Deactivate(terminal.terminalId))
+        terminals.deactivate(TerminalCommand.Deactivate(terminal.storeId, terminal.terminalId))
 
         assertUnauthenticatedAndNothingWritten(createOrder(terminal, terminal.bearer))
     }

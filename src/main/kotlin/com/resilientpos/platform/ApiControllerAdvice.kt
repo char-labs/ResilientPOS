@@ -2,12 +2,15 @@ package com.resilientpos.platform
 
 import com.resilientpos.foundation.DomainErrorKind
 import com.resilientpos.foundation.DomainException
+import io.github.oshai.kotlinlogging.Level
 import jakarta.servlet.http.HttpServletRequest
 import org.springframework.dao.ConcurrencyFailureException
 import org.springframework.http.HttpHeaders
 import org.springframework.http.HttpStatus
 import org.springframework.http.HttpStatusCode
 import org.springframework.http.ResponseEntity
+import org.springframework.http.converter.HttpMessageNotReadableException
+import org.springframework.security.access.AccessDeniedException
 import org.springframework.web.bind.annotation.ExceptionHandler
 import org.springframework.web.bind.annotation.RestControllerAdvice
 import org.springframework.web.context.request.ServletWebRequest
@@ -35,22 +38,44 @@ class ApiControllerAdvice : ResponseEntityExceptionHandler() {
             statusCode.is4xxClientError -> ErrorType.BAD_REQUEST
             else -> ErrorType.INTERNAL_ERROR
         }
-        return super.handleExceptionInternal(ex, failBody(errorType, ex, request.describe()), headers, statusCode, request)
+        // 본문 변환 실패 메시지는 입력 조각(예: 따옴표 없는 비밀번호)을 담으므로 메시지와 스택 없이 클래스 이름만 남긴다.
+        val body = if (ex is HttpMessageNotReadableException) {
+            failBody(errorType, null, "${request.describe()} cause=${ex.javaClass.simpleName}")
+        } else {
+            failBody(errorType, ex, request.describe())
+        }
+        return super.handleExceptionInternal(ex, body, headers, statusCode, request)
     }
 
-    /** 도메인 규칙 위반은 예외의 `code`와 응답용 `message`를 그대로 내보내고 `kind`가 상태 코드를 정한다. */
+    /**
+     * 도메인 규칙 위반은 예외의 `code`와 응답용 `message`를 그대로 내보내고 `kind`가 상태 코드를 정한다.
+     * 도메인 404는 없는 경로의 404([ErrorType.NOT_FOUND])와 같은 수준으로 남긴다. 다른 매장 ID를 훑는 요청이 WARN으로 쌓이지 않게 한다.
+     */
     @ExceptionHandler(DomainException::class)
     fun handleDomain(e: DomainException, request: HttpServletRequest): ResponseEntity<ApiResponse<Nothing>> {
-        log.warn { "${request.describe()} errorCode=${e.code} : ${e.message}" }
+        val level = if (e.kind == DomainErrorKind.NOT_FOUND) ErrorType.NOT_FOUND.level else Level.WARN
+        log.at(level, marker = null) { message = "${request.describe()} errorCode=${e.code} : ${e.message}" }
         return ResponseEntity.status(e.kind.toHttpStatus()).body(ApiResponse.fail(ErrorResponse(e.code, e.message)))
     }
 
-    /** 원인에 관계없이 같은 응답이다. 원인을 나누면 토큰 추측에 단서를 준다. */
+    /**
+     * 원인에 관계없이 같은 응답이다. 원인을 나누면 토큰·계정 추측에 단서를 준다.
+     * `WWW-Authenticate`는 예외의 challenge가 있을 때만 붙인다(단말 토큰은 `Bearer`, 쿠키 세션인 점주 경로는 없다).
+     */
     @ExceptionHandler(UnauthenticatedException::class)
     fun handleUnauthenticated(e: UnauthenticatedException, request: HttpServletRequest): ResponseEntity<ApiResponse<Nothing>> =
         ResponseEntity.status(ErrorType.UNAUTHENTICATED.status)
-            .header(HttpHeaders.WWW_AUTHENTICATE, "Bearer")
+            .headers { headers -> e.challenge?.let { headers.set(HttpHeaders.WWW_AUTHENTICATE, it) } }
             .body(failBody(ErrorType.UNAUTHENTICATED, e, request.describe()))
+
+    /**
+     * 점주 경로의 CSRF 토큰이 없거나 쿠키와 다르다(`CsrfException`). 인증과 달리 권한 역할은 두지 않는다.
+     * `InvalidCsrfTokenException`의 메시지에 제출된 토큰 값이 실리므로 예외 메시지와 스택은 로그에도 남기지 않고 code만 남긴다.
+     */
+    @ExceptionHandler(AccessDeniedException::class)
+    fun handleAccessDenied(request: HttpServletRequest): ResponseEntity<ApiResponse<Nothing>> =
+        ResponseEntity.status(ErrorType.ACCESS_DENIED.status)
+            .body(failBody(ErrorType.ACCESS_DENIED, null, request.describe()))
 
     /**
      * 같은 대상에 요청이 겹쳐서 난 잠금 대기 초과와 조회 시점의 버전 충돌. 서버 오류로 집계하지 않는다.
@@ -60,6 +85,12 @@ class ApiControllerAdvice : ResponseEntityExceptionHandler() {
     fun handleConcurrency(e: ConcurrencyFailureException, request: HttpServletRequest): ResponseEntity<ApiResponse<Nothing>> =
         ResponseEntity.status(ErrorType.CONCURRENT_REQUEST.status)
             .body(failBody(ErrorType.CONCURRENT_REQUEST, e, request.describe()))
+
+    /** 세션 저장소(Redis) 장애. 원인 예외는 로그에만 남기고 응답은 고정 문구다. */
+    @ExceptionHandler(SessionStoreUnavailableException::class)
+    fun handleSessionStoreUnavailable(e: SessionStoreUnavailableException, request: HttpServletRequest): ResponseEntity<ApiResponse<Nothing>> =
+        ResponseEntity.status(ErrorType.SERVICE_UNAVAILABLE.status)
+            .body(failBody(ErrorType.SERVICE_UNAVAILABLE, e, request.describe()))
 
     @ExceptionHandler(Exception::class)
     fun handleUnexpected(e: Exception, request: HttpServletRequest): ResponseEntity<ApiResponse<Nothing>> =
@@ -75,10 +106,10 @@ class ApiControllerAdvice : ResponseEntityExceptionHandler() {
         DomainErrorKind.FORBIDDEN -> HttpStatus.FORBIDDEN
     }
 
-    private fun failBody(errorType: ErrorType, e: Exception, request: String): ApiResponse<Nothing> {
+    private fun failBody(errorType: ErrorType, e: Exception?, request: String): ApiResponse<Nothing> {
         // marker를 생략하면 기본 인자 브리지(`KLogger.at$default`)를 거쳐 로그의 호출 위치가 그 브리지로 찍힌다.
         log.at(errorType.level, marker = null) {
-            message = "$request errorCode=${errorType.name} : ${e.message}"
+            message = "$request errorCode=${errorType.name}" + (e?.let { " : ${it.message}" } ?: "")
             cause = e
         }
         return ApiResponse.fail(ErrorResponse(errorType.name, errorType.message))

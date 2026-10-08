@@ -62,7 +62,7 @@ class ErrorLogRequestContextTest(@Autowired private val mockMvc: MockMvc) {
     fun `경로 변수를 쓰는 요청은 URI만으로 대상이 드러난다`() {
         mockMvc.get("/test-advice/domain/NOT_FOUND")
 
-        assertRequestContext(method = "GET", uri = "/test-advice/domain/NOT_FOUND", level = Level.WARN)
+        assertRequestContext(method = "GET", uri = "/test-advice/domain/NOT_FOUND", level = Level.INFO)
     }
 
     @Test

@@ -24,10 +24,10 @@ class TerminalManagement(
 
     /** 단말과 첫 credential을 한 트랜잭션에 넣고 평문 토큰을 돌려준다. 매장 존재는 확인하지 않는다. */
     fun register(command: TerminalCommand.Register): TerminalCommand.Register.Result = Tx.masterTx {
-        val terminal = repository.save(Terminal.register(command.storeId, identifierGenerator))
+        val terminal = repository.save(Terminal.register(command.storeId, command.terminalCode, identifierGenerator))
         val issued = TerminalCredential.issue(terminal.id, identifierGenerator)
         repository.save(issued.credential)
-        TerminalCommand.Register.Result(terminal.id, issued.token)
+        TerminalCommand.Register.Result(terminal.id, command.terminalCode, issued.token)
     }
 
     /** 유효한 토큰이면 단말과 매장을, 모르는 토큰·회전된 토큰·비활성 단말이면 null을 돌려준다. */
@@ -35,9 +35,10 @@ class TerminalManagement(
         repository.findActiveByTokenHash(TerminalCredential.hash(token))?.let { AuthenticatedTerminal(it.id, it.storeId) }
     }
 
-    /** 유효 credential을 폐기하고 새로 발급한다. 옛 행은 이력으로 남는다. 비활성 단말은 거절한다. */
+    /** 유효 credential을 폐기하고 새로 발급한다. 옛 행은 이력으로 남는다. 다른 매장의 단말은 `TERMINAL_NOT_FOUND`, 비활성 단말은 `TERMINAL_INACTIVE`로 거절한다. */
     fun rotateCredential(command: TerminalCommand.RotateCredential): TerminalCommand.RotateCredential.Result = Tx.masterTx {
         val terminal = repository.findByIdForUpdate(command.terminalId) ?: throw Terminal.notFound()
+        terminal.requireStore(command.storeId)
         terminal.requireActive()
         repository.findActiveCredential(terminal.id)?.let { repository.update(it.revoke(clock.instant())) }
         val issued = TerminalCredential.issue(terminal.id, identifierGenerator)
@@ -45,10 +46,11 @@ class TerminalManagement(
         TerminalCommand.RotateCredential.Result(issued.token)
     }
 
-    /** 단말을 비활성화한다. 이미 비활성이면 그대로다. */
-    fun deactivate(command: TerminalCommand.Deactivate): Unit = Tx.masterTx {
+    /** 단말을 비활성화한다. 이미 비활성이면 그대로이고 전후 상태가 모두 `INACTIVE`다. */
+    fun deactivate(command: TerminalCommand.Deactivate): TerminalCommand.Deactivate.Result = Tx.masterTx {
         val terminal = repository.findByIdForUpdate(command.terminalId) ?: throw Terminal.notFound()
-        repository.update(terminal.deactivate())
-        Unit
+        terminal.requireStore(command.storeId)
+        val after = repository.update(terminal.deactivate())
+        TerminalCommand.Deactivate.Result(terminal.id, terminal.status, after.status)
     }
 }
