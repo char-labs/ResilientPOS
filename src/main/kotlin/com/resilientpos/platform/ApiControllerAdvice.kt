@@ -2,6 +2,7 @@ package com.resilientpos.platform
 
 import com.resilientpos.foundation.DomainErrorKind
 import com.resilientpos.foundation.DomainException
+import io.github.oshai.kotlinlogging.Level
 import jakarta.servlet.http.HttpServletRequest
 import org.springframework.dao.ConcurrencyFailureException
 import org.springframework.http.HttpHeaders
@@ -46,10 +47,14 @@ class ApiControllerAdvice : ResponseEntityExceptionHandler() {
         return super.handleExceptionInternal(ex, body, headers, statusCode, request)
     }
 
-    /** 도메인 규칙 위반은 예외의 `code`와 응답용 `message`를 그대로 내보내고 `kind`가 상태 코드를 정한다. */
+    /**
+     * 도메인 규칙 위반은 예외의 `code`와 응답용 `message`를 그대로 내보내고 `kind`가 상태 코드를 정한다.
+     * 도메인 404는 없는 경로의 404([ErrorType.NOT_FOUND])와 같은 수준으로 남긴다. 다른 매장 ID를 훑는 요청이 WARN으로 쌓이지 않게 한다.
+     */
     @ExceptionHandler(DomainException::class)
     fun handleDomain(e: DomainException, request: HttpServletRequest): ResponseEntity<ApiResponse<Nothing>> {
-        log.warn { "${request.describe()} errorCode=${e.code} : ${e.message}" }
+        val level = if (e.kind == DomainErrorKind.NOT_FOUND) ErrorType.NOT_FOUND.level else Level.WARN
+        log.at(level, marker = null) { message = "${request.describe()} errorCode=${e.code} : ${e.message}" }
         return ResponseEntity.status(e.kind.toHttpStatus()).body(ApiResponse.fail(ErrorResponse(e.code, e.message)))
     }
 

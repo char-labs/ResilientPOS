@@ -144,6 +144,20 @@ class ApiAdviceTest(@Autowired private val mockMvc: MockMvc) {
     }
 
     @Test
+    fun `도메인 404는 없는 경로의 404처럼 INFO로 남고 그 밖의 도메인 예외는 WARN이다`(output: CapturedOutput) {
+        val mark = output.all.length
+
+        mockMvc.get("/test-advice/domain/NOT_FOUND").andExpect { status { isNotFound() } }
+        mockMvc.get("/test-advice/domain/CONFLICT").andExpect { status { isConflict() } }
+
+        val lines = output.all.substring(mark).lines()
+        val notFound = lines.single { "errorCode=SAMPLE_NOT_FOUND" in it }
+        val conflict = lines.single { "errorCode=SAMPLE_CONFLICT" in it }
+        assertTrue(" INFO " in notFound, notFound)
+        assertTrue(" WARN " in conflict, conflict)
+    }
+
+    @Test
     fun `도메인 규칙 위반의 kind가 HTTP 상태를 정한다`() {
         val expected = mapOf(
             DomainErrorKind.INVALID to 400,
