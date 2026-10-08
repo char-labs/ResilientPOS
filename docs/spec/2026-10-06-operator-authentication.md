@@ -84,7 +84,7 @@
 - 문제: Spring Session 필터는 MVC 밖의 서블릿 필터라, Redis 오류가 `ApiControllerAdvice`를 거치지 않고 Tomcat 기본 HTML 500으로 나간다(실측). 클라이언트가 envelope의 `errorCode`로 분기하지 못하고, 서버 버그(500)와 일시 장애가 구분되지 않는다.
 - 수단: `platform`의 서블릿 필터 하나를 `/owner/*`에만 걸고 Spring Session 필터보다 앞에 둔다. 체인 안에서 Redis 오류(`DataAccessException`)가 올라오고 응답이 아직 커밋되지 않았으면, 응답을 비우고 `handlerExceptionResolver`로 넘긴다. 그러면 `ApiControllerAdvice`가 `503 SERVICE_UNAVAILABLE`(`ErrorType`, ERROR 로그)을 쓴다. 세션 읽기(요청 처리 중)와 세션 저장(응답 커밋 때) 실패를 모두 덮는다. 응답이 이미 커밋됐으면 바꿀 수 없으므로 다시 던진다.
 - 단말 경로와 다른 경로는 이 필터를 지나지 않는다. 분산 락은 fail-open이라 Redis 오류를 adapter에서 삼킨다.
-- MVC 안에서 세션에 닿는 곳은 둘이다. `DispatcherServlet`은 요청마다 `FlashMapManager`로 세션을 읽는다(spring-webmvc 7.0.9 `doService`). 이 오류는 `ServletException`으로 감싸져 필터의 `DataAccessException` catch를 지난다. 이 API는 redirect와 flash 속성을 쓰지 않으므로 아무것도 하지 않는 `FlashMapManager`(빈 이름 `flashMapManager`)로 이 읽기를 없앤다. 다른 하나는 로그인 Controller의 세션 조작(세션 ID 교체, 컨텍스트 저장)이다. 여기서 난 Redis 오류는 `SessionStoreUnavailableException`으로 바꿔 던져 503이 되게 한다. 로그인 실패 카운터의 Redis 오류도 같은 예외다(결정 6).
+- MVC 안에서 세션에 닿는 곳은 둘이다. `DispatcherServlet`은 요청마다 `FlashMapManager`로 세션을 읽는다(spring-webmvc 7.0.9 `doService`). 이 오류는 `ServletException`으로 감싸져 필터의 `DataAccessException` catch를 지난다. 이 API는 redirect와 flash 속성을 쓰지 않으므로 아무것도 하지 않는 `FlashMapManager`(빈 이름 `flashMapManager`)로 이 읽기를 없앤다. 같은 서블릿이 요청 끝마다 `ServletRequestHandledEvent`를 만들며 세션 ID를 읽으므로(`publishRequestHandledEvent`), 구독자가 없는 그 이벤트도 끈다(`spring.mvc.publish-request-handled-events: false`). 다른 하나는 로그인 Controller의 세션 조작(세션 ID 교체, 컨텍스트 저장)이다. 여기서 난 Redis 오류는 `SessionStoreUnavailableException`으로 바꿔 던져 503이 되게 한다. 로그인 실패 카운터의 Redis 오류도 같은 예외다(결정 6).
 - 503은 변경이 커밋되지 않았다는 뜻이 아니다. 인증 경로의 세션 저장은 Facade 커밋 뒤 응답을 커밋할 때 일어난다. 그래서 등록·회전이 커밋된 뒤에도 503이 나갈 수 있다. 등록·회전 뒤 503을 받으면 목록으로 확인하고, 토큰이 없으면 회전한다. 이 내용을 REST Docs 설명에도 적는다.
 - 한계: 로그인 감사 로그(`OWNER_LOGGED_IN`)는 세션 저장보다 먼저 남으므로, 저장이 실패해 503이 나가도 로그는 남는다.
 
@@ -173,7 +173,7 @@
 14. V014가 기존 행을 매장별 `LEGACY-1`, `LEGACY-2`…로 채운다. 그 뒤 `terminal_code`는 NOT NULL이고 `(store_id, terminal_code)`가 unique다. V015 뒤 `t_owner.email`이 unique다.
 15. REST Docs 스니펫(`build/generated-snippets`)이 가입·로그인·로그아웃·CSRF·매장 2개·단말 4개 endpoint의 요청·응답 필드를 문서화한다. 401·403·404·409 예도 담는다.
 16. `ModuleStructureTest`가 `owner`를 포함한 모듈 8개를 인식하고 통과한다.
-17. 세션 저장소(Redis)에 닿지 못하면 다음 요청은 envelope의 `503 SERVICE_UNAVAILABLE`이고 HTML이 아니다: 세션 쿠키가 있는 인증 경로, 세션 쿠키가 있거나 없는 로그인, 세션 쿠키가 있는 `GET /owner/v1/csrf`. 같은 상태에서 단말 요청(`/v1/**`)은 세션 쿠키가 실려 와도 영향이 없다.
+17. 세션 저장소(Redis)에 닿지 못하면 다음 요청은 envelope의 `503 SERVICE_UNAVAILABLE`이고 HTML이 아니다: 세션 쿠키가 있는 인증 경로, 세션 쿠키가 있거나 없는 로그인(틀린 비밀번호도 비교 없이 503). 세션이 필요 없는 `GET /owner/v1/csrf`는 세션 쿠키가 있어도 204다. 같은 상태에서 단말 요청(`/v1/**`)은 세션 쿠키가 실려 와도 영향이 없다.
 18. Redis에 저장된 세션 속성은 JSON이고 JDK 직렬화 바이트가 아니다. 로그인 → 인증 경로 → 로그아웃이 JSON 세션으로 동작한다. 허용 목록 밖의 타입이 든 세션은 역직렬화하지 않는다.
 
 ### Checkpoint와 검증 명령 (선택)
@@ -309,7 +309,7 @@ create index ix_store_owner_id on t_store (owner_id);
 | 🔴 리뷰 포인트 행별 점검 반영: 결정 6 fail-closed, 결정 12의 `FlashMapManager`·로그인 세션 조작 503 (`OwnerSessionStoreOutageIntegrationTest`의 세션 쿠키가 있는 로그인·csrf·단말 요청과 카운터 장애 로그인, `OwnerManagementTest`의 Redis 오류 503·clear 실패 로그인 성공, 로그아웃 통합 테스트의 CSRF 쿠키 만료) | `./gradlew test --tests 'com.resilientpos.platform.OwnerSessionStoreOutageIntegrationTest'` 기존 구현에서 7건 중 3건 실패: 세션 쿠키가 있는 단말 sync가 200이 아니라 Tomcat HTML 500, 카운터 장애에서 틀린 비밀번호가 503이 아니라 401 UNAUTHENTICATED, 쿠키 단 `GET /owner/v1/csrf`는 204가 아니라 503. 쿠키 단 로그인(503)과 쿠키 없는 맞는 비밀번호 로그인(503)은 이미 통과(characterization). `OwnerManagementTest`는 옛 `RedisLoginFailureCounter`에서 Redis 오류 사례 1건 실패(예외 없이 로그인 성공), clear 실패 사례는 통과. 로그아웃 CSRF 쿠키 만료는 이미 `Max-Age=0`이라 통과 | 같은 명령 통과. `flashMapManager` 빈(아무것도 하지 않음)과 `spring.mvc.publish-request-handled-events: false` 둘 다 필요하다: 빈만 두면 `FrameworkServlet.publishRequestHandledEvent`가 `WebUtils.getSessionId`로 세션을 읽어 단말 sync·로그인이 chunked 응답 오류로 깨지고, 빈을 빼면 3건이 HTML 500이다. `increment`는 Redis 오류(`DataAccessException`·`IllegalStateException`)를 `SessionStoreUnavailableException`(생성자 인자를 `RuntimeException`으로 넓힘)으로 던지고 `clear`는 WARN만 남긴다. `OwnerController.logIn`은 세션 ID 교체·컨텍스트 저장의 `DataAccessException`만 감싼다. 세션 쿠키가 있는 `GET /owner/v1/csrf`는 세션 저장소가 필요 없어 204다 | `./gradlew test` 전체 586건 통과, 실패 0, 건너뜀 0 |
 
 ## 결과
-- `./gradlew test` 전체 568건 통과(실패 0, 건너뜀 0). 인수 조건 1~16을 구현했다. 각 동작의 RED·GREEN 관측은 TDD 검증 기록에 있다.
+- `./gradlew test` 전체 586건 통과(실패 0, 건너뜀 0). 인수 조건 1~18을 구현했다. 각 동작의 RED·GREEN 관측은 TDD 검증 기록에 있다.
 - 수동 확인(2026-10-07, compose의 PostgreSQL·Redis·Kafka와 `bootRun`, curl 쿠키 jar). 첫 실행은 리뷰 반영 전(05a9b43), 둘째 실행은 반영 뒤(4966d92)다.
   - 첫 실행: CSRF 토큰 없는 가입은 403 `ACCESS_DENIED`다. 대문자 이메일로 가입하면 소문자로 저장되고, 같은 이메일은 409 `OWNER_EMAIL_DUPLICATED`다. 로그인 전 매장 목록은 401이다.
   - 둘째 실행: 기동 로그에 Boot 기본 사용자 비밀번호가 없다. 로그인 응답의 쿠키는 `__Host-SESSION=…; Path=/; Secure; HttpOnly; SameSite=Lax`와 `__Host-XSRF-TOKEN=…; Path=/; Secure`였다.
@@ -328,6 +328,14 @@ create index ix_store_owner_id on t_store (owner_id);
   - 이메일 SHA-256 키는 알려진 이메일 목록으로 되돌릴 수 있는 가명화 수준이다.
   - 단말·매장 목록 정렬은 DB collation의 문자열 순이라 `LEGACY-10`이 `LEGACY-2`보다 앞에 온다.
   - 가입 409가 계정 존재를 알리므로 로그인의 더미 해시 비교는 보조 수단이다.
+- 🔴 리뷰 포인트 행별 점검(spring-backend-specialist, 2026-10-08). PR 본문 리뷰 포인트 표의 행마다 '봐야 할 것'을 코드와 대조했고 P0은 없었다.
+  - 결함 A(P1): 세션 쿠키가 실린 요청에서 MVC가 세션을 읽었다. 경로는 `FlashMapManager`와 요청 처리 이벤트 둘이다. 그래서 Redis 장애 때 쿠키가 실린 단말 sync가 Tomcat HTML 500이었다(RED 관측). 결정 12대로 고쳤다.
+  - 결함 B(P1): 카운터가 fail-open이라 Redis 장애 중 틀린 비밀번호는 401, 맞는 비밀번호는 503이 되어 판별 신호가 생겼다(RED 관측). 결정 6을 fail-closed로 바꿨다.
+  - 결함 C(P3): 503이어도 등록·회전이 커밋됐을 수 있다. 결정 12, REST Docs, 관측성 wiki에 확인 방법을 적었다.
+  - P4: 로그아웃의 CSRF 쿠키 만료 단언과 context-path 주석을 넣었다. 도메인 404의 로그 수준(WARN)과 `ErrorType.NOT_FOUND`(INFO)의 차이는 사람이 정할 일로 남겼다.
+  - 그 밖의 행(체인 범위, 세션 ID 교체, CSRF 저장소 공유, 증가 먼저와 Lua, 마이그레이션과 adapter 판정, 소유 확인 순서, 엔티티 규칙, 직렬화기 분리)은 근거와 함께 확인됐다.
+  - 결정 12·13을 구현하면서 찾은 것: Spring Data Redis 4.1.1 `GenericJacksonJsonRedisSerializer`가 최상위 `@class`를 허용 목록 검사 없이 읽을 타입으로 삼는다. 하위 클래스에서 읽을 타입을 `Object`로 고정해 막았다. 업스트림 보고는 하지 않았다.
+  - 간헐 실패 원인: 본문 변환 실패 로그에 입력 조각이 남았다. 여기에 `CapturedOutput.all`이 클래스 단위 캡처(앞 테스트 출력)까지 이어 붙는 구조가 겹쳐 비밀번호 부재 단언이 순서에 따라 실패했다. 로그는 클래스 이름만 남기고, 단언은 그 테스트가 낸 출력만 본다.
 - 리뷰(resilientpos-multi-review, Claude·Codex 실행, Gemini는 CLI가 없어 미실행): Claude 82점, Codex는 변경 요청이었고 P0은 없었다.
   - 둘이 함께 지적한 항목은 반영했다. 비교 뒤에 세던 실패 카운터(동시 시도 통과)와 INCR·EXPIRE 분리(영구 잠금), 세션 쿠키 속성을 바인딩만 보던 테스트, 결과 절과 V015 대조가 그것이다.
   - 한쪽만 지적한 항목 중 반영한 것: unique 상세의 이메일 로그, `__Host-` 쿠키, 제어·서식 문자, CSRF 거절 로그의 토큰, Boot 기본 사용자, 체인과 Controller의 CSRF 저장소 공유, 쓰이지 않는 코드, Redis 주석, spec 문구(의존 방향, 인수 3·4, 질문 2·6·9).
