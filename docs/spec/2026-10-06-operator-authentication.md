@@ -43,7 +43,7 @@
 - 평문 비밀번호는 로그, 예외 메시지, 요청 DTO의 `toString` 어디에도 남지 않는다.
 
 **결정 6: 로그인 실패 제한은 Redis 카운터다.**
-- 키는 정규화한 이메일의 SHA-256이다. 형식이 맞는 이메일의 로그인 시도는 비교 전에 먼저 센다(INCR). 센 값이 5를 넘으면 비밀번호를 비교하지 않고 거절한다. 로그인에 성공하면 키를 지운다. 창은 첫 시도부터 15분이고, 창이 끝나면 저절로 풀린다.
+- 키는 정규화한 이메일의 SHA-256이다. 형식이 맞는 이메일의 로그인 시도는 비교 전에 먼저 센다(INCR). 센 값이 5를 넘으면 비밀번호를 비교하지 않고 거절한다. 로그인에 성공하면 키를 지운다. 지우기는 best-effort라 Redis 오류면 WARN 한 줄을 남기고 로그인은 성공으로 끝낸다(2026-10-08 범위 조정). 이미 비밀번호를 맞힌 요청이라 막을 이유가 없고, 남은 카운터는 창이 끝나면 풀린다. 대가로 4~5회 실패 뒤 성공한 점주가 같은 창 안에서 다시 로그인하면 잠길 수 있다. 창은 첫 시도부터 15분이고, 창이 끝나면 저절로 풀린다.
 - 증가와 TTL은 Lua 스크립트 하나로 한다(INCR, TTL이 없으면 PEXPIRE). 동시에 들어온 시도도 각자 하나씩 세므로 창 안의 비교는 정확히 5번이다. 따로 보내면 EXPIRE만 빠진 키가 TTL 없이 남아 영구 잠금이 될 수 있고, 스크립트는 어떤 경로로 생긴 TTL 없는 키도 다음 시도에서 TTL을 얻게 한다.
 - 응답은 원인(없는 계정, 틀린 비밀번호, 잠김)과 무관하게 같은 `401 UNAUTHENTICATED`다. 계정 존재를 알리지 않으려고 없는 계정에도 카운터를 올리고, 더미 해시와 비교해 응답 시간을 맞춘다.
 - 카운터가 Redis에 닿지 못하면 비밀번호를 비교하지 않고 `503 SERVICE_UNAVAILABLE`로 답한다(fail-closed, 2026-10-08 범위 조정). 원래는 분산 락처럼 fail-open이었다. 그런데 같은 Redis에 세션을 쓰지 못하면 로그인은 어차피 성공할 수 없다. 게다가 틀린 비밀번호는 401, 맞는 비밀번호는 세션 저장 실패로 503이 되어, 제한 없는 비밀번호 판별 신호가 생긴다(🔴 점검). 분산 락은 fail-open 그대로다. 잠금 상태는 업무 사실이 아니라 DB에 두지 않는다(스키마 변경 검토 질문 1).
@@ -89,6 +89,16 @@
 - 503은 변경이 커밋되지 않았다는 뜻이 아니다. 인증 경로의 세션 저장은 Facade 커밋 뒤 응답을 커밋할 때 일어난다. 그래서 등록·회전이 커밋된 뒤에도 503이 나갈 수 있다. 등록·회전 뒤 503을 받으면 목록으로 확인하고, 토큰이 없으면 회전한다. 이 내용을 REST Docs 설명에도 적는다.
 - 한계: 로그인 감사 로그(`OWNER_LOGGED_IN`)는 세션 저장보다 먼저 남으므로, 저장이 실패해 503이 나가도 로그는 남는다.
 
+**범위 조정(PR #90 multi-review 반영, 2026-10-08).** Claude 84점, Codex 84점(점주 인증·platform)·94점(store·terminal), Gemini 미실행(CLI 없음). Critical은 없었다. 아래를 이 PR에 넣는다.
+- 결정 6을 fail-closed로 바꾼 뒤 남은 옛 fail-open 문구를 고친다. `application.yaml`의 Redis 주석 둘과 [관측성](../wiki/observability.md)의 점주 감사 항목이다(두 리뷰어 합의).
+- 모듈 설명의 낡은 문구를 고친다. `terminal/package-info.java`("단말 코드는 아직 두지 않는다")와 `store/package-info.java`(매장 이름과 소유 점주)다(두 리뷰어 합의). V014 머리 주석의 "운영자"는 고치지 않는다. 이미 적용한 로컬 DB의 Flyway 체크섬이 깨지기 때문이다.
+- 세션 저장소 503의 감지 수단을 실측으로 고정한다. 필터에서 쓰는 503은 MVC handler 밖이라 `http_server_requests`의 `uri` 태그가 `/owner/...`가 아닐 수 있다. 장애 통합 테스트에서 그 태그를 단언하고, [관측성](../wiki/observability.md)의 감지 쿼리를 실측에 맞춘다.
+- 세션 읽기는 성공하고 응답 커밋 때 세션 저장만 실패하는 경로를 통합 테스트로 고정한다. 결정 12는 이 경로도 503으로 덮는다고 적었지만, 지금 테스트는 Redis가 처음부터 없는 경우만 본다. 결과가 503 envelope와 ERROR 한 줄이 아니면 고친다.
+- `OwnerSessionStoreOutageIntegrationTest`의 `로그인은 세션을 저장하지 못하면 503 envelope다`는 fail-closed 뒤 카운터 실패 경로를 탄다. 실제 원인에 맞게 이름을 바꾼다.
+- 결정 6에 카운터 지우기 실패가 best-effort임을 적는다(위).
+- [현재 상태](../wiki/current-state.md)의 `ErrorType` 개수(8개, `SERVICE_UNAVAILABLE`), 모듈 수, Redis·Spring Security·Spring Session 의존성 서술을 고친다.
+- 넣지 않고 제외·한계에 남기는 것: 외부 노출 전 rate limit(#87)과 운영 Redis TLS·인증의 기동 검증, 같은 코드의 동시 등록 테스트(순차 중복과 같은 unique 경로), DTO 파일 분리, 목록 개수 상한, 세션 필터의 `IllegalStateException`, `response.reset()`이 지우는 Security 헤더, Lua 결과 타입.
+
 **결정 13: 세션 속성은 JSON으로 직렬화한다.** (2026-10-07 범위 조정)
 - 문제: Spring Session 기본 JDK 직렬화에는 두 가지 문제가 있다. Spring Security 버전을 올리면 `serialVersionUID`가 바뀌어 기존 세션을 읽지 못한다. 또 Redis에 쓸 수 있는 주체가 역직렬화 gadget으로 코드를 실행할 수 있다. 프로젝트 규칙도 `java.io.Serializable` 직렬화를 쓰지 않는다.
 - 수단: Spring Session의 Redis serializer 빈을 Spring Data Redis의 `GenericJacksonJsonRedisSerializer`(Jackson 3)로 바꾼다. 다형성 타입은 Spring Security의 `SecurityJacksonModules`가 허용하는 타입만 받는다(allowlist). 세션 principal(점주 UUID)이 허용 목록에 없으면 가장 작은 변경으로 맞춘다. 예를 들면 principal을 문자열로 두거나, 그 타입 하나만 허용 목록에 더한다.
@@ -133,6 +143,9 @@
 - 회전 유예, 재활성화, 비활성 단말의 큐 드레인, 단말 코드 변경 명령. 결정 9·10.
 - 관리 콘솔 화면과, 시연 화면(`static/terminal`)이 관리 API를 부르는 것.
 - 운영자 재결제 입구([payment-status-query](2026-10-06-payment-status-query.md) 제외 절). 점주의 것인지 플랫폼 운영자의 것인지는 그 PR이 정한다.
+- 운영 Redis의 인증·TLS 누락을 기동 때 막는 검증. 배포 설정의 확인 항목으로 둔다. 외부 노출 전에 rate limit(#87)과 함께 본다(multi-review).
+- 매장·단말 목록의 개수 상한. 가입·생성 rate limit이 없어 점주 한 명이 목록을 키울 수 있다. #87과 함께 본다(multi-review).
+- 같은 코드의 동시 등록 테스트, DTO 파일 분리, 세션 필터의 `IllegalStateException`(종료 중), 503 응답에서 `response.reset()`이 지우는 Security 헤더, 로그인 카운터 Lua의 결과 타입 표기. multi-review의 P3·Nice-to-have로 동작에 영향이 없거나 같은 경로가 이미 검증된다.
 
 ## 관련 문서
 없음. 이 PR이 따르는 장기 스펙 문서(DESIGN·concerns·flows)가 없다. 앞 PR은 [terminal-authentication](2026-10-05-terminal-authentication.md), [payment-status-query](2026-10-06-payment-status-query.md)다.
