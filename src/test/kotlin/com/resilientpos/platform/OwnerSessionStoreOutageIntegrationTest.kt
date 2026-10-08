@@ -3,6 +3,7 @@ package com.resilientpos.platform
 import com.resilientpos.PostgresIntegrationTest
 import com.resilientpos.terminal.TerminalManagement
 import com.resilientpos.terminal.registerTerminal
+import io.micrometer.core.instrument.MeterRegistry
 import java.net.ServerSocket
 import java.net.URI
 import java.net.http.HttpClient
@@ -38,6 +39,7 @@ import org.springframework.test.context.DynamicPropertySource
 class OwnerSessionStoreOutageIntegrationTest(
     @LocalServerPort private val port: Int,
     @Autowired private val terminals: TerminalManagement,
+    @Autowired private val meterRegistry: MeterRegistry,
 ) {
 
     private val client = HttpClient.newHttpClient()
@@ -68,8 +70,23 @@ class OwnerSessionStoreOutageIntegrationTest(
         send("GET", "/owner/v1/stores", cookie = "__Host-SESSION=$unknownSession").assertServiceUnavailableEnvelope()
     }
 
+    /** uri 태그별 503 타이머 횟수. 같은 컨텍스트의 다른 테스트가 만든 503과 섞이지 않게 호출 전후 차이로 본다. */
+    private fun counts503(): Map<String, Long> = meterRegistry.find("http.server.requests").tag("status", "503").timers()
+        .groupBy { it.id.getTag("uri") ?: "null" }.mapValues { (_, timers) -> timers.sumOf { it.count() } }
+
     @Test
-    fun `로그인은 세션을 저장하지 못하면 503 envelope다`() {
+    fun `세션 저장소 503의 http_server_requests uri 태그를 고정한다`() {
+        val before = counts503()
+        val unknownSession = Base64.getEncoder().encodeToString(UUID.randomUUID().toString().toByteArray())
+
+        send("GET", "/owner/v1/stores", cookie = "__Host-SESSION=$unknownSession").assertServiceUnavailableEnvelope()
+
+        val delta = counts503().mapValues { (uri, count) -> count - (before[uri] ?: 0) }.filterValues { it > 0 }
+        assertEquals(mapOf("UNKNOWN" to 1L), delta)
+    }
+
+    @Test
+    fun `세션 쿠키 없는 로그인도 Redis에 닿지 못하면 카운터에서 503 envelope다`() {
         val csrf = send("GET", "/owner/v1/csrf").headers().allValues("Set-Cookie")
             .first { it.startsWith("__Host-XSRF-TOKEN=") }.substringBefore(";").substringAfter("=")
         val cookie = "__Host-XSRF-TOKEN=$csrf"
