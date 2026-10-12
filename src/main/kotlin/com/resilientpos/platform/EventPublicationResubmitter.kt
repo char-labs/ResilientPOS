@@ -19,13 +19,16 @@ import org.springframework.stereotype.Component
  *
  * 한 주기는 세 단계다.
  * 1. 끊긴 기록(`PUBLISHED`·`PROCESSING`·`RESUBMITTED`인 채 마지막 시도부터 [staleAfter]가 지남)을 `FAILED`로 바꾼다.
- *    조건을 건 UPDATE 한 문장이다. Modulith staleness 모니터는 규모 때문에 쓰지 않는다. 모니터는 상태마다 그 상태의 행을
- *    직렬화된 이벤트까지 모두 읽어 메모리에서 시각으로 거르고 한 건씩 UPDATE하며, 모든 pod에서 돈다. 브로커 장애로
- *    미완료 행이 쌓이면 그 비용이 행 수와 pod 수만큼 는다.
+ *    조건을 건 UPDATE 한 문장이다. Modulith staleness 모니터는 규모 때문에 쓰지 않는다. 모니터도 pod마다 돌지만 상태마다
+ *    그 상태의 행을 직렬화된 이벤트까지 모두 읽어 메모리에서 시각으로 거르고 한 건씩 UPDATE한다. 브로커 장애 중에는 판정
+ *    기간 동안 들어온 전송 대기 행이 모두 읽힌다.
  * 2. `FAILED` 기록을 다시 보낸다. [Lock]으로 pod 사이를 줄 세우되 트랜잭션은 열지 않는다([Lock.executeWithLockNoTx]).
  *    Modulith의 재전송 표시(완료되지 않았고 `status != RESUBMITTED`인 행만 바꾸는 조건부 UPDATE)가 한 건씩 바로 커밋되므로
- *    다음 pod는 표시된 행과 그사이 완료된 행을 건너뛰고, 비동기 externalizer가 완료 표시를 하려고 행 잠금을 기다리지 않는다.
- *    그래서 락이 fail-open으로 빠져도 표시를 얻은 pod 하나만 보낸다. 락은 pod 사이의 중복 읽기와 표시 경합을 줄인다.
+ *    다음 pod는 표시된 행을 건너뛰고, 비동기 externalizer가 완료 표시를 하려고 행 잠금을 기다리지 않는다. 완료된 행은 표시되지
+ *    않는다. 다만 표시 직후 Modulith가 리스너 호출 전에 그 행을 `PROCESSING`으로 바꾸므로, 락이 빠지면(fail-open, TTL 초과)
+ *    같은 `FAILED` 행을 먼저 읽어 둔 pod가 처리 중인 행을 다시 표시해 보낼 수 있다. 락은 이 중복 전송을 줄인다.
+ *    이 중복과, 전송 뒤 완료 표시 전에 프로세스가 죽거나 전송이 [staleAfter]를 넘겨 끊긴 기록이 된 행의 재전송은 멱등
+ *    consumer가 견딘다.
  * 3. 완료 기록을 지운다. 멱등 DELETE라 락 밖에서 따로 커밋한다. 실패해도 재전송에 번지지 않는다.
  * 앞 단계가 던지면 뒤 단계는 그 주기에 건너뛰고 다음 주기에 다시 한다.
  *
