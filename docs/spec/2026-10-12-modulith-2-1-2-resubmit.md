@@ -5,7 +5,7 @@ Spring Modulith 2.1.2는 발행 기록의 상태 전이에 완료 조건을 더�
 
 기대 결과는 셋이다. 재전송 작업 1단계는 끊긴 기록 UPDATE 한 문장만 남는다. Modulith staleness monitor를 쓰지 않는 이유는 규모로 적힌다. 락은 정합성 수단이 아니라 pod 사이의 중복 전송을 줄이는 수단으로 설명되고, 2.1.2에서 사라진 중복과 남는 중복이 구분된다.
 
-2.1.2는 아직 Maven Central에 없다(마일스톤 due 2026-10-22). 사용자 결정에 따라 배포된 것처럼 2.1.2를 커밋하고, 검증은 커밋하지 않는 스냅숏 빌드로 한다. PR은 draft로 열고 GA 뒤 정식 버전으로 다시 검증한다.
+2.1.2는 아직 Maven Central에 없다. GitHub 마일스톤의 목표일은 2026-10-22이지만 확정된 릴리스 날짜가 아니라 밀릴 수 있다. 사용자 결정에 따라 배포된 것처럼 2.1.2를 커밋하고, 검증은 커밋하지 않는 스냅숏 빌드로 한다. PR은 draft로 열고 GA 뒤 정식 버전으로 다시 검증한다.
 
 ## 범위
 **업스트림 사실.** 2026-10-12에 로컬 클론(`~/ybcha/spring-modulith`)의 `upstream/2.1.x` db6283c 소스로 대조했다.
@@ -40,7 +40,7 @@ Spring Modulith 2.1.2는 발행 기록의 상태 전이에 완료 조건을 더�
    - [Modulith·Kafka 키워드](../wiki/modulith-kafka-keywords.md)(볼트): 그 문서의 갱신 규칙을 따른다. 머리의 기준 버전, 2절의 Staleness monitor 항목과 재전송 API 동작 항목, 8.17·8.18에 날짜를 붙인 줄, 8.18의 절 번호, 출처를 고친다. 2절 "주의"의 "공식 문서가 외부 조정이 필요하다고 적는다"는 2026-10-12 레퍼런스와 `FailedEventPublications`·`ResubmissionOptions` Javadoc에 그 문장이 없어서 찾지 못했다고 적는다.
    - [현재 상태](../wiki/current-state.md)(볼트): 빌드 선언 표의 Modulith 버전, Modulith 도입 문단의 버전 문장.
 
-**공식 문서 대조.** [Spring Modulith 이벤트 레퍼런스](https://docs.spring.io/spring-modulith/reference/events.html)는 2026-10-12 현재 2.1.1 판이다. 이 페이지는 monitor를 "`PUBLISHED`·`PROCESSING`·`RESUBMITTED`에서 해당 기간보다 오래된 기록을 `FAILED`로 바꾸는 주기 작업"으로, 재전송을 "`FAILED`를 `RESUBMITTED`로 바꾸고 마지막 재전송 시각을 갱신한다"로 설명한다. 무엇을 기준으로 시각을 재는지, 완료된 행을 어떻게 다루는지, 몇 건씩 읽는지는 적지 않는다. 그래서 동작은 소스로 확인했다. 2.1.2 릴리스 노트는 아직 없다. 근거는 마일스톤 2.1.2(due 2026-10-22, open)의 이슈 목록이다. 닫힌 #1935·#1837·#1942·#1918이 있고, 열린 #1956(Spring Boot 4.1.2로 업그레이드)도 있다.
+**공식 문서 대조.** [Spring Modulith 이벤트 레퍼런스](https://docs.spring.io/spring-modulith/reference/events.html)는 2026-10-12 현재 2.1.1 판이다. 이 페이지는 monitor를 "`PUBLISHED`·`PROCESSING`·`RESUBMITTED`에서 해당 기간보다 오래된 기록을 `FAILED`로 바꾸는 주기 작업"으로, 재전송을 "`FAILED`를 `RESUBMITTED`로 바꾸고 마지막 재전송 시각을 갱신한다"로 설명한다. 무엇을 기준으로 시각을 재는지, 완료된 행을 어떻게 다루는지, 몇 건씩 읽는지는 적지 않는다. 그래서 동작은 소스로 확인했다. 2.1.2 릴리스 노트는 아직 없다. 근거는 마일스톤 2.1.2(목표일 2026-10-22, open)의 이슈 목록이다. 닫힌 #1935·#1837·#1942·#1918이 있고, 열린 #1956(Spring Boot 4.1.2로 업그레이드)도 있다.
 
 ## 제외
 - #85가 넣은 BOM 버전 덮어쓰기 셋(`tomcat.version`·`jackson-bom.version`·`kafka.version`). Boot 4.1.2로 올리는 맥락이라 이 PR과 다르다.
