@@ -204,10 +204,10 @@ provider 응답이 끊기면 `t_payment_attempt.status`가 `UNKNOWN`으로 남�
 
 ## 5. 아직 엔티티가 없는 것
 
-`Store`의 판매 정책·통화, `ReconciliationCase`(불일치 근거·조치), `ReceiptDelivery`(영수증 전달)는 [도메인 모델 §2](domain-model.md)에 자리만 있고 표와 엔티티는 없다. 주문의 `store_id`는 인증된 단말의 매장과 대조할 뿐 매장 표로 검증하지 않는다([현재 상태](current-state.md)).
+`Store`의 판매 정책·통화, `ReconciliationCase`(불일치 근거·조치), `ReceiptDelivery`(영수증 전달)는 [도메인 모델 §2](domain-model.md)에 자리만 있고 표와 엔티티는 없다. 주문의 `store_id`는 인증된 단말의 매장과 대조할 뿐 매장 표로 검증하지 않는다(볼트의 현재 상태 `docs/wiki/current-state.md`).
 
 ## 관련 문서
 - [도메인 모델](domain-model.md) — aggregate 경계(§2), 용어집(§3), 스키마 변경 검토(§4.7)
-- [현재 상태](current-state.md) — 모듈별 구현 상태와 알려진 빈틈
+- 현재 상태(`docs/wiki/current-state.md`, 볼트) — 모듈별 구현 상태와 알려진 빈틈
 - 볼트 규칙 `domain-modeling-kotlin.md` §5 — 엔티티 작성 규칙(`.claude/rules`로 복사된다)
 - 마이그레이션 `src/main/resources/db/migration/V002`·`V003`·`V005`~`V008`·`V010`~`V015` — 각 표의 DDL과 주석
