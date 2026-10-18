@@ -21,12 +21,15 @@
   - GitHub에서 열리지 않는 링크 정리. `README.md` 1건과 `docs/wiki/README.md` 13건이 커밋되지 않는 볼트 링크(`docs/wiki/current-state.md`, `docs/wiki/modulith-kafka-keywords.md`, `.claude/skills/**`)를 가리킨다. 링크를 경로 표기(코드 스팬)로 바꾸고, wiki 인덱스에 그 경로가 `make bootstrap` 뒤에만 생긴다는 한 줄을 둔다. 링크를 지우면 에이전트가 찾아갈 경로가 사라지므로 경로는 남긴다.
 - **범위 조정 2(2026-10-18, PR #95 생성 뒤).** 사용자가 남은 볼트 링크도 이 PR에서 정리하기로 했다. 공개 저장소에서 열리지 않는 링크를 없앤다는 같은 목표다. `AGENTS.md` 9건, `docs/wiki/development-workflow.md` 11건, `docs/wiki/borrowed-workflows.md`·`docs/wiki/entity-map.md` 각 2건, `docs/wiki/testing-strategy.md` 1건을 같은 방식으로 경로 표기로 바꾼다. `AGENTS.md`는 링크가 경로 표기로 바뀌어도 에이전트가 읽을 경로가 같다. 하네스(`scripts/test_link_claude.py`, `scripts/check_pr.py`)는 이 링크 형식을 검사하지 않는다.
 - **범위 조정 3(2026-10-18).** 사용자가 `docs/wiki/domain-model.md`의 볼트 링크 3건(16·311·323번째 줄)도 이 PR에 넣기로 했다. #94는 같은 파일의 150~193번째 줄만 바꾸므로 hunk가 겹치지 않는다. 고치는 것은 링크 표기뿐이고 문장은 그대로 둔다.
+- **범위 조정 4(2026-10-18).** 사용자가 남은 두 가지도 이 PR에 넣기로 했다.
+  - `docs/wiki/domain-model.md`에서 코드와 어긋난 문장 정정(결과 절의 "코드와 어긋난 문서 문장"). §1의 "`Money`·`IdentifierGenerator`뿐", §2의 `contract`가 "다른 업무 모듈의 타입을 들지 않는다(raw `UUID`)", §4.6의 "`sync` → `order`/`payment`"와 이어지는 "`order`/`payment` Facade 합류" 문장이다. `contract`의 세 이벤트와 `OrderPaid` KDoc, `ModuleStructureTest`, `TerminalOwnerController`, `StoreManagement.requireOwned`와 대조해 고친다. §4.6 제목은 그대로 둔다. `architecture.md`가 그 앵커를 링크하고 볼트 문서가 절 이름으로 부른다. 고치는 줄은 #94의 hunk(150~193번째 줄)와 겹치지 않는다.
+  - 과거 PR spec 45개의 링크 103건을 경로 표기로 바꾼다. [drop-changes-log](2026-09-21-drop-changes-log.md)는 제외 절에서 "머지된 spec 안의 `changes.md` 링크와 문장은 고치지 않는다(나중에 손대면 기록이 아니게 된다)"고 정했다. 이 PR은 그 결정을 링크 표기에 한해 바꾼다. 저장소 공개를 앞두고 GitHub에서 깨진 링크를 없애려는 것이고, 사용자가 "spec은 기록이라 두었다"는 설명을 듣고 진행을 정했다. 문장·결정·날짜는 바꾸지 않고 링크 문법만 바꾼다. `changes.md`는 "`docs/wiki/changes.md`, 2026-09-21 삭제"로 적어 당시 가리킨 파일을 남긴다.
 - 근거 원칙: 의존과 호출 순서는 문서가 아니라 origin/main 808aed9의 코드에서 확인한다. 모듈 의존은 `ApplicationModules.of(ResilientPosApplication::class.java)`로 출력한 결과를 그래프로 옮긴다. 이벤트 스토밍은 [도메인 청사진](../references/05_Domain_Development_Blueprint.md) §2·§3·§9, [문서 맵](../references/00_Document_Index.md) 변경 이력, [도메인 모델](../wiki/domain-model.md)의 용어집과 결정 표에 있는 것만 쓴다. 근거에 없는 진행 방식(참가자·워크숍 형식 등)은 쓰지 않고 "기록이 없다"고 적는다.
 
 ## 제외
-- `docs/wiki/domain-model.md`에서 볼트 링크 3건 밖의 수정. 열린 PR #94가 같은 파일을 바꾼다. 코드와 어긋난 문장을 찾으면 이 spec 결과 절에 남기고 고치지 않는다. 16번째 줄 링크가 있는 문장("`Money`·`IdentifierGenerator`뿐")도 링크만 바꾸고 문장은 후속 PR로 남긴다.
+- `docs/wiki/domain-model.md`에서 볼트 링크 3건과 범위 조정 4의 문장 밖의 수정. 열린 PR #94가 같은 파일을 바꾼다.
+- 볼트 rules(`.claude/rules/domain-modeling-kotlin.md` §6)에 있는 같은 문장("`sync` intake → `order`/`payment`")은 볼트가 정본이라 이 저장소 PR에서 고치지 않는다.
 - README 기존 절 가운데 코드와 어긋나지 않는 문장의 문체·구성 변경. 범위 조정에 적은 문장만 고친다.
-- 과거 PR spec 45개의 링크 103건(`current-state.md` 59건, `modulith-kafka-keywords.md` 9건, 이미 지운 `changes.md` 35건). spec은 그 PR 당시의 기록이라 고치지 않는다.
 - 코드·테스트 변경. 의존 출력에 쓴 임시 테스트는 커밋하지 않는다. 모듈 문서를 빌드마다 생성하는 테스트(Modulith `Documenter`)도 더하지 않는다. README 도식은 사람이 읽고 고치는 문서이고, 생성 산출물을 커밋하면 빌드마다 diff가 생긴다.
 - Obsidian 볼트에 있는 wiki(`current-state.md`, `modulith-kafka-keywords.md`) 수정과 링크. 저장소에 커밋되지 않는 링크라 공개 저장소에서 열리지 않는다.
 
@@ -45,6 +48,8 @@
 - docs/wiki/entity-map.md
 - docs/wiki/testing-strategy.md
 - docs/wiki/domain-model.md
+- docs/spec/2026-09-*.md
+- docs/spec/2026-10-0*.md
 
 ## 인수 조건
 1. README에 `## 아키텍처` 절이 있고, 요청에서 Kafka consumer까지의 흐름 도식, 모듈 의존 그래프, 모듈 사이 이벤트 표, 이벤트 스토밍 요약, `docs/wiki/architecture.md` 링크가 있다.
@@ -54,8 +59,9 @@
 5. Mermaid 블록이 모두 문법 오류 없이 렌더링된다.
 6. 새 문서와 README의 상대 링크가 모두 저장소에 추적되는 파일을 가리킨다.
 7. README의 기술 스택 표·로컬 실행·TDD·Engineering Principles 문장이 `build.gradle.kts`·`docker/docker-compose.yaml`·`application.yaml`과 어긋나지 않는다. H2, "Kafka 미도입", "도메인 구현 미완료", "PostgreSQL만 뜬다"는 문장이 남아 있지 않다.
-8. `README.md`, `AGENTS.md`, `docs/wiki/` 아래 문서에 추적되지 않는 파일을 가리키는 상대 링크가 없다.
+8. `README.md`, `AGENTS.md`, `docs/wiki/`·`docs/spec/` 아래 문서에 추적되지 않는 파일을 가리키는 상대 링크가 없다.
 9. `python3 scripts/check_pr.py --base origin/main --worktree`가 통과하고, 제출 전 `--worktree` 없는 실행도 통과한다.
+10. `docs/wiki/domain-model.md` §1·§2·§4.6의 문장이 코드와 어긋나지 않는다. 과거 spec의 diff에는 링크 문법 말고 바뀐 글자가 없다.
 
 ## 검증
 - 모듈 의존: 임시 테스트로 `ApplicationModules.of(...)`의 모듈 목록과 `getDirectDependencies`를 출력해 그래프와 대조한다. 실행 뒤 임시 테스트를 지운다.
@@ -66,9 +72,10 @@
 ## Wiki 영향
 - 신설 [architecture.md](../wiki/architecture.md). [wiki README](../wiki/README.md)에 진입점을 더한다.
 - 요구사항·설계 변화는 없다. 이미 머지된 구조를 그림으로 옮기는 문서 PR이다.
+- [도메인 모델](../wiki/domain-model.md) §1·§2·§4.6은 이미 머지된 코드에 맞춰 문장을 고친다. 새 결정은 없다.
 
 ## 분할 계획
-개발 컨텍스트는 "외부 독자용 아키텍처 설명" 하나다. origin/main 808aed9에서 시작했다. 열린 PR은 #94(`build.gradle.kts`, `docs/wiki/domain-model.md`, `EventPublicationResubmitter`와 그 테스트, #94의 spec)이고 이 PR의 변경 경로와 겹치지 않는다. README 기존 절 정정과 두 파일의 볼트 링크 정리는 범위 조정으로 이 PR에 넣었다. 공개 독자가 같은 README에서 모순을 보지 않게 하는 같은 목표라서다. 남은 볼트 링크 정리도 같은 목표라 범위 조정 2로 넣었고, 새 경로(`AGENTS.md`와 wiki 네 파일)도 #94와 겹치지 않는다. 범위 조정 3으로 `docs/wiki/domain-model.md`가 #94와 경로가 겹친다. 바꾸는 줄(16·311·323)이 #94의 hunk(150~193번째 줄)와 떨어져 있어 push 전에 #94 head와 시험 merge로 충돌이 없는지 확인한다. domain-model.md의 어긋난 문장은 #94 뒤의 별도 컨텍스트다. `Makefile`도 #94와 겹치지 않는다.
+개발 컨텍스트는 "외부 독자용 아키텍처 설명" 하나다. origin/main 808aed9에서 시작했다. 열린 PR은 #94(`build.gradle.kts`, `docs/wiki/domain-model.md`, `EventPublicationResubmitter`와 그 테스트, #94의 spec)이고 이 PR의 변경 경로와 겹치지 않는다. README 기존 절 정정과 두 파일의 볼트 링크 정리는 범위 조정으로 이 PR에 넣었다. 공개 독자가 같은 README에서 모순을 보지 않게 하는 같은 목표라서다. 남은 볼트 링크 정리도 같은 목표라 범위 조정 2로 넣었고, 새 경로(`AGENTS.md`와 wiki 네 파일)도 #94와 겹치지 않는다. 범위 조정 3으로 `docs/wiki/domain-model.md`가 #94와 경로가 겹친다. 바꾸는 줄(16·311·323)이 #94의 hunk(150~193번째 줄)와 떨어져 있어 push 전에 #94 head와 시험 merge로 충돌이 없는지 확인한다. 범위 조정 4의 domain-model.md 문장 정정과 과거 spec 링크도 "공개 독자가 코드와 맞지 않는 문서나 깨진 링크를 보지 않게 한다"는 같은 목표라 넣었다. `Makefile`도 #94와 겹치지 않는다.
 
 ## TDD 검증 기록
 적용하지 않는다. 문서만 바꾸고 업무 동작과 테스트 대상 코드가 없다.
