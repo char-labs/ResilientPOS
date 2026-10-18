@@ -63,7 +63,7 @@ python3 scripts/check_pr.py --base main --worktree
 - [개발 규칙](../wiki/development-workflow.md): 병렬 PR에서 버전이 겹칠 수 있다는 점과 머지 직전 재실행 규칙을 추가하고,
   "GitHub Actions를 쓰지 않는다"는 세 곳의 서술을 실제 상태로 바꾼다.
 - [차용 내역](../wiki/borrowed-workflows.md): workflow 없음을 전제로 한 `check-ci` 설명을 갱신한다.
-- [변경 기록](../wiki/changes.md): 이 spec 링크와 검사 범위의 한계를 남긴다.
+- 변경 기록(`docs/wiki/changes.md`, 2026-09-21 삭제): 이 spec 링크와 검사 범위의 한계를 남긴다.
 
 ## 분할 계획
 예상 규모: 하네스 약 25줄, 테스트 약 60줄, 문서 약 90줄로 총 180줄 내외다.

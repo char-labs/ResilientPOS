@@ -56,8 +56,8 @@
 - 설정이 실제로 먹는지는 컨텍스트를 띄워 값을 읽어 확인한다. yaml에 적기만 하고 확인하지 않으면 오타를 잡지 못한다.
 
 ## Wiki 영향
-- [현재 상태](../wiki/current-state.md) — "운영 배포 설정과 커넥션 풀 튜닝은 아직 없다"를 실제 상태로 고치고, 상한 값과 근거를 적는다.
-- [변경 이력](../wiki/changes.md) — 항목 추가.
+- 현재 상태(`docs/wiki/current-state.md`, 볼트) — "운영 배포 설정과 커넥션 풀 튜닝은 아직 없다"를 실제 상태로 고치고, 상한 값과 근거를 적는다.
+- 변경 이력(`docs/wiki/changes.md`, 2026-09-21 삭제) — 항목 추가.
 - 요구사항 변화: 주문 line 개수에 상한이 생긴다. 넘으면 400이다.
 
 ## 분할 계획
@@ -115,7 +115,7 @@ Claude 리뷰(85점)가 블로킹 없이 Important 8건을 냈다. 사실 주장
 
 **받았다 — `POSTGRES_PASSWORD`의 실패 모드가 주석과 다르다.** 지적대로다. 해석되지 않은 placeholder는 `@ConfigurationProperties` 바인딩에서 **예외가 아니라 리터럴 문자열**이 된다(`Environment.getProperty`는 던지지만 바인딩은 던지지 않는다. 직접 확인했다). 기동이 멈추는 실제 지점은 Hikari의 인증 실패이고 로그도 `password authentication failed`다. **DB가 `trust` 인증이면 아무것도 막지 못한다.** 주석과 wiki를 실제 동작으로 고쳤다. 인수 조건 5를 "기동에 실패한다"에서 실제 실패 모드로 낮춰 적는다.
 
-**받았다 — Flyway가 `socketTimeout` 아래에서 돈다, 쿼리 10초가 읽기에만 붙는다, 문자열 상한과 컬럼 상한의 간극, profile 미분리의 대가.** 코드로 막을 수 없거나 이 PR의 범위가 아닌 것들이라 [현재 상태](../wiki/current-state.md)의 알려진 빈틈에 전부 적었다.
+**받았다 — Flyway가 `socketTimeout` 아래에서 돈다, 쿼리 10초가 읽기에만 붙는다, 문자열 상한과 컬럼 상한의 간극, profile 미분리의 대가.** 코드로 막을 수 없거나 이 PR의 범위가 아닌 것들이라 현재 상태(`docs/wiki/current-state.md`, 볼트)의 알려진 빈틈에 전부 적었다.
 
 **받지 않았다 — Jackson 기본 문자열 길이가 2천만이라는 지적.** 실측했다. `tools.jackson.core.StreamReadConstraints.defaults()`는 이 버전에서 `maxStringLength=100000000`, `maxNumberLength=1000`, `maxDocumentLength=-1`이다. 2천만은 jackson-core 2.15의 값이고 Jackson 3에서는 다르다. 문서의 "1억"이 맞다.
 

@@ -77,8 +77,8 @@ Claude에서 `/이름`, Codex에서 `$이름`으로 호출한다. 자연어 요�
 
 | 구성 | 목적 | 선택 범위 |
 |---|---|---|
-| [resilientpos-workflow](../../.claude/skills/resilientpos-workflow/SKILL.md) | 지침·컨벤션의 누락/중복/충돌 점검과 최소 수정 | 워크플로우/지침 개선 요청 |
-| [resilientpos-commit-push](../../.claude/skills/resilientpos-commit-push/SKILL.md) | 범위를 확인한 커밋과 요청된 push | commit/push 요청 |
+| resilientpos-workflow(`.claude/skills/resilientpos-workflow/SKILL.md`) | 지침·컨벤션의 누락/중복/충돌 점검과 최소 수정 | 워크플로우/지침 개선 요청 |
+| resilientpos-commit-push(`.claude/skills/resilientpos-commit-push/SKILL.md`) | 범위를 확인한 커밋과 요청된 push | commit/push 요청 |
 | workflow-reviewer | 지침·스킬을 읽기 전용으로 검토 | 워크플로우 변경 검토 |
 
 당시 보류했던 항목(orchestrator/grill/spec-write 전체 도입, 문체 전용 agent, rules 일괄 생성기, CLI·전역 hook 설치,

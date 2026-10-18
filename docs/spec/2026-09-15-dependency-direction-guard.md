@@ -51,8 +51,8 @@ python3 scripts/check_pr.py --base feature/foundation-value-types --worktree
 - 실패: `foundation`에 JPA 애너테이션을 임시로 붙여 규칙이 실패하는지 확인한다.
 
 ## Wiki 영향
-- [현재 상태](../wiki/current-state.md): Gradle 구조와 분할 조건, 의존성 가드의 적용 범위를 추가한다.
-- [변경 기록](../wiki/changes.md): 이 spec 링크와 분할을 미룬 근거를 남긴다.
+- 현재 상태(`docs/wiki/current-state.md`, 볼트): Gradle 구조와 분할 조건, 의존성 가드의 적용 범위를 추가한다.
+- 변경 기록(`docs/wiki/changes.md`, 2026-09-21 삭제): 이 spec 링크와 분할을 미룬 근거를 남긴다.
 
 ## 분할 계획
 예상 규모: 테스트 약 40줄, 빌드 설정 1줄, 문서 약 110줄로 총 150줄 내외다.

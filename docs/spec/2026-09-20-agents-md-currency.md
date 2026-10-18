@@ -7,7 +7,7 @@ PostgreSQL 전용이 되었고 Spring Modulith 2.1.1이 도입되었는데도 �
 반복 비용이 큰 규약·함정 네 가지를 한 줄씩 남긴다.
 
 ## 범위
-- "현재 기술 스택" 절을 `build.gradle.kts`와 [현재 상태](../wiki/current-state.md)에 맞춘다. PostgreSQL 전용과
+- "현재 기술 스택" 절을 `build.gradle.kts`와 현재 상태(`docs/wiki/current-state.md`, 볼트)에 맞춘다. PostgreSQL 전용과
   Flyway 스키마 소유·JPA validate를 적고, Spring Modulith 2.1.1 도입을 반영한다. 테스트 도구로 Spring REST Docs,
   Testcontainers PostgreSQL, ArchUnit, Fixture Monkey를 요약에 넣는다. Redis와 Kafka가 아직 없다는 문장은 유지한다.
 - "비즈니스·도메인·Controller 개발" 자리에 코드 규약 두 가지를 한 줄씩 더한다. 도메인 규칙 위반은 `require`가 아니라
@@ -57,9 +57,9 @@ PostgreSQL 전용이 되었고 Spring Modulith 2.1.1이 도입되었는데도 �
   문서와 AGENTS.md뿐임을 확인한다.
 
 ## Wiki 영향
-[변경 기록](../wiki/changes.md)에 이 spec 링크와 요구사항 무영향 근거를 남긴다. 제품 요구사항과 설계는 바뀌지 않는다.
+변경 기록(`docs/wiki/changes.md`, 2026-09-21 삭제)에 이 spec 링크와 요구사항 무영향 근거를 남긴다. 제품 요구사항과 설계는 바뀌지 않는다.
 이번 변경은 이미 머지된 PR들이 만든 사실을 인덱스 문서에 옮겨 적는 것이고, 새 결정을 내리지 않는다.
-[현재 상태](../wiki/current-state.md)는 이미 같은 사실을 담고 있어 갱신하지 않는다.
+현재 상태(`docs/wiki/current-state.md`, 볼트)는 이미 같은 사실을 담고 있어 갱신하지 않는다.
 
 ## 분할 계획
 문서 3개, 추가·수정 줄 수는 100줄 미만으로 예상한다. 개발 규칙의 파일·줄 수 한도에서 멀어 분할하지 않는다.

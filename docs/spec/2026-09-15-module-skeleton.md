@@ -50,8 +50,8 @@ python3 scripts/check_pr.py --base main --worktree
 - 실패 시나리오: `order` 패키지에 `payment.internal` 참조를 임시로 넣고 `./gradlew test`가 실패하는 것을 확인한 뒤 되돌린다. 실패 메시지와 되돌린 결과를 아래 TDD 표에 적는다.
 
 ## Wiki 영향
-- [현재 상태](../wiki/current-state.md): "도메인 모듈은 아직 구현되지 않았다", "Spring Modulith는 설계 방향이며 현재 빌드 의존성에는 없다"를 실제 도입 상태로 갱신한다.
-- [변경 기록](../wiki/changes.md): 이 spec 링크와 요구사항 영향(제품 요구사항 무변경, 구조 선언만)을 남긴다.
+- 현재 상태(`docs/wiki/current-state.md`, 볼트): "도메인 모듈은 아직 구현되지 않았다", "Spring Modulith는 설계 방향이며 현재 빌드 의존성에는 없다"를 실제 도입 상태로 갱신한다.
+- 변경 기록(`docs/wiki/changes.md`, 2026-09-21 삭제): 이 spec 링크와 요구사항 영향(제품 요구사항 무변경, 구조 선언만)을 남긴다.
 
 ## 분할 계획
 예상 규모: build 설정 약 5줄, `package-info.java` 7개 약 60줄, 테스트 약 20줄, 문서 약 130줄로 총 220줄 내외. 경고 한도(600줄) 안이다.

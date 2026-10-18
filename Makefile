@@ -32,7 +32,7 @@ harness: ## 로컬 하네스 테스트 (Python 표준 라이브러리)
 check: ## PR 규칙 검사 (예: make check BASE=main)
 	python3 scripts/check_pr.py --base $(BASE) --worktree
 
-up: ## 로컬 PostgreSQL 기동 (앱·LGTM profile은 README 참고)
+up: ## 로컬 PostgreSQL·Redis·Kafka 기동 (앱·LGTM profile은 README 참고)
 	$(COMPOSE) up -d --wait
 
 down: ## compose로 띄운 컨테이너를 profile 구분 없이 모두 중지

@@ -32,7 +32,7 @@
 - 파일 최상위 `private val log = KotlinLogging.logger {}` 방식. 카카오페이 기술 블로그가 권장하는 형태지만 이번에는 lazy 위임 한 가지로 통일한다.
 - 로거 생성 경로를 막는 ArchUnit 규칙. `LoggerFactory.getLogger` 호출은 막을 수 있지만, `KotlinLogging.logger(String)` 직접 호출은 `logger()`의 inline 전개와 바이트코드가 같아 구분되지 않는다. 경로 전체를 막지 못하는 규칙은 이번에 넣지 않는다.
 - 테스트 코드의 logback 직접 사용. `ErrorLogRequestContextTest`는 로그 출력을 가로채려고 logback `Logger`를 다루는 것이라 대상이 아니다.
-- 구조화 로그(JSON), correlation id, MDC. [현재 상태](../wiki/current-state.md)에 적힌 알려진 빈틈 그대로다.
+- 구조화 로그(JSON), correlation id, MDC. 현재 상태(`docs/wiki/current-state.md`, 볼트)에 적힌 알려진 빈틈 그대로다.
 
 ## 관련 문서
 없음
@@ -65,7 +65,7 @@
 - `python3 scripts/check_pr.py --base fe6f889 --worktree` — PASS.
 
 ## Wiki 영향
-- [현재 상태](../wiki/current-state.md) — 빌드 선언 표에 kotlin-logging을 넣고, `platform` 모듈 설명에 `logger()`와 선언 규칙을 적고, 테스트 수를 갱신한다.
+- 현재 상태(`docs/wiki/current-state.md`, 볼트) — 빌드 선언 표에 kotlin-logging을 넣고, `platform` 모듈 설명에 `logger()`와 선언 규칙을 적고, 테스트 수를 갱신한다.
 - 요구사항 변화: 없다. 로그 내용과 형식은 그대로이고 로거를 만드는 방법만 바뀐다.
 
 ## 분할 계획

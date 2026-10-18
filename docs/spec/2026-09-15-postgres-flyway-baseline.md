@@ -56,8 +56,8 @@ python3 scripts/check_pr.py --base main --worktree
 - 실패: 마이그레이션 파일을 훼손하면 checksum 불일치로 기동이 실패하는지 확인한다.
 
 ## Wiki 영향
-- [현재 상태](../wiki/current-state.md): H2 제거, PostgreSQL 단일 엔진, Flyway 스키마 소유, 테스트에 Docker가 필요하다는 점을 기록한다.
-- [변경 기록](../wiki/changes.md): 이 spec 링크와 테스트 DB 전략 결정 근거를 남긴다.
+- 현재 상태(`docs/wiki/current-state.md`, 볼트): H2 제거, PostgreSQL 단일 엔진, Flyway 스키마 소유, 테스트에 Docker가 필요하다는 점을 기록한다.
+- 변경 기록(`docs/wiki/changes.md`, 2026-09-21 삭제): 이 spec 링크와 테스트 DB 전략 결정 근거를 남긴다.
 
 ## 분할 계획
 예상 규모: 빌드·설정 약 30줄, 마이그레이션 약 10줄, 테스트 약 70줄, 문서 약 130줄로 총 240줄 내외다.

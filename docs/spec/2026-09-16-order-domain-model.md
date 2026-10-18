@@ -65,8 +65,8 @@ python3 scripts/check_pr.py --base main --worktree
 
 ## Wiki 영향
 - [도메인 모델](../wiki/domain-model.md): `OrderStatus`의 첫 상태는 `OPEN`이고 오프라인·동기화 여부는 order 상태가 아니라 `sync`가 소유하는 사실이라는 결정을 §8에 추가한다. [시스템 설계 §5](../references/02_System_Design.md)의 `OFFLINE_CREATED → SYNCED`는 이 결정으로 대체한다. 상태 열거값은 각 명령 PR이 추가한다.
-- [현재 상태](../wiki/current-state.md): `order` 모듈에 첫 타입이 생겼고, `foundation`에 `Transition`·`DomainEvent`가 있으며, `DependencyDirectionTest`에 도메인 레이어 규칙이 있다는 사실을 반영한다. "도메인 레이어 규칙은 아직 없다" 문장을 지운다.
-- [변경 기록](../wiki/changes.md): 이 spec 링크와 결정을 남긴다. 제품 요구사항은 바뀌지 않는다. 청사진 §1.1의 `OrderService.create`는 만들지 않고, 시스템 설계 §5의 order 상태 이름을 wiki 결정으로 대체한다.
+- 현재 상태(`docs/wiki/current-state.md`, 볼트): `order` 모듈에 첫 타입이 생겼고, `foundation`에 `Transition`·`DomainEvent`가 있으며, `DependencyDirectionTest`에 도메인 레이어 규칙이 있다는 사실을 반영한다. "도메인 레이어 규칙은 아직 없다" 문장을 지운다.
+- 변경 기록(`docs/wiki/changes.md`, 2026-09-21 삭제): 이 spec 링크와 결정을 남긴다. 제품 요구사항은 바뀌지 않는다. 청사진 §1.1의 `OrderService.create`는 만들지 않고, 시스템 설계 §5의 order 상태 이름을 wiki 결정으로 대체한다.
 
 ## 분할 계획
 예상 규모: 구현 약 190줄(foundation 15, ID 20, order 공개 75, domain 80), 테스트 약 130줄, 문서 약 180줄로 총 500줄·15파일 내외. 경고 한도(600줄·20파일) 안이다.

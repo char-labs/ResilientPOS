@@ -1,7 +1,7 @@
 # PR spec: 빈 상품 코드·상품명을 가진 주문 line 거절
 
 ## 목적
-`POST /v1/orders`는 `productCode`나 `productName`이 빈 문자열이거나 공백뿐인 line을 그대로 받아 저장한다. [현재 상태](../wiki/current-state.md)가 알려진 빈틈으로 적어 둔 항목이다. 상품을 식별할 수 없는 line은 영수증·주방 ticket·정산 어디에서도 쓸 수 없으므로 `OrderLine`이 생성 시점에 거절한다.
+`POST /v1/orders`는 `productCode`나 `productName`이 빈 문자열이거나 공백뿐인 line을 그대로 받아 저장한다. 현재 상태(`docs/wiki/current-state.md`, 볼트)가 알려진 빈틈으로 적어 둔 항목이다. 상품을 식별할 수 없는 line은 영수증·주방 ticket·정산 어디에서도 쓸 수 없으므로 `OrderLine`이 생성 시점에 거절한다.
 
 ## 범위
 - 소유 모듈: `order`. 규칙은 `internal/domain`의 `OrderLine`이 소유한다. 데이터가 가진 규칙은 데이터 가까이에 둔다는 기존 방식(`INVALID_QUANTITY`, `NEGATIVE_UNIT_PRICE`)을 따른다.
@@ -57,8 +57,8 @@
 - 정상 시나리오: 기존 생성·재시도 테스트가 그대로 통과한다. 실패 시나리오: 인수 조건 1, 2, 4.
 
 ## Wiki 영향
-- [현재 상태](../wiki/current-state.md): 알려진 빈틈에서 "빈 `productCode`·`productName`을 받는 것"을 지우고 거절 코드 두 개와 테스트 수를 반영한다. 길이 상한 초과가 500이 되는 것을 알려진 빈틈에 더한다.
-- [변경 기록](../wiki/changes.md): 이 spec 링크와 요구사항 영향을 적는다.
+- 현재 상태(`docs/wiki/current-state.md`, 볼트): 알려진 빈틈에서 "빈 `productCode`·`productName`을 받는 것"을 지우고 거절 코드 두 개와 테스트 수를 반영한다. 길이 상한 초과가 500이 되는 것을 알려진 빈틈에 더한다.
+- 변경 기록(`docs/wiki/changes.md`, 2026-09-21 삭제): 이 spec 링크와 요구사항 영향을 적는다.
 - [도메인 모델](../wiki/domain-model.md): 무영향. 용어와 aggregate 경계가 바뀌지 않는다.
 
 ## 분할 계획
@@ -77,7 +77,7 @@
 - 인수 조건 1~5를 충족했다. `./gradlew test`는 59개(기존 55, 신규 4) 중 실패 0이다.
 - 구현은 `OrderLine`의 `init`에 `isBlank()` 검사 두 개와 코드 상수 두 개다. `OrderLine`은 `Order.restore` 경로에서도 만들어지므로 blank 값이 이미 저장된 행이 있으면 조회가 실패한다. 배포된 데이터가 없어서 도달하지 않는 경로이고, 기존 `INVALID_QUANTITY`·`NEGATIVE_UNIT_PRICE`도 같은 성질이다.
 - REST Docs는 `lines[].productCode`·`lines[].productName` 설명에 거절 코드를 적었다. 새 스니펫은 만들지 않았다. Controller 슬라이스는 Facade를 대역으로 두므로 도메인 규칙의 응답은 `EMPTY_ORDER` 문서와 모양이 같다.
-- 제외에 적은 길이 상한 초과는 임시 테스트로 확인했다. 65자 `productCode`의 응답은 `500 INTERNAL_ERROR`였다. 임시 테스트는 커밋하지 않았고 [현재 상태](../wiki/current-state.md)의 알려진 빈틈에 적었다.
+- 제외에 적은 길이 상한 초과는 임시 테스트로 확인했다. 65자 `productCode`의 응답은 `500 INTERNAL_ERROR`였다. 임시 테스트는 커밋하지 않았고 현재 상태(`docs/wiki/current-state.md`, 볼트)의 알려진 빈틈에 적었다.
 - `tdd-driver`에 위임하지 않고 주 에이전트가 TDD 절차를 직접 수행했다. 변경이 구현 8줄이라 위임 비용이 더 컸다.
 - 범위 조정 뒤: blank 목록에 탭·개행·NBSP를 더한 도메인 테스트가 구현 변경 없이 통과했다(`isBlank()`가 이미 거절하는 값이라 characterization이다). `Order.restore` KDoc은 주석만 고쳤다. `./gradlew test`는 59개 중 실패 0이다.
 - multi-review: Claude 86점, Codex 92점, Gemini 미실행(CLI 없음). 둘 다 막는 결함은 없다고 판정했다. 함께 지적한 네 가지는 위 범위 조정에 적고 반영했다. 한 리뷰어만 지적한 다음 항목은 반영하지 않았다. 오류 응답에 몇 번째 line인지 싣기(응답 규약을 한 번에 정할 후속 주제), `POST /v1/orders` 오류 코드 표를 wiki에 두기, `BLANK_PRODUCT_NAME`의 HTTP 경로 테스트와 공백 보존의 DB 왕복 테스트(같은 매핑·같은 저장 경로라 얻는 것이 적다), blank 검사가 수량·단가 검사보다 앞이라 둘 다 틀린 line의 코드가 `INVALID_QUANTITY`에서 `BLANK_PRODUCT_CODE`로 바뀐 것(PR 본문의 기존 기능 영향에 적는다).

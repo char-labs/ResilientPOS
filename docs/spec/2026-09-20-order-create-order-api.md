@@ -62,8 +62,8 @@ python3 scripts/check_pr.py --base origin/main --worktree
 - 실패: 도메인 거절과 형식 오류가 각각 지정한 `errorCode`의 400으로 나가고 저장되지 않는지 확인한다.
 
 ## Wiki 영향
-- [현재 상태](../wiki/current-state.md): 첫 공개 endpoint, REST Docs 도입, 테스트 수를 반영한다. "REST Docs는 첫 Controller PR에서 추가한다"는 문장을 고친다.
-- [변경 기록](../wiki/changes.md): 이 spec 링크와 결정 근거를 남긴다.
+- 현재 상태(`docs/wiki/current-state.md`, 볼트): 첫 공개 endpoint, REST Docs 도입, 테스트 수를 반영한다. "REST Docs는 첫 Controller PR에서 추가한다"는 문장을 고친다.
+- 변경 기록(`docs/wiki/changes.md`, 2026-09-21 삭제): 이 spec 링크와 결정 근거를 남긴다.
 - [AGENTS.md](../../AGENTS.md): 기술 스택 요약에 REST Docs를 더한다.
 
 ## 분할 계획

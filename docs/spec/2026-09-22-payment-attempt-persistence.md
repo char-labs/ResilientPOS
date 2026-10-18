@@ -75,7 +75,7 @@
 - 1-to-many와 중복 승인 차단을 실제 PostgreSQL에서 확인한다. 엔티티와 테이블 정의만 읽고 넘어가지 않는다.
 
 ## Wiki 영향
-- [현재 상태](../wiki/current-state.md) — `t_payment_attempt`와 그 설계 결정을 적고 테스트 수를 맞춘다. 앞선 PR이 `attemptNo`를 걷어내면서 남은 서술도 함께 지운다.
+- 현재 상태(`docs/wiki/current-state.md`, 볼트) — `t_payment_attempt`와 그 설계 결정을 적고 테스트 수를 맞춘다. 앞선 PR이 `attemptNo`를 걷어내면서 남은 서술도 함께 지운다.
 - [도메인 모델](../wiki/domain-model.md) — `payment`의 핵심 불변식, `attempt` 용어, 멱등성 담당자 세 곳이 `(orderId, attemptNo)`를 가리키고 있다. 그 키가 없어졌으므로 정본을 실제 스키마에 맞춘다.
 - 요구사항 변화: 없다. 저장 경로만 생기고 API도 이벤트도 그대로다.
 

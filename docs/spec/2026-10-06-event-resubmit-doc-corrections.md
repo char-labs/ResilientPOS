@@ -29,8 +29,8 @@
 - `EventPublicationResubmitterIntegrationTest`: 완료된 재전송 행을 넣는 곳의 주석. 테스트 코드는 그대로 둔다.
 - [event-publication-resubmit](2026-09-29-event-publication-resubmit.md): 1단계 설명의 괄호, 재전송 결정의 fail-open 항목, 한계의 "영영 나가지 못하는 기록", 결과의 2차 multi-review 항목. 같은 한계 절에 사실 2의 업스트림 결함을 더한다.
 - [도메인 모델](../wiki/domain-model.md) §4.3: 1단계 설명, "영영 나가지 못하는 기록"의 로그·기준·탐지 SQL, §4.7 버전 올리기 절차 5번의 완료 표시 대조 항목.
-- [Modulith·Kafka 키워드](../wiki/modulith-kafka-keywords.md)(볼트): 재전송 API의 동작 항목, 8.17의 fail-open 설명, 8.26의 대가. 그 문서의 갱신 규칙에 따라 날짜를 붙인 정정 줄과 출처를 더한다.
-- [현재 상태](../wiki/current-state.md)(볼트): "영영 나가지 못하는 기록이 500건을 넘으면" 문장.
+- Modulith·Kafka 키워드(`docs/wiki/modulith-kafka-keywords.md`, 볼트)(볼트): 재전송 API의 동작 항목, 8.17의 fail-open 설명, 8.26의 대가. 그 문서의 갱신 규칙에 따라 날짜를 붙인 정정 줄과 출처를 더한다.
+- 현재 상태(`docs/wiki/current-state.md`, 볼트)(볼트): "영영 나가지 못하는 기록이 500건을 넘으면" 문장.
 
 ## 제외
 - 동작 변경. 1단계 SQL, 재전송 옵션, 스케줄, 락은 그대로다. 정리 UPDATE도 지우지 않는다.
@@ -63,7 +63,7 @@
 
 ## Wiki 영향
 - [도메인 모델](../wiki/domain-model.md) §4.3·§4.7: 재전송 작업의 설명과 탐지 SQL을 사실에 맞춘다. 요구사항 변화는 없다. 동작은 그대로이고 설명만 고친다.
-- [Modulith·Kafka 키워드](../wiki/modulith-kafka-keywords.md)·[현재 상태](../wiki/current-state.md)는 볼트 링크라 이 PR의 diff에 나오지 않는다.
+- Modulith·Kafka 키워드(`docs/wiki/modulith-kafka-keywords.md`, 볼트)·현재 상태(`docs/wiki/current-state.md`, 볼트)는 볼트 링크라 이 PR의 diff에 나오지 않는다.
 
 ## 분할 계획
 개발 컨텍스트는 "#70 문서의 Modulith 동작 설명 정정" 하나다. origin/main 2b47e38에서 시작했고 열린 PR이 없어 경로 겹침이 없다. 업스트림 수정과 역직렬화 실패 행의 격리는 별도 컨텍스트다.

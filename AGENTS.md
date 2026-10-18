@@ -14,17 +14,17 @@
 - 스킬과 에이전트 정본은 Obsidian 볼트에 두고 저장소는 `.claude/skills`, `.claude/agents`, `.codex/agents` 심볼릭 링크로 연결한다. `.claude/rules`는 Claude Code가 링크를 싣지 않으므로 볼트에서 실제 파일로 복사하며, 볼트 rules를 고친 뒤에는 `make bootstrap`을 다시 실행한다. 네 경로는 `.gitignore` 대상이라 추적하지 않는다. 새 머신에서는 clone 후, 새 worktree에서는 에이전트 세션을 시작하기 전에 `make -C worktree경로 bootstrap`을 실행한다. 세션이 먼저 시작되면 그 세션에는 rules가 실리지 않는다. 볼트가 없으면 링크 없이 동작하며 스킬도 없다.
 
 ## 작업별로 읽기와 검증
-- 새 기능·변경 요청: 요구사항이 합의되지 않았으면 [grill 스킬](.claude/skills/resilientpos-grill/SKILL.md)로 먼저 심문한다. 설계 → 리뷰 → 구현 → 머지를 한 번에 진행하려면 [develop 스킬](.claude/skills/resilientpos-develop/SKILL.md), 여러 작업을 나눠 위임하려면 [orchestrator 스킬](.claude/skills/resilientpos-orchestrator/SKILL.md)을 사용한다.
+- 새 기능·변경 요청: 요구사항이 합의되지 않았으면 grill 스킬(`.claude/skills/resilientpos-grill/SKILL.md`)로 먼저 심문한다. 설계 → 리뷰 → 구현 → 머지를 한 번에 진행하려면 develop 스킬(`.claude/skills/resilientpos-develop/SKILL.md`), 여러 작업을 나눠 위임하려면 orchestrator 스킬(`.claude/skills/resilientpos-orchestrator/SKILL.md`)을 사용한다.
 - 개발 시작: 해당 PR spec과 [개발 규칙](docs/wiki/development-workflow.md)을 읽는다. 지식 탐색은 [wiki 인덱스](docs/wiki/README.md)에서 관련 페이지만 선택한다.
-- 애플리케이션/빌드 변경: [현재 상태](docs/wiki/current-state.md)와 [README의 Engineering Principles](README.md#engineering-principles)를 확인한다.
-- 비즈니스·도메인·Controller 개발: 용어·aggregate 경계·유비쿼터스 언어는 [도메인 모델](docs/wiki/domain-model.md)을 먼저 읽는다. 구현은 [TDD 스킬](.claude/skills/resilientpos-tdd/SKILL.md)을 사용하고 지원 환경에서는 `tdd-driver`에 한 동작의 구현/테스트를 맡긴다. Repository 자체 테스트는 제외한다.
+- 애플리케이션/빌드 변경: 현재 상태(`docs/wiki/current-state.md`, 볼트)와 [README의 Engineering Principles](README.md#engineering-principles)를 확인한다.
+- 비즈니스·도메인·Controller 개발: 용어·aggregate 경계·유비쿼터스 언어는 [도메인 모델](docs/wiki/domain-model.md)을 먼저 읽는다. 구현은 TDD 스킬(`.claude/skills/resilientpos-tdd/SKILL.md`)을 사용하고 지원 환경에서는 `tdd-driver`에 한 동작의 구현/테스트를 맡긴다. Repository 자체 테스트는 제외한다.
 - 도메인 규칙 위반은 `require`가 아니라 `foundation.DomainException(code, message, kind)`으로 던진다. `kind`는 HTTP 숫자가 아닌 업무 의미이고 기본값은 `INVALID`다.
 - 컬럼·테이블·제약·인덱스를 더하거나 빼는 PR은 [도메인 모델](docs/wiki/domain-model.md)의 "스키마 변경 검토" 절 질문에 답을 spec의 `스키마 변경 검토` 절에 적는다. 필요성(기존 데이터로 대신할 수 있고 나중에 채울 수도 있으면 넣지 않는다), 정합성(unique·`@Version`·멱등 키는 Redis·Kafka로 대신하지 않는다), 반영(락과 이전 버전 호환) 세 관점이다. 답은 구현자가 아닌 리뷰어가 DDL·엔티티·코드와 대조하고 `- 대조 기록:` 줄을 남긴다. 마이그레이션을 바꾸는 PR에 이 절이 없으면 `check_pr.py`가 실패하고, 대조 기록이 없으면 `--worktree`에서는 경고, `--worktree` 없는 제출 전 검사에서는 실패한다.
-- Kafka·Spring Kafka·Modulith 이벤트(externalization, 재시도·DLT·재전송) 작업은 공식 문서로 Best Practice를 대조하고 근거를 PR spec에 남긴다. 문서가 기본값을 말하지 않으면 sources jar나 기동 로그의 ProducerConfig·ConsumerConfig values로 실제 값을 확인하고 추측으로 적지 않는다. 작업을 끝내면 PR 전에 [Modulith·Kafka 키워드](docs/wiki/modulith-kafka-keywords.md)를 그 문서의 "갱신 규칙"대로 갱신한다.
+- Kafka·Spring Kafka·Modulith 이벤트(externalization, 재시도·DLT·재전송) 작업은 공식 문서로 Best Practice를 대조하고 근거를 PR spec에 남긴다. 문서가 기본값을 말하지 않으면 sources jar나 기동 로그의 ProducerConfig·ConsumerConfig values로 실제 값을 확인하고 추측으로 적지 않는다. 작업을 끝내면 PR 전에 Modulith·Kafka 키워드(`docs/wiki/modulith-kafka-keywords.md`, 볼트)를 그 문서의 "갱신 규칙"대로 갱신한다.
 - Controller는 DTO만 돌려준다. 응답 envelope는 `platform`의 `ApiResponseBodyAdvice`가 씌우고 오류 변환은 `ApiControllerAdvice`가 맡는다.
 - 애플리케이션/빌드 변경 검증: `./gradlew test`로 검증한다. 통합 테스트가 Testcontainers로 PostgreSQL과 Redis를 띄우므로 Docker가 필요하다. 특정 테스트는 `./gradlew test --tests 'com.resilientpos.테스트클래스'`로 좁혀 실행할 수 있다.
 - 하네스 코드 변경: `python3 -m unittest discover -s scripts -p 'test_*.py'`를 실행한다. Python 3 표준 라이브러리만 사용한다.
-- 지침/컨벤션 점검은 [workflow 스킬](.claude/skills/resilientpos-workflow/SKILL.md)을 사용한다. Git 작업(브랜치·커밋·push·PR·충돌·리뷰 조회)은 [git 스킬](.claude/skills/resilientpos-git/SKILL.md)을 쓰고, 커밋/push 범위 판단은 [commit-push 스킬](.claude/skills/resilientpos-commit-push/SKILL.md)을 함께 적용한다. 전체 스킬·에이전트 목록과 모델 배정은 [차용 내역](docs/wiki/borrowed-workflows.md)과 [지침 설계 근거](docs/wiki/agent-instructions.md)에 있다.
+- 지침/컨벤션 점검은 workflow 스킬(`.claude/skills/resilientpos-workflow/SKILL.md`)을 사용한다. Git 작업(브랜치·커밋·push·PR·충돌·리뷰 조회)은 git 스킬(`.claude/skills/resilientpos-git/SKILL.md`)을 쓰고, 커밋/push 범위 판단은 commit-push 스킬(`.claude/skills/resilientpos-commit-push/SKILL.md`)을 함께 적용한다. 전체 스킬·에이전트 목록과 모델 배정은 [차용 내역](docs/wiki/borrowed-workflows.md)과 [지침 설계 근거](docs/wiki/agent-instructions.md)에 있다.
 - squash merge된 로컬 브랜치는 `git branch -d`가 삭제를 거절한다. `gh pr view 번호 --json headRefOid`의 커밋이 로컬 tip과 같거나 로컬 tip이 그 커밋의 조상인지 확인한 뒤 `-D`로 지운다.
 - 개발 중: `python3 scripts/check_pr.py --base <PR-기준커밋> --worktree`를 실행한다. PR 제출 전에는 `--worktree` 없이 한 번 더 실행한다. 일부 검사는 개발 중에는 경고이고 제출 전에만 실패다. 문서만 바뀌면 링크·내용과 이 검사를 확인한다.
 - `check_pr.py`는 spec의 필수 절에 부등호 여는 문자가 코드 블록 밖에 있으면 그 절을 미작성으로 판정한다. 제네릭 타입 표기나 MockMvc의 상태 코드 불일치 메시지 같은 문구는 spec에서 글로 풀어 적는다.

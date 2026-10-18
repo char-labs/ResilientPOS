@@ -27,7 +27,7 @@
 - 그 절에 내용이 있는 `- 대조 기록:` 줄이 없으면 `--worktree`에서는 경고, 이력 검사에서는 실패다. 독립 대조는 PR 제출 직전에 하므로 개발 중 검사를 막지 않는다. 검사기는 줄의 존재만 확인하고 내용의 진위는 PR 리뷰가 본다.
 - `--migrations-only`(PR 워크플로)와 마이그레이션이 없는 PR은 영향받지 않는다.
 - 제한: 검사기는 답의 품질과 대조의 진위를 판단하지 못한다. 절과 대조 기록을 빠뜨리는 것만 막는다. `spring.flyway.locations` 변경과 `db/migration` 패키지 밖의 `JavaMigration` 빈은 경로로 알 수 없다.
-- 버전 중복 검사의 `MIGRATION` 정규식이 하위 디렉터리와 대문자 확장자를 보지 못하는 것은 이 PR 이전부터 있던 문제이고 이 PR에서 고치지 않는다. 우회 검토에서 발견해 [변경 기록](../wiki/changes.md)에 남겼다.
+- 버전 중복 검사의 `MIGRATION` 정규식이 하위 디렉터리와 대문자 확장자를 보지 못하는 것은 이 PR 이전부터 있던 문제이고 이 PR에서 고치지 않는다. 우회 검토에서 발견해 변경 기록(`docs/wiki/changes.md`, 2026-09-21 삭제)에 남겼다.
 
 ### 스키마 변경 검토
 이 PR의 최종 변경에는 마이그레이션이 없다. 검토했다가 뺀 `t_order.payload_hash`의 답을 사례로 남긴다.
@@ -58,7 +58,7 @@
 
 ## 제외
 - 빈 `productCode`·`productName` 거절 규칙과 `RequestCheckout`. 각각 다음 PR이다.
-- 주문을 soft delete했을 때의 같은 키 재시도. `BaseEntity`의 `@SoftDelete`가 조회에서 삭제된 주문을 거르므로 Facade가 기존 주문을 찾지 못하고 INSERT가 unique 제약에 걸린다. 지금은 주문을 삭제하는 코드가 없어서 도달할 수 없는 경로이고, 주문 삭제 명령을 넣는 PR이 조회를 고친다. 기술 검증에서 발견해 [현재 상태](../wiki/current-state.md)의 알려진 빈틈에 적었다.
+- 주문을 soft delete했을 때의 같은 키 재시도. `BaseEntity`의 `@SoftDelete`가 조회에서 삭제된 주문을 거르므로 Facade가 기존 주문을 찾지 못하고 INSERT가 unique 제약에 걸린다. 지금은 주문을 삭제하는 코드가 없어서 도달할 수 없는 경로이고, 주문 삭제 명령을 넣는 PR이 조회를 고친다. 기술 검증에서 발견해 현재 상태(`docs/wiki/current-state.md`, 볼트)의 알려진 빈틈에 적었다.
 - 같은 키의 두 요청이 동시에 도착하는 경합. 둘 다 조회에서 기존 주문을 찾지 못하면 unique 제약이 한쪽을 거절한다. 이 거절을 기존 결과 반환으로 바꾸는 일은 이 PR의 목표가 아니다.
 - 409 응답에 기존 `orderId`를 담는 것. 오류 응답 모양(`errorCode`·`message`)을 바꾸는 일이라서 필요해지면 `platform` PR로 한다.
 - idempotency hit·conflict 전용 metric. 업무 metric 기반이 아직 없다.
@@ -115,11 +115,11 @@ python3 scripts/check_pr.py --base b412ccf --worktree
 - 실패: payload가 다른 요청이 409 `IDEMPOTENCY_CONFLICT`를 받고 기존 주문이 바뀌지 않는다.
 
 ## Wiki 영향
-- [현재 상태](../wiki/current-state.md): 알려진 빈틈에서 "같은 키에 다른 payload" 항목을 지우고 직접 비교 판정, `CONFLICT`의 첫 사용처, 다시 볼 조건, 테스트 수를 반영한다.
+- 현재 상태(`docs/wiki/current-state.md`, 볼트): 알려진 빈틈에서 "같은 키에 다른 payload" 항목을 지우고 직접 비교 판정, `CONFLICT`의 첫 사용처, 다시 볼 조건, 테스트 수를 반영한다.
 - [도메인 모델](../wiki/domain-model.md): "스키마 변경 검토" 절을 새로 둔다. aggregate 경계와 용어는 바뀌지 않는다.
 - [AGENTS.md](../../AGENTS.md): 같은 규칙을 한 줄로 적고 도메인 모델을 가리킨다.
 - [개발 규칙](../wiki/development-workflow.md): 로컬 검사기가 검사하는 항목에 스키마 변경 검토 절과 대조 기록을 더한다.
-- [변경 기록](../wiki/changes.md): 이 spec 링크, 결정 근거, 범위 조정을 남긴다.
+- 변경 기록(`docs/wiki/changes.md`, 2026-09-21 삭제): 이 spec 링크, 결정 근거, 범위 조정을 남긴다.
 
 ## 분할 계획
 예상 규모: 구현 약 20줄, 테스트 약 170줄, 문서 약 170줄로 총 360줄·10파일 내외. 경고 한도(600줄·20파일) 안이다. 초과하면 HTTP 통합(인수 조건 6)을 후속 PR로 옮긴다. 후속 순서는 빈 상품 코드 규칙, `RequestCheckout`이다. 범위 조정 3으로 하네스 검사와 테스트 약 120줄이 늘어 총 500줄 안팎이 된다. 경고 한도(600줄)에 닿으면 하네스 검사를 후속 PR로 되돌린다.

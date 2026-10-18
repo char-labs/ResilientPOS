@@ -69,9 +69,9 @@
 - 정상 시나리오: 인수 조건 1~3. 재시도 시나리오: 인수 조건 4. 이 PR에는 거절되는 입력이 없다(제외 참고).
 
 ## Wiki 영향
-- [현재 상태](../wiki/current-state.md): `order` 모듈 설명에 `CHECKOUT_REQUESTED`, `Checkout`, `requestCheckout`, `OrderPaymentRequested`와 아직 저장 경로가 없다는 점, 테스트 수를 반영한다.
+- 현재 상태(`docs/wiki/current-state.md`, 볼트): `order` 모듈 설명에 `CHECKOUT_REQUESTED`, `Checkout`, `requestCheckout`, `OrderPaymentRequested`와 아직 저장 경로가 없다는 점, 테스트 수를 반영한다.
 - [도메인 모델](../wiki/domain-model.md): 4.1절의 `order.requestCheckout(policy)` 예시를 실제 시그니처와 정책을 미룬 이유로 고치고, 용어집 `checkout`의 "정책 버전"이 아직 없다는 점을 적는다. 0원 주문을 `payment`가 provider 호출 없이 승인해야 한다는 조건을 컨텍스트 사이 흐름에 적는다.
-- [변경 기록](../wiki/changes.md): 이 spec 링크, 합의한 결정, 요구사항 영향을 적는다.
+- 변경 기록(`docs/wiki/changes.md`, 2026-09-21 삭제): 이 spec 링크, 합의한 결정, 요구사항 영향을 적는다.
 
 ## 분할 계획
 예상 규모는 구현 약 60줄, 테스트 약 90줄, 문서 약 130줄로 총 280줄·10파일 내외다. 경고 한도(600줄·20파일) 안이다. 초과하면 wiki의 도메인 모델 갱신을 다음 PR로 옮긴다. 후속 순서는 `order-request-checkout-persistence`(`V003` `t_order_checkout`, 엔티티, Command·Result, Facade, 재시도 통합 테스트) → `order-request-checkout-api`(endpoint, REST Docs)다. 앞 PR이 머지된 뒤 main에서 다음 PR을 시작한다.

@@ -58,8 +58,8 @@ python3 scripts/check_pr.py --base feature/module-skeleton --worktree
 - 실패: scale 초과 입력, 통화 불일치 연산이 각각 지정한 메시지로 거절되는지 확인한다.
 
 ## Wiki 영향
-- [현재 상태](../wiki/current-state.md): `foundation` 모듈 추가와 모듈 8개, `uuid-creator` 의존성을 반영한다.
-- [변경 기록](../wiki/changes.md): 이 spec 링크와 결정 근거를 남긴다.
+- 현재 상태(`docs/wiki/current-state.md`, 볼트): `foundation` 모듈 추가와 모듈 8개, `uuid-creator` 의존성을 반영한다.
+- 변경 기록(`docs/wiki/changes.md`, 2026-09-21 삭제): 이 spec 링크와 결정 근거를 남긴다.
 
 ## 분할 계획
 예상 규모: 구현 약 90줄, 테스트 약 120줄, 문서 약 110줄로 총 320줄 내외. 경고 한도(600줄) 안이다.

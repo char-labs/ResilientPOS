@@ -21,7 +21,7 @@
   별도 에이전트라는 한 구절을 더한다. 리뷰 에이전트들은 서로를 열거해 역할 경계를 양방향으로 고정하는 것이 관례이고,
   새 에이전트의 정의는 이미 `code-reviewer`를 열거한다. 볼트는 git으로 관리되지 않으므로 수정 전에 그 파일의 사본을
   `~/Documents/`에 남기고, 수정한 사실과 문구를 이 spec의 결과 절과 변경 기록에 적는다.
-- [변경 기록](../wiki/changes.md)에 이 spec 링크, 요구사항 영향 근거, 아래 세 결정을 남긴다.
+- 변경 기록(`docs/wiki/changes.md`, 2026-09-21 삭제)에 이 spec 링크, 요구사항 영향 근거, 아래 세 결정을 남긴다.
   - 렌즈는 웹 조사(Spring·Hibernate·PostgreSQL·OWASP 공식 문서, Stripe·토스페이먼츠·Airbnb·카카오페이 기술 블로그 등)에
     근거한다.
   - 읽기 전용을 본문 서술이 아니라 도구 목록으로 보장하려고 Bash를 뺐다.
@@ -93,7 +93,7 @@ wiki 커밋 뒤에 받은 `workflow-reviewer`의 검토에서 네 가지 지적�
   절에 기록한다.
 
 ## Wiki 영향
-[지침 설계 근거](../wiki/agent-instructions.md)의 배정표와 선행 규칙을 고치고 [변경 기록](../wiki/changes.md)에 이 spec
+[지침 설계 근거](../wiki/agent-instructions.md)의 배정표와 선행 규칙을 고치고 변경 기록(`docs/wiki/changes.md`, 2026-09-21 삭제)에 이 spec
 링크를 남긴다. 제품 요구사항과 설계는 바뀌지 않는다. 개발 도구인 리뷰 에이전트가 하나 늘었을 뿐이고, 이 에이전트는
 읽기 전용이며 자동으로 발동하는 경로가 없다.
 
@@ -124,7 +124,7 @@ wiki 커밋 뒤에 받은 `workflow-reviewer`의 검토에서 네 가지 지적�
   "백엔드 운영 리스크(정합성·멱등성·응답 속도·보안 등)를 열세 개 렌즈로 점검하는 읽기 전용 리뷰. 사용자가 명시적으로
   요청할 때만 사용"이고 모델 칸은 `opus`다. 수정 전 사본(`~/Documents/vault-README.md.2026-09-20.before-spring-backend-specialist.bak`)과
   `diff`로 비교해 한 줄 추가뿐임을 확인했다.
-- [변경 기록](../wiki/changes.md)에 항목을 더했다. `borrowed-workflows.md`, `AGENTS.md`, 에이전트 정의 본문은 바뀌지 않았다.
+- 변경 기록(`docs/wiki/changes.md`, 2026-09-21 삭제)에 항목을 더했다. `borrowed-workflows.md`, `AGENTS.md`, 에이전트 정의 본문은 바뀌지 않았다.
 
 ### workflow-reviewer 검토 (2026-09-20)
 spec, 기준 ref, 수정한 wiki 파일, 볼트의 두 에이전트 정의를 넘겨 읽기 전용으로 검토받았다. 판정은 WARN이고 지적은 네

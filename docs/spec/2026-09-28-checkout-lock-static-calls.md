@@ -86,7 +86,7 @@
 - **트랜잭션 실행기를 정적 객체로 두고 `readOnlyTx { }`처럼 어디서나 부르기**: 호출부가 짧아지지만 주입 대신 정적 접근이 생기고, 트랜잭션을 여는 곳이 Facade 밖으로 퍼진다. 트랜잭션은 메서드의 `@Transactional`로만 연다.
 
 ## 관련 문서
-[도메인 모델](../wiki/domain-model.md) §4.3·§4.6, [Modulith·Kafka 키워드](../wiki/modulith-kafka-keywords.md). 잠금은 [payment-advisory-lock](2026-09-26-payment-advisory-lock.md), 승인의 트랜잭션 경계는 [payment-gateway-authorization](2026-09-23-payment-gateway-authorization.md)이 정했다.
+[도메인 모델](../wiki/domain-model.md) §4.3·§4.6, Modulith·Kafka 키워드(`docs/wiki/modulith-kafka-keywords.md`, 볼트). 잠금은 [payment-advisory-lock](2026-09-26-payment-advisory-lock.md), 승인의 트랜잭션 경계는 [payment-gateway-authorization](2026-09-23-payment-gateway-authorization.md)이 정했다.
 
 공식 문서 대조:
 - Spring Modulith 이벤트(https://docs.spring.io/spring-modulith/reference/events.html): 발행 기록은 `ApplicationEventPublisher`로 낸 이벤트를 트랜잭션 리스너 단위로 남긴다. 발행을 모듈 publisher로 감싸도 같은 `publishEvent`를 거치므로 기록 방식은 같다. `@ApplicationModuleListener`는 `REQUIRES_NEW` 트랜잭션을 함께 선언한다.
@@ -137,7 +137,7 @@
 
 ## Wiki 영향
 - [도메인 모델](../wiki/domain-model.md): 트랜잭션 밖이어야 하는 메서드는 `NOT_SUPPORTED`로 호출자 트랜잭션을 멈추고 거절하지 않는다는 규칙, 이벤트는 모듈 publisher가 구체 타입으로 발행한다는 규칙을 이벤트 발행 규칙 옆에 적는다.
-- [Modulith·Kafka 키워드](../wiki/modulith-kafka-keywords.md): `ApplicationEventPublisher` 항목의 "이 프로젝트에서"에 모듈 publisher를 적고, 8절에 결정을 [합의]로 더한다. 이 문서는 Obsidian 볼트 원본을 가리키는 링크라 저장소 커밋에 들어가지 않는다.
+- Modulith·Kafka 키워드(`docs/wiki/modulith-kafka-keywords.md`, 볼트): `ApplicationEventPublisher` 항목의 "이 프로젝트에서"에 모듈 publisher를 적고, 8절에 결정을 [합의]로 더한다. 이 문서는 Obsidian 볼트 원본을 가리키는 링크라 저장소 커밋에 들어가지 않는다.
 - [도메인 모델](../wiki/domain-model.md): 전파 규칙에 클래스 레벨 `@Transactional` 금지와 Spring Data 기본 메서드의 읽기 전용 트랜잭션을 더한다.
 - 요구사항 변화: 없다. 업무 동작과 이벤트 계약이 그대로이고, 트랜잭션 안에서 부른 승인·재결제가 거절 대신 따로 실행되는 것은 지금 호출자가 없는 경로다.
 
