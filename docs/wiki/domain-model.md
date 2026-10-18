@@ -13,7 +13,7 @@ Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰�
 
 ## 1. 용어 정의
 
-표의 타입 이름은 목표 모델이다. 지금 저장소에 있는 타입은 `foundation`의 `Money`·`IdentifierGenerator`뿐이며, 현재 구현 상태는 [현재 상태](current-state.md)가 정본이다.
+표의 타입 이름은 목표 모델이다. 지금 저장소에 있는 타입은 `foundation`의 `Money`·`IdentifierGenerator`뿐이며, 현재 구현 상태는 현재 상태(`docs/wiki/current-state.md`, 볼트)가 정본이다.
 
 | 용어 | 정의 | 구분 기준 | ResilientPOS 예시 |
 |---|---|---|---|
@@ -308,7 +308,7 @@ grill 심문과 업무 기능 spec의 "소유 모듈 / Command·Query·Event / �
 
 | 사례 | 이 저장소 | 이유 |
 |---|---|---|
-| bounded context = Gradle 모듈 | Spring Modulith 패키지 모듈. Gradle 분할은 [현재 상태](current-state.md)의 조건이 충족될 때만 | 모듈 8개가 비어 있는 지금 나누면 담길 코드보다 빌드 코드가 많다. 경계는 Modulith 검증이 이미 막는다 |
+| bounded context = Gradle 모듈 | Spring Modulith 패키지 모듈. Gradle 분할은 현재 상태(`docs/wiki/current-state.md`, 볼트)의 조건이 충족될 때만 | 모듈 8개가 비어 있는 지금 나누면 담길 코드보다 빌드 코드가 많다. 경계는 Modulith 검증이 이미 막는다 |
 | Kotlin `internal` 가시성으로 JPA 엔티티를 숨김 | 목적은 같고 수단이 둘로 갈린다. 모듈 경계는 `internal` **패키지** + Modulith 검증, 엔티티를 밖에서 만들거나 바꾸지 못하게 하는 것은 `private` 생성자와 전 필드 `var … protected set`이고, `EntityVisibilityTest`가 그 형태를 고정한다([entity-property-visibility](../spec/2026-09-22-entity-property-visibility.md)) | 단일 Gradle 프로젝트에서 Kotlin `internal`은 전체에 보여 경계가 되지 않는다. 사례 스스로 배치용 JPA 엔티티를 중복 생성한 부작용을 기록했다. 생성·변경을 `from`·`apply`로 묶는 일은 키워드 없이 생성자와 setter 가시성만으로 된다. `private set`이 아닌 이유는 `allOpen`이 `@Entity`에 걸려 있어 멤버가 open이고 Kotlin이 open 프로퍼티의 `private set`을 금지하기 때문이다. 바뀌지 않는 필드를 `val`로 좁히지 않는 이유는 그것이 JVM final 영속 필드가 되어 Jakarta Persistence 3.2 §2.2 금지와 bytecode enhancement 비호환에 걸리기 때문이다 |
 | Command를 aggregate 안의 중첩 클래스로, 상태는 `var … internal set` | Command는 Facade의 공개 입력, aggregate는 불변(§4.1) | CQRS 규약상 Command는 모듈 공개 계약이다. 불변 전이는 기존 Kotlin 규칙과 일치한다 |
 | API·배치 공통 로직을 Biz-component 패키지로 | Controller·이벤트 리스너·스케줄러가 같은 Command Facade를 호출 | Facade가 이미 use case 단위의 공통 진입점이다. 별도 레이어를 두지 않는다 |
@@ -320,5 +320,5 @@ grill 심문과 업무 기능 spec의 "소유 모듈 / Command·Query·Event / �
 ## 관련 문서
 - [README Engineering Principles](../../README.md#engineering-principles) — 역할 분리·CQRS·데이터 정본 원칙
 - [테스트 전략](testing-strategy.md) — Aggregate/Value Object/Policy는 Spring 없는 단위 테스트
-- [현재 상태](current-state.md) — 모듈 선언 상태, Gradle 분할 조건, 의존성 가드
+- 현재 상태(`docs/wiki/current-state.md`, 볼트) — 모듈 선언 상태, Gradle 분할 조건, 의존성 가드
 - [개발 규칙](development-workflow.md) — 업무 기능 spec이 담아야 하는 항목
