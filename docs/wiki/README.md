@@ -11,6 +11,7 @@
 - 비즈니스·도메인·Controller 개발: [TDD 테스트 전략](testing-strategy.md)과 [공통 스킬](../../.claude/skills/resilientpos-tdd/SKILL.md).
 - metric·로그 노출과 LGTM 연결 전제: [관측성](observability.md).
 - Kafka·Spring Kafka·Modulith 이벤트 작업: [Modulith·Kafka 키워드](modulith-kafka-keywords.md). 맨 앞 "갱신 규칙"대로 작업을 끝낼 때마다 갱신한다. 이 문서는 Obsidian 볼트에 있고 `make bootstrap`이 이 경로에 링크한다 — 저장소에 커밋하지 않는다.
+- 요청 처리 단계·대표 흐름 시퀀스·재시도와 DLT·이벤트 스토밍 결과·모듈 의존 그래프: [아키텍처](architecture.md). 모듈 의존을 바꾸면 이 페이지와 README의 그래프를 함께 고친다.
 - 도메인 용어·bounded context·유비쿼터스 언어 용어집: [도메인 모델](domain-model.md). 업무 spec을 쓰거나 새 타입·테이블·이벤트 이름을 만들 때 먼저 읽는다.
 - JPA 엔티티 11개의 역할·참조 관계·단말/점주/운영자 흐름별 생성·전이 순서: [엔티티 지도](entity-map.md). 테이블을 더하거나 흐름을 바꿀 때 함께 고친다.
 - 새 기능·변경 요청의 설계 합의: [grill 스킬](../../.claude/skills/resilientpos-grill/SKILL.md). 합의 뒤 장기 스펙은 [spec-write 스킬](../../.claude/skills/resilientpos-spec-write/SKILL.md).

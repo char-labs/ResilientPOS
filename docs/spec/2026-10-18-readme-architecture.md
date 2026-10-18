@@ -59,4 +59,17 @@
 적용하지 않는다. 문서만 바꾸고 업무 동작과 테스트 대상 코드가 없다.
 
 ## 결과
-개발 전 작성. 개발 후 실행 결과와 변경 이유를 추가한다.
+범위 절을 모두 반영했다. 2026-10-18 실행 결과와 확인한 사실은 아래와 같다.
+
+- **배치.** README에는 전체 흐름 flowchart, 모듈 사이 이벤트 표, 모듈 의존 그래프, 이벤트 스토밍 요약만 두고(82줄 추가), 시퀀스 셋·실패 경로·이벤트 스토밍 과정·모듈 표는 [architecture.md](../wiki/architecture.md)에 두었다. 같은 그림을 두 곳에 두지 않으려고 의존 그래프는 README에만, 간선별 대표 타입 표는 wiki에만 있다.
+- **모듈 의존 출력.** 임시 테스트로 `ApplicationModules.of(ResilientPosApplication::class.java)`의 `getDirectDependencies`를 출력했다(808aed9, Spring Modulith 2.1.1). 모듈 사이 간선은 `sync → order`(USES_COMPONENT, `OrderCommandFacade`), `terminal → store`(USES_COMPONENT, `StoreManagement`), `order·payment·fulfillment → contract`, `contract·order·payment·sync → store·terminal`, `store·terminal → owner`, 그리고 `foundation`·`platform`으로 가는 간선이다. `EVENT_LISTENER` 종류는 없다. consumer가 `@KafkaListener`라 Modulith가 이벤트 수신을 의존으로 보지 못한다. 출력과 그래프를 대조한 뒤 임시 테스트를 지웠다. 다시 뽑는 코드는 wiki §6.5에 있다.
+- **그래프 배치.** 처음 그린 그래프는 점선 8개가 겹쳐 읽히지 않았다. `contract`·`order`·`payment`·`sync`가 모두 `store`와 `terminal` 둘 다에 의존하므로, 둘을 `단말·매장` 상자로 묶고 상자로 점선 하나씩을 그었다. 간선의 뜻은 범례에 적었다.
+- **Mermaid.** `mmdc`가 없어 Mermaid 11.4.1(GitHub과 같은 메이저 버전)을 브라우저에서 불러 6개 블록을 `parse`·`render`했다. 모두 오류가 없었고 화면으로 확인해 단어 중간에서 줄이 바뀌는 라벨 넷을 고쳤다.
+- **링크.** 새 문서와 README·wiki README에 추가한 상대 링크와 앵커(`#아키텍처`, `#5-이벤트-스토밍`, 도메인 모델 §3·§4.1·§4.3·§4.4·§4.6)가 모두 추적 파일과 실재 제목을 가리킨다. 기존 줄의 링크 14건은 추적되지 않는 볼트 심볼릭 링크(`docs/wiki/current-state.md`, `docs/wiki/modulith-kafka-keywords.md`, `.claude/skills/**`)를 가리켜 공개 저장소에서 열리지 않는다. 이 PR의 범위 밖이라 그대로 두었다.
+- `python3 scripts/check_pr.py --base origin/main --worktree`: PASS(일반 4개/474줄).
+
+**코드와 어긋난 문서 문장(고치지 않음, 후속 PR 후보).**
+- [도메인 모델](../wiki/domain-model.md) §4.6은 "허용되는 동기 호출은 `sync` → `order`/`payment`의 공개 Command Facade뿐"이라고 적는다. 코드에서 `sync`는 `payment`를 부르지 않고(같은 절 본문도 `createAttempt`가 sync 경로에 없다고 적는다), 이 절이 다루지 않는 `terminal → store` 동기 호출(`TerminalOwnerController`의 `StoreManagement.requireOwned`, 매장 소유 확인 읽기)이 있다.
+- 도메인 모델 §2는 `contract`가 "다른 업무 모듈의 타입을 들지 않는다(식별자를 raw `UUID`로 든다)"고 적는다. 코드의 세 이벤트는 `StoreId`·`TerminalId`를 든다. `OrderPaid` KDoc이 근거(`contract`에 의존하지 않는 모듈의 타입이라 순환이 없다)를 적고 있고, `ModuleStructureTest`도 `store`·`terminal`·`owner`를 금지 목록에 두지 않는다. 문장이 코드보다 넓다.
+- 도메인 모델 §1의 "지금 저장소에 있는 타입은 `foundation`의 `Money`·`IdentifierGenerator`뿐"은 낡았다.
+- README 기존 절: 기술 스택 표 아래의 "PostgreSQL 연결 구성과 도메인 구현은 아직 완료되지 않았습니다", "Kafka, OpenTelemetry는 … 현재 의존성에는 없습니다", 표의 H2 드라이버, Engineering Principles의 "Kafka는 독립 consumer/replay/확장 요구가 실제로 생길 때만 도입"이 새 아키텍처 절과 어긋난다. Kafka 도입은 도메인 모델 §8에 이유가 있다.

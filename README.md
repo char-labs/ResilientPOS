@@ -20,6 +20,87 @@ ResilientPOS는 네트워크 단절과 부분 실패 속에서도 주문·결제
 현재는 단일 Gradle 프로젝트의 애플리케이션 초기 구조입니다. PostgreSQL 연결 구성과 도메인 구현은 아직 완료되지 않았습니다.
 Kafka, OpenTelemetry는 설계상 도입 방향이며 현재 의존성에는 없습니다. Redis는 결제 시도 생성·주문 생성의 중복 완화 잠금(`platform.Lock`)에만 쓰고, 정합성의 정본은 PostgreSQL 제약입니다. [구현 현황](docs/wiki/current-state.md)에서 계획과 실제 상태를 구분합니다.
 
+## 아키텍처
+
+한 번 배포하는 Spring Boot 애플리케이션 하나를 Spring Modulith 모듈로 나눈 모듈형 모놀리스입니다. 상태 변경과 이벤트 발행 기록은 PostgreSQL 커밋 하나에 묶고, 모듈 사이는 커밋 뒤 Kafka 이벤트로 잇습니다. 시퀀스 도식, 실패 경로, 이벤트 스토밍 과정, 모듈별 공개 API는 [아키텍처 상세](docs/wiki/architecture.md)에 있습니다. 아래 그림은 main 808aed9의 코드에서 옮겼습니다.
+
+### 요청에서 Kafka 이벤트까지
+
+```mermaid
+flowchart LR
+    POS["POS 단말"] -->|"HTTP /v1/**<br/>Bearer 토큰"| AUTH["인증 interceptor<br/>(terminal)"]
+    AUTH --> CTRL["Controller<br/>Request → Command"]
+    CTRL --> FAC["Command Facade"]
+    subgraph TX["트랜잭션 하나, 커밋 하나"]
+        FAC -->|"전이"| AGG["Aggregate<br/>새 상태 + 도메인 이벤트"]
+        FAC -->|"저장"| ROWS[("업무 테이블")]
+        FAC -->|"이벤트 발행"| EPR[("event_publication<br/>발행 기록")]
+    end
+    EPR -->|"커밋 뒤 externalizer"| TOPIC[("Kafka 토픽<br/>key = orderId")]
+    TOPIC --> CONS["다른 모듈의<br/>@KafkaListener"]
+    CONS --> FAC2["그 모듈의 Command Facade"]
+    CONS -.->|"재시도 소진·업무 불일치"| DLT[("원토픽.DLT")]
+    RES["EventPublicationResubmitter<br/>1분 주기"] -.->|"브로커로 못 보낸 기록 재전송"| EPR
+```
+
+1. 단말이 `/v1/**`를 Bearer 토큰으로 부르면 `terminal` 모듈의 interceptor가 토큰을 단말 credential과 대조합니다. 점주 경로 `/owner/**`는 세션 쿠키로 인증합니다.
+2. Controller는 요청을 Command로 바꾸기만 합니다. Command Facade가 트랜잭션을 열고, 행을 잠가 읽고, aggregate 전이를 부르고, 저장하고, 이벤트를 발행합니다.
+3. 업무 행과 이벤트 발행 기록(Spring Modulith Event Publication Registry)이 한 커밋에 들어갑니다. 그래서 "상태는 바뀌었는데 이벤트가 사라짐"이 생기지 않습니다.
+4. 커밋 뒤 Modulith가 이벤트를 Kafka로 보냅니다. 보내지 못한 기록은 주기 작업이 1분마다 다시 보냅니다.
+5. 받는 모듈의 consumer는 자기 모듈의 Command Facade를 부릅니다. 같은 메시지가 두 번 와도 결과는 하나입니다(unique 제약). 일시적 실패는 같은 자리에서 다시 시도하고, 다시 해도 같은 결과인 실패는 DLT로 보냅니다.
+6. 결제 provider 호출은 트랜잭션 밖에서 합니다. 응답이 끊기면 결제를 실패로 확정하지 않고 `UNKNOWN`으로 두었다가 주기 작업이 provider 조회로 확정합니다.
+
+### 모듈 사이 이벤트
+
+| 이벤트 | 내는 모듈 | 토픽 | 받는 모듈 | 받은 뒤 하는 일 |
+|---|---|---|---|---|
+| `OrderPaymentRequested` | order (checkout 확정) | `order.payment-requested` | payment | 결제 시도 기록 |
+| `PaymentEvent.AttemptCreated` | payment | `payment.attempt-created` | payment | provider 승인 요청 |
+| `PaymentApproved` | payment (승인, 조회로 승인 확정, 0원) | `payment.approved` | order | 주문 `PAID` 전이 |
+| `OrderPaid` | order | `order.paid` | fulfillment | 주문 이행 기록 |
+
+대표 흐름은 `주문 생성 → checkout → OrderPaymentRequested → 결제 시도 → provider 승인 → PaymentApproved → 주문 PAID → OrderPaid → fulfillment`입니다. 단말이 오프라인에서 쌓은 주문·결제 요청은 sync 배치로 들어와 같은 Facade를 거치고, 커밋 뒤에는 같은 이벤트 흐름을 탑니다.
+
+### 모듈과 의존
+
+```mermaid
+flowchart TB
+    sync["sync<br/>오프라인 배치 접수"]
+    order["order<br/>주문·checkout"]
+    payment["payment<br/>결제 시도"]
+    fulfillment["fulfillment<br/>주문 이후 이행"]
+    contract["contract<br/>모듈을 건너가는 이벤트"]
+    subgraph ref["단말·매장"]
+        terminal["terminal<br/>단말·인증"]
+        store["store<br/>매장"]
+    end
+    owner["owner<br/>점주 계정"]
+    reconciliation["reconciliation<br/>(아직 비어 있음)"]
+
+    sync ==>|"OrderCommandFacade 호출"| order
+    order -->|"발행·소비"| contract
+    payment -->|"발행·소비"| contract
+    fulfillment -->|"소비"| contract
+    sync -.-> ref
+    order -.-> ref
+    payment -.-> ref
+    contract -.-> ref
+    terminal ==>|"StoreManagement 호출"| store
+    terminal -.-> owner
+    store -.-> owner
+```
+
+- 굵은 선은 다른 모듈의 Facade를 직접 부르는 동기 호출, 실선은 `contract` 이벤트 타입, 점선은 식별자(`StoreId` 등)와 인증 값(`AuthenticatedTerminal`)만 쓰는 의존입니다. `단말·매장` 상자로 가는 점선은 `terminal`과 `store` 둘 다에 의존한다는 뜻입니다. 그림에서 뺀 간선이 둘 있습니다. `foundation`(값 타입)에는 `reconciliation`을 뺀 모든 모듈이, `platform`(트랜잭션·락·Kafka 구성 등 공용 인프라)에는 업무 모듈 7개가 의존합니다.
+- 간선은 `ApplicationModules.of(ResilientPosApplication::class.java)`가 출력한 모듈 의존을 그대로 옮겼습니다. `order`와 `payment`는 서로 의존하지 않고, `payment`·`fulfillment`에 의존하는 모듈은 없습니다.
+- 다른 모듈은 그 모듈의 기본 패키지에 있는 타입(Facade, Command, View, ID, 이벤트)만 쓸 수 있고 `internal` 아래는 쓸 수 없습니다. `ModuleStructureTest`(Modulith 경계·순환 검증)와 `DependencyDirectionTest`(도메인 레이어의 프레임워크 무의존)가 위반을 테스트 실패로 만듭니다.
+- `order`와 `payment`는 서로의 사실을 주고받습니다. 이벤트를 각자 두면 서로 의존하는 순환이 되므로 둘이 함께 의존하는 `contract` 모듈에 둡니다.
+
+### 이벤트 스토밍
+
+- 원문 [도메인 청사진](docs/references/05_Domain_Development_Blueprint.md)(2026-09-03)은 주문·결제와 동기화·정산 두 관점의 이벤트 스토밍을 교차 검토한 결과입니다. bounded context 7개와 aggregate, 커맨드 → 이벤트 → 정책 흐름 4개, 커맨드·조회 목록, ADR로 미룬 제품 질문 6개를 남겼습니다. 진행 방식(참가자, 보드)의 기록은 없습니다.
+- 저장소는 이 결과를 [도메인 모델](docs/wiki/domain-model.md)로 옮기며 단어를 다시 정했습니다. 예를 들어 `KitchenTicket`은 `Fulfillment`, `TerminalSyncState`는 `Watermark`가 됐고, 응답이 끊긴 결제는 `PaymentFailed`가 아니라 `PaymentUnknown`입니다. 이후 점주 계정 `owner`를 더해 bounded context는 8개입니다.
+- 지금 코드에는 주문 → 결제 → fulfillment, 오프라인 sync, `UNKNOWN` 확정 흐름이 있습니다. reconciliation case와 store 판매 정책은 아직 없습니다. 원문과 다르게 정한 것과 구현 여부의 전체 표는 [아키텍처 상세 §5](docs/wiki/architecture.md#5-이벤트-스토밍)에 있습니다.
+
 ## 시작하기
 
 클론 직후와 새 worktree를 만든 직후, 에이전트 세션을 시작하기 전에 실행합니다. 스킬·에이전트 정본은 Obsidian 볼트에 있고, 저장소에는 링크만 만듭니다.
@@ -137,6 +218,7 @@ Controller는 MockMvc와 Spring REST Docs로 HTTP 계약을 검증하며, fixtur
 ## 문서
 
 - [공통 wiki](docs/wiki/README.md): 현재 지식과 주제별 문서
+- [아키텍처 상세](docs/wiki/architecture.md): 요청 처리 단계, 대표 흐름 시퀀스, 실패 경로, 이벤트 스토밍, 모듈 경계
 - [개발 규칙](docs/wiki/development-workflow.md): SDD 절차, PR 범위와 로컬 검증
 - [Spec 이력](docs/spec): PR별 명세와 검증 기록
 - [요구사항 원문](docs/references/README.md): 제공된 기획·설계 자료
