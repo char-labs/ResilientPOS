@@ -72,7 +72,7 @@
 - **모듈 의존 출력.** 임시 테스트로 `ApplicationModules.of(ResilientPosApplication::class.java)`의 `getDirectDependencies`를 출력했다(808aed9, Spring Modulith 2.1.1). 모듈 사이 간선은 `sync → order`(USES_COMPONENT, `OrderCommandFacade`), `terminal → store`(USES_COMPONENT, `StoreManagement`), `order·payment·fulfillment → contract`, `contract·order·payment·sync → store·terminal`, `store·terminal → owner`, 그리고 `foundation`·`platform`으로 가는 간선이다. `EVENT_LISTENER` 종류는 없다. consumer가 `@KafkaListener`라 Modulith가 이벤트 수신을 의존으로 보지 못한다. 출력과 그래프를 대조한 뒤 임시 테스트를 지웠다. 다시 뽑는 코드는 wiki §6.5에 있다.
 - **그래프 배치.** 처음 그린 그래프는 점선 8개가 겹쳐 읽히지 않았다. `contract`·`order`·`payment`·`sync`가 모두 `store`와 `terminal` 둘 다에 의존하므로, 둘을 `단말·매장` 상자로 묶고 상자로 점선 하나씩을 그었다. 간선의 뜻은 범례에 적었다.
 - **Mermaid.** `mmdc`가 없어 Mermaid 11.4.1(GitHub과 같은 메이저 버전)을 브라우저에서 불러 6개 블록을 `parse`·`render`했다. 모두 오류가 없었고 화면으로 확인해 단어 중간에서 줄이 바뀌는 라벨 넷을 고쳤다.
-- **링크.** 새 문서와 README·wiki README에 추가한 상대 링크와 앵커(`#아키텍처`, `#5-이벤트-스토밍`, 도메인 모델 §3·§4.1·§4.3·§4.4·§4.6)가 모두 추적 파일과 실재 제목을 가리킨다. 기존 줄의 링크 14건은 추적되지 않는 볼트 심볼릭 링크(`docs/wiki/current-state.md`, `docs/wiki/modulith-kafka-keywords.md`, `.claude/skills/**`)를 가리켜 공개 저장소에서 열리지 않는다. 이 PR의 범위 밖이라 그대로 두었다.
+- **링크.** 새 문서와 README·wiki README에 추가한 상대 링크와 앵커(`#아키텍처`, `#5-이벤트-스토밍`, 도메인 모델 §3·§4.1·§4.3·§4.4·§4.6)가 모두 추적 파일과 실재 제목을 가리킨다. 기존 줄의 링크 14건은 추적되지 않는 볼트 심볼릭 링크(`docs/wiki/current-state.md`, `docs/wiki/modulith-kafka-keywords.md`, `.claude/skills/**`)를 가리켜 공개 저장소에서 열리지 않았다. 아래 범위 조정에서 경로 표기로 바꿨다.
 - `python3 scripts/check_pr.py --base origin/main --worktree`: PASS(일반 4개/474줄, 범위 조정 전).
 
 **범위 조정 반영(README 낡은 문장과 볼트 링크).**
@@ -82,11 +82,10 @@
 - TDD 절: Fixture Monkey·REST Docs는 이미 빌드에 있어 "최초 기능 적용 PR에서 설치" 문장을 지웠다.
 - Engineering Principles: 모듈 목록에 `owner`·`store`·`terminal`을 더했다. Kafka 문장을 "모듈 사이 이벤트는 커밋 뒤 Kafka로, 재시도·DLT는 브로커 쪽"으로 바꾸고 이유는 [도메인 모델 §8](../wiki/domain-model.md#8-참고-사례와-다르게-가는-결정) 링크로 두었다. Redis 용도에 점주 세션 저장을 더했다([operator-authentication](2026-10-06-operator-authentication.md)에서 정한 것).
 - 볼트 링크: `README.md` 1건과 `docs/wiki/README.md` 13건을 경로 표기로 바꾸고 wiki 인덱스 머리에 이유 한 줄을 두었다. 새 문서 포함 네 파일의 상대 링크와 앵커 위반이 0건이다.
-- 확인: 위 낡은 문장(`H2`, "현재 의존성에는 없", "아직 완료되지 않았", "PostgreSQL을 띄웁니다", "로컬 PostgreSQL 기동", "최초 기능 적용 PR", "실제로 생길 때만 도입")을 `grep`해 남은 것이 없다. `python3 -m unittest discover -s scripts -p 'test_*.py'` 132개 통과, `make help`의 `up` 설명이 바뀐 것을 확인했다.
+- 확인: 위 낡은 문장(`H2`, "현재 의존성에는 없", "아직 완료되지 않았", "PostgreSQL을 띄웁니다", "로컬 PostgreSQL 기동", "최초 기능 적용 PR", "실제로 생길 때만 도입")을 `grep`해 남은 것이 없다. `python3 -m unittest discover -s scripts -p 'test_*.py'` 132개 통과, `make help`의 `up` 설명이 바뀐 것을 확인했다. `check_pr.py --base origin/main`은 `--worktree` 있는 실행과 없는 실행 모두 PASS다(일반 5개).
 - 남은 볼트 링크(후속 PR 후보): `AGENTS.md` 9건, `docs/wiki/development-workflow.md` 11건, `domain-model.md` 3건(#94와 겹침), `borrowed-workflows.md`·`entity-map.md` 각 2건, `testing-strategy.md` 1건.
 
 **코드와 어긋난 문서 문장(고치지 않음, 후속 PR 후보).**
 - [도메인 모델](../wiki/domain-model.md) §4.6은 "허용되는 동기 호출은 `sync` → `order`/`payment`의 공개 Command Facade뿐"이라고 적는다. 코드에서 `sync`는 `payment`를 부르지 않고(같은 절 본문도 `createAttempt`가 sync 경로에 없다고 적는다), 이 절이 다루지 않는 `terminal → store` 동기 호출(`TerminalOwnerController`의 `StoreManagement.requireOwned`, 매장 소유 확인 읽기)이 있다.
 - 도메인 모델 §2는 `contract`가 "다른 업무 모듈의 타입을 들지 않는다(식별자를 raw `UUID`로 든다)"고 적는다. 코드의 세 이벤트는 `StoreId`·`TerminalId`를 든다. `OrderPaid` KDoc이 근거(`contract`에 의존하지 않는 모듈의 타입이라 순환이 없다)를 적고 있고, `ModuleStructureTest`도 `store`·`terminal`·`owner`를 금지 목록에 두지 않는다. 문장이 코드보다 넓다.
 - 도메인 모델 §1의 "지금 저장소에 있는 타입은 `foundation`의 `Money`·`IdentifierGenerator`뿐"은 낡았다.
-- README 기존 절: 기술 스택 표 아래의 "PostgreSQL 연결 구성과 도메인 구현은 아직 완료되지 않았습니다", "Kafka, OpenTelemetry는 … 현재 의존성에는 없습니다", 표의 H2 드라이버, Engineering Principles의 "Kafka는 독립 consumer/replay/확장 요구가 실제로 생길 때만 도입"이 새 아키텍처 절과 어긋난다. Kafka 도입은 도메인 모델 §8에 이유가 있다.
