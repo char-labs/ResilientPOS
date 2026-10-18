@@ -16,11 +16,15 @@
   6. Spring Modulith 모듈: 책임, 공개 API(모듈 루트 타입)와 `internal` 경계, `contract` 모듈, 동기 호출, 의존 그래프 전체와 대표 타입, 의존 규칙을 지키는 테스트, 그래프를 다시 뽑는 방법.
 - `docs/wiki/README.md` 작업별 진입점에 새 페이지 한 줄.
 - 도식은 GitHub이 렌더링하는 Mermaid(sequence·flowchart)로 그린다.
+- **범위 조정(2026-10-18, 첫 구현 커밋 뒤).** 사용자가 아래 두 가지를 이 PR에 함께 넣기로 했다. 새 아키텍처 절과 모순되는 README 문장이 공개 독자에게 그대로 보이기 때문이다.
+  - README 기존 절의 낡은 문장 정정. `build.gradle.kts`, `docker/docker-compose.yaml`, `application.yaml`, `PostgresIntegrationTest`와 대조한다. 기술 스택 표(H2 제거, Redis·Security·Session·Kafka·Modulith·Kotlin JDSL·Flyway·테스트 도구 추가)와 그 아래 문단("도메인 구현 미완료", "Kafka 미도입", Redis 용도), `make up`과 로컬 실행 표(PostgreSQL만 뜬다는 설명), Testcontainers가 띄우는 것, TDD 절의 "의존성 설치는 최초 기능 PR에서", Engineering Principles의 모듈 목록·Kafka 도입 조건·Redis 용도. `make help`가 출력하는 `Makefile`의 `up` 설명도 같은 문장이라 함께 고친다.
+  - GitHub에서 열리지 않는 링크 정리. `README.md` 1건과 `docs/wiki/README.md` 13건이 커밋되지 않는 볼트 링크(`docs/wiki/current-state.md`, `docs/wiki/modulith-kafka-keywords.md`, `.claude/skills/**`)를 가리킨다. 링크를 경로 표기(코드 스팬)로 바꾸고, wiki 인덱스에 그 경로가 `make bootstrap` 뒤에만 생긴다는 한 줄을 둔다. 링크를 지우면 에이전트가 찾아갈 경로가 사라지므로 경로는 남긴다.
 - 근거 원칙: 의존과 호출 순서는 문서가 아니라 origin/main 808aed9의 코드에서 확인한다. 모듈 의존은 `ApplicationModules.of(ResilientPosApplication::class.java)`로 출력한 결과를 그래프로 옮긴다. 이벤트 스토밍은 [도메인 청사진](../references/05_Domain_Development_Blueprint.md) §2·§3·§9, [문서 맵](../references/00_Document_Index.md) 변경 이력, [도메인 모델](../wiki/domain-model.md)의 용어집과 결정 표에 있는 것만 쓴다. 근거에 없는 진행 방식(참가자·워크숍 형식 등)은 쓰지 않고 "기록이 없다"고 적는다.
 
 ## 제외
 - `docs/wiki/domain-model.md` 수정. 열린 PR #94가 같은 파일을 바꾼다. 코드와 어긋난 문장을 찾으면 이 spec 결과 절에 남기고 고치지 않는다.
-- README의 기존 절(기술 스택 표, Engineering Principles) 정정. 낡은 문장이 있으면 결과 절에 남기고 별도 PR로 한다.
+- README 기존 절 가운데 코드와 어긋나지 않는 문장의 문체·구성 변경. 범위 조정에 적은 문장만 고친다.
+- `README.md`·`docs/wiki/README.md` 밖의 볼트 링크(`AGENTS.md` 9건, `docs/wiki/development-workflow.md` 11건, `domain-model.md` 3건, `borrowed-workflows.md`·`entity-map.md` 각 2건, `testing-strategy.md` 1건). `AGENTS.md`는 에이전트 지침 정본이라 따로 검토하고, `domain-model.md`는 #94와 겹친다. 후속 PR 후보로 결과 절에 남긴다.
 - 코드·테스트 변경. 의존 출력에 쓴 임시 테스트는 커밋하지 않는다. 모듈 문서를 빌드마다 생성하는 테스트(Modulith `Documenter`)도 더하지 않는다. README 도식은 사람이 읽고 고치는 문서이고, 생성 산출물을 커밋하면 빌드마다 diff가 생긴다.
 - Obsidian 볼트에 있는 wiki(`current-state.md`, `modulith-kafka-keywords.md`) 수정과 링크. 저장소에 커밋되지 않는 링크라 공개 저장소에서 열리지 않는다.
 
@@ -32,6 +36,7 @@
 - README.md
 - docs/wiki/architecture.md
 - docs/wiki/README.md
+- Makefile
 
 ## 인수 조건
 1. README에 `## 아키텍처` 절이 있고, 요청에서 Kafka consumer까지의 흐름 도식, 모듈 의존 그래프, 모듈 사이 이벤트 표, 이벤트 스토밍 요약, `docs/wiki/architecture.md` 링크가 있다.
@@ -40,7 +45,9 @@
 4. 이벤트 스토밍 절의 모든 사실에 근거 문서 링크가 있다.
 5. Mermaid 블록이 모두 문법 오류 없이 렌더링된다.
 6. 새 문서와 README의 상대 링크가 모두 저장소에 추적되는 파일을 가리킨다.
-7. `python3 scripts/check_pr.py --base origin/main --worktree`가 통과하고, 제출 전 `--worktree` 없는 실행도 통과한다.
+7. README의 기술 스택 표·로컬 실행·TDD·Engineering Principles 문장이 `build.gradle.kts`·`docker/docker-compose.yaml`·`application.yaml`과 어긋나지 않는다. H2, "Kafka 미도입", "도메인 구현 미완료", "PostgreSQL만 뜬다"는 문장이 남아 있지 않다.
+8. `README.md`와 `docs/wiki/README.md`에 추적되지 않는 파일을 가리키는 상대 링크가 없다.
+9. `python3 scripts/check_pr.py --base origin/main --worktree`가 통과하고, 제출 전 `--worktree` 없는 실행도 통과한다.
 
 ## 검증
 - 모듈 의존: 임시 테스트로 `ApplicationModules.of(...)`의 모듈 목록과 `getDirectDependencies`를 출력해 그래프와 대조한다. 실행 뒤 임시 테스트를 지운다.
@@ -53,7 +60,7 @@
 - 요구사항·설계 변화는 없다. 이미 머지된 구조를 그림으로 옮기는 문서 PR이다.
 
 ## 분할 계획
-개발 컨텍스트는 "외부 독자용 아키텍처 설명" 하나다. origin/main 808aed9에서 시작했다. 열린 PR은 #94(`build.gradle.kts`, `docs/wiki/domain-model.md`, `EventPublicationResubmitter`와 그 테스트, #94의 spec)이고 이 PR의 변경 경로와 겹치지 않는다. README 기존 절 정정과 domain-model.md의 어긋난 문장 정정은 별도 컨텍스트다.
+개발 컨텍스트는 "외부 독자용 아키텍처 설명" 하나다. origin/main 808aed9에서 시작했다. 열린 PR은 #94(`build.gradle.kts`, `docs/wiki/domain-model.md`, `EventPublicationResubmitter`와 그 테스트, #94의 spec)이고 이 PR의 변경 경로와 겹치지 않는다. README 기존 절 정정과 두 파일의 볼트 링크 정리는 범위 조정으로 이 PR에 넣었다. 공개 독자가 같은 README에서 모순을 보지 않게 하는 같은 목표라서다. domain-model.md의 어긋난 문장과 다른 파일의 볼트 링크 정리는 별도 컨텍스트다. `Makefile`도 #94와 겹치지 않는다.
 
 ## TDD 검증 기록
 적용하지 않는다. 문서만 바꾸고 업무 동작과 테스트 대상 코드가 없다.
