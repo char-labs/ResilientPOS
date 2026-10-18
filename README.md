@@ -10,15 +10,18 @@ ResilientPOS는 네트워크 단절과 부분 실패 속에서도 주문·결제
 |---|---|
 | 언어 / JVM | Kotlin 2.4.10 / Java 25 toolchain |
 | 프레임워크 | Spring Boot 4.1.1 |
-| 웹 / 데이터 접근 | Spring MVC, Spring Data JPA, Jackson Kotlin |
-| 데이터베이스 드라이버 | PostgreSQL, H2 |
-| 운영 상태 확인 | Spring Boot Actuator, Micrometer Prometheus registry |
-| 테스트 | Kotlin Test, JUnit 5, Spring Boot Test |
+| 모듈 경계 / 이벤트 | Spring Modulith (모듈 검증, Event Publication Registry, Kafka externalization) |
+| 웹 / 보안 | Spring MVC, Spring Security, Spring Session Data Redis |
+| 데이터 접근 | Spring Data JPA, Kotlin JDSL, Flyway, Jackson Kotlin |
+| 저장소 / 메시징 | PostgreSQL, Redis (Spring Data Redis), Apache Kafka (Spring Kafka) |
+| 운영 상태 확인 | Spring Boot Actuator, Micrometer Prometheus registry, kotlin-logging |
+| 테스트 | Kotlin Test, JUnit 5, Spring Boot Test, Testcontainers, Fixture Monkey, Spring REST Docs, ArchUnit |
 | 빌드 | Gradle Wrapper 9.7.1, Kotlin DSL |
 | 개발 하네스 | Python 3 표준 라이브러리 기반 로컬 PR 검사 |
 
-현재는 단일 Gradle 프로젝트의 애플리케이션 초기 구조입니다. PostgreSQL 연결 구성과 도메인 구현은 아직 완료되지 않았습니다.
-Kafka, OpenTelemetry는 설계상 도입 방향이며 현재 의존성에는 없습니다. Redis는 결제 시도 생성·주문 생성의 중복 완화 잠금(`platform.Lock`)에만 쓰고, 정합성의 정본은 PostgreSQL 제약입니다. [구현 현황](docs/wiki/current-state.md)에서 계획과 실제 상태를 구분합니다.
+단일 Gradle 프로젝트이고, 모듈 경계는 Spring Modulith 검증 테스트가 지킵니다. 주문·결제 정합성의 정본은 PostgreSQL 제약이고 스키마는 Flyway 마이그레이션이 소유합니다.
+Redis는 두 가지에만 씁니다. 하나는 중복 요청과 주기 작업의 pod 간 겹침을 줄이는 분산 락(`platform.Lock`)이고, Redis 장애 때는 잠그지 않고 진행하며 DB 제약이 막습니다. 다른 하나는 점주 세션과 로그인 실패 카운터입니다.
+OpenTelemetry trace는 아직 없습니다. 지금 내보내는 metric과 로그는 [관측성](docs/wiki/observability.md)에 있습니다.
 
 ## 아키텍처
 
@@ -124,16 +127,16 @@ make bootstrap
 | `make test` | 애플리케이션 테스트 |
 | `make harness` | 로컬 하네스 테스트 (Python 표준 라이브러리) |
 | `make check` | PR 규칙 검사. 기준 커밋은 `BASE` 로 지정 (`make check BASE=main`) |
-| `make up` | 로컬 PostgreSQL 기동 (docker compose) |
+| `make up` | 로컬 PostgreSQL·Redis·Kafka 기동 (docker compose) |
 | `make down` | compose로 띄운 컨테이너를 profile 구분 없이 모두 중지 |
 
 ### 로컬 실행 (docker compose)
 
-Docker 관련 파일은 모두 `docker/` 아래에 있고 로컬 개발 전용입니다. 테스트는 이 파일과 무관하게 Testcontainers로 PostgreSQL을 띄웁니다.
+Docker 관련 파일은 모두 `docker/` 아래에 있고 로컬 개발 전용입니다. 테스트는 이 파일과 무관하게 Testcontainers로 PostgreSQL·Redis·Kafka를 띄웁니다.
 
 | 명령 | 뜨는 것 |
 | --- | --- |
-| `make up` | PostgreSQL 18 (`localhost:5432`) |
+| `make up` | PostgreSQL 18 (`localhost:5432`), Redis 8 (`localhost:6379`), Kafka 4.1 KRaft 단일 노드 (`localhost:9092`) |
 | `docker compose -f docker/docker-compose.yaml --profile app up -d --build` | + 앱 컨테이너 (`localhost:8080`, ECS JSON 로그) |
 | `docker compose -f docker/docker-compose.yaml --profile app --profile obs up -d --build` | + Alloy, Grafana LGTM (`localhost:3000`, admin/admin) |
 
@@ -169,7 +172,7 @@ ResilientPOS는 **PR 단위로 명세를 먼저 작성하고 구현·검증하�
 ### TDD — Test-Driven Development
 
 SDD의 인수 조건을 **실패하는 테스트 → 최소 구현 → 리팩터링**으로 구체화합니다. 비즈니스·도메인은 단위 테스트를 기본으로 하고, 트랜잭션·이벤트 연결은 필요한 통합 테스트로 검증합니다. Repository 자체 테스트는 대상에서 제외합니다.
-Controller는 MockMvc와 Spring REST Docs로 HTTP 계약을 검증하며, fixture 객체는 Fixture Monkey로 생성하고 경계값과 문서 예시는 고정합니다. 두 라이브러리의 실제 의존성 설치는 최초 기능 적용 PR에서 진행합니다.
+Controller는 MockMvc와 Spring REST Docs로 HTTP 계약을 검증하며, fixture 객체는 Fixture Monkey로 생성하고 경계값과 문서 예시는 고정합니다.
 저장소의 `resilientpos-tdd` 스킬과 `tdd-driver` 에이전트가 이 과정을 주도하고 결과를 spec에 남깁니다. [테스트 전략](docs/wiki/testing-strategy.md)
 
 ### 설계와 검증 방식
@@ -185,7 +188,7 @@ Controller는 MockMvc와 Spring REST Docs로 HTTP 계약을 검증하며, fixtur
 ## Engineering Principles
 
 - **정합성/복구 가능성/관측 가능성 우선**: 기능보다 데이터 정합성과 장애 복구, 운영 가시성을 우선합니다.
-- **모듈 경계 준수 (Spring Modulith)**: `order`, `payment`, `sync`, `reconciliation`, `fulfillment` 경계를 지키며 다른 모듈의 internal 코드/DB를 직접 접근하지 않습니다.
+- **모듈 경계 준수 (Spring Modulith)**: `owner`, `store`, `terminal`, `order`, `payment`, `sync`, `reconciliation`, `fulfillment` 경계를 지키며 다른 모듈의 internal 코드/DB를 직접 접근하지 않습니다.
 - **역할 분리**:
   - Facade: use case + transaction 조합
   - Aggregate / Value Object / Policy: 상태 전이·불변식·금액 계산·검증 소유
@@ -196,13 +199,13 @@ Controller는 MockMvc와 Spring REST Docs로 HTTP 계약을 검증하며, fixtur
   - 저장소: JPA 엔티티로 aggregate를 저장한다. 간단한 조회는 Spring Data repository, 그 밖의 조회(조인·동적 조건·projection·잠금)는 Kotlin JDSL로 쓴다
 - **데이터 정본 원칙**:
   - 주문/결제 정합성 정본: PostgreSQL
-  - Redis: cache, rate limit, 짧은 중복 요청 완화 용도만 사용
+  - Redis: cache, rate limit, 짧은 중복 요청 완화, 점주 세션 저장 용도만 사용
   - Redis를 payment idempotency/sync watermark의 정본으로 사용 금지
 - **비동기 처리 원칙**:
   - at-least-once 전제
   - 모든 consumer 멱등 보장
   - Event Publication Registry 또는 outbox/inbox 사용
-  - Kafka는 독립 consumer/replay/확장 요구가 실제로 생길 때만 도입
+  - 모듈 사이 이벤트는 커밋 뒤 Kafka로 전달하고 재시도·DLT는 브로커 쪽에서 처리 (도입 이유는 [도메인 모델 §8](docs/wiki/domain-model.md#8-참고-사례와-다르게-가는-결정))
 - **외부 결제 연동 원칙**:
   - 개인 개발자 test-only 환경으로 제한
   - timeout은 결제 실패 확정이 아님

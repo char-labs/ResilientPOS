@@ -73,7 +73,17 @@
 - **그래프 배치.** 처음 그린 그래프는 점선 8개가 겹쳐 읽히지 않았다. `contract`·`order`·`payment`·`sync`가 모두 `store`와 `terminal` 둘 다에 의존하므로, 둘을 `단말·매장` 상자로 묶고 상자로 점선 하나씩을 그었다. 간선의 뜻은 범례에 적었다.
 - **Mermaid.** `mmdc`가 없어 Mermaid 11.4.1(GitHub과 같은 메이저 버전)을 브라우저에서 불러 6개 블록을 `parse`·`render`했다. 모두 오류가 없었고 화면으로 확인해 단어 중간에서 줄이 바뀌는 라벨 넷을 고쳤다.
 - **링크.** 새 문서와 README·wiki README에 추가한 상대 링크와 앵커(`#아키텍처`, `#5-이벤트-스토밍`, 도메인 모델 §3·§4.1·§4.3·§4.4·§4.6)가 모두 추적 파일과 실재 제목을 가리킨다. 기존 줄의 링크 14건은 추적되지 않는 볼트 심볼릭 링크(`docs/wiki/current-state.md`, `docs/wiki/modulith-kafka-keywords.md`, `.claude/skills/**`)를 가리켜 공개 저장소에서 열리지 않는다. 이 PR의 범위 밖이라 그대로 두었다.
-- `python3 scripts/check_pr.py --base origin/main --worktree`: PASS(일반 4개/474줄).
+- `python3 scripts/check_pr.py --base origin/main --worktree`: PASS(일반 4개/474줄, 범위 조정 전).
+
+**범위 조정 반영(README 낡은 문장과 볼트 링크).**
+- 기술 스택 표를 `build.gradle.kts`에 맞췄다. H2를 지우고 Spring Modulith, Spring Security, Spring Session Data Redis, Kotlin JDSL, Flyway, Redis, Kafka, kotlin-logging, Testcontainers·Fixture Monkey·REST Docs·ArchUnit을 더했다. Modulith는 버전을 적지 않았다. #94가 2.1.1을 2.1.2로 올리므로 적으면 그 머지와 함께 낡는다.
+- 표 아래 문단: "도메인 구현 미완료"와 "Kafka 미도입"을 지우고, Redis 용도를 분산 락(fail-open)과 점주 세션·로그인 실패 카운터 둘로 적었다(`docker/docker-compose.yaml`의 redis 주석, [관측성](../wiki/observability.md)). 볼트 링크였던 "구현 현황"은 추적되는 [관측성](../wiki/observability.md) 링크로 바꿨다.
+- `make up`과 로컬 실행 표: compose의 profile 없는 서비스가 PostgreSQL 18·Redis 8·Kafka 4.1이라 셋을 적었다. Testcontainers도 셋을 띄운다(`PostgresIntegrationTest`). `Makefile`의 `up` 설명도 같이 고쳤다.
+- TDD 절: Fixture Monkey·REST Docs는 이미 빌드에 있어 "최초 기능 적용 PR에서 설치" 문장을 지웠다.
+- Engineering Principles: 모듈 목록에 `owner`·`store`·`terminal`을 더했다. Kafka 문장을 "모듈 사이 이벤트는 커밋 뒤 Kafka로, 재시도·DLT는 브로커 쪽"으로 바꾸고 이유는 [도메인 모델 §8](../wiki/domain-model.md#8-참고-사례와-다르게-가는-결정) 링크로 두었다. Redis 용도에 점주 세션 저장을 더했다([operator-authentication](2026-10-06-operator-authentication.md)에서 정한 것).
+- 볼트 링크: `README.md` 1건과 `docs/wiki/README.md` 13건을 경로 표기로 바꾸고 wiki 인덱스 머리에 이유 한 줄을 두었다. 새 문서 포함 네 파일의 상대 링크와 앵커 위반이 0건이다.
+- 확인: 위 낡은 문장(`H2`, "현재 의존성에는 없", "아직 완료되지 않았", "PostgreSQL을 띄웁니다", "로컬 PostgreSQL 기동", "최초 기능 적용 PR", "실제로 생길 때만 도입")을 `grep`해 남은 것이 없다. `python3 -m unittest discover -s scripts -p 'test_*.py'` 132개 통과, `make help`의 `up` 설명이 바뀐 것을 확인했다.
+- 남은 볼트 링크(후속 PR 후보): `AGENTS.md` 9건, `docs/wiki/development-workflow.md` 11건, `domain-model.md` 3건(#94와 겹침), `borrowed-workflows.md`·`entity-map.md` 각 2건, `testing-strategy.md` 1건.
 
 **코드와 어긋난 문서 문장(고치지 않음, 후속 PR 후보).**
 - [도메인 모델](../wiki/domain-model.md) §4.6은 "허용되는 동기 호출은 `sync` → `order`/`payment`의 공개 Command Facade뿐"이라고 적는다. 코드에서 `sync`는 `payment`를 부르지 않고(같은 절 본문도 `createAttempt`가 sync 경로에 없다고 적는다), 이 절이 다루지 않는 `terminal → store` 동기 호출(`TerminalOwnerController`의 `StoreManagement.requireOwned`, 매장 소유 확인 읽기)이 있다.
