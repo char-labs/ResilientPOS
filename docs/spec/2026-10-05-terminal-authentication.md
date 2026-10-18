@@ -1,7 +1,7 @@
 # PR spec: 단말 인증과 주문의 매장·단말 소유권 검사를 들인다
 
 ## 목적
-쓰기 API 세 개(`POST /v1/orders`, `POST /v1/orders/{orderId}/checkout`, `POST /v1/terminals/{terminalId}/sync`)에 인증이 없다. `orderId`만 알면 다른 매장의 주문도 `CHECKOUT_REQUESTED`로 전이시킬 수 있고, 되돌리는 endpoint가 없어 복구할 수도 없다. [현재 상태](../wiki/current-state.md)는 단말 인증과 소유권 검사가 들어오기 전에는 이 API를 외부에 노출하지 않는다고 적고, 인증만 넣으면 빈틈이 남는다고 경고한다. [order-request-checkout-api](2026-09-21-order-request-checkout-api.md), [sync-intake](2026-09-30-sync-intake.md), [sync-request-checkout](2026-09-30-sync-request-checkout.md)가 이 작업을 뒤로 미뤘다.
+쓰기 API 세 개(`POST /v1/orders`, `POST /v1/orders/{orderId}/checkout`, `POST /v1/terminals/{terminalId}/sync`)에 인증이 없다. `orderId`만 알면 다른 매장의 주문도 `CHECKOUT_REQUESTED`로 전이시킬 수 있고, 되돌리는 endpoint가 없어 복구할 수도 없다. 현재 상태(`docs/wiki/current-state.md`, 볼트)는 단말 인증과 소유권 검사가 들어오기 전에는 이 API를 외부에 노출하지 않는다고 적고, 인증만 넣으면 빈틈이 남는다고 경고한다. [order-request-checkout-api](2026-09-21-order-request-checkout-api.md), [sync-intake](2026-09-30-sync-intake.md), [sync-request-checkout](2026-09-30-sync-request-checkout.md)가 이 작업을 뒤로 미뤘다.
 
 기대 결과:
 - `terminal` 모듈에 `Terminal` aggregate와 credential 이력이 생기고, 공개 Facade `TerminalManagement`가 등록·회전·비활성화·인증을 맡는다.
@@ -152,7 +152,7 @@ create unique index ux_terminal_credential_active on t_terminal_credential (term
 - `python3 scripts/check_pr.py --base 8133048 --worktree`.
 
 ## Wiki 영향
-- [현재 상태](../wiki/current-state.md): `terminal` 모듈의 aggregate·Facade·인증 경로, checkout·sync의 소유권 검사, 401·403 응답을 적는다. "인가가 없다"와 sync의 "단말 인증 … 없다"를 고친다. 등록 API가 없어 외부 노출은 여전히 하지 않는다는 점과 이전 버전 인스턴스의 빈틈을 남긴다. `ErrorType` 항목 수를 고친다.
+- 현재 상태(`docs/wiki/current-state.md`, 볼트): `terminal` 모듈의 aggregate·Facade·인증 경로, checkout·sync의 소유권 검사, 401·403 응답을 적는다. "인가가 없다"와 sync의 "단말 인증 … 없다"를 고친다. 등록 API가 없어 외부 노출은 여전히 하지 않는다는 점과 이전 버전 인스턴스의 빈틈을 남긴다. `ErrorType` 항목 수를 고친다.
 - [도메인 모델](../wiki/domain-model.md): `terminal` 행의 "매장 안에서 코드 유일"이 아직 구현되지 않았다는 점, `Terminal` 구성(credential 이력), §4.7 사례에 두 unique를 적는다. 용어 `credential`이 용어집에 없으면 더한다.
 - [관측성](../wiki/observability.md): "앱에 인증이 없으므로" 문장을 `/v1/**`만 인증하고 Actuator는 배포에서 막는다로 고친다.
 - [엔티티 지도](../wiki/entity-map.md): `TerminalEntity`·`TerminalCredentialEntity`의 역할과 참조 관계를 더한다. 새 엔티티의 KDoc이 이 문서를 가리킨다(범위 조정, 구현 중 추가).

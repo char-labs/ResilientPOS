@@ -81,7 +81,7 @@
 
 ## Wiki 영향
 - [도메인 모델](../wiki/domain-model.md) — §4.7 사례에 `t_fulfillment`의 unique `(order_id)`와 `type`을 뺀 근거를 더한다.
-- [현재 상태](../wiki/current-state.md)는 볼트에서 갱신한다(`OrderEvent.Paid` → `contract.OrderPaid`, 기록되는 이벤트 목록, `fulfillment`가 비어 있지 않음, 테스트 수).
+- 현재 상태(`docs/wiki/current-state.md`, 볼트)는 볼트에서 갱신한다(`OrderEvent.Paid` → `contract.OrderPaid`, 기록되는 이벤트 목록, `fulfillment`가 비어 있지 않음, 테스트 수).
 - 요구사항 변화: 없다. 원문이 정한 흐름이 이어진다.
 
 ## 분할 계획

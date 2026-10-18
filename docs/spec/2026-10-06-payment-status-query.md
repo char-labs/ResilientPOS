@@ -84,9 +84,9 @@ endpoint가 쓰기 세 개뿐이라 단말이 결제가 거절됐는지, 결과�
 ## Wiki 영향
 - [README](../../README.md#engineering-principles): CQRS 규약의 읽기 줄을 확정한 규약으로 고친다("첫 조회 PR에서 정한다"를 지운다).
 - [도메인 모델](../wiki/domain-model.md): 용어표의 Facade·명령/조회/결과/뷰 예시를 `PaymentQueryFacade.findAttempts(PaymentQuery.FindAttempts)`와 `PaymentAttemptView`로 고치고, §4.2에 조회 구현의 위치(`persistence/query`, port 없음, aggregate를 거치지 않음)를 적는다. `payment` 행의 공개 Facade에 `PaymentQueryFacade`를 더한다.
-- [현재 상태](../wiki/current-state.md)는 볼트에서 갱신한다(두 endpoint, 단말이 거절을 아는 길, 재결제 입구).
+- 현재 상태(`docs/wiki/current-state.md`, 볼트)는 볼트에서 갱신한다(두 endpoint, 단말이 거절을 아는 길, 재결제 입구).
 - 볼트 rules `domain-modeling-kotlin.md`(§5 읽기 projection, §6 이름공간과 예시)와 `kotlin-idioms-and-design-patterns.md`(§1 팩토리 대상과 예시)가 조회 안에 중첩한 `View`를 가르쳤다. 이번 규약(최상위 View, port 없는 조회 클래스, 엔티티에서 View로의 변환은 조회 파일의 private 확장 함수)으로 볼트 원본을 고치고 `make bootstrap`으로 다시 복사했다. 저장소에 추적되지 않는 경로라 커밋은 없다.
-- Kafka·Modulith 이벤트 작업이 아니라 [Modulith·Kafka 키워드](../wiki/modulith-kafka-keywords.md)는 바꾸지 않는다.
+- Kafka·Modulith 이벤트 작업이 아니라 Modulith·Kafka 키워드(`docs/wiki/modulith-kafka-keywords.md`, 볼트)는 바꾸지 않는다.
 - 요구사항 변화: 단말이 결제 시도와 거절을 조회하고 재결제를 요청할 수 있다. 정합성 요구는 그대로다.
 
 ## 분할 계획

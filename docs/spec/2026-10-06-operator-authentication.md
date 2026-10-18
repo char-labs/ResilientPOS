@@ -96,7 +96,7 @@
 - 세션 읽기는 성공하고 응답 커밋 때 세션 저장만 실패하는 경로를 통합 테스트로 고정한다. 결정 12는 이 경로도 503으로 덮는다고 적었지만, 지금 테스트는 Redis가 처음부터 없는 경우만 본다. 결과가 503 envelope와 ERROR 한 줄이 아니면 고친다.
 - `OwnerSessionStoreOutageIntegrationTest`의 `로그인은 세션을 저장하지 못하면 503 envelope다`는 fail-closed 뒤 카운터 실패 경로를 탄다. 실제 원인에 맞게 이름을 바꾼다.
 - 결정 6에 카운터 지우기 실패가 best-effort임을 적는다(위).
-- [현재 상태](../wiki/current-state.md)의 `ErrorType` 개수(8개, `SERVICE_UNAVAILABLE`), 모듈 수, Redis·Spring Security·Spring Session 의존성 서술을 고친다.
+- 현재 상태(`docs/wiki/current-state.md`, 볼트)의 `ErrorType` 개수(8개, `SERVICE_UNAVAILABLE`), 모듈 수, Redis·Spring Security·Spring Session 의존성 서술을 고친다.
 - 넣지 않고 제외·한계에 남기는 것: 외부 노출 전 rate limit(#87)과 운영 Redis TLS·인증의 기동 검증, 같은 코드의 동시 등록 테스트(순차 중복과 같은 unique 경로), DTO 파일 분리, 목록 개수 상한, 세션 필터의 `IllegalStateException`, `response.reset()`이 지우는 Security 헤더, Lua 결과 타입.
 
 **결정 13: 세션 속성은 JSON으로 직렬화한다.** (2026-10-07 범위 조정)
@@ -361,5 +361,5 @@ create index ix_store_owner_id on t_store (owner_id);
   - 두 리뷰어가 함께 지적한 옛 fail-open 문구(`application.yaml` 둘, 관측성 wiki)와 낡은 모듈 설명(`terminal`·`store` package-info)을 고쳤다.
   - Claude가 추정한 503 감지 쿼리의 빈틈은 실측으로 맞았다. 필터에서 쓰는 503의 `uri` 태그는 `UNKNOWN`이라 `uri=~"/owner/.*"`로는 잡히지 않는다. 관측성 wiki의 쿼리를 `status="503"`(uri 무관)과 ERROR의 `errorCode=SERVICE_UNAVAILABLE`로 바꿨다. 지금 503을 내는 곳은 세션 저장소·카운터 장애 처리뿐이다.
   - Claude가 추정한 세션 저장 실패의 이중 로그는 관측되지 않았다. 저장은 `SessionRepositoryFilter.commitSession`에서 실패하고 필터가 503 envelope와 ERROR 한 줄로 바꾼다. 이 경로를 `OwnerSessionSaveFailureIntegrationTest`로 고정했다.
-  - 카운터 지우기 실패의 best-effort를 결정 6에 적었고(Codex), 실제 원인과 다른 테스트 이름을 고쳤다(Claude). [현재 상태](../wiki/current-state.md)의 `ErrorType` 개수, 모듈 수, Redis·Security·Session 의존성 서술을 고쳤다.
+  - 카운터 지우기 실패의 best-effort를 결정 6에 적었고(Codex), 실제 원인과 다른 테스트 이름을 고쳤다(Claude). 현재 상태(`docs/wiki/current-state.md`, 볼트)의 `ErrorType` 개수, 모듈 수, Redis·Security·Session 의존성 서술을 고쳤다.
   - 반영하지 않은 것은 범위 조정 절과 제외 절에 적었다(rate limit·Redis TLS의 외부 노출 전 조건, 동시 등록 테스트, DTO 파일 분리, 목록 상한, 작은 Nice-to-have).

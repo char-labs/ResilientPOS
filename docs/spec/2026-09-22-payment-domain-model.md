@@ -43,7 +43,7 @@
 ## 제외
 - JPA 엔티티와 `t_payment_attempt` 마이그레이션. **바로 뒤따르는 PR**이 만든다. 이 PR은 도메인 한 목표만 담는다.
 - Facade와 `PaymentAttemptRepository` 포트·adapter. [도메인 모델](../wiki/domain-model.md) §4.4가 "Facade는 구현이 둘이 될 때 인터페이스를 뽑는다"고 정했고, 호출부가 없으면 시그니처가 맞는지 확인할 수단이 없다.
-- `OrderPaymentRequested`를 받는 `@ApplicationModuleListener`와 그에 딸린 재시도·풀·종료 정책. 그 PR이 [현재 상태](../wiki/current-state.md)에 적힌 Event Publication Registry의 빈틈도 함께 닫는다.
+- `OrderPaymentRequested`를 받는 `@ApplicationModuleListener`와 그에 딸린 재시도·풀·종료 정책. 그 PR이 현재 상태(`docs/wiki/current-state.md`, 볼트)에 적힌 Event Publication Registry의 빈틈도 함께 닫는다.
 - provider 결과를 적용하는 전이(`APPROVED`·`DECLINED`·`UNKNOWN`)와 그때 나는 `PaymentDeclined`·`PaymentUnknown` 이벤트. 상태 값만 이 PR이 선언하고 전이는 결과를 받는 PR이 만든다.
 - `PaymentGateway` 포트와 `FakePaymentGateway`. **부르는 쪽과 같은 PR에 둔다.** 포트를 호출부 없이 먼저 만들면 그 모양이 맞는지 확인할 수단이 없다. Facade와 리스너를 만드는 다음 PR이 함께 가져간다.
 - provider idempotency 키의 저장 위치(시도의 자식인지 컨텍스트 공용 테이블인지). 영속화 PR이 정한다.
@@ -76,7 +76,7 @@ DESIGN 계층은 없다. 정본은 [도메인 모델](../wiki/domain-model.md) �
 - 모듈 경계는 `ModuleStructureTest`가, 도메인 레이어 의존성은 `DependencyDirectionTest`가 판정한다. 눈으로 보지 않는다.
 
 ## Wiki 영향
-- [현재 상태](../wiki/current-state.md) — `payment` 모듈이 더 이상 비어 있지 않다. 상태 어휘와 포트 경계를 적고, 모듈 개수 서술을 실제 값과 맞춘다.
+- 현재 상태(`docs/wiki/current-state.md`, 볼트) — `payment` 모듈이 더 이상 비어 있지 않다. 상태 어휘와 포트 경계를 적고, 모듈 개수 서술을 실제 값과 맞춘다.
 - 요구사항 변화: 결제 상태 어휘 네 개와 0원 승인 규칙이 코드로 고정된다. 아직 외부로 나가는 endpoint가 없어 API 계약은 바뀌지 않는다.
 
 ## 분할 계획

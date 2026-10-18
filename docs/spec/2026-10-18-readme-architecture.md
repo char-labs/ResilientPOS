@@ -102,14 +102,22 @@
 **범위 조정 2 반영(남은 볼트 링크).**
 - `AGENTS.md` 9건, `docs/wiki/development-workflow.md` 11건, `docs/wiki/borrowed-workflows.md`·`docs/wiki/entity-map.md` 각 2건, `docs/wiki/testing-strategy.md` 1건을 "이름(저장소 루트 기준 경로)" 형식으로 바꿨다. `current-state.md`·`modulith-kafka-keywords.md`에는 wiki 인덱스와 같이 "볼트"를 붙였다. `entity-map.md`의 괄호 안 링크 한 곳은 괄호가 겹치지 않게 문장을 고쳤다.
 - 확인: 과거 spec과 `docs/references/`를 뺀 추적 Markdown 전체에서, 추적되지 않는 파일을 가리키는 상대 링크는 그때 제외한 `docs/wiki/domain-model.md` 3건만 남았다. `python3 -m unittest discover -s scripts -p 'test_*.py'` 132개 통과, `check_pr.py --base origin/main --worktree` PASS(일반 10개).
-- 과거 spec 45개의 링크 103건은 기록이라 두었다.
+- 과거 spec 45개의 링크 103건은 이때 기록이라 두었다(범위 조정 4에서 바꿨다).
 
 **범위 조정 3 반영(domain-model 링크).**
 - `docs/wiki/domain-model.md` 16·311·323번째 줄의 `current-state.md` 링크 3건을 같은 형식으로 바꿨다. 문장은 바꾸지 않았다.
 - #94 head(`512298b`)와 `git merge-tree --write-tree`로 시험 merge했고 충돌이 없었다.
 - 확인: 과거 spec과 `docs/references/`를 뺀 추적 Markdown 전체에서 추적되지 않는 파일을 가리키는 상대 링크가 0건이다.
 
-**코드와 어긋난 문서 문장(고치지 않음, 후속 PR 후보).**
+**코드와 어긋난 문서 문장(처음 찾은 내용, 범위 조정 4에서 고쳤다).**
 - [도메인 모델](../wiki/domain-model.md) §4.6은 "허용되는 동기 호출은 `sync` → `order`/`payment`의 공개 Command Facade뿐"이라고 적는다. 코드에서 `sync`는 `payment`를 부르지 않고(같은 절 본문도 `createAttempt`가 sync 경로에 없다고 적는다), 이 절이 다루지 않는 `terminal → store` 동기 호출(`TerminalOwnerController`의 `StoreManagement.requireOwned`, 매장 소유 확인 읽기)이 있다.
 - 도메인 모델 §2는 `contract`가 "다른 업무 모듈의 타입을 들지 않는다(식별자를 raw `UUID`로 든다)"고 적는다. 코드의 세 이벤트는 `StoreId`·`TerminalId`를 든다. `OrderPaid` KDoc이 근거(`contract`에 의존하지 않는 모듈의 타입이라 순환이 없다)를 적고 있고, `ModuleStructureTest`도 `store`·`terminal`·`owner`를 금지 목록에 두지 않는다. 문장이 코드보다 넓다.
 - 도메인 모델 §1의 "지금 저장소에 있는 타입은 `foundation`의 `Money`·`IdentifierGenerator`뿐"은 낡았다.
+
+**범위 조정 4 반영(domain-model 문장, 과거 spec 링크).**
+- [도메인 모델](../wiki/domain-model.md) §1: "`Money`·`IdentifierGenerator`뿐"을 지우고, 원문의 커맨드·이벤트가 코드에 있는지는 [아키텍처 §5.4](../wiki/architecture.md#54-지금-코드에-있는-것과-없는-것)로 안내했다.
+- §2: "**`contract`를 의존하는 모듈의 타입을 들지 않는다**"로 좁히고, `StoreId`·`TerminalId`를 드는 이유(`OrderPaid` KDoc)와 `ModuleStructureTest`가 막는 패키지 여섯을 적었다.
+- §4.6: 첫 항목을 "동기 쓰기 호출은 `sync` → `order`뿐"으로 고치고, 상태를 바꾸지 않는 `terminal → store` 소유 확인(`TerminalOwnerController` → `StoreManagement.requireOwned`)을 한 항목으로 더했다. 다음 항목의 "`order`/`payment` Facade 합류"도 `order`로 고쳤다. 제목은 그대로다.
+- #94 head(`512298b`)와 다시 시험 merge했고 충돌이 없었다.
+- 과거 spec: 45개 파일의 링크 103건(`current-state.md` 59건, `modulith-kafka-keywords.md` 9건, `changes.md` 35건)을 바꿨다. 코드 블록 밖만 바꿨고, 원문에서 링크를 텍스트로 풀어낸 글과 새 글에서 덧붙인 경로 표기를 뺀 글이 파일마다 같은지 스크립트로 대조했다.
+- 볼트 rules `domain-modeling-kotlin.md` §6의 "`sync` intake → `order`/`payment`" 문장은 제외 절대로 두었다. 볼트에서 고칠 후속 작업이다.

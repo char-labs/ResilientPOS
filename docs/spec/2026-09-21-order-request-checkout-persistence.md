@@ -96,16 +96,16 @@
 - 정상 시나리오: 인수 조건 1·2·6. 재시도·동시성: 3·5. 실패: 4.
 
 ## Wiki 영향
-- [현재 상태](../wiki/current-state.md): "도메인에만 있다"는 문단을 Facade·`t_order_checkout`·잠금 조회가 있고 endpoint만 없다는 내용으로 고친다. 주문 생성 재시도가 현재 `status`를 돌려준다는 점, 마이그레이션 `V003`, 테스트 수를 반영한다.
+- 현재 상태(`docs/wiki/current-state.md`, 볼트): "도메인에만 있다"는 문단을 Facade·`t_order_checkout`·잠금 조회가 있고 endpoint만 없다는 내용으로 고친다. 주문 생성 재시도가 현재 `status`를 돌려준다는 점, 마이그레이션 `V003`, 테스트 수를 반영한다.
 - [도메인 모델](../wiki/domain-model.md): aggregate 구성 표의 checkout 설명에서 "키는 영속화 PR이 정한다"를 `CheckoutId`와 unique 제약으로 바꾼다. 4.7절 사례에 `t_order_checkout`의 판단(통화 컬럼 없음, unique가 방어선, 잠금)을 더한다.
-- [변경 기록](../wiki/changes.md): 이 spec 링크와 결정을 적는다.
+- 변경 기록(`docs/wiki/changes.md`, 2026-09-21 삭제): 이 spec 링크와 결정을 적는다.
 
 ## 분할 계획
 예상 규모는 구현 약 150줄, 테스트 약 170줄, 문서 약 170줄로 총 490줄·16파일 내외다. 경고 한도(600줄·20파일) 안이다. 초과하면 동시성 테스트(인수 조건 5)와 잠금 조회를 후속 PR로 옮기지 않고 wiki의 도메인 모델 갱신을 줄인다. 잠금은 이 PR의 정합성 답이라 나누지 않는다. 후속은 `order-request-checkout-api`(endpoint, 요청·응답 DTO, REST Docs, `ORDER_NOT_FOUND`의 404 문서화, `data.status` 설명)다.
 
 다음 PR이 정할 것:
 - 잠금 대기 초과(`PessimisticLockingFailureException` 계열)를 재시도 가능한 오류 응답으로 바꾸는 매핑과 오류 코드.
-- 인가가 없다는 점을 [현재 상태](../wiki/current-state.md)의 알려진 빈틈에 적는다. endpoint가 열리면 `orderId`만 알아도 다른 매장의 주문을 전이시킬 수 있다.
+- 인가가 없다는 점을 현재 상태(`docs/wiki/current-state.md`, 볼트)의 알려진 빈틈에 적는다. endpoint가 열리면 `orderId`만 알아도 다른 매장의 주문을 전이시킬 수 있다.
 
 ## TDD 검증 기록
 

@@ -22,14 +22,14 @@
 `BaseEntity`가 `@MappedSuperclass` 파일이라 PR 템플릿의 사실 기준으로 🔴이다. multi-review를 돌렸다(Claude, Codex 실행. Gemini는 CLI가 없어 미실행). 둘 다 코드에 막는 결함은 없다고 판정했다. Claude가 Critical로 든 것은 그 시점에 TDD 검증 기록과 결과 절이 비어 있었다는 점이고 이 커밋에서 채웠다.
 - 시각 단언을 시계에 기대지 않게 바꿨다. 인수 조건 2에서 `updated_at`이 `created_at`보다 앞서지 않는다는 단언을 뺐다. Hibernate가 두 값을 따로 만들 뿐 순서를 약속하지 않는다. 인수 조건 3은 두 시각을 먼 과거로 돌려놓은 뒤 `updated_at`만 새로 찍히는지 본다. 시스템 시계가 뒤로 가도 결과가 같다.
 - 인수 조건 1의 테스트가 `save`는 예외 없이 끝났음을 확인해서 충돌이 커밋에서 드러난다는 것을 고정한다. 남은 행의 `status`와 checkout 행 수도 함께 본다.
-- 과장된 서술을 고쳤다. "시각 출처가 애플리케이션 하나로 모인다"는 틀렸다. Hibernate는 `Clock` 빈이 아니라 자기 시계를 쓴다. `deleted_at`이 DB 시각이라는 서술에 소스 근거를 달았고 `deleted_at`과 `updated_at`의 순서가 뒤집힐 수 있는 경우를 적었다. #33 머지 전에는 HTTP에서 계속 500이라는 점을 [현재 상태](../wiki/current-state.md)에 적었다.
+- 과장된 서술을 고쳤다. "시각 출처가 애플리케이션 하나로 모인다"는 틀렸다. Hibernate는 `Clock` 빈이 아니라 자기 시계를 쓴다. `deleted_at`이 DB 시각이라는 서술에 소스 근거를 달았고 `deleted_at`과 `updated_at`의 순서가 뒤집힐 수 있는 경우를 적었다. #33 머지 전에는 HTTP에서 계속 500이라는 점을 현재 상태(`docs/wiki/current-state.md`, 볼트)에 적었다.
 - 검토한 선택지에 Spring Data JPA Auditing을 더하고 버린 이유를 적었다. 제외에 지금의 `@Version`이 막는 범위를 적었다.
 - 반영하지 않은 것: `hibernate.testing.clock`으로 Hibernate 시계를 고정하자는 안은 테스트 전용 설정을 컨텍스트에 들이는 대신 위처럼 과거 값으로 돌려놓는 쪽이 작아서 받지 않았다. executor의 `awaitTermination` 결과를 확인하자는 안은 같은 패키지의 기존 동시성 테스트와 같은 방식이라 그대로 뒀다. `SourceType.DB`와 `@Generated`를 막는 ArchUnit 규칙은 이 PR의 통합 테스트가 `BaseEntity` 경로의 회귀를 잡으므로 넣지 않았다. 엔티티가 `BaseEntity` 밖에서 generated 값을 쓰기 시작하면 다시 본다.
 
 ### 범위 조정 2 (2026-09-21, #33·#35 머지 뒤 rebase)
 이 PR을 올린 뒤 #33(checkout endpoint와 `409 CONCURRENT_REQUEST` 매핑)과 #35(Event Publication Registry)가 `main`에 먼저 머지됐다. 사용자 요청으로 `origin/main` 위에 rebase했다. 코드 충돌은 없었고 `docs/wiki/changes.md`(두 PR의 항목 뒤에 이 PR의 항목을 둔다)와 `docs/wiki/current-state.md`의 테스트 수 줄(88개에 이 PR의 2개를 더해 90개)만 풀었다.
 - 위 "실패·재시도·복구"와 "관측성"이 조건으로 적은 "#33 머지 뒤"가 성립했다. 커밋 시점 버전 충돌은 이제 HTTP에서 `409 CONCURRENT_REQUEST`이고 WARN 로그의 `errorCode=CONCURRENT_REQUEST`로 남는다.
-- Wiki 영향에 적은 대로 #33이 [현재 상태](../wiki/current-state.md)에 더한 "커밋 시점의 버전 충돌은 이 매핑에 닿지 않는다 ... 알려진 빈틈이다" 서술을 고쳤다. 이 PR이 앞서 적은 "#33 머지 전에는 HTTP에서 계속 500이다"도 함께 고쳤다.
+- Wiki 영향에 적은 대로 #33이 현재 상태(`docs/wiki/current-state.md`, 볼트)에 더한 "커밋 시점의 버전 충돌은 이 매핑에 닿지 않는다 ... 알려진 빈틈이다" 서술을 고쳤다. 이 PR이 앞서 적은 "#33 머지 전에는 HTTP에서 계속 500이다"도 함께 고쳤다.
 - HTTP까지 잇는 통합 테스트는 더하지 않았다. 잠금 없이 `@Version`에 기대는 endpoint가 아직 없어서 테스트 전용 endpoint를 만들어야 한다. 영속 계층의 예외 타입은 이 PR의 `OrderVersionConflictIntegrationTest`가, 그 계열의 409는 #33의 `ApiAdviceTest`가 고정한다. 그런 endpoint를 처음 더하는 PR이 HTTP 테스트를 함께 넣는다.
 - #35의 발행 기록 테이블은 Modulith의 것이고 `BaseEntity`를 쓰지 않는다. 이 PR의 변경과 닿지 않는다.
 
@@ -73,9 +73,9 @@
 - `BaseEntity`는 `@MappedSuperclass` 파일이라 PR 템플릿의 사실 기준으로 🔴이다. 제출 전에 multi-review를 돌린다.
 
 ## Wiki 영향
-- [현재 상태](../wiki/current-state.md): `platform` 문단에 시각 출처와 커밋 시점 버전 충돌의 예외 타입을 적고 테스트 수를 고친다. PR #33이 먼저 머지되면 그 PR이 더한 "커밋 시점의 버전 충돌은 이 매핑에 닿지 않는다 ... 알려진 빈틈이다" 서술을 이 PR에서 고친다. 이 PR이 먼저 머지되면 #33이 그 서술을 뺀다.
+- 현재 상태(`docs/wiki/current-state.md`, 볼트): `platform` 문단에 시각 출처와 커밋 시점 버전 충돌의 예외 타입을 적고 테스트 수를 고친다. PR #33이 먼저 머지되면 그 PR이 더한 "커밋 시점의 버전 충돌은 이 매핑에 닿지 않는다 ... 알려진 빈틈이다" 서술을 이 PR에서 고친다. 이 PR이 먼저 머지되면 #33이 그 서술을 뺀다.
 - [도메인 모델](../wiki/domain-model.md) 4.2절: `BaseEntity` 서술의 "DB 시각"을 애플리케이션 시각으로 고치고 이유를 적는다.
-- [변경 기록](../wiki/changes.md): 이 spec 링크와 결정, 볼트 규칙 수정 기록을 적는다.
+- 변경 기록(`docs/wiki/changes.md`, 2026-09-21 삭제): 이 spec 링크와 결정, 볼트 규칙 수정 기록을 적는다.
 - 볼트 `rules/domain-modeling-kotlin.md` 5절의 `BaseEntity` 서술("DB 시각")도 고친다. 볼트는 저장소 밖이고 git으로 관리되지 않으므로 수정 전 사본을 `~/Documents`에 남긴다.
 
 ## 분할 계획

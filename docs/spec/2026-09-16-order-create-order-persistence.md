@@ -73,9 +73,9 @@ Docker가 필요하다. 통합 테스트는 Testcontainers의 PostgreSQL 18에�
 - 실패: 도메인 거절은 행을 남기지 않고, unique 위반은 DB가 거절한다. JPA `validate`가 마이그레이션과 엔티티 불일치를 기동 시점에 잡는다.
 
 ## Wiki 영향
-- [현재 상태](../wiki/current-state.md): 모듈 9개(`platform` 추가), `order`에 Facade 구현·JPA adapter·`V002`가 있음, Fixture Monkey 의존성 추가, 테스트 수 갱신. "`platform` 패키지는 아직 만들지 않았다" 문장을 지운다.
+- 현재 상태(`docs/wiki/current-state.md`, 볼트): 모듈 9개(`platform` 추가), `order`에 Facade 구현·JPA adapter·`V002`가 있음, Fixture Monkey 의존성 추가, 테스트 수 갱신. "`platform` 패키지는 아직 만들지 않았다" 문장을 지운다.
 - [테스트 전략](../wiki/testing-strategy.md)의 "Fixture Monkey 의존성은 아직 없다" 문장은 이 PR 뒤 사실과 다르다. 그 절은 설치 PR의 기록이라 본문은 고치지 않고 현재 상태 페이지가 정본이다.
-- [변경 기록](../wiki/changes.md): 이 spec 링크와 결정을 남긴다. 제품 요구사항은 바뀌지 않는다.
+- 변경 기록(`docs/wiki/changes.md`, 2026-09-21 삭제): 이 spec 링크와 결정을 남긴다. 제품 요구사항은 바뀌지 않는다.
 
 ## 분할 계획
 예상 규모: 구현 약 260줄(Repository 15, Facade 45, JPA 130, platform 25, 마이그레이션 30, build 5, package-info 10), 테스트 약 150줄(통합 90, fixture 30, 기존 테스트 수정 30), 문서 약 170줄로 총 580줄·17파일 내외. 경고 한도(600줄·20파일) 근처다.

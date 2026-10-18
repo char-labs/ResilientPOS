@@ -15,7 +15,7 @@ Orca는 앱 설정(`branchPrefix = git-username`) 때문에 브랜치를 `char-y
   - 이미 push되어 PR이 열린 브랜치는 이름을 바꾸지 않는다.
 - [개발 규칙](../wiki/development-workflow.md) "개발 시작" 2번 단계에 같은 규칙을 한 문장으로 맞춘다. 이 단계는 작업
   브랜치 생성을 설명하지만 이름 규칙이 없어, wiki만 읽으면 Orca가 붙인 이름을 그대로 쓰게 된다.
-- [변경 기록](../wiki/changes.md)에 이 spec 링크와 요구사항 영향 근거를 남긴다.
+- 변경 기록(`docs/wiki/changes.md`, 2026-09-21 삭제)에 이 spec 링크와 요구사항 영향 근거를 남긴다.
 
 ## 제외
 - Orca 앱 설정(`branchPrefix`)은 바꾸지 않는다. prefix를 없애도 작업 유형 prefix를 붙이려면 이름 변경이 어차피
@@ -52,7 +52,7 @@ Orca는 앱 설정(`branchPrefix = git-username`) 때문에 브랜치를 `char-y
 
 ## Wiki 영향
 [개발 규칙](../wiki/development-workflow.md)의 "개발 시작" 2번 단계에 브랜치 이름 규칙을 더하고,
-[변경 기록](../wiki/changes.md)에 이 spec 링크를 남긴다. 제품 요구사항과 설계는 바뀌지 않는다. 개발 절차 중 핸드오프
+변경 기록(`docs/wiki/changes.md`, 2026-09-21 삭제)에 이 spec 링크를 남긴다. 제품 요구사항과 설계는 바뀌지 않는다. 개발 절차 중 핸드오프
 worktree의 브랜치 이름을 정하는 단계만 바뀐다.
 
 ## 분할 계획

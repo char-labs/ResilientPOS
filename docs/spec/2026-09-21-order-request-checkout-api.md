@@ -14,7 +14,7 @@
 - 관측성: 경합 응답은 기존 `failBody` 경로로 `errorCode=CONCURRENT_REQUEST`와 예외를 남긴다. 5xx가 아니라서 서버 오류율 지표에 섞이지 않는다.
 - 실패·재시도·복구: `409 CONCURRENT_REQUEST`를 받은 단말은 같은 요청을 다시 보낸다. `RequestCheckout`은 상태로 멱등을 판정하므로 그때는 기존 결과를 받는다.
 - REST Docs: 성공, `ORDER_NOT_FOUND`, `CONCURRENT_REQUEST`, 형식이 틀린 `orderId`를 문서화한다. `POST /v1/orders`의 `data.status` 설명을 "주문의 현재 상태"로 고친다(#32에서 checkout을 요청한 주문의 생성 재시도가 `CHECKOUT_REQUESTED`를 받는 것을 계약으로 삼았다).
-- 인가가 없다는 점을 [현재 상태](../wiki/current-state.md)의 알려진 빈틈에 적는다.
+- 인가가 없다는 점을 현재 상태(`docs/wiki/current-state.md`, 볼트)의 알려진 빈틈에 적는다.
 
 ### 합의한 결정 (2026-09-21 grill)
 - 경로는 주문에 대한 행위를 하위 경로로 둔 `POST /v1/orders/{orderId}/checkout`이고 성공은 첫 요청과 재요청 모두 200이다. 회차를 조회하는 endpoint가 없고 주문의 상태를 바꾸는 요청이라 201보다 200이 맞다. 멱등 재시도가 "또 만들었다"로 읽히지 않는다.
@@ -70,8 +70,8 @@
 - 정상 시나리오: 인수 조건 1·6. 실패 시나리오: 2·3·4·5·7.
 
 ## Wiki 영향
-- [현재 상태](../wiki/current-state.md): checkout endpoint와 응답 모양, `409 CONCURRENT_REQUEST` 매핑과 `ErrorType` 항목 수, 알려진 빈틈(인가 없음, unique 위반은 계속 500), 테스트 수를 반영한다. "checkout을 요청하는 endpoint는 아직 없다"와 "이 예외를 HTTP 응답으로 바꾸는 매핑은 아직 없다"를 지운다.
-- [변경 기록](../wiki/changes.md): 이 spec 링크와 결정을 적는다.
+- 현재 상태(`docs/wiki/current-state.md`, 볼트): checkout endpoint와 응답 모양, `409 CONCURRENT_REQUEST` 매핑과 `ErrorType` 항목 수, 알려진 빈틈(인가 없음, unique 위반은 계속 500), 테스트 수를 반영한다. "checkout을 요청하는 endpoint는 아직 없다"와 "이 예외를 HTTP 응답으로 바꾸는 매핑은 아직 없다"를 지운다.
+- 변경 기록(`docs/wiki/changes.md`, 2026-09-21 삭제): 이 spec 링크와 결정을 적는다.
 - [도메인 모델](../wiki/domain-model.md): 무영향. 용어·aggregate 경계·스키마가 바뀌지 않는다.
 
 ## 분할 계획
@@ -94,5 +94,5 @@
 - 구현: `OrderController.requestCheckout`, `RequestCheckoutResponse`, `ErrorType.CONCURRENT_REQUEST`, `ApiControllerAdvice`의 `ConcurrencyFailureException` handler다. 경로 변수를 문서화하려면 URL 템플릿이 필요해서 checkout의 웹 슬라이스 테스트는 Kotlin DSL 대신 REST Docs의 request builder를 쓴다.
 - 이것으로 `RequestCheckout`(도메인 #31, 영속화·Facade #32, 이 PR)이 끝났다.
 - multi-review: Claude 88점, Codex 90점, Gemini 미실행(CLI 없음). 둘 다 막는 결함은 없고 합의한 전제를 뒤집을 사유도 없다고 판정했다. 반영한 것은 위 범위 조정에 적었다. 반영하지 않은 것과 이유는 다음과 같다. advice 테스트의 두 경우를 한 테스트의 반복으로 둔 것은 같은 파일의 기존 테스트(`도메인 규칙 위반의 kind가 HTTP 상태를 정한다`)와 같은 방식이라 그대로 뒀다. 테스트 클래스 이름 `OrderCheckoutControllerTest`는 대상이 `OrderController`지만 문서화 대상 endpoint를 드러내려고 그대로 뒀다. 응답 DTO가 도메인 enum `OrderStatus`를 그대로 내보내는 것은 `CreateOrderResponse`와 같은 기존 방식이다. 요청 본문에 `terminalId`를 받아 주문의 것과 대조하자는 안은 위조할 수 있는 값이라 보안 통제가 아니고 가짜 안전감을 줘서 받지 않았다.
-- 범위 밖에서 확인한 사실: 커밋 시점의 버전 충돌이 `JpaSystemException`(500)으로 나온다. 위 범위 조정과 [현재 상태](../wiki/current-state.md)의 알려진 빈틈에 적었고 별도 PR로 고친다.
+- 범위 밖에서 확인한 사실: 커밋 시점의 버전 충돌이 `JpaSystemException`(500)으로 나온다. 위 범위 조정과 현재 상태(`docs/wiki/current-state.md`, 볼트)의 알려진 빈틈에 적었고 별도 PR로 고친다.
 - `tdd-driver`에 위임하지 않고 주 에이전트가 TDD 절차를 직접 수행했다.

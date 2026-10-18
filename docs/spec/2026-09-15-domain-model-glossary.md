@@ -46,7 +46,7 @@ python3 scripts/check_pr.py --base main --worktree
 
 ## Wiki 영향
 - 신설 [domain-model.md](../wiki/domain-model.md). [wiki README](../wiki/README.md) 인덱스에 진입점 추가.
-- [변경 기록](../wiki/changes.md)에 이 spec 링크와 요구사항 영향을 남긴다. 제품 요구사항은 바뀌지 않는다. 원문 blueprint의 모델을 정본 지식으로 옮기고 설계 결정 두 가지를 확정한 것이다.
+- 변경 기록(`docs/wiki/changes.md`, 2026-09-21 삭제)에 이 spec 링크와 요구사항 영향을 남긴다. 제품 요구사항은 바뀌지 않는다. 원문 blueprint의 모델을 정본 지식으로 옮기고 설계 결정 두 가지를 확정한 것이다.
 
 ## 분할 계획
 예상 규모: wiki 본문 약 250줄(도식 분석 반영 후 약 200줄), spec 약 100줄, 포인터 약 10줄, 변경 기록 약 15줄로 총 350줄 내외. 경고 한도(600줄) 안이다.

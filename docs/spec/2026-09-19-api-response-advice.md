@@ -53,8 +53,8 @@ python3 scripts/check_pr.py --base main --worktree
 - 실패: 인수 조건 3~6의 상태 코드와 `errorCode`, 500 응답에 예외 메시지가 없는지 확인한다.
 
 ## Wiki 영향
-- [현재 상태](../wiki/current-state.md): `platform` 항목에 응답 envelope와 advice를 추가하고 테스트 수를 갱신한다.
-- [변경 기록](../wiki/changes.md): 이 spec 링크와 결정(원본에서 뺀 것과 이유)을 남긴다. 제품 요구사항은 바뀌지 않는다.
+- 현재 상태(`docs/wiki/current-state.md`, 볼트): `platform` 항목에 응답 envelope와 advice를 추가하고 테스트 수를 갱신한다.
+- 변경 기록(`docs/wiki/changes.md`, 2026-09-21 삭제): 이 spec 링크와 결정(원본에서 뺀 것과 이유)을 남긴다. 제품 요구사항은 바뀌지 않는다.
 
 ## 분할 계획
 예상 규모: 구현 약 90줄·4파일, 테스트 약 90줄·1파일, 문서 약 100줄로 총 280줄·8파일. 경고 한도(600줄·20파일) 안이다.

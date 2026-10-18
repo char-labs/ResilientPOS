@@ -67,7 +67,7 @@
 
 ## Wiki 영향
 - [도메인 모델](../wiki/domain-model.md) — §2·§3에 `contract` 모듈과 그 경계를 더한다. bounded context 7개와 다른 성격이라는 것도 적는다.
-- [현재 상태](../wiki/current-state.md) — 모듈 목록, `payment`의 순환 빈틈 해소, 이벤트 위치를 갱신한다.
+- 현재 상태(`docs/wiki/current-state.md`, 볼트) — 모듈 목록, `payment`의 순환 빈틈 해소, 이벤트 위치를 갱신한다.
 - 요구사항 변화: 없다. API도 스키마도 동작도 그대로다.
 
 ## 분할 계획

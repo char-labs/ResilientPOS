@@ -86,7 +86,7 @@ Kotlin JDSL
 
 ## Wiki 영향
 - [도메인 모델](../wiki/domain-model.md) §4.3 트랜잭션 규칙: `Tx.masterTx`·`readOnlyTx`와 `@ReadOnlyTransactional`, `SUPPORTS`의 한계(단독 호출이면 트랜잭션이 없고, 적용되는 읽기 전용 효과와 적용되지 않는 효과는 결과 절의 실측), 한 시점이 필요한 조회의 방법, `NOT_SUPPORTED` 허용 조건, 쓰기 경로에 트랜잭션이 필요한 이유, `findById` 선언 기준, 조회는 Kotlin JDSL. §4.2는 자식 엔티티의 조회를 adapter가 JDSL로 한다는 것으로 고친다.
-- [현재 상태](../wiki/current-state.md): 의존성 표에 Kotlin JDSL, "현재 빌드 의존성에는 없다" 문장, `authorize` 트랜잭션 서술. 이 문서는 Obsidian 볼트로 가는 링크(gitignore 대상)라 볼트에서 고치고 저장소 커밋에는 들어가지 않는다.
+- 현재 상태(`docs/wiki/current-state.md`, 볼트): 의존성 표에 Kotlin JDSL, "현재 빌드 의존성에는 없다" 문장, `authorize` 트랜잭션 서술. 이 문서는 Obsidian 볼트로 가는 링크(gitignore 대상)라 볼트에서 고치고 저장소 커밋에는 들어가지 않는다.
 - 요구사항 변화는 없다. 업무 동작이 같다.
 
 ## 분할 계획

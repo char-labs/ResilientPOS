@@ -67,8 +67,8 @@ python3 scripts/check_pr.py --base origin/main --worktree
 - 실패: 인수 조건 1~6의 거절 사례가 `DomainException`과 지정한 `code`로 실패하는지 확인한다. `grep`은 결과가 없어야 한다.
 
 ## Wiki 영향
-- [현재 상태](../wiki/current-state.md): `foundation` 항목에 `DomainException`을 추가하고 테스트 수를 갱신한다.
-- [변경 기록](../wiki/changes.md): 이 spec 링크와 결정 근거를 남긴다. 제품 요구사항은 바뀌지 않는다.
+- 현재 상태(`docs/wiki/current-state.md`, 볼트): `foundation` 항목에 `DomainException`을 추가하고 테스트 수를 갱신한다.
+- 변경 기록(`docs/wiki/changes.md`, 2026-09-21 삭제): 이 spec 링크와 결정 근거를 남긴다. 제품 요구사항은 바뀌지 않는다.
 
 ## 분할 계획
 예상 규모: 구현 약 80줄, 테스트 수정 약 100줄, 문서 약 130줄로 총 310줄·12파일 내외. 경고 한도(600줄·20파일) 안이다.
@@ -89,7 +89,7 @@ python3 scripts/check_pr.py --base origin/main --worktree
 
 `Money.of`가 `ArithmeticException`을 감싸던 자리는 cause를 넘기지 않는다. `INVALID_MONEY_SCALE` 코드가 원인을 이미 말해 주므로 `DomainException`에 cause 파라미터를 두지 않았다.
 
-main rebase 뒤 `ApiControllerAdvice`에 `DomainException` handler를 추가했다(아래 범위 조정). 이어서 `DomainErrorKind`를 추가해 `kind`가 상태 코드를 정하게 했다(아래 범위 조정). 422는 Spring 7에서 deprecated된 `UNPROCESSABLE_ENTITY` 대신 `UNPROCESSABLE_CONTENT`를 쓴다. `./gradlew test`는 40개 테스트가 모두 통과했다(실패 0, Docker·Testcontainers PostgreSQL 사용. #22의 advice 테스트 6개와 이 PR의 2개 포함). `DependencyDirectionTest`와 `ModuleStructureTest`도 같은 실행에서 통과했다. `grep -rn "require(\|IllegalArgumentException" src/main/kotlin`은 결과가 없다. [현재 상태](../wiki/current-state.md)의 테스트 수를 40개(API advice 8)로 고쳤다.
+main rebase 뒤 `ApiControllerAdvice`에 `DomainException` handler를 추가했다(아래 범위 조정). 이어서 `DomainErrorKind`를 추가해 `kind`가 상태 코드를 정하게 했다(아래 범위 조정). 422는 Spring 7에서 deprecated된 `UNPROCESSABLE_ENTITY` 대신 `UNPROCESSABLE_CONTENT`를 쓴다. `./gradlew test`는 40개 테스트가 모두 통과했다(실패 0, Docker·Testcontainers PostgreSQL 사용. #22의 advice 테스트 6개와 이 PR의 2개 포함). `DependencyDirectionTest`와 `ModuleStructureTest`도 같은 실행에서 통과했다. `grep -rn "require(\|IllegalArgumentException" src/main/kotlin`은 결과가 없다. 현재 상태(`docs/wiki/current-state.md`, 볼트)의 테스트 수를 40개(API advice 8)로 고쳤다.
 
 ### 범위 조정 - main rebase와 DomainException handler 추가 (개발 후)
 개발 도중 main에 #22 [api-response-advice](2026-09-19-api-response-advice.md)가 머지되어 이 브랜치를 main 위로 rebase했다. 충돌은 `docs/wiki/changes.md` 한 곳이었고 두 항목을 모두 남겼다. spec 단독 첫 커밋은 그대로 첫 커밋이다.

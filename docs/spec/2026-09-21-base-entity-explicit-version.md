@@ -86,7 +86,7 @@ PR #34(`fix/commit-version-conflict-optimistic-lock`)가 같은 `BaseEntity.kt`�
 5. 정본: 해당 없음. 사본이나 중복 저장이 생기지 않는다.
 6. check-then-act: `RequestCheckout`은 `status`를 읽고 전이를 정한다. 경합은 주문 행 잠금이 막고 그 뒤에 루트의 `@Version`과 unique `(order_id, checkout_no)`가 있다. 세 가지 모두 그대로다. 자식 행의 version은 이 경로의 방어선이었던 적이 없다. checkout은 INSERT뿐이고 line은 이 경로에서 바뀌지 않는다. "자식 행만 바뀌면 루트의 version이 오르지 않는다"는 4.7절의 주의는 계속 유효하고, 자식에 version이 없어졌으므로 더 분명해진다. 한 aggregate를 여러 쿼리로 읽는 경로에 대한 답은 [order-request-checkout-persistence](2026-09-21-order-request-checkout-persistence.md)의 답 6과 같고 이 PR이 바꾸지 않는다. 쓰기 경로는 `findByIdForUpdate`가 주문 행을 먼저 잠그므로 line·checkout 조회가 다른 커밋을 섞어 읽지 않는다. 잠금 없는 `findById`는 READ COMMITTED에서 세 쿼리가 서로 다른 커밋을 볼 수 있지만 그 결과로 전이를 판단하지 않는다. 자식 행의 version은 이 경로의 방어선이었던 적이 없다.
 7. 락과 크기: `ALTER TABLE ... DROP COLUMN`은 `ACCESS EXCLUSIVE`를 잡지만 카탈로그에서 컬럼을 숨길 뿐 테이블을 재작성하지 않는다. 배포된 환경이 없어서 대상은 개발자 로컬 DB와 매번 빈 DB로 시작하는 테스트뿐이다. 그래도 4.7절의 지침대로 마이그레이션에 `set local lock_timeout`을 둔다.
-8. 이전 버전 호환: 컬럼 삭제는 이전 버전의 기동과 쓰기를 즉시 깨뜨리므로 원칙은 "그 컬럼을 쓰는 코드가 배포에서 빠진 다음 PR에서"다. 이번에는 한 PR로 한다. 보호할 이전 버전 인스턴스가 없기 때문이다. 근거는 둘이다. 사용자가 2026-09-21 이 작업을 지시하면서 아직 배포된 환경이 없다고 밝혔고, [현재 상태](../wiki/current-state.md)에도 "운영 배포 설정과 커넥션 풀 튜닝은 아직 없다"고 적혀 있다. 뒤의 문장만으로는 실행 중인 인스턴스가 없다는 것까지 증명되지 않으므로 앞의 사실이 실제 근거다. 지금 이 스키마를 쓰는 곳은 개발자 로컬 DB와 매번 빈 DB로 시작하는 테스트뿐이고, 로컬 DB에서는 `V004`가 순방향으로 적용된다. 나누는 쪽의 비용은 이렇다. 엔티티에서 `version`을 뺀 코드는 `version bigint not null` 컬럼에 INSERT할 수 없다. 그래서 첫 PR에 default를 더하거나 not null을 푸는 마이그레이션이 하나 필요하고 둘째 PR이 컬럼을 지운다. 지킬 대상이 없는데 마이그레이션 둘과 PR 둘을 쓰게 된다. 이 판단은 배포 환경이 없는 지금에만 성립한다. 배포 환경이 생긴 뒤의 컬럼 삭제는 4.7절 질문 8의 순서를 따른다.
+8. 이전 버전 호환: 컬럼 삭제는 이전 버전의 기동과 쓰기를 즉시 깨뜨리므로 원칙은 "그 컬럼을 쓰는 코드가 배포에서 빠진 다음 PR에서"다. 이번에는 한 PR로 한다. 보호할 이전 버전 인스턴스가 없기 때문이다. 근거는 둘이다. 사용자가 2026-09-21 이 작업을 지시하면서 아직 배포된 환경이 없다고 밝혔고, 현재 상태(`docs/wiki/current-state.md`, 볼트)에도 "운영 배포 설정과 커넥션 풀 튜닝은 아직 없다"고 적혀 있다. 뒤의 문장만으로는 실행 중인 인스턴스가 없다는 것까지 증명되지 않으므로 앞의 사실이 실제 근거다. 지금 이 스키마를 쓰는 곳은 개발자 로컬 DB와 매번 빈 DB로 시작하는 테스트뿐이고, 로컬 DB에서는 `V004`가 순방향으로 적용된다. 나누는 쪽의 비용은 이렇다. 엔티티에서 `version`을 뺀 코드는 `version bigint not null` 컬럼에 INSERT할 수 없다. 그래서 첫 PR에 default를 더하거나 not null을 푸는 마이그레이션이 하나 필요하고 둘째 PR이 컬럼을 지운다. 지킬 대상이 없는데 마이그레이션 둘과 PR 둘을 쓰게 된다. 이 판단은 배포 환경이 없는 지금에만 성립한다. 배포 환경이 생긴 뒤의 컬럼 삭제는 4.7절 질문 8의 순서를 따른다.
 9. 이벤트·캐시: 두 컬럼은 도메인 이벤트 payload와 DTO에 실리지 않는다. 캐시는 없다.
 
 마이그레이션 번호: `V005`다. 처음 작성할 때 기준 브랜치의 마지막은 `V003`이라 `V004`로 잡았고, Event Publication Registry PR도 `V004`를 예고했으므로 먼저 머지되는 쪽이 갖기로 했다. 그 PR(#35)이 먼저 머지되어 `V004__platform_event_publication.sql`을 가져갔고, 이 PR을 `main` 위로 rebase하면서 `V005`로 바꿨다(2026-09-21 확인). 중복은 `check_pr.py`와 PR 워크플로의 버전 게이트가 막는다. 머지 직전에 다시 확인한다.
@@ -103,8 +103,8 @@ PR #34(`fix/commit-version-conflict-optimistic-lock`)가 같은 `BaseEntity.kt`�
 
 ## Wiki 영향
 - [도메인 모델](../wiki/domain-model.md) 4.2절: `BaseEntity`가 주는 것에서 `@Version`을 빼고, 낙관적 잠금이 필요한 엔티티만 직접 선언한다는 규칙과 그 이유, `@Version` 없는 엔티티의 새 행은 어댑터가 persist한다는 규칙을 적는다. 4.7절 질문 6의 서술은 자식 행에 version이 없다는 사실에 맞춘다.
-- [현재 상태](../wiki/current-state.md): `platform`의 `BaseEntity` 공통 컬럼 서술에서 `version`을 빼고 상속하는 엔티티 목록을 맞춘다.
-- [변경 기록](../wiki/changes.md): 결정과 사용자가 밝힌 이유, 새 엔티티 판별 방식의 선택, 한 PR로 컬럼을 지운 근거를 적는다.
+- 현재 상태(`docs/wiki/current-state.md`, 볼트): `platform`의 `BaseEntity` 공통 컬럼 서술에서 `version`을 빼고 상속하는 엔티티 목록을 맞춘다.
+- 변경 기록(`docs/wiki/changes.md`, 2026-09-21 삭제): 결정과 사용자가 밝힌 이유, 새 엔티티 판별 방식의 선택, 한 PR로 컬럼을 지운 근거를 적는다.
 - 볼트 `rules/domain-modeling-kotlin.md` 5절의 `BaseEntity` 서술. 볼트는 저장소 밖이고 git으로 관리되지 않으므로 수정 전 사본을 `~/Documents`에 남기고 변경 기록에 적는다.
 - 요구사항 영향: 제품 요구사항은 바뀌지 않는다. 저장 형식(두 테이블의 컬럼)과 엔티티 작성 규칙이 바뀐다.
 

@@ -14,7 +14,7 @@ Spring Boot 4.1.1 BOM이 정하는 전이 의존성 셋에 수정 버전이 나�
 - **Tomcat 노출 범위.** 같은 #51476에서 이 Tomcat CVE는 Servlet security constraint를 쓰는 애플리케이션에만 해당한다고 했다. 이 저장소는 Servlet 인증·security constraint를 쓰지 않는다(단말 인증은 `HandlerInterceptor`, [terminal-authentication](2026-10-05-terminal-authentication.md) 결정 1). 실제 노출 가능성은 낮지만 등급이 CRITICAL이라 올린다.
 - **Jackson.** FasterXML/jackson-databind#6203(CVE-2026-91776)이 닫혔고 3.1.7이 Maven Central에 있다.
 - **Kafka·lz4-java.** lz4-java #100·#127(XXHash JNI)이 2026-09-25 닫혔다. apache/kafka는 KAFKA-20842(1.11.1)·KAFKA-20936(1.11.2)·KAFKA-21174(1.11.4)를 반영했고 1.12.0(#23637)은 열려 있다. `kafka-clients` 4.2.2의 `lz4-java` 1.11.2는 CVE-2026-59949(1.11.1에서 수정)를 덮는다.
-- **Spring Modulith.** CVE 이슈가 없다. 2.1.2 마일스톤(남은 것은 "Release 2.1.2"뿐)은 버그 수정만 담는다. 그중 #1918(상태별 staleness 기간 0을 즉시 만료로 취급)은 이 저장소에 해당하지 않는다. staleness monitor의 세 기간을 모두 0(기본값)으로 두어 monitor가 등록되지 않기 때문이다([Modulith·Kafka 키워드](../wiki/modulith-kafka-keywords.md) Staleness monitor). Modulith는 올리지 않는다.
+- **Spring Modulith.** CVE 이슈가 없다. 2.1.2 마일스톤(남은 것은 "Release 2.1.2"뿐)은 버그 수정만 담는다. 그중 #1918(상태별 staleness 기간 0을 즉시 만료로 취급)은 이 저장소에 해당하지 않는다. staleness monitor의 세 기간을 모두 0(기본값)으로 두어 monitor가 등록되지 않기 때문이다(Modulith·Kafka 키워드(`docs/wiki/modulith-kafka-keywords.md`, 볼트) Staleness monitor). Modulith는 올리지 않는다.
 
 ## 범위
 **결정 1: Boot BOM의 버전 속성을 재정의한다.**
@@ -59,8 +59,8 @@ Spring Boot 4.1.1 BOM이 정하는 전이 의존성 셋에 수정 버전이 나�
 - `python3 scripts/check_pr.py --base origin/main --worktree`, 제출 전에는 `--worktree` 없이.
 
 ## Wiki 영향
-- [현재 상태](../wiki/current-state.md)(볼트) "실제 빌드 선언" 표의 프레임워크 줄에 BOM 재정의 세 개와 지울 시점을 적는다. 요구사항 변화는 없다.
-- [Modulith·Kafka 키워드](../wiki/modulith-kafka-keywords.md)(볼트) 버전 줄과 출처의 kafka-clients를 4.2.2로 바꾸고 `updated`와 출처의 저장소 근거를 갱신한다. 설정 값 대조에서 차이가 나오면 해당 키워드도 고친다.
+- 현재 상태(`docs/wiki/current-state.md`, 볼트)(볼트) "실제 빌드 선언" 표의 프레임워크 줄에 BOM 재정의 세 개와 지울 시점을 적는다. 요구사항 변화는 없다.
+- Modulith·Kafka 키워드(`docs/wiki/modulith-kafka-keywords.md`, 볼트)(볼트) 버전 줄과 출처의 kafka-clients를 4.2.2로 바꾸고 `updated`와 출처의 저장소 근거를 갱신한다. 설정 값 대조에서 차이가 나오면 해당 키워드도 고친다.
 - 두 문서는 볼트 링크라 이 PR의 diff에는 나오지 않는다.
 
 ## 분할 계획

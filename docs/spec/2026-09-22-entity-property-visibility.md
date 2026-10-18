@@ -111,7 +111,7 @@
 - [도메인 모델](../wiki/domain-model.md) 8절 표의 "Kotlin `internal` 가시성으로 JPA 엔티티를 숨김" 행. 지금은 `internal`을 쓰지 않는다는 기각만 적혀 있어서, 사례가 그 키워드로 이루려던 목적(엔티티를 밖에서 만들거나 바꾸지 못하게)을 이 저장소가 어떻게 이루는지가 빠져 있다. `private` 생성자와 `val`·`protected set`이 그 수단이라는 것을 행에 적는다. `internal`을 쓰지 않는 기존 근거는 그대로 둔다.
 - 볼트 `.claude/rules/domain-modeling-kotlin.md` 5절의 가시성 불릿·예시 코드와 7절 "하지 않는 것"의 두 줄. 이 PR을 시작하기 전에 이미 반영돼 있다. 볼트는 저장소 밖이고 git으로 관리되지 않으므로 수정 전 사본을 `~/Documents/domain-modeling-kotlin.2026-09-21.before-entity-visibility.md`에 남겼다. 범위의 3번 경로로 가면 지침을 한 번 더 고치고 사본도 다시 남긴 뒤 결과 절에 적는다.
 - `docs/wiki/changes.md`는 없다. [drop-changes-log](2026-09-21-drop-changes-log.md)가 사본 기록이라는 이유로 삭제했고 기록 요구를 PR spec 한 곳으로 모았다. 그래서 변경 기록·볼트 수정 기록·요구사항 판정은 이 spec에만 남긴다.
-- [현재 상태](../wiki/current-state.md)는 갱신 대상이 아니다. 테스트 개수와 모듈 선언 상태가 바뀌지 않는다.
+- 현재 상태(`docs/wiki/current-state.md`, 볼트)는 갱신 대상이 아니다. 테스트 개수와 모듈 선언 상태가 바뀌지 않는다.
 - 요구사항 영향: 없다. 제품 요구사항, API 계약, 저장 형식, 도메인 이벤트가 모두 그대로다. 바뀌는 것은 엔티티 작성 규칙을 컴파일러가 강제하는지 여부뿐이고, 생성·변경 경로는 이미 `from`과 `apply`였다.
 
 ## 분할 계획

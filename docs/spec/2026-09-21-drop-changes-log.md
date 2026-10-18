@@ -120,4 +120,4 @@ origin/main --worktree`는 PASS이고 일반 10개 파일 559줄로 한도 안�
 
 검사 항목 나열에서 "wiki 기록"만 빼고 나머지 항목과 문장 구조는 그대로 둔다. `docs/wiki/README.md`의 진입점
 한 줄도 같이 고친다. 그 줄이 기술 스택을 AGENTS.md에서 보라고 안내하는데 그 내용이 이제 없어서, 기술 스택 현황은
-[현재 상태](../wiki/current-state.md)로 보낸다.
+현재 상태(`docs/wiki/current-state.md`, 볼트)로 보낸다.

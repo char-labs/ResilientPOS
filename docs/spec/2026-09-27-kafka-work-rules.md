@@ -9,7 +9,7 @@
 
 ## 범위
 - `AGENTS.md` "작업별로 읽기와 검증"에 한 줄을 더한다. Kafka·Spring Kafka·Modulith 이벤트(externalization, 재시도·DLT·재전송) 작업은
-  공식 문서로 대조하고 근거를 PR spec에 남기며, 작업을 끝내면 PR 전에 [Modulith·Kafka 키워드](../wiki/modulith-kafka-keywords.md)의
+  공식 문서로 대조하고 근거를 PR spec에 남기며, 작업을 끝내면 PR 전에 Modulith·Kafka 키워드(`docs/wiki/modulith-kafka-keywords.md`, 볼트)의
   갱신 규칙대로 키워드와 선택 이유를 갱신한다. 갱신 절차의 정본은 그 문서 맨 앞 "갱신 규칙" 절이므로 AGENTS.md는 절차를 되풀이하지 않는다.
   #61이 같은 절의 "애플리케이션/빌드 변경 검증" 줄을 고치므로, 새 줄은 그 줄과 붙지 않는 "스키마 변경 검토" 줄 바로 뒤에 둔다.
 - `scripts/link_claude.py`의 `LINKS`에 `('docs/wiki/modulith-kafka-keywords.md', 'wiki/modulith-kafka-keywords.md')`를 더한다.

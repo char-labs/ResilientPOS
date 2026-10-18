@@ -150,8 +150,8 @@ fun resolveUnknown() = Lock.executeWithLockNoTx(LOCK_KEY) {
   - §4.3에 `UNKNOWN` 확정 주기 작업(간격·락·배치·멱등·`Lock` 블록 안 행 잠금 예외)을 적는다.
 - [entity-map](../wiki/entity-map.md): `t_payment_attempt` 흐름에 `UNKNOWN` → 조회 확정을 더한다.
 - [observability](../wiki/observability.md): 확정 작업의 로그 세 줄과 사람이 볼 조건(같은 `paymentId`의 WARN이 계속됨)을 적는다.
-- [modulith-kafka-keywords](../wiki/modulith-kafka-keywords.md): 이벤트·토픽·consumer·Modulith 설정을 바꾸지 않는다. PR 전에 그 문서의 갱신 규칙으로 해당 여부를 다시 확인한다.
-- [current-state](../wiki/current-state.md)는 볼트 정본이라 이 저장소 diff에 들지 않는다. 머지 뒤 볼트에서 갱신한다.
+- modulith-kafka-keywords(`docs/wiki/modulith-kafka-keywords.md`, 볼트): 이벤트·토픽·consumer·Modulith 설정을 바꾸지 않는다. PR 전에 그 문서의 갱신 규칙으로 해당 여부를 다시 확인한다.
+- current-state(`docs/wiki/current-state.md`, 볼트)는 볼트 정본이라 이 저장소 diff에 들지 않는다. 머지 뒤 볼트에서 갱신한다.
 
 ## 분할 계획
 한 개발 컨텍스트("결제 결과가 주문까지 수렴")다. 조회 port·Fake·전이·Facade·작업·인덱스는 서로 없으면 검증할 수 없어 나누지 않는다. 재결제 HTTP endpoint와 조회 API는 #75, reconciliation case는 후속이다. 2026-10-01 작업 시작 시 origin/main은 8133048이고 열린 PR이 없었다. 2026-10-06 구현 중에 #81(단말 인증, `V012__terminal_credential.sql`)과 #82(시연 화면)가 main에 들어와 origin/main 24b2728 위로 rebase했다. 마이그레이션 번호가 겹쳐 이 PR의 인덱스를 `V013`으로 옮겼다. 그 밖에 #81과 겹친 경로는 테스트 픽스처(`OrderFixtures` 등)뿐이고 rebase 충돌은 없었다. 열린 PR #83은 `static/terminal/index.html`과 자기 spec만 바꿔 겹치지 않는다.
