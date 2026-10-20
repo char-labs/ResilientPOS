@@ -12,7 +12,7 @@ class UniqueViolationTest {
         SQLException("duplicate key value violates unique constraint \"$constraint\"", sqlState)
 
     @Test
-    fun `SQLState가 23505이고 메시지에 따옴표째 제약 이름이 있으면 참이다`() {
+    fun `SQLState가 23505이고 메시지에 제약 이름이 있으면 참이다`() {
         assertTrue(violation("23505", "ux_a").isUniqueViolationOf("ux_a"))
     }
 
@@ -57,5 +57,15 @@ class UniqueViolationTest {
     @Test
     fun `앞부분만 같은 다른 제약 이름이면 거짓이다`() {
         assertFalse(violation("23505", "ux_ab").isUniqueViolationOf("ux_a"))
+    }
+
+    @Test
+    fun `제약 이름 뒤에 식별자 문자 $가 이어지면 거짓이다`() {
+        assertFalse(violation("23505", "ux_a\$1").isUniqueViolationOf("ux_a"))
+    }
+
+    @Test
+    fun `제약 이름 앞에 식별자 문자가 이어지면 거짓이다`() {
+        assertFalse(violation("23505", "pk_ux_a").isUniqueViolationOf("ux_a"))
     }
 }
