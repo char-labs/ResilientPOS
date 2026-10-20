@@ -68,4 +68,9 @@ class UniqueViolationTest {
     fun `제약 이름 앞에 식별자 문자가 이어지면 거짓이다`() {
         assertFalse(violation("23505", "pk_ux_a").isUniqueViolationOf("ux_a"))
     }
+
+    @Test
+    fun `제약 이름 뒤에 비ASCII 글자가 이어지면 거짓이다`() {
+        assertFalse(violation("23505", "ux_a한").isUniqueViolationOf("ux_a"))
+    }
 }
