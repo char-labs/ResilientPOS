@@ -27,9 +27,17 @@ data class OrderPaid(
     val terminalId: TerminalId,
     val checkoutNo: Int,
     val amount: Money,
+    val schemaVersion: Int = SCHEMA_VERSION,
 ) : DomainEvent {
+    init {
+        requireKnownSchemaVersion(javaClass.simpleName, schemaVersion, SCHEMA_VERSION)
+    }
+
     companion object {
         /** 토픽 이름은 저장 형식이다. key는 `orderId`라 같은 주문의 메시지가 한 파티션에 차례로 선다(도메인 모델 §4.3). */
         const val TOPIC = "order.paid"
+
+        /** 형식 버전. 호환되지 않는 변경에만 올린다. 필드 추가는 올리지 않는다(docs/wiki/event-contract.md). */
+        const val SCHEMA_VERSION = 1
     }
 }
