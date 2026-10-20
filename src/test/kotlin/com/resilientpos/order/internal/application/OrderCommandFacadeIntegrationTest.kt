@@ -27,6 +27,7 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import org.springframework.beans.factory.annotation.Autowired
+import org.springframework.dao.ConcurrencyFailureException
 import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.jdbc.core.queryForList
@@ -161,7 +162,7 @@ class OrderCommandFacadeIntegrationTest(
     }
 
     @Test
-    fun `같은 terminal_id와 client_order_id는 DB unique가 거절한다`() {
+    fun `같은 terminal_id와 client_order_id의 다른 주문 저장은 경합으로 거절되고 행은 하나다`() {
         val terminalId = TerminalId(UUID.randomUUID())
         val clientOrderId = ClientOrderId(UUID.randomUUID())
         val command = OrderFixtures.createOrderCommand(terminalId = terminalId, clientOrderId = clientOrderId)
@@ -174,7 +175,10 @@ class OrderCommandFacadeIntegrationTest(
             Clock.systemUTC().instant(),
         ).aggregate
 
-        assertFailsWith<DataIntegrityViolationException> { repository.save(duplicate) }
+        val e = assertFailsWith<ConcurrencyFailureException> { repository.save(duplicate) }
+
+        assertTrue(e.mostSpecificCause.message.orEmpty().contains("t_order_terminal_id_client_order_id_key"))
+        assertEquals(1L, orderRowCount(terminalId, clientOrderId))
     }
 
     private fun newOrder(): Order =

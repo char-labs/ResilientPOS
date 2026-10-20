@@ -28,7 +28,7 @@ class OrderCommandFacade(
     /**
      * 같은 `(terminalId, clientOrderId)` 요청이 여러 인스턴스에 동시에 오면 [Lock]이 줄 세운다. 늦게 온 요청은 앞 요청의
      * 커밋을 기다렸다가 그 주문을 돌려받는다. 락은 최선 노력이고 방어선은 unique `(terminal_id, client_order_id)`다.
-     * 락이 통하지 않으면 늦은 요청은 커밋에서 unique 위반으로 실패한다.
+     * 락이 통하지 않으면 늦은 요청은 저장에서 unique 위반을 만나 `ConcurrencyFailureException`으로 실패하고, 다시 보내면 그 주문을 받는다.
      */
     fun create(command: OrderCommand.Create): OrderCommand.Create.Result {
         // 가장 싼 거절을 가장 먼저 한다. line 개수는 command만 보면 알 수 있는데 뒤로 미루면
