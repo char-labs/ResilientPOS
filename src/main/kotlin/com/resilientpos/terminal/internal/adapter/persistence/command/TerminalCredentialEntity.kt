@@ -11,7 +11,7 @@ import java.util.UUID
 
 /**
  * 역할: 단말의 인증 credential 한 건. 평문 토큰이 아니라 SHA-256 hex만 저장하고, 폐기해도 행은 남는 이력이다.
- * 관계: `terminalId`로 [TerminalEntity]를 가리킨다(FK 없음). 유효 행은 단말당 하나이고 partial unique가 지킨다.
+ * 관계: `terminalId`로 [TerminalEntity]를 가리킨다(FK 없음). 유효 행은 단말당 하나이고 커밋 때 검사하는 exclusion 제약 `ux_terminal_credential_active`가 지킨다.
  * 흐름: 등록·회전이 새 행을 넣고, 회전이 옛 행에 `revokedAt`을 찍는다. 인증은 해시로 이 행을 찾는다. 전체 지도는 `docs/wiki/entity-map.md`.
  *
  * `TerminalCredential`의 JPA 매핑. 바뀌는 것은 `revokedAt`뿐이다. 전 필드는 `var`에 `protected set`이다(`OrderEntity`의 KDoc 참고).

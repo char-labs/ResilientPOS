@@ -84,6 +84,7 @@ class TerminalCredentialSchemaIntegrationTest(
 
         assertEquals(true, secondInsertSucceeded, "두 번째 INSERT는 성공하고 커밋에서 실패해야 한다")
         assertEquals(true, generateSequence<Throwable>(failure) { it.cause }.any { it.message?.contains("ux_terminal_credential_active") == true }, failure.toString())
+        assertEquals(true, generateSequence<Throwable>(failure) { it.cause }.filterIsInstance<SQLException>().any { it.sqlState == "23P01" }, "커밋 때 exclusion 위반이다: $failure")
         assertEquals(0L, jdbcTemplate.queryForObject<Long>("select count(*) from t_terminal_credential where terminal_id = ?", terminalId))
     }
 

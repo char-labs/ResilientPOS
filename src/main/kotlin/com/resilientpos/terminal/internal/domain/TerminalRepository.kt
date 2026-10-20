@@ -27,6 +27,6 @@ interface TerminalRepository {
     /** 상태가 바뀐 단말을 반영한다. 이미 저장된 행만 다룬다. */
     fun update(terminal: Terminal): Terminal
 
-    /** 폐기된 credential을 반영하고 즉시 flush한다. 같은 트랜잭션에서 새 유효 credential을 넣기 전에 partial unique를 비워야 한다. */
+    /** 폐기된 credential을 반영한다. 같은 트랜잭션의 새 발급과 한 커밋에 들어가고 `ux_terminal_credential_active`는 커밋 때 검사한다. */
     fun update(credential: TerminalCredential): TerminalCredential
 }
