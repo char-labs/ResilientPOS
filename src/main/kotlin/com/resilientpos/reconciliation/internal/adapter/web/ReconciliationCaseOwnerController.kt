@@ -1,7 +1,6 @@
 package com.resilientpos.reconciliation.internal.adapter.web
 
 import com.resilientpos.owner.OwnerId
-import com.resilientpos.platform.logger
 import com.resilientpos.reconciliation.ReconciliationManagement
 import com.resilientpos.reconciliation.ReconciliationQuery
 import com.resilientpos.reconciliation.ReconciliationQueryFacade
@@ -18,7 +17,6 @@ import org.springframework.web.bind.annotation.RestController
 /**
  * 점주용 대조 case endpoint. `/owner` 아래는 `OwnerSecurityFilterChain`이 세션 쿠키와 CSRF 토큰으로 지킨다. principal은 점주 ID(UUID 문자열)다.
  * 모든 endpoint는 먼저 `StoreManagement.requireOwned`로 매장 소유를 확인한다(남의 매장·없는 매장은 `404 STORE_NOT_FOUND`).
- * 해소는 Facade가 커밋해 돌아온 뒤 감사 로그 한 줄을 남기고, 사유 원문은 자유 입력이라 로그에 싣지 않는다(DB의 해소 기록이 정본이다).
  */
 @RestController
 class ReconciliationCaseOwnerController(
@@ -42,15 +40,6 @@ class ReconciliationCaseOwnerController(
     ): ResolveReconciliationCaseResponse {
         val owner = UUID.fromString(ownerId)
         stores.requireOwned(StoreId(storeId), OwnerId(owner))
-        val result = management.resolve(request.toCommand(storeId, caseId, owner))
-        log.info {
-            "audit action=RECONCILIATION_CASE_RESOLVED ownerId=$ownerId storeId=$storeId caseId=${result.caseId.value} " +
-                "paymentId=${result.paymentId.value} decision=${result.decision} paymentStatus=${result.paymentStatus}"
-        }
-        return ResolveReconciliationCaseResponse.from(result)
-    }
-
-    private companion object {
-        val log by logger()
+        return ResolveReconciliationCaseResponse.from(management.resolve(request.toCommand(storeId, caseId, owner)))
     }
 }

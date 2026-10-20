@@ -168,11 +168,12 @@ class ReconciliationFlowIntegrationTest(
 
     @Test
     fun `점주가 거절로 해소하면 시도가 DECLINED이고 주문은 CHECKOUT_REQUESTED이며 재결제가 승인되면 PAID가 된다`() {
+        // 끝자리 5는 금액 불일치 case라 거절에 PG 취소 참조가 필요하다.
         val (paymentId, caseId) = handedOver("4555", queries = 1)
         val orderId = jdbcTemplate.queryForObject("select order_id from t_payment_attempt where id = ?", UUID::class.java, paymentId.value)!!
 
         val result = reconciliationManagement.resolve(
-            ReconciliationFixtures.resolve(caseId, ReconciliationDecision.DECLINED, providerReference = null, approvedAmount = null)
+            ReconciliationFixtures.resolve(caseId, ReconciliationDecision.DECLINED, providerReference = "PG-CANCEL-FLOW", approvedAmount = null)
                 .copy(storeId = OrderFixtures.storeId),
         )
 

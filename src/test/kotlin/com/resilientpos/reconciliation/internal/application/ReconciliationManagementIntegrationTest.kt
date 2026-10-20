@@ -139,6 +139,18 @@ class ReconciliationManagementIntegrationTest(
     }
 
     @Test
+    fun `공백뿐인 거절 참조는 해소 기록과 시도의 provider_reference에 null로 남는다`() {
+        val (paymentId, caseId) = openedCase()
+
+        reconciliationManagement.resolve(
+            ReconciliationFixtures.resolve(caseId, ReconciliationDecision.DECLINED, providerReference = "   ", approvedAmount = null),
+        )
+
+        assertNull(jdbcTemplate.caseRow(caseId)["provider_reference"])
+        assertNull(jdbcTemplate.attemptRow(paymentId)["provider_reference"])
+    }
+
+    @Test
     fun `승인 금액이 다르면 RECONCILIATION_AMOUNT_MISMATCH이고 case와 시도와 발행 기록은 그대로다`() {
         val (paymentId, caseId) = openedCase()
 

@@ -89,8 +89,8 @@ class ReconciliationCaseOwnerControllerTest(
 
     private fun list(): ResultActions = mockMvc.perform(get("/owner/v1/stores/{storeId}/reconciliation-cases", STORE_ID).with(owner))
 
-    private fun approveBody(reason: String = NOTE) = """
-        { "decision": "APPROVED", "providerReference": "$PROVIDER_REF", "approvedAmount": "4500", "approvedCurrency": "KRW", "reason": "$reason" }
+    private fun approveBody(note: String = NOTE) = """
+        { "decision": "APPROVED", "providerReference": "$PROVIDER_REF", "approvedAmount": "4500", "approvedCurrency": "KRW", "note": "$note" }
     """.trimIndent()
 
     private fun domainError(code: String, kind: DomainErrorKind) = DomainException(code, "오류", kind)
@@ -188,7 +188,7 @@ class ReconciliationCaseOwnerControllerTest(
                         fieldWithPath("providerReference").type(JsonFieldType.STRING).optional().description("PG 승인 참조. 승인(APPROVED)에는 필수이고 255자 이하"),
                         fieldWithPath("approvedAmount").type(JsonFieldType.STRING).optional().description("PG 화면에서 본 승인 금액. 통화 기준 decimal string. 승인에는 필수이며 case의 시도 금액과 통화까지 같아야 한다. 거절에는 싣지 않는다. approvedCurrency와 함께만 온다"),
                         fieldWithPath("approvedCurrency").type(JsonFieldType.STRING).optional().description("승인 금액의 통화 코드(ISO 4217). approvedAmount와 함께만 온다"),
-                        fieldWithPath("reason").type(JsonFieldType.STRING).description("해소 사유. 비어 있지 않고 500자 이하. 해소 기록에 남고 로그에는 남지 않는다"),
+                        fieldWithPath("note").type(JsonFieldType.STRING).description("해소 사유. 비어 있지 않고 500자 이하. 해소 기록에 남고 로그에는 남지 않는다"),
                     ),
                     responseFields(
                         fieldWithPath("result").type(JsonFieldType.STRING).description("SUCCESS 또는 FAIL"),
@@ -216,7 +216,7 @@ class ReconciliationCaseOwnerControllerTest(
             ),
         )
 
-        resolve("""{ "decision": "DECLINED", "reason": "$NOTE" }""")
+        resolve("""{ "decision": "DECLINED", "note": "$NOTE" }""")
             .andExpect(status().isOk)
             .andExpect(jsonPath("$.data.decision").value("DECLINED"))
             .andExpect(jsonPath("$.data.paymentStatus").value("DECLINED"))
@@ -229,10 +229,10 @@ class ReconciliationCaseOwnerControllerTest(
 
     @Test
     fun `승인 금액과 통화 중 하나만 오면 400 INVALID_RECONCILIATION_RESOLUTION이고 Facade를 부르지 않는다`() {
-        resolve("""{ "decision": "APPROVED", "providerReference": "$PROVIDER_REF", "approvedAmount": "4500", "reason": "$NOTE" }""")
+        resolve("""{ "decision": "APPROVED", "providerReference": "$PROVIDER_REF", "approvedAmount": "4500", "note": "$NOTE" }""")
             .andExpect(status().isBadRequest)
             .andExpect(jsonPath("$.error.errorCode").value("INVALID_RECONCILIATION_RESOLUTION"))
-        resolve("""{ "decision": "APPROVED", "providerReference": "$PROVIDER_REF", "approvedCurrency": "KRW", "reason": "$NOTE" }""")
+        resolve("""{ "decision": "APPROVED", "providerReference": "$PROVIDER_REF", "approvedCurrency": "KRW", "note": "$NOTE" }""")
             .andExpect(status().isBadRequest)
             .andExpect(jsonPath("$.error.errorCode").value("INVALID_RECONCILIATION_RESOLUTION"))
 
@@ -246,7 +246,7 @@ class ReconciliationCaseOwnerControllerTest(
         resolve(approveBody())
             .andExpect(status().isBadRequest)
             .andExpect(jsonPath("$.error.errorCode").value("INVALID_RECONCILIATION_RESOLUTION"))
-            .andDo(document("reconciliation-cases-resolve-invalid", CSRF_HEADER, CASE_PATH, responseFields(failFields("INVALID_RECONCILIATION_RESOLUTION. 승인에 PG 승인 참조나 승인 금액이 없거나, 거절에 승인 금액이 있거나, 사유가 비었거나 500자를 넘는다. 승인 금액과 통화 중 하나만 보낸 경우도 같다"))))
+            .andDo(document("reconciliation-cases-resolve-invalid", CSRF_HEADER, CASE_PATH, responseFields(failFields("INVALID_RECONCILIATION_RESOLUTION. 승인에 PG 승인 참조나 승인 금액이 없거나, 거절에 승인 금액이 있거나, 금액 불일치 case의 거절에 PG 취소 참조가 없거나, 사유가 비었거나 500자를 넘거나 사유·참조에 NUL 문자가 있다. 승인 금액과 통화 중 하나만 보낸 경우도 같다"))))
     }
 
     @Test

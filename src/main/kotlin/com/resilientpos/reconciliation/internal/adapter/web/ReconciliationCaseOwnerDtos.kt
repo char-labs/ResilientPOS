@@ -27,7 +27,7 @@ data class ResolveReconciliationCaseRequest(
     val providerReference: String? = null,
     val approvedAmount: String? = null,
     val approvedCurrency: Currency? = null,
-    val reason: String? = null,
+    val note: String? = null,
 ) {
     fun toCommand(storeId: UUID, caseId: UUID, ownerId: UUID) = ReconciliationCommand.Resolve(
         caseId = ReconciliationCaseId(caseId),
@@ -36,7 +36,7 @@ data class ResolveReconciliationCaseRequest(
         decision = decision,
         providerReference = providerReference,
         approvedAmount = approvedMoney(),
-        note = reason.orEmpty(),
+        note = note.orEmpty(),
     )
 
     private fun approvedMoney(): Money? {

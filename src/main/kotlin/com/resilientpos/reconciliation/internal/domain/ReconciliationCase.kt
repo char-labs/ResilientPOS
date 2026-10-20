@@ -47,7 +47,8 @@ class ReconciliationCase private constructor(
      *
      * `MANUAL_REVIEW`에서만 해소한다. 이미 `RESOLVED`인 case에 같은 결론이 다시 오면(응답을 잃은 재요청) 해소 기록을 바꾸지 않고
      * 같은 인스턴스를 돌려주고, 다른 결론이면 [RECONCILIATION_CASE_ALREADY_RESOLVED]다.
-     * 검증: 사유는 비어 있지 않고 [MAX_NOTE_LENGTH]자 이하, 참조는 [MAX_PROVIDER_REFERENCE_LENGTH]자 이하여야 하고, 승인은 참조와 승인 금액이 필수, 거절은 승인 금액이 없어야 하며
+     * 공백뿐인 참조는 없는 것으로 다뤄 해소 기록에 null로 남긴다.
+     * 검증: 사유는 비어 있지 않고 [MAX_NOTE_LENGTH]자 이하, 참조는 [MAX_PROVIDER_REFERENCE_LENGTH]자 이하여야 하고, 승인은 참조와 승인 금액이 필수, 거절은 승인 금액이 없어야 하고(금액 불일치 case의 거절은 PG 취소 참조가 필수), 사유·참조에 NUL이 없어야 하며
      * (모두 [INVALID_RECONCILIATION_RESOLUTION]), 승인 금액은 통화까지 [amount]와 같아야 한다([RECONCILIATION_AMOUNT_MISMATCH]).
      */
     fun resolve(command: ReconciliationCommand.Resolve, now: Instant): Transition<ReconciliationCase, Nothing> =
@@ -55,7 +56,7 @@ class ReconciliationCase private constructor(
             ReconciliationCaseStatus.MANUAL_REVIEW -> {
                 requireValidResolution(command)
                 val resolution = Resolution(
-                    command.ownerId, now, command.decision, command.providerReference, command.approvedAmount, command.note,
+                    command.ownerId, now, command.decision, command.providerReference?.takeIf { it.isNotBlank() }, command.approvedAmount, command.note,
                 )
                 Transition(withResolution(resolution), emptyList())
             }
@@ -87,6 +88,10 @@ class ReconciliationCase private constructor(
         if ((command.providerReference?.length ?: 0) > MAX_PROVIDER_REFERENCE_LENGTH) {
             throw invalidResolution("PG 승인 참조는 ${MAX_PROVIDER_REFERENCE_LENGTH}자 이하여야 합니다")
         }
+        // PostgreSQL text가 받지 못하는 문자는 NUL(U+0000) 하나라 그것만 본다(OrderLine과 같다). 넘으면 커밋에서 실패해 500이 된다.
+        if (command.note.contains(NUL) || command.providerReference?.contains(NUL) == true) {
+            throw invalidResolution("사유와 PG 참조에 쓸 수 없는 문자가 있습니다")
+        }
         when (command.decision) {
             ReconciliationDecision.APPROVED -> {
                 if (command.providerReference.isNullOrBlank() || command.approvedAmount == null) {
@@ -100,8 +105,14 @@ class ReconciliationCase private constructor(
                     )
                 }
             }
-            ReconciliationDecision.DECLINED ->
+            ReconciliationDecision.DECLINED -> {
                 if (command.approvedAmount != null) throw invalidResolution("거절에는 승인 금액을 실을 수 없습니다")
+                // 금액이 다르게 승인됐다는 보고가 있는 case는 승인된 돈을 되돌린 근거(PG 취소 참조)가 있어야 거절할 수 있다.
+                val isAmountMismatch = reason == PaymentReconciliationReason.AMOUNT_MISMATCH || unknownReason == PaymentUnknownReason.AMOUNT_MISMATCH
+                if (isAmountMismatch && command.providerReference.isNullOrBlank()) {
+                    throw invalidResolution("금액 불일치 case의 거절에는 PG 취소 참조가 필요합니다")
+                }
+            }
         }
     }
 
@@ -118,6 +129,8 @@ class ReconciliationCase private constructor(
     override fun hashCode() = id.hashCode()
 
     companion object {
+        private const val NUL = '\u0000'
+
         const val RECONCILIATION_CASE_NOT_FOUND = "RECONCILIATION_CASE_NOT_FOUND"
         const val RECONCILIATION_CASE_ALREADY_RESOLVED = "RECONCILIATION_CASE_ALREADY_RESOLVED"
         const val RECONCILIATION_PAYMENT_ALREADY_CONCLUDED = "RECONCILIATION_PAYMENT_ALREADY_CONCLUDED"

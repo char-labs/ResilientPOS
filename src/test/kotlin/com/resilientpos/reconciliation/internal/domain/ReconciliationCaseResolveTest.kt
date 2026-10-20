@@ -1,5 +1,7 @@
 package com.resilientpos.reconciliation.internal.domain
 
+import com.resilientpos.contract.PaymentReconciliationReason
+import com.resilientpos.contract.PaymentUnknownReason
 import com.resilientpos.foundation.DomainErrorKind
 import com.resilientpos.foundation.DomainException
 import com.resilientpos.foundation.IdentifierGenerator
@@ -26,8 +28,11 @@ class ReconciliationCaseResolveTest {
         override fun next(): UUID = remaining.removeFirstOrNull() ?: error("준비한 식별자를 다 썼다")
     }
 
-    private fun manualReview(): ReconciliationCase =
-        ReconciliationCase.open(ReconciliationFixtures.open(), FixedIdentifierGenerator(listOf(UUID(0, 1)))).aggregate
+    private fun manualReview(
+        reason: PaymentReconciliationReason = PaymentReconciliationReason.QUERY_LIMIT_EXCEEDED,
+        unknownReason: PaymentUnknownReason = PaymentUnknownReason.RESULT_UNCONFIRMED,
+    ): ReconciliationCase =
+        ReconciliationCase.open(ReconciliationFixtures.open(reason, unknownReason = unknownReason), FixedIdentifierGenerator(listOf(UUID(0, 1)))).aggregate
 
     private fun resolve(
         target: ReconciliationCase,
@@ -157,6 +162,50 @@ class ReconciliationCaseResolveTest {
                 resolve(it, note = note)
             }
         }
+    }
+
+    @Test
+    fun `금액 불일치 case의 거절은 PG 취소 참조가 없거나 공백이면 거절하고 있으면 해소한다`() {
+        val amountMismatchCases = listOf(
+            { manualReview(reason = PaymentReconciliationReason.AMOUNT_MISMATCH) },
+            { manualReview(unknownReason = PaymentUnknownReason.AMOUNT_MISMATCH) },
+        )
+        amountMismatchCases.forEach { open ->
+            listOf(null, "", "   ").forEach { reference ->
+                val target = open()
+                val error = assertFailsWith<DomainException> {
+                    resolve(target, ReconciliationDecision.DECLINED, providerReference = reference, approvedAmount = null)
+                }
+                assertEquals(ReconciliationCase.INVALID_RECONCILIATION_RESOLUTION, error.code)
+                assertEquals(DomainErrorKind.INVALID, error.kind)
+                assertEquals(ReconciliationCaseStatus.MANUAL_REVIEW, target.status)
+                assertNull(target.resolution)
+            }
+            val resolved = resolve(open(), ReconciliationDecision.DECLINED, providerReference = "PG-CANCEL-1", approvedAmount = null)
+            assertEquals("PG-CANCEL-1", resolved.aggregate.resolution?.providerReference)
+        }
+    }
+
+    @Test
+    fun `사유나 참조에 NUL 문자가 있으면 거절한다`() {
+        assertRejected(ReconciliationCase.INVALID_RECONCILIATION_RESOLUTION, DomainErrorKind.INVALID) {
+            resolve(it, note = "확인\u0000함")
+        }
+        assertRejected(ReconciliationCase.INVALID_RECONCILIATION_RESOLUTION, DomainErrorKind.INVALID) {
+            resolve(it, providerReference = "PG\u0000REF")
+        }
+        assertRejected(ReconciliationCase.INVALID_RECONCILIATION_RESOLUTION, DomainErrorKind.INVALID) {
+            resolve(it, ReconciliationDecision.DECLINED, providerReference = "PG\u0000REF", approvedAmount = null)
+        }
+    }
+
+    @Test
+    fun `공백뿐인 거절 참조는 없는 것으로 다뤄 해소 기록에 null로 남긴다`() {
+        val resolution = checkNotNull(
+            resolve(manualReview(), ReconciliationDecision.DECLINED, providerReference = "   ", approvedAmount = null).aggregate.resolution,
+        )
+
+        assertNull(resolution.providerReference)
     }
 
     @Test

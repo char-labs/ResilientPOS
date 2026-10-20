@@ -2,6 +2,7 @@ package com.resilientpos.reconciliation.internal.adapter.web
 
 import com.jayway.jsonpath.JsonPath
 import com.resilientpos.PostgresIntegrationTest
+import com.resilientpos.contract.PaymentReconciliationReason
 import com.resilientpos.payment.PaymentId
 import com.resilientpos.platform.OwnerSession
 import com.resilientpos.platform.asOwner
@@ -57,19 +58,19 @@ class ReconciliationCaseOwnerApiIntegrationTest(
     )
 
     /** 그 매장의 `MANUAL_REVIEW` case와 넘긴 `UNKNOWN` 시도를 만든다. */
-    private fun openCase(store: UUID): Pair<ReconciliationCaseId, PaymentId> {
+    private fun openCase(store: UUID, reason: PaymentReconciliationReason = PaymentReconciliationReason.QUERY_LIMIT_EXCEEDED): Pair<ReconciliationCaseId, PaymentId> {
         val paymentId = jdbcTemplate.insertHandedOverAttempt()
-        val command = ReconciliationFixtures.open().copy(paymentId = paymentId, orderId = UUID.randomUUID(), storeId = StoreId(store))
+        val command = ReconciliationFixtures.open(reason = reason).copy(paymentId = paymentId, orderId = UUID.randomUUID(), storeId = StoreId(store))
         return management.open(command).caseId to paymentId
     }
 
     private fun resolveUrl(store: UUID, caseId: ReconciliationCaseId) = "/owner/v1/stores/$store/reconciliation-cases/${caseId.value}/resolve"
 
     private fun approve(amount: String = "4500", store: UUID = storeId, caseId: ReconciliationCaseId, session: OwnerSession = owner): ResultActionsDsl =
-        resolve(store, caseId, session, """{ "decision": "APPROVED", "providerReference": "PG-REF-1", "approvedAmount": "$amount", "approvedCurrency": "KRW", "reason": "PG 화면에서 승인 확인" }""")
+        resolve(store, caseId, session, """{ "decision": "APPROVED", "providerReference": "PG-REF-1", "approvedAmount": "$amount", "approvedCurrency": "KRW", "note": "PG 화면에서 승인 확인" }""")
 
     private fun decline(caseId: ReconciliationCaseId): ResultActionsDsl =
-        resolve(storeId, caseId, owner, """{ "decision": "DECLINED", "reason": "PG 화면에서 거절 확인" }""")
+        resolve(storeId, caseId, owner, """{ "decision": "DECLINED", "note": "PG 화면에서 거절 확인" }""")
 
     private fun resolve(store: UUID, caseId: ReconciliationCaseId, session: OwnerSession, body: String): ResultActionsDsl =
         mockMvc.post(resolveUrl(store, caseId)) {
@@ -139,11 +140,13 @@ class ReconciliationCaseOwnerApiIntegrationTest(
             jsonPath("$.data.paymentStatus") { value("APPROVED") }
         }
         assertEquals(resolvedRow, jdbcTemplate.caseRow(caseId))
+        assertEquals(1, auditLines(output, caseId).size, "같은 결론의 재요청에는 감사 줄이 남지 않는다")
 
         decline(caseId).andExpect {
             status { isConflict() }
             jsonPath("$.error.errorCode") { value("RECONCILIATION_CASE_ALREADY_RESOLVED") }
         }
+        assertEquals(1, auditLines(output, caseId).size)
         assertEquals("APPROVED", jdbcTemplate.attemptRow(paymentId)["status"])
         assertEquals(resolvedRow, jdbcTemplate.caseRow(caseId))
     }
@@ -156,7 +159,7 @@ class ReconciliationCaseOwnerApiIntegrationTest(
             status { isUnprocessableEntity() }
             jsonPath("$.error.errorCode") { value("RECONCILIATION_AMOUNT_MISMATCH") }
         }
-        resolve(storeId, caseId, owner, """{ "decision": "APPROVED", "approvedAmount": "4500", "approvedCurrency": "KRW", "reason": "확인" }""").andExpect {
+        resolve(storeId, caseId, owner, """{ "decision": "APPROVED", "approvedAmount": "4500", "approvedCurrency": "KRW", "note": "확인" }""").andExpect {
             status { isBadRequest() }
             jsonPath("$.error.errorCode") { value("INVALID_RECONCILIATION_RESOLUTION") }
         }
@@ -165,6 +168,24 @@ class ReconciliationCaseOwnerApiIntegrationTest(
         assertEquals("UNKNOWN", jdbcTemplate.attemptRow(paymentId)["status"])
         assertTrue(jdbcTemplate.isUnresolved(caseId))
         assertEquals(emptyList(), auditLines(output, caseId))
+    }
+
+    @Test
+    fun `금액 불일치 case의 거절은 PG 취소 참조가 없으면 400이고 바뀌지 않으며 참조가 있으면 시도가 DECLINED가 된다`() {
+        val (caseId, paymentId) = openCase(storeId, PaymentReconciliationReason.AMOUNT_MISMATCH)
+
+        decline(caseId).andExpect {
+            status { isBadRequest() }
+            jsonPath("$.error.errorCode") { value("INVALID_RECONCILIATION_RESOLUTION") }
+        }
+        assertEquals("MANUAL_REVIEW", jdbcTemplate.caseStatus(caseId))
+        assertEquals("UNKNOWN", jdbcTemplate.attemptRow(paymentId)["status"])
+
+        resolve(storeId, caseId, owner, """{ "decision": "DECLINED", "providerReference": "PG-CANCEL-1", "note": "PG에서 취소 확인" }""").andExpect {
+            status { isOk() }
+            jsonPath("$.data.paymentStatus") { value("DECLINED") }
+        }
+        assertEquals("PG-CANCEL-1", jdbcTemplate.attemptRow(paymentId)["provider_reference"])
     }
 
     @Test

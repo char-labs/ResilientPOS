@@ -37,6 +37,7 @@ object ReconciliationFixtures {
         reason: PaymentReconciliationReason = PaymentReconciliationReason.QUERY_LIMIT_EXCEEDED,
         reportedAmount: Money? = null,
         reportedProviderReference: String? = null,
+        unknownReason: PaymentUnknownReason = PaymentUnknownReason.RESULT_UNCONFIRMED,
     ): ReconciliationCommand.Open =
         fixtureMonkey.giveMeKotlinBuilder<ReconciliationCommand.Open>()
             .setExp(ReconciliationCommand.Open::occurredAt, handedAt)
@@ -46,7 +47,7 @@ object ReconciliationFixtures {
             .setExp(ReconciliationCommand.Open::terminalId, terminalId)
             .setExp(ReconciliationCommand.Open::amount, amount)
             .setExp(ReconciliationCommand.Open::reason, reason)
-            .setExp(ReconciliationCommand.Open::unknownReason, PaymentUnknownReason.RESULT_UNCONFIRMED)
+            .setExp(ReconciliationCommand.Open::unknownReason, unknownReason)
             .setExp(ReconciliationCommand.Open::reportedAmount, reportedAmount)
             .setExp(ReconciliationCommand.Open::reportedProviderReference, reportedProviderReference)
             .sample()

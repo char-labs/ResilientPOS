@@ -209,6 +209,27 @@ class PaymentUnknownResolutionIntegrationTest(
     }
 
     @Test
+    fun `이전 버전이 만든 unknown_reason이 null인 UNKNOWN 행도 상한에서 넘기고 사유는 RESULT_UNCONFIRMED로 읽는다`() {
+        // 롤링 배포 중 이전 버전이 만든 UNKNOWN 행을 흉내 낸다. 끝자리 4는 Fake가 조회에도 결과를 알리지 않는다.
+        val paymentId = PaymentId(UUID.randomUUID())
+        jdbcTemplate.update(
+            """
+            insert into t_payment_attempt
+                (id, order_id, store_id, terminal_id, checkout_no, kind, amount, currency, status, unknown_reason, created_at, updated_at)
+            values (?, ?, ?, ?, 1, 'AUTHORIZATION', 4534, 'KRW', 'UNKNOWN', null, now(), now())
+            """.trimIndent(),
+            paymentId.value, UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(),
+        )
+
+        repeat(3) { paymentManagement.resolveUnknown(PaymentCommand.ResolveUnknown(paymentId)) }
+
+        assertNotNull(row(paymentId)["reconciliation_requested_at"])
+        assertEquals(1, publications(paymentId, "PaymentReconciliationRequested"))
+        val fact = serializedFact(paymentId)
+        assertTrue("\"unknownReason\":\"RESULT_UNCONFIRMED\"" in fact, fact)
+    }
+
+    @Test
     fun `조회가 다른 금액의 승인이면 확정하지 않고 바로 넘기고 AMOUNT_MISMATCH 발행 기록에 알려 준 금액과 참조가 남는다`() {
         val paymentId = unknownAttempt("4525")
 
