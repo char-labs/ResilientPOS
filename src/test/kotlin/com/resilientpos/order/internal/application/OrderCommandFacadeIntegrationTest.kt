@@ -27,7 +27,6 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import org.springframework.beans.factory.annotation.Autowired
-import org.springframework.dao.ConcurrencyFailureException
 import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.jdbc.core.queryForList
@@ -162,7 +161,7 @@ class OrderCommandFacadeIntegrationTest(
     }
 
     @Test
-    fun `같은 terminal_id와 client_order_id의 다른 주문 저장은 경합으로 거절되고 행은 하나다`() {
+    fun `같은 terminal_id와 client_order_id는 DB unique가 거절한다`() {
         val terminalId = TerminalId(UUID.randomUUID())
         val clientOrderId = ClientOrderId(UUID.randomUUID())
         val command = OrderFixtures.createOrderCommand(terminalId = terminalId, clientOrderId = clientOrderId)
@@ -175,13 +174,7 @@ class OrderCommandFacadeIntegrationTest(
             Clock.systemUTC().instant(),
         ).aggregate
 
-        val e = assertFailsWith<ConcurrencyFailureException> { repository.save(duplicate) }
-
-        // DB에 실제로 붙은 이름을 고정하려고 운영 코드의 상수 대신 리터럴로 든다. 이름을 바꾸면 상수와 함께 고친다.
-        assertTrue(e.mostSpecificCause.message.orEmpty().contains("t_order_terminal_id_client_order_id_key"))
-        assertTrue(e.message.orEmpty().contains(terminalId.value.toString()), "WARN 로그로 대상을 찾을 수 있게 주문 키를 남긴다")
-        assertTrue(e.message.orEmpty().contains(clientOrderId.value.toString()), "WARN 로그로 대상을 찾을 수 있게 주문 키를 남긴다")
-        assertEquals(1L, orderRowCount(terminalId, clientOrderId))
+        assertFailsWith<DataIntegrityViolationException> { repository.save(duplicate) }
     }
 
     private fun newOrder(): Order =

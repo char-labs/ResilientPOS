@@ -5,15 +5,12 @@ import com.resilientpos.order.OrderId
 import com.resilientpos.order.internal.domain.Order
 import com.resilientpos.order.internal.domain.OrderRepository
 import com.resilientpos.platform.JdslQueryExecutor
-import com.resilientpos.platform.isUniqueViolationOf
 import com.resilientpos.platform.selectFrom
 import com.resilientpos.platform.ReadOnlyTransactional
 import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.TerminalId
 import jakarta.persistence.EntityManager
-import jakarta.persistence.PersistenceException
 import java.util.UUID
-import org.springframework.dao.ConcurrencyFailureException
 import org.springframework.stereotype.Repository
 import org.springframework.transaction.annotation.Transactional
 
@@ -102,23 +99,7 @@ class OrderPersistenceAdapter(
         order.checkouts.filter { it.id.value !in storedCheckoutIds }
             .map { OrderCheckoutEntity.from(orderId, it) }
             .forEach(entityManager::persist)
-        if (existing == null) flushNewOrder(order)
         return order
-    }
-
-    private fun flushNewOrder(order: Order) {
-        try {
-            entityManager.flush()
-        } catch (e: PersistenceException) {
-            // 사전 조회 뒤 같은 키의 주문이 먼저 들어온 경합이라 도메인 거절이 아니다. 커밋이 호출자(sync 항목) 트랜잭션에 있어도 여기서 가리도록 저장에서 flush한다.
-            if (e.isUniqueViolationOf(CLIENT_ORDER_CONSTRAINT)) {
-                throw ConcurrencyFailureException(
-                    "같은 키의 주문이 동시에 저장됐다 terminalId=${order.terminalId.value} clientOrderId=${order.clientOrderId.value}",
-                    e,
-                )
-            }
-            throw e
-        }
     }
 
     private fun toDomain(entity: OrderEntity): Order =
@@ -137,8 +118,4 @@ class OrderPersistenceAdapter(
                 .where(path(OrderCheckoutEntity::orderId).eq(orderId))
                 .orderBy(path(OrderCheckoutEntity::checkoutNo).asc())
         }
-
-    private companion object {
-        const val CLIENT_ORDER_CONSTRAINT = "t_order_terminal_id_client_order_id_key"
-    }
 }

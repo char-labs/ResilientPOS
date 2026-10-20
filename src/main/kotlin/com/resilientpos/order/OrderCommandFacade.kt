@@ -28,9 +28,7 @@ class OrderCommandFacade(
     /**
      * 같은 `(terminalId, clientOrderId)` 요청이 여러 인스턴스에 동시에 오면 [Lock]이 줄 세운다. 늦게 온 요청은 앞 요청의
      * 커밋을 기다렸다가 그 주문을 돌려받는다. 락은 최선 노력이고 방어선은 unique `(terminal_id, client_order_id)`다.
-     * 락이 통하지 않거나 같은 키의 sync 항목([createInCallerTransaction])과 겹치면 늦은 요청은 저장에서 unique 위반을 만나
-     * `ConcurrencyFailureException`으로 실패한다. 다시 보내면 먼저 저장된 주문과 내용이 같을 때 그 주문을 받고,
-     * 다르면 `IDEMPOTENCY_CONFLICT`로 거절된다.
+     * 락이 통하지 않으면 늦은 요청은 커밋에서 unique 위반으로 실패한다.
      */
     fun create(command: OrderCommand.Create): OrderCommand.Create.Result {
         // 가장 싼 거절을 가장 먼저 한다. line 개수는 command만 보면 알 수 있는데 뒤로 미루면
@@ -46,7 +44,6 @@ class OrderCommandFacade(
     /**
      * 호출자 트랜잭션에 합류하는 생성. 잠그지 않는다 — 같은 키의 경합을 호출자가 스스로 줄 세우고 한 커밋으로 묶어야 할 때
      * (sync intake, watermark 행 잠금 아래) 부른다. 방어선은 [create]와 같은 unique `(terminal_id, client_order_id)`다.
-     * 새 주문은 저장에서 flush되므로 같은 키가 겹치면 호출자의 커밋이 아니라 여기서 `ConcurrencyFailureException`으로 실패하고, 호출자 트랜잭션은 롤백만 할 수 있다.
      * 트랜잭션 안에서만 부른다. 밖에서 부르면 주문 행만 어댑터의 안전망 트랜잭션으로 커밋되어 호출자가 묶으려던 커밋이 갈라진다. 검사는 두지 않는다(계약은 이 KDoc이다).
      */
     fun createInCallerTransaction(command: OrderCommand.Create): OrderCommand.Create.Result {
