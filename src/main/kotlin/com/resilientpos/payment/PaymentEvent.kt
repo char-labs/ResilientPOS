@@ -1,6 +1,7 @@
 package com.resilientpos.payment
 
 import com.resilientpos.contract.PaymentAttemptKind
+import com.resilientpos.contract.requireKnownSchemaVersion
 import com.resilientpos.foundation.DomainEvent
 import com.resilientpos.foundation.Money
 import com.resilientpos.store.StoreId
@@ -30,10 +31,18 @@ sealed interface PaymentEvent : DomainEvent {
         val checkoutNo: Int,
         val kind: PaymentAttemptKind,
         val amount: Money,
+        val schemaVersion: Int = SCHEMA_VERSION,
     ) : PaymentEvent {
+        init {
+            requireKnownSchemaVersion(javaClass.simpleName, version = schemaVersion, known = SCHEMA_VERSION)
+        }
+
         companion object {
             /** 토픽 이름은 저장 형식이다. 받는 쪽이 같은 모듈이어도 재시도·DLT를 같은 경로로 받으려고 Kafka를 거친다. */
             const val TOPIC = "payment.attempt-created"
+
+            /** 형식 버전. 호환되지 않는 변경에만 올린다. 필드 추가는 올리지 않는다(docs/wiki/event-contract.md). */
+            const val SCHEMA_VERSION = 1
         }
     }
 
