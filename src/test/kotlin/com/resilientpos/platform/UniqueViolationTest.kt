@@ -37,4 +37,25 @@ class UniqueViolationTest {
 
         assertTrue(e.isUniqueViolationOf("ux_a"))
     }
+
+    private fun withMessage(message: String) = SQLException(message, "23505")
+
+    @Test
+    fun `독일어 번역 메시지의 »« 따옴표 안 제약 이름도 찾는다`() {
+        val e = withMessage("FEHLER: doppelter Schlüsselwert verletzt Unique-Constraint »ux_a«")
+
+        assertTrue(e.isUniqueViolationOf("ux_a"))
+    }
+
+    @Test
+    fun `프랑스어 번역 메시지의 « » 따옴표 안 제약 이름도 찾는다`() {
+        val e = withMessage("ERREUR: la valeur d'une clé dupliquée rompt la contrainte unique « ux_a »")
+
+        assertTrue(e.isUniqueViolationOf("ux_a"))
+    }
+
+    @Test
+    fun `앞부분만 같은 다른 제약 이름이면 거짓이다`() {
+        assertFalse(violation("23505", "ux_ab").isUniqueViolationOf("ux_a"))
+    }
 }

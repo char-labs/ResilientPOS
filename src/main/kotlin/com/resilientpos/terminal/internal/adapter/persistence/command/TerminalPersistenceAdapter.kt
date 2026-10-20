@@ -62,8 +62,6 @@ class TerminalPersistenceAdapter(
             entityManager.flush()
         } catch (e: PersistenceException) {
             // 사전 조회 없이 unique가 막는다. 다른 제약 위반은 그대로 던진다. 예외 뒤 영속성 컨텍스트는 쓰지 않고 트랜잭션은 롤백된다.
-            // Hibernate의 constraintName은 영어 메시지 템플릿에서 꺼내서 서버 lc_messages가 다르면 비어 있다.
-            // SQLState와, 어느 언어의 메시지에도 그대로 실리는 제약 이름으로 가린다.
             if (e.isUniqueViolationOf(TERMINAL_CODE_CONSTRAINT)) throw Terminal.codeDuplicated()
             throw e
         }

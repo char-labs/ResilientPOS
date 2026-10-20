@@ -28,7 +28,6 @@ class OwnerPersistenceAdapter(
             entityManager.flush()
         } catch (e: PersistenceException) {
             // 사전 조회 없이 unique가 막는다. 다른 제약 위반은 그대로 던진다. 예외 뒤 영속성 컨텍스트는 쓰지 않고 트랜잭션은 롤백된다.
-            // SQLState와, 어느 언어의 메시지에도 그대로 실리는 제약 이름으로 가린다(서버 lc_messages에 기대지 않는다).
             if (e.isUniqueViolationOf(OWNER_EMAIL_CONSTRAINT)) throw Owner.emailDuplicated()
             throw e
         }
