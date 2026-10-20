@@ -29,8 +29,8 @@
 
 **7. 해소 명령.** 점주는 결론과 근거를 낸다.
 - `APPROVED`: PG 승인 참조와 PG 화면에서 본 승인 금액이 필수다. 승인 금액이 case가 넘겨받은 시도 금액(통화 포함)과 다르면 거절한다(`RECONCILIATION_AMOUNT_MISMATCH`). 금액이 정말 다르면 점주는 PG에서 취소한 뒤 `DECLINED`로 해소하고, 그 경위를 사유에 적는다.
-- `DECLINED`: 참조는 선택이다. 돈이 움직이지 않았거나 PG에서 취소했다는 점주의 확인이다.
-- 사유는 둘 다 필수이고 500자 이하다. PG 승인 참조는 255자 이하다(저장 컬럼 `provider_reference varchar(255)`. 넘으면 커밋에서 실패해 500이 된다). 결론에 필요한 값이 빠졌거나 사유가 비었거나 사유·참조가 길면 `INVALID_RECONCILIATION_RESOLUTION`으로 거절한다(2026-10-20 범위 조정, 참조 길이).
+- `DECLINED`: 돈이 움직이지 않았거나 PG에서 취소했다는 점주의 확인이다. 참조는 선택이다. 다만 provider가 승인이라고 답한 적이 있는 case(넘김 사유나 불명 사유가 `AMOUNT_MISMATCH`)는 돈이 움직였을 가능성이 높아 PG 취소 참조가 필수다. 취소하지 않은 채 거절하면 재결제가 열려 이중 청구가 된다. 결과를 받지 못한 건은 PG에 거래가 없으면 줄 참조가 없어 선택으로 둔다(2026-10-20 범위 조정, multi-review).
+- 사유는 둘 다 필수이고 500자 이하다. PG 승인 참조는 255자 이하다(저장 컬럼 `provider_reference varchar(255)`. 넘으면 커밋에서 실패해 500이 된다). 결론에 필요한 값이 빠졌거나 사유가 비었거나 사유·참조가 길거나 NUL 문자(U+0000, PostgreSQL varchar에 들어가지 못해 커밋에서 500이 된다)를 담으면 `INVALID_RECONCILIATION_RESOLUTION`으로 거절한다. 공백뿐인 참조는 없는 것으로 다룬다(2026-10-20 범위 조정, 참조 길이와 multi-review).
 - 대조는 case aggregate가 한다. "근거·규칙·감사 없이 해결하지 않는다"가 case의 불변식이기 때문이다. 시도 금액은 바뀌지 않는 값이라 case가 넘겨받은 사본으로 대조해도 정본과 어긋나지 않는다.
 - `MANUAL_REVIEW`에서만 해소한다. 이미 `RESOLVED`인 case에 같은 결론이 다시 오면 기존 결과를 돌려주고 해소 기록을 바꾸지 않는다(응답을 잃은 재요청). 다른 결론이면 `RECONCILIATION_CASE_ALREADY_RESOLVED`(409)다.
 - 해소 기록(점주 ID, 해소 시각, 결론, 참조, 승인 금액, 사유)은 case 행의 컬럼이다. case당 해소는 한 번이라(`RESOLVED`는 끝 상태) 목록이 필요 없다. 재개·담당자 배정·2인 승인처럼 이력이 필요한 기능이 생기면 그 PR이 이력 표를 만들고 이 컬럼으로 기존 행을 채운다(2026-10-20 범위 조정).
@@ -101,9 +101,9 @@
 - **조회 `ReconciliationQueryFacade.findReviewable(ReconciliationQuery.FindReviewable(storeId))`**: `ReconciliationCaseView` 목록을 돌려준다. 그 매장의 `MANUAL_REVIEW` case를 최신순(`id` 내림차순)으로 최대 100건 읽는다. 미해소 건은 점주가 처리하면 줄어드는 목록이라 페이지를 두지 않는다. 100건을 넘는 매장이 생기면 페이지를 더한다. 해소된 case의 이력 조회는 제외다.
 - **점주 API**(`reconciliation.internal.adapter.web`, 모든 endpoint는 먼저 `requireOwned`)
   - `GET /owner/v1/stores/{storeId}/reconciliation-cases`: 미해소 목록. 항목은 `caseId`, `paymentId`, `orderId`, `terminalId`, `checkoutNo`, `reason`, `unknownReason`, `status`, `ruleVersion`, `amount`·`currency`(시도), `queryCount`, `reportedAmount`·`reportedCurrency`·`reportedProviderReference`(있을 때), `openedAt`이다.
-  - `POST /owner/v1/stores/{storeId}/reconciliation-cases/{caseId}/resolve`: 본문은 `decision`, `providerReference`, `approvedAmount`, `approvedCurrency`, `reason`이다. 응답은 `caseId`, `status`, `decision`, `paymentId`, `paymentStatus`다.
+  - `POST /owner/v1/stores/{storeId}/reconciliation-cases/{caseId}/resolve`: 본문은 `decision`, `providerReference`, `approvedAmount`, `approvedCurrency`, `note`(사유)다. 목록 응답의 `reason`(넘김 사유)과 한 단어가 두 뜻이 되지 않게 사유는 `note`라 부른다(2026-10-20 범위 조정, multi-review). 금액·통화 형식이 틀리면 기존 `Money` 변환의 오류 code(`INVALID_MONEY_FORMAT` 등)다. 응답은 `caseId`, `status`, `decision`, `paymentId`, `paymentStatus`다.
   - 금액은 기존 응답처럼 통화 기준 decimal string과 통화 코드다. 다른 매장의 case와 없는 case는 같은 `404 RECONCILIATION_CASE_NOT_FOUND`다.
-  - 해소가 커밋된 뒤 Controller가 감사 INFO 한 줄을 남긴다(operator-authentication 결정 11과 같은 모양). 항목은 `ownerId`, `action=RECONCILIATION_CASE_RESOLVED`, `storeId`, `caseId`, `paymentId`, `decision`, `paymentStatus`다. 사유 원문은 로그에 남기지 않는다. 자유 입력이라 개인정보가 섞일 수 있고, DB 감사 기록이 정본이다.
+  - 처음 해소가 커밋된 뒤 Controller가 감사 INFO 한 줄을 남긴다(operator-authentication 결정 11과 같은 모양). 같은 결론의 재요청은 남기지 않는다(해소 건수를 이중으로 세지 않게, 2026-10-20 범위 조정). 항목은 `ownerId`, `action=RECONCILIATION_CASE_RESOLVED`, `storeId`, `caseId`, `paymentId`, `decision`, `paymentStatus`다. 사유 원문은 로그에 남기지 않는다. 자유 입력이라 개인정보가 섞일 수 있고, DB 감사 기록이 정본이다.
   - REST Docs를 붙인다.
 
 ### 계약 요약
@@ -176,6 +176,7 @@
 - src/test/kotlin/com/resilientpos/**
 - src/test/resources/**
 - docs/spec/2026-10-20-payment-reconciliation-case.md
+- docs/wiki/architecture.md
 - docs/wiki/domain-model.md
 - docs/wiki/entity-map.md
 - docs/wiki/observability.md
@@ -189,7 +190,7 @@
 6. 같은 `paymentId`의 사실이 두 번 와도 case는 하나다. 열린 case는 `MANUAL_REVIEW`이고 분류 규칙 버전 1이며, 연 시각은 넘긴 시각이고 해소 기록은 없다.
 7. 점주가 자기 매장의 case를 `APPROVED`(참조·같은 금액·사유)로 해소하면 한 커밋에 다음이 모두 남는다. case는 `RESOLVED`가 되고 해소 기록(점주·시각·결론·참조·승인 금액·사유)이 남는다. 시도는 `APPROVED`와 그 참조가 되고 `PaymentApproved` 발행 기록이 생긴다. 그 뒤 주문이 `PAID`가 된다(Kafka 포함 통합).
 8. `DECLINED`로 해소하면 시도가 `DECLINED`, 주문은 `CHECKOUT_REQUESTED`다. 그 시도의 재결제가 승인되면 주문이 `PAID`가 된다.
-9. 승인 금액이 다르면 `422 RECONCILIATION_AMOUNT_MISMATCH`이고 아무것도 바뀌지 않는다. 승인에 참조나 금액이 없거나, 사유가 비었거나 500자를 넘으면 `400 INVALID_RECONCILIATION_RESOLUTION`이다.
+9. 승인 금액이 다르면 `422 RECONCILIATION_AMOUNT_MISMATCH`이고 아무것도 바뀌지 않는다. 승인에 참조나 금액이 없거나, 금액 불일치 case의 거절에 참조가 없거나, 사유가 비었거나 500자를 넘거나, 사유·참조에 NUL 문자가 있으면 `400 INVALID_RECONCILIATION_RESOLUTION`이다.
 10. 다른 매장의 case와 없는 case는 `404 RECONCILIATION_CASE_NOT_FOUND`, 남의 매장 경로는 `404 STORE_NOT_FOUND`, 세션이 없으면 401이다.
 11. 해소된 case에 같은 결론이 다시 오면 200과 같은 결과이고 해소 기록이 바뀌지 않는다. 다른 결론이면 `409 RECONCILIATION_CASE_ALREADY_RESOLVED`다.
 12. 같은 case의 해소가 동시에 둘 와도 결제 확정은 한 번이고 해소 기록은 먼저 커밋한 요청의 것이다.
@@ -305,6 +306,7 @@ create index ix_reconciliation_case_store on t_reconciliation_case (store_id, st
    - 롤링 배포 중 이전 버전이 만든 `UNKNOWN` 행은 `unknown_reason`이 null이다. 새 버전의 adapter는 `UNKNOWN`인데 null인 행을 `RESULT_UNCONFIRMED`로 읽는다. 이전 버전에는 금액 대조가 없으므로 정확하다. 코드 주석에 이유를 남긴다.
    - 새 버전이 만든 `UNKNOWN(AMOUNT_MISMATCH)` 시도는 아직 넘기지 않았으면 이전 버전의 주기 작업이 금액 대조 없이 승인으로 확정할 수 있다. 이 PR 전의 동작과 같아 회귀는 아니다.
    - 이전 버전의 주기 작업은 넘김을 모르므로, 그 사이 넘긴 시도를 조회로 확정할 수 있다. 그러면 그 case의 해소는 결제가 이미 결말이 난 상태를 만난다. 같은 결론이면 닫히고, 다르면 `409 RECONCILIATION_PAYMENT_ALREADY_CONCLUDED`로 롤백되고 점주는 메시지의 결제 결말과 같은 결론으로 다시 해소한다. 넘김은 60회 조회 뒤에야 일어나고 배포 창은 몇 분이라 드물다.
+   - 새 버전이 만든 `PaymentReconciliationRequested` 발행 기록이 브로커 전송에 실패해 남으면, 배포 창 동안 이전 버전 pod의 재전송 작업(`EventPublicationResubmitter`)은 그 타입을 몰라 역직렬화에 실패하고 그 실행이 끊긴다(spring-modulith#1904, domain-model §4.3). 그 기록은 새 버전 pod가 보낸다.
 9. **payload에 실리는가.**
    - `query_count`·`unknown_reason`·넘긴 시각(`occurredAt`)은 새 이벤트 `PaymentReconciliationRequested`에 실린다. 첫 버전이라 하위 호환을 따질 이전 형식이 없고, 필드 목록이 계약이다(#78).
    - case 표는 이벤트나 캐시에 실리지 않는다. 점주 API 응답은 DTO다.
@@ -334,6 +336,7 @@ create index ix_reconciliation_case_store on t_reconciliation_case (store_id, st
   - §3 용어집에 넘김(`reconciliation requested`), 불명 사유, 분류 규칙 버전을 더한다.
   - §4.3 주기 작업에 상한과 넘김을 더한다.
   - §4.6에 두 번째 동기 쓰기 경로를 더한다(결정 8).
+- [architecture](../wiki/architecture.md): domain-model §4.6 제목이 바뀌어 그 앵커 링크만 고친다.
 - [entity-map](../wiki/entity-map.md): `t_payment_attempt`의 새 컬럼과 `UNKNOWN → case` 흐름을 적고, `t_reconciliation_case`를 더한다.
 - [observability](../wiki/observability.md): gauge 하나, counter 둘, 로그와 바뀐 알림 조건을 적는다.
 - modulith-kafka-keywords(`docs/wiki/modulith-kafka-keywords.md`, 볼트): 새 토픽·consumer group·외부화 이벤트를 PR 전에 그 문서의 갱신 규칙대로 적는다.
@@ -380,6 +383,10 @@ push·PR 생성·머지 직전에 다시 확인하고, 먼저 머지된 쪽에 �
 | 10·13·HTTP부터 DB까지: `ReconciliationCaseOwnerApiIntegrationTest`의 `목록은 자기 매장의 MANUAL_REVIEW case만 최신순으로 …`(openedAt은 OPEN 감사 줄 시각) | `./gradlew test --tests 'com.resilientpos.reconciliation.internal.adapter.web.ReconciliationCaseOwnerApiIntegrationTest'`. 조회 클래스가 빈 목록을 돌려주는 최소 선언 상태에서 4건 중 1건 assertion 실패(목록 길이 0). 나머지 세 건은 이미 있던 Facade와 방금 만든 Controller가 이어져 처음부터 통과(characterization) | 같은 명령 통과(4건). `ReconciliationCaseQueries.findReviewable`이 case와 `OPEN` 감사 줄을 조인해 한 쿼리로 읽고(`selectNew`), 그 매장의 `MANUAL_REVIEW`만 `id` 내림차순 100건 | 아래 마지막 행 |
 | 7·9·10·11·HTTP부터 DB까지: 같은 클래스의 `승인으로 해소하면 case는 RESOLVED가 되고 … 같은 결론의 재요청은 …, 다른 결론은 409다`·`승인 금액이 다르면 422이고 … 참조가 없으면 400이다`·`다른 매장의 case를 자기 매장 경로로 … 404 STORE_NOT_FOUND이며 아무것도 바뀌지 않는다` | 위 행과 같은 명령. characterization이라 RED 없음(실제 세션·CSRF·DB·감사 로그 줄·사유 원문 미노출을 처음 한 흐름으로 확인) | 같은 명령 통과 | `./gradlew test` 전체 BUILD SUCCESSFUL, 675건 통과·실패 0·건너뜀 0(`build/test-results/test/*.xml` 집계). 점주 API 웹 슬라이스 12건과 HTTP 통합 4건이 새로 늘어난 건수 |
 | 대조 리뷰 반영: PG 승인 참조 길이와 V016 backfill 술어 / `ReconciliationCaseResolveTest`의 `PG 승인 참조 255자는 통과하고 256자는 거절한다`, `SchemaMigrationTest`의 V016 backfill 테스트 | `./gradlew test --tests 'com.resilientpos.reconciliation.internal.domain.ReconciliationCaseResolveTest'`. 11건 중 1건 실패(256자 참조에 `Expected an exception of class DomainException to be thrown, but was completed successfully`). V016 술어 변경은 결과 행이 같아 기존 backfill 테스트가 그대로 통과(characterization) | 길이 검사를 더한 뒤 같은 명령 통과. REST Docs 요청 필드 설명에 255자를 적음 | `./gradlew test --tests 'com.resilientpos.reconciliation.*' --tests 'com.resilientpos.SchemaMigrationTest'` 54건 통과 |
+| 6·7·11·12 감사 표를 case 한 표로 접음(REFACTOR, 동작 유지): V017(`t_reconciliation_case_action` 제거, `opened_at`·해소 컬럼 추가), `Resolution` 값 객체, `ReconciliationCaseOpenTest`의 `두 사유 모두 … 연 시각은 넘긴 시각이며 해소 기록과 이벤트는 없다`, `ReconciliationCaseResolveTest`의 `승인으로 해소하면 … 해소 기록이 점주와 시각과 결론과 근거를 담는다`·`해소된 case에 같은 결론이 다시 오면 … 해소 기록을 바꾸지 않는다`(두 번째 요청을 60초 늦게 보내도 기록 불변), `ReconciliationManagementIntegrationTest`의 열기·해소·거절·재요청 단언을 해소 컬럼 단언으로 교체(`isUnresolved`로 롤백된 case의 해소 컬럼이 모두 null), `ReconciliationFlowIntegrationTest`·`ReconciliationCaseOwnerApiIntegrationTest`의 감사 줄 단언을 `caseRow`로 교체, `SchemaMigrationTest` 표 목록에서 감사 표 제거 | RED 없음(리팩터링). 동작 테스트의 단언 모양만 바뀌어 같은 사실을 고정한다 | `./gradlew test --tests 'com.resilientpos.reconciliation.*' --tests 'com.resilientpos.SchemaMigrationTest' --tests 'com.resilientpos.ModuleStructureTest' --tests 'com.resilientpos.EntityVisibilityTest'` BUILD SUCCESSFUL, 60건 통과·실패 0. 도메인 `resolve`·`open`에서 식별자 인자를 뺌, 엔티티가 `Resolution`을 컬럼으로 펼침, 목록 조회에서 조인 제거 | 위 명령 |
+| 12·동시 해소 관측 방식 교체: `ReconciliationResolveConcurrencyIntegrationTest`의 `같은 case의 해소가 동시에 둘 와도 … 처음 해소는 하나이고 … 해소 기록은 한 요청의 것이다`(두 요청의 사유를 다르게 보냄) | `./gradlew test --tests 'com.resilientpos.reconciliation.internal.application.ReconciliationResolveConcurrencyIntegrationTest'`. 감사 줄이 없어져 "OWNER 줄 하나"를 관측할 수 없으므로 resolved counter(처음 해소했을 때만 센다)가 하나만 오르는지로 바꿨다. `findByIdAndStoreIdForUpdate`를 `findFirst`(잠금 없음)로 임시 변경한 상태에서 세 번 모두 assertion 실패(counter가 호출 전보다 둘 오름, 테스트 61행). 확인 뒤 백업으로 그 파일만 되돌림 | 같은 명령 통과 | 위 명령 |
+| 14·gauge를 주기 끝에 센다(multi-review): `UnknownPaymentResolverIntegrationTest`의 `한 주기 뒤 gauge가 그 주기가 확정한 시도를 뺀 결과 불명 승인 시도 수와 같다`(기존 "주기 시작 값" 계약을 교체), `그 주기에 넘긴 시도가 같은 주기 뒤 pending gauge에 보인다` | `./gradlew test --tests 'com.resilientpos.payment.internal.application.UnknownPaymentResolverIntegrationTest'`. 12건 중 2건 assertion 실패(`expected: <1.0> but was: <2.0>`은 그 주기에 확정한 시도가 unknown gauge에 남음, `expected: <1.0> but was: <0.0>`은 그 주기에 넘긴 시도가 pending gauge에 없음) | 두 count를 `Lock.executeWithLockNoTx` 블록 뒤로 옮기고 KDoc을 고친 뒤 같은 명령 12건 통과 | 위 마지막 회귀 행 |
+| 6·12·case 동시 열기의 복구 경로: `ReconciliationOpenConcurrencyIntegrationTest`의 `같은 시도의 열기가 겹쳐 한쪽이 unique 위반으로 실패해도 다시 부르면 기존 case를 돌려주고 case는 하나다`, `consumer의 열기가 unique 위반으로 실패하면 DLT로 가지 않고 재시도가 기존 case를 찾아 case는 하나다` | `./gradlew test --tests 'com.resilientpos.reconciliation.internal.application.ReconciliationOpenConcurrencyIntegrationTest'`. characterization이라 RED 없음(처음부터 통과, 2건). 겹침은 B의 삽입을 바깥 트랜잭션이 커밋에서 flush하게 붙잡고 그동안 다른 스레드의 A를 커밋시켜 결정적으로 만든다(`PaymentAttemptCreationConcurrencyIntegrationTest`와 같은 방법). Kafka 테스트는 `ReconciliationManagement` spy의 첫 호출에만 겹침을 만든다. 재시도 허용 목록이 이 사실을 고정하는지 보려고 `KafkaConfiguration`에서 `DataIntegrityViolationException`을 임시로 뺀 상태로 돌리면 그 테스트가 실패한다(`consumer가 재시도까지 처리한다` 20초 초과, DLT로 감). 확인 뒤 백업으로 그 파일만 되돌림 | 같은 명령 통과(2건). 던진 예외는 `ux_reconciliation_case_payment` 위반이고 consumer 호출은 첫 처리·A·재시도 세 번, case 행 하나, DLT 메시지 없음 | `./gradlew test` 전체 BUILD SUCCESSFUL, 678건 통과·실패 0·건너뜀 0(`build/test-results/test/*.xml` 집계) |
 
 ## 결과
 - 인수 조건 1~15를 위 TDD 기록의 테스트로 확인했다. 16의 최종 실행 결과는 아래 검증 줄에 남긴다.
@@ -401,5 +408,9 @@ push·PR 생성·머지 직전에 다시 확인하고, 먼저 머지된 쪽에 �
   - 결정 기록은 볼트 modulith-kafka-keywords 8.34(넘김은 이벤트, 해소는 동기 합류)와 4절의 토픽·group 목록, 8.28 덧붙임에 남겼다.
 - **한계**
   - 대상 조회에 더한 `reconciliation_requested_at is null`은 V013 partial 인덱스의 술어 밖이라 인덱스 뒤 Filter로 남는다. 넘긴 시도도 `UNKNOWN`이라 인덱스에 남는다. 실행 계획은 다시 재지 않았다. 넘긴 채 해소되지 않은 건이 수천 건으로 쌓이면 술어에 넣은 인덱스를 다시 본다.
-  - 점주 목록은 최대 100건이고 그 이상의 페이지는 없다(범위 절).
+  - 점주 목록은 최신순 최대 100건이고 그 이상의 페이지는 없다(범위 절, 사용자 결정으로 최신순 유지). 100건을 넘는 매장이 생기면 가장 오래된 case부터 화면에서 빠지고 잘렸다는 신호도 없다. 그 전에 pending gauge(24시간 알림)로 쌓임을 본다.
+  - "60회 ≈ 1시간"은 결과 불명 승인 시도가 배치 크기(100) 이하일 때다. 더 많으면 한 건은 `ceil(불명 건수 / 100)`분마다 조회되어 넘김까지 그만큼 늦어진다(PG 장애로 1,000건이면 약 10시간). 알림 조건 `unknown - pending > 0 for 2h`도 "불명이 하나라도 계속 있음"을 재므로 새 불명이 꾸준히 들어오면 작업이 멀쩡해도 울린다. 작업 생존 metric과 함께 알림 규칙을 만드는 PR이 다시 본다.
+  - 승인 응답에서 금액 불일치로 불명이 된 시도가 이후 조회에서 계속 불명이면 `QUERY_LIMIT_EXCEEDED`로 넘어가고, provider가 처음 말한 금액·참조는 WARN 로그에만 남는다(case 근거에는 불명 사유 `AMOUNT_MISMATCH`만 있다). 그래도 거절 해소에는 취소 참조가 필수다(결정 7).
+  - V015 전에 등록된 단말의 매장은 `t_store` 행이 없어 어떤 점주도 `requireOwned`를 통과하지 못한다. 그런 매장의 case는 플랫폼 운영자 주체(#91)가 생길 때까지 해소할 사람이 없다.
+  - 조회가 알려 준 참조(`reported_provider_reference varchar(255)`)는 provider 값이라 길이를 검사하지 않는다. 255자를 넘으면 case 열기가 재시도 뒤 DLT로 간다. 실제 PG 어댑터 PR이 참조 형식과 함께 확인한다.
   - 롤링 배포 중 이전 버전이 넘긴 시도를 조회로 확정할 수 있다(스키마 변경 검토 질문 8). 그러면 점주는 `409 RECONCILIATION_PAYMENT_ALREADY_CONCLUDED`의 메시지를 보고 결제 결말과 같은 결론으로 다시 해소한다.
