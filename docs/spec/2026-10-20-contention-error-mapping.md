@@ -1,7 +1,7 @@
 # PR spec: 같은 키 주문 생성 경합의 unique 위반을 409로 바꾼다
 
 ## 목적
-같은 `(terminalId, clientOrderId)`의 주문 생성이 겹치면 늦은 요청이 `t_order`의 unique 위반(`DataIntegrityViolationException`)으로 실패하고 HTTP에서 `500 INTERNAL_ERROR`가 된다. 다시 보내면 앞 요청이 만든 주문을 받는 경합인데 단말은 서버 오류와 구분할 수 없다. 이 위반을 기존 경합 응답 `409 CONCURRENT_REQUEST`로 바꾼다(#79).
+같은 `(terminalId, clientOrderId)`의 주문 생성이 겹치면 늦은 요청이 `t_order`의 unique 위반(`DataIntegrityViolationException`)으로 실패하고 HTTP에서 `500 INTERNAL_ERROR`가 된다. 같은 요청이면 다시 보낼 때 앞 요청이 만든 주문을 받는 경합인데, 단말은 서버 오류와 구분할 수 없다. 이 위반을 기존 경합 응답 `409 CONCURRENT_REQUEST`로 바꾼다(#79).
 
 ## 범위
 - 소유 모듈: `order`(persistence adapter가 제약 이름으로 위반을 가린다), `platform`(제약 이름 판별 함수를 한 곳에 둔다). Command·Query·Event와 스키마는 바뀌지 않는다. 새 오류 code와 `ErrorType` 항목은 없다.
@@ -12,12 +12,12 @@
 - 변환: `OrderPersistenceAdapter.save`가 **새 주문일 때만** 저장 끝에 `flush`한다. SQLState `23505`이고 제약 이름이 `t_order_terminal_id_client_order_id_key`이면 원인 예외를 담은 Spring `ConcurrencyFailureException`을 던지고, 그 밖의 위반은 그대로 던진다. 기존 `ApiControllerAdvice.handleConcurrency`가 이 계열을 `409 CONCURRENT_REQUEST`(WARN, 고정 문구)로 바꾼다. advice는 KDoc만 고친다.
   - 저장에서 `flush`하는 이유: 지금은 위반이 커밋에서 드러난다. sync에서는 그 커밋이 `SyncCommandFacade`의 항목 트랜잭션이라 `order`가 가로챌 자리가 없다. 저장 시점으로 당기면 adapter 한 곳이 HTTP와 sync 두 경로를 덮는다. 새 주문의 INSERT가 커밋 대신 저장 시점에 나갈 뿐 문장 수와 트랜잭션 경계는 같다. unique 키 항목은 저장 시점부터 커밋까지 쥐므로 조금 더 오래 잡힌다. flush는 영속성 컨텍스트 전체를 내보내므로, 같은 트랜잭션에서 먼저 바꾼 다른 엔티티의 위반도 여기서 드러난다(지금 그런 호출자는 없다).
 - 제약 이름 판별 함수 `isUniqueViolationOf`를 `platform`의 최상위 확장 함수 하나로 옮긴다. 지금 `OwnerPersistenceAdapter`와 `TerminalPersistenceAdapter`에 같은 private 사본이 있고 주문이 세 번째 사용처다. 판별 방식은 아래 범위 조정에서 바꿨다.
-- 실패·재시도·복구: 늦은 요청의 트랜잭션은 롤백되고 아무것도 남지 않는다. `POST /v1/orders`는 `clientOrderId`로 멱등이라 단말이 같은 요청을 다시 보내면 앞 요청이 커밋한 주문을 받는다. sync에서는 `DomainException`이 아니라서 항목이 `REJECTED`로 기록되지 않고 배치가 409로 끝난다. 이미 커밋된 앞 항목은 남는다. 재전송하면 그 항목은 앞 주문과 내용이 같을 때 그 주문으로 `APPLIED`이고, 다르면 `REJECTED`(`IDEMPOTENCY_CONFLICT`)로 순번이 확정된다.
+- 실패·재시도·복구: 늦은 요청의 트랜잭션은 롤백되고 아무것도 남지 않는다. `POST /v1/orders`는 `clientOrderId`로 멱등이라 단말이 다시 보내면 먼저 저장된 주문과 내용이 같을 때 그 주문을 받고, 다르면 `409 IDEMPOTENCY_CONFLICT`를 받는다. sync에서는 `DomainException`이 아니라서 항목이 `REJECTED`로 기록되지 않고 배치가 409로 끝난다. 이미 커밋된 앞 항목은 남는다. 재전송하면 그 항목은 앞 주문과 내용이 같을 때 그 주문으로 `APPLIED`이고, 다르면 `REJECTED`(`IDEMPOTENCY_CONFLICT`)로 순번이 확정된다.
 - 관측성: 이 경로는 ERROR 로그의 `INTERNAL_ERROR`에서 WARN 로그의 `errorCode=CONCURRENT_REQUEST`로 옮겨 가고 5xx 지표에서 빠진다. 더하는 로그와 metric은 없다.
 
 ### 합의한 결정 (2026-10-20 grill)
 - 범위는 `t_order (terminal_id, client_order_id)` 하나다. 위에서 HTTP 500에 닿지 않는다고 확인한 제약과 버전 충돌은 다루지 않는다.
-- 위반은 `DomainException`이 아니라 경합 예외(`ConcurrencyFailureException`)로 바꾼다. 이 위반은 도메인 규칙 위반이 아니다. 멱등 생성 규칙은 앞 요청이 지켰고, 같은 요청이 겹쳤다는 경합을 뜻한다. `DomainException`으로 바꾸면 `SyncCommandFacade.applyOperation`이 그것을 도메인 거절로 보고 항목을 `REJECTED`로 영구 기록한다. 그러면 주문은 있는데 단말은 거절을 받고 새 operationId로 다시 보내야 한다. 지금은 배치가 실패한 뒤 재전송하면 `APPLIED`가 되는데 그보다 나빠진다. 대가: 저장소 코드가 Spring DAO 예외를 직접 던지는 첫 사례다. adapter가 영속 계층 예외를 Spring의 `DataAccessException` 계층으로 번역하는 자리라 계층과 어긋나지 않는다.
+- 위반은 `DomainException`이 아니라 경합 예외(`ConcurrencyFailureException`)로 바꾼다. 이 위반은 도메인 규칙 위반이 아니다. 멱등 생성 규칙은 앞 요청이 지켰고, 같은 요청이 겹쳤다는 경합을 뜻한다. `DomainException`으로 바꾸면 `SyncCommandFacade.applyOperation`이 그것을 도메인 거절로 보고 항목을 `REJECTED`로 영구 기록한다. 그러면 주문은 있는데 단말은 거절을 받고 새 operationId로 다시 보내야 한다. 지금은 배치가 실패한 뒤 재전송하면 앞 주문과 내용이 같을 때 `APPLIED`가 되는데, 그보다 나빠진다. 대가: 저장소 코드가 Spring DAO 예외를 직접 던지는 첫 사례다. adapter가 영속 계층 예외를 Spring의 `DataAccessException` 계층으로 번역하는 자리라 계층과 어긋나지 않는다.
 - 판별 함수는 `platform`으로 옮긴다. 사본 세 벌 대신 한 벌이고, owner·terminal adapter의 diff가 조금 는다.
 
 ### 검토한 선택지
@@ -37,13 +37,20 @@
 - 반영하지 않은 것: HTTP 두 건을 실제로 겹치는 통합 테스트는 검증 절에 적은 대로 인수 조건 1과 3이 이어서 덮으므로 더하지 않았다. `entity-map.md`에서 재결제를 "HTTP endpoint 없음"이라고 적은 낡은 서술은 이 PR과 무관해서 고치지 않았다. `OrderRepository.save`의 port KDoc은 바꾸지 않았다. 경합 예외는 Spring 타입이라 도메인 port에 적지 않고, 호출자가 읽는 Facade KDoc에 둔다.
 
 ### 범위 조정 2 (2026-10-20, 반영 커밋 재리뷰)
-반영 커밋(`dd6a97d..HEAD`)만 다시 multi-review했다. Claude 92점, Codex 88점(Codex CLI를 직접 실행했다. 리뷰 래퍼가 CLI를 건너뛰고 직접 판정해서 그 결과는 Codex 점수로 쓰지 않았다), Gemini는 CLI가 없어 미실행이다. 막는 결함은 없었다. 반영한 것은 다음과 같다.
+반영 커밋(`dd6a97d..HEAD`)만 다시 multi-review했다. Claude 92점, Codex 88점(CLI 직접 실행), Gemini는 CLI가 없어 미실행이다. 막는 결함은 없었다. 반영한 것은 다음과 같다.
 - 재전송 결과를 조건 없이 "앞 주문으로 `APPLIED`"라고 적었다(두 리뷰어 모두 지적). 앞 주문과 내용이 같을 때만 그 주문으로 `APPLIED`이고, 다르면 `verifySamePayload`가 `IDEMPOTENCY_CONFLICT`로 거절해 `REJECTED`로 순번이 확정된다. 앞서 확정된 항목(`APPLIED`·`REJECTED`)은 `DUPLICATE`이고 `CONFLICT`였던 항목은 다시 `CONFLICT`다. REST Docs 설명, 이 spec, `entity-map.md`, 현재 상태(볼트)를 이렇게 고친다.
-- 판별 함수의 경계 문자를 PostgreSQL 식별자에 쓸 수 있는 문자 전체(유니코드 글자·숫자·`_`·`$`)로 넓힌다(두 리뷰어 모두 지적). ASCII만 보면 `ux_a$1` 같은 이름에서 `ux_a`가 참이 된다. 넓혀도 번역 메시지는 깨지지 않는다. PostgreSQL 17·18의 `src/backend/po` 번역 15개를 2026-10-20에 확인했고, 모두 제약 이름 자리를 남기며 그 앞뒤가 따옴표나 공백이다. KDoc에 이 근거와 함께, `logServerErrorDetail=false`로 메시지에 다른 식별자(DETAIL의 키 값)가 실리지 않는다는 전제를 적는다. 앞쪽 경계(`pk_ux_a`)와 `$` 사례를 테스트에 더한다.
+- 판별 함수의 경계 문자를 PostgreSQL의 따옴표 없는 식별자에 쓰는 문자(유니코드 글자·숫자·`_`·`$`)로 넓힌다(두 리뷰어 모두 지적). ASCII만 보면 `ux_a$1` 같은 이름에서 `ux_a`가 참이 된다. 넓혀도 번역 메시지는 깨지지 않는다. PostgreSQL 17·18의 `src/backend/po` 번역 15개를 2026-10-20에 확인했고, 모두 제약 이름 자리를 남기며 그 앞뒤가 따옴표나 공백이다. KDoc에 이 근거와 함께, `logServerErrorDetail=false`로 메시지에 다른 식별자(DETAIL의 키 값)가 실리지 않는다는 전제를 적는다. 앞쪽 경계(`pk_ux_a`)와 `$` 사례를 테스트에 더한다.
 - sync 경합 테스트의 대기 조회를 `pg_stat_activity`에서 `pg_locks`로 바꾼다. 테스트 트랜잭션 안에서 읽는 `pg_stat_activity`는 처음 읽은 시점의 세션 목록에 고정돼서, 그 뒤 새로 열린 연결이 sync를 맡으면 대기를 보지 못한다. 원인 단언은 검증 대상인 판별 함수를 쓰지 않고 SQLState와 메시지로 직접 본다. `JdbcTemplate`이 앞 트랜잭션과 같은 연결을 쓴다는 전제를 주석으로 적는다.
 - 한계 표식을 저장소 규약인 `ponytail:`로 맞춘다. `create`의 KDoc에 sync 항목과 겹치는 경로를 적는다. 예외 메시지에 주문 키가 실리는지 통합 테스트에서 단언한다. 판정과 무관해진 테스트 이름("따옴표째")을 고친다.
 - 테스트 두 곳(`OrderCommandFacadeIntegrationTest`, `SyncCreateOrderRaceIntegrationTest`)은 제약 이름을 상수가 아니라 리터럴로 든다. DB에 실제로 붙은 이름을 고정하려는 것이라 운영 코드의 상수를 공유하지 않는다. 이름을 바꾸면 상수와 두 테스트를 함께 고친다.
 - 반영하지 않은 것: `generateSequence`의 원인 순환은 기존 코드이고 현실에서 생기지 않는다. JDBC batch를 켜면 SQL 본문을 담은 `BatchUpdateException`이 원인 사슬에 들어오므로 그때 판별 함수를 다시 본다.
+
+### 범위 조정 3 (2026-10-20, 두 번째 반영 커밋 리뷰)
+두 번째 반영 커밋(`45046ea..bf9ad89`)을 다시 multi-review했다. Claude 94점, Codex 87점(CLI 직접 실행), Gemini는 CLI가 없어 미실행이다. 막는 결함은 없었다. 반영한 것은 다음과 같다.
+- 재전송 결과를 "같은 내용으로 다시 보내면 같은 주문을 받는다"라고 적은 곳은 늦은 요청을 그대로 다시 보내는 것으로 읽힌다(두 리뷰어 모두 지적). 비교 기준은 먼저 저장된 주문이다. 그래서 "먼저 저장된 주문과 내용이 같으면 그 주문, 다르면 `IDEMPOTENCY_CONFLICT`"로 고친다. 고치는 곳은 `create` KDoc, `entity-map.md`, 현재 상태(볼트), 이 spec이다.
+- 판별 함수의 보장 범위를 따옴표 없는 식별자로 좁혀 적는다(두 리뷰어 모두 지적). 따옴표로 감싼 식별자는 `-`·`.`·공백도 담을 수 있어서 메시지에서 경계를 가릴 수 없다. 저장소의 제약 이름은 모두 소문자·숫자·`_`다. 그런 이름이 필요해지면 pgjdbc `ServerErrorMessage.constraint`로 바꾼다. 비ASCII 글자 경계(`ux_a한`) 테스트를 더한다. 경계를 ASCII로 되돌리면 이 테스트가 실패한다.
+- 경합 예외 메시지의 `terminalId`도 단언한다(두 리뷰어 모두 지적). 테스트가 제약 이름을 리터럴로 드는 이유를 그 자리에 한 줄 적는다.
+- TDD 기록의 낡은 메커니즘과 테스트 이름을 지금 것으로 고친다.
 
 ## 제외
 - 커밋 시점 버전 충돌. #34로 해결됐다. 버전 충돌을 HTTP까지 잇는 테스트는 #34가 정한 대로 잠금 없이 `@Version`에 기대는 endpoint를 처음 더하는 PR이 넣는다.
@@ -71,9 +78,9 @@
 
 ## 인수 조건
 1. 같은 `(terminal_id, client_order_id)`의 주문이 커밋돼 있을 때 같은 키의 다른 주문을 저장하면 `ConcurrencyFailureException`이 나고, 그 원인 사슬에 `t_order_terminal_id_client_order_id_key`가 있으며, 주문 행은 하나다.
-2. 같은 키의 주문 생성이 커밋되기 전에 sync `CREATE_ORDER`가 오면 배치는 `ConcurrencyFailureException`으로 끝난다. 그 항목의 접수 기록은 없고 watermark는 전진하지 않는다. 배치의 예외는 원인 사슬이 그 제약의 unique 위반이다. 앞 생성이 커밋된 뒤 같은 배치를 다시 보내면 그 항목은 `APPLIED`이고 앞 주문의 `orderId`를 받으며, 접수 기록은 1행, watermark는 1이 된다.
+2. 같은 키의 주문 생성이 커밋되기 전에 같은 내용의 sync `CREATE_ORDER`가 오면 배치는 `ConcurrencyFailureException`으로 끝난다. 그 항목의 접수 기록은 없고 watermark는 전진하지 않는다. 배치의 예외는 원인 사슬이 그 제약의 unique 위반이다. 앞 생성이 커밋된 뒤 같은 배치를 다시 보내면 그 항목은 `APPLIED`이고 앞 주문의 `orderId`를 받으며, 접수 기록은 1행, watermark는 1이 된다.
 3. `POST /v1/orders`에서 Facade가 `ConcurrencyFailureException`을 던지면 `409`, `errorCode=CONCURRENT_REQUEST`, 고정 문구다. REST Docs 스니펫 `orders-create-concurrent-request`가 생긴다. `POST /v1/terminals/{terminalId}/sync`에서 Facade가 같은 예외를 던져도 같은 409이고 스니펫 `sync-receive-batch-concurrent-request`가 생긴다.
-4. `platform`의 판별 함수는 SQLState `23505`이고 메시지에 그 제약 이름이 식별자 경계(앞뒤가 PostgreSQL 식별자 문자인 유니코드 글자·숫자·`_`·`$`가 아님)로 있을 때만 참이다. 이름을 감싼 따옴표의 형식(큰따옴표, `»…«`, `« … »`)과는 관계없다. 다른 제약 이름, 앞이나 뒤만 같은 다른 제약 이름(`ux_a`로 물을 때 `ux_ab`, `pk_ux_a`, `ux_a$1`), 다른 SQLState, 원인 사슬에 `SQLException`이 없는 경우는 거짓이다.
+4. `platform`의 판별 함수는 SQLState `23505`이고 메시지에 그 제약 이름이 식별자 경계(앞뒤가 따옴표 없는 PostgreSQL 식별자 문자인 유니코드 글자·숫자·`_`·`$`가 아님)로 있을 때만 참이다. 이름을 감싼 따옴표의 형식(큰따옴표, `»…«`, `« … »`)과는 관계없다. 다른 제약 이름, 앞이나 뒤만 같은 다른 제약 이름(`ux_a`로 물을 때 `ux_ab`, `pk_ux_a`, `ux_a$1`, `ux_a한`), 다른 SQLState, 원인 사슬에 `SQLException`이 없는 경우는 거짓이다.
 5. owner·terminal의 기존 중복 테스트(`409 OWNER_EMAIL_DUPLICATED`, `409 TERMINAL_CODE_DUPLICATED`)가 판별 함수를 옮긴 뒤에도 그대로 통과한다.
 6. `./gradlew test` 전체와 `python3 scripts/check_pr.py --base origin/main`이 통과한다.
 
@@ -81,12 +88,12 @@
 - `./gradlew test --tests 'com.resilientpos.order.*' --tests 'com.resilientpos.sync.*' --tests 'com.resilientpos.platform.*' --tests 'com.resilientpos.owner.*' --tests 'com.resilientpos.terminal.*'`
 - `./gradlew test` 전체. Testcontainers의 PostgreSQL·Redis·Kafka를 쓴다(Docker는 OrbStack).
 - `python3 scripts/check_pr.py --base origin/main --worktree`(개발 중), `--worktree` 없이 한 번 더(제출 전).
-- 정상: 같은 키의 주문 생성이 겹치면 늦은 쪽은 409이고 행은 하나다. 다시 보내면 앞 주문을 받는다.
+- 정상: 같은 키의 주문 생성이 겹치면 늦은 쪽은 409이고 행은 하나다. 다시 보내면 먼저 저장된 주문과 내용이 같을 때 그 주문을 받고, 다르면 `409 IDEMPOTENCY_CONFLICT`다.
 - 실패: 다른 제약 위반은 이전처럼 `DataIntegrityViolationException` 계열(500)이다. 판별 함수가 제약 이름을 가리지 않게 고치면 인수 조건 4가 실패하는지, adapter의 변환을 지우면 인수 조건 1·2가 실패하는지 본다.
 - 경로 (1)(HTTP 두 건, `Lock` fail-open)은 인수 조건 1(adapter 변환)과 3(HTTP 매핑)을 이어서 덮는다. 두 요청이 같은 adapter 코드를 지나므로 따로 경합 테스트를 두지 않는다.
 
 ## Wiki 영향
-- [엔티티 지도](../wiki/entity-map.md): `t_order` 방어선 줄에 경합 위반이 409 `CONCURRENT_REQUEST`가 된다는 것을 적는다. 4.1 흐름 표의 주문 생성 줄과 4.2의 "배치 전체가 409·500이면" 줄을 같은 키 생성 경합은 409로 고친다. 4.2의 그 줄에는 실패한 항목이 재전송 때 `APPLIED`라는 것을, 4.5 멱등 표의 주문 생성 줄에는 겹치면 409라는 것을 적는다.
+- [엔티티 지도](../wiki/entity-map.md): `t_order` 방어선 줄에 경합 위반이 409 `CONCURRENT_REQUEST`가 된다는 것을 적는다. 4.1 흐름 표의 주문 생성 줄과 4.2의 "배치 전체가 409·500이면" 줄을 같은 키 생성 경합은 409로 고친다. 4.2의 그 줄에는 실패한 항목이 재전송 때 앞 주문과 내용이 같으면 `APPLIED`, 다르면 `REJECTED`(`IDEMPOTENCY_CONFLICT`)라는 것을, 4.5 멱등 표의 주문 생성 줄에는 겹치면 409라는 것을 적는다. 4.1과 4.5의 재시도 결과는 먼저 저장된 주문과 내용이 같을 때로 한정한다.
 - 현재 상태(`docs/wiki/current-state.md`, 볼트)는 볼트에서 갱신한다. 주문 생성의 락이 통하지 않을 때 "오류를 받는다", 주문 API의 "같은 키의 동시 요청이 unique 제약 위반으로 끝나는 것은 알려진 빈틈이다", sync 배치 오류의 409/500 구분, `CONCURRENT_REQUEST` 설명의 "unique 제약 위반은 계속 500이다" 네 곳을 고친다.
 - [도메인 모델](../wiki/domain-model.md)은 이 동작을 서술하지 않아 바꾸지 않는다. Kafka·Modulith 작업이 아니라 Modulith·Kafka 키워드(볼트)도 바꾸지 않는다.
 - 요구사항 변화: 없다. 같은 키의 겹친 생성은 여전히 늦은 쪽이 실패하고 정합성은 unique가 지킨다. 실패의 HTTP 표현만 재시도할 수 있는 409가 된다.
@@ -99,13 +106,13 @@
 | 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
 |---|---|---|---|
 | 같은 키의 주문 저장은 경합 예외다 (인수 1) `OrderCommandFacadeIntegrationTest`의 `같은 terminal_id와 client_order_id의 다른 주문 저장은 경합으로 거절되고 행은 하나다`(기존 `같은 terminal_id와 client_order_id는 DB unique가 거절한다`의 기대를 바꿨다. 원인 사슬의 제약 이름과 행 수 단언을 더했다) | `./gradlew test --tests 'com.resilientpos.order.internal.application.OrderCommandFacadeIntegrationTest'` — 바꾼 1개가 assertion 실패. 기대한 `ConcurrencyFailureException` 대신 커밋에서 `DataIntegrityViolationException`(원인 `ConstraintViolationException`, `PSQLException`)이 나왔다 | `OrderPersistenceAdapter.save`가 새 주문일 때만 flush하고 그 제약의 unique 위반을 `ConcurrencyFailureException`으로 바꾼 뒤 같은 명령, 11개 통과 | 아래 판별 함수 이동 뒤 회귀에 포함 |
-| sync 생성이 커밋 전 같은 키 생성과 겹치면 배치가 경합 예외로 끝나고 재전송은 APPLIED다 (인수 2) `SyncCreateOrderRaceIntegrationTest`의 `커밋 전인 같은 키 생성과 겹친 sync 생성은 경합 예외로 끝나 기록을 남기지 않고 재전송하면 앞 주문으로 APPLIED다`(앞 생성을 커밋 전에 붙들고 sync INSERT의 잠금 대기를 `pg_stat_activity`로 확인한 뒤 커밋한다) | 해당 없음. 앞 동작의 구현 뒤에 쓴 characterization이라 처음부터 통과했다. 대신 동작을 지워 확인했다. 변환을 `DomainException(kind = CONFLICT)`으로 바꾸면 `./gradlew test --tests 'com.resilientpos.sync.internal.application.SyncCreateOrderRaceIntegrationTest'`이 실패한다. 배치가 예외 없이 끝나고 그 항목이 `REJECTED`, `lastAckedSequence=1`로 확정된다(합의한 결정의 근거). 새 주문의 flush를 지우면 sync가 잠금을 기다리지 않아 대기 단계에서 실패한다. 둘 다 원복했다 | 같은 명령, 1개 통과 | `./gradlew test --tests 'com.resilientpos.sync.*' --tests 'com.resilientpos.order.*'` 193개 통과 |
+| sync 생성이 커밋 전 같은 키 생성과 겹치면 배치가 경합 예외로 끝나고 재전송은 APPLIED다 (인수 2) `SyncCreateOrderRaceIntegrationTest`의 `커밋 전인 같은 키 생성과 겹친 sync 생성은 경합 예외로 끝나 기록을 남기지 않고 재전송하면 앞 주문으로 APPLIED다`(앞 생성을 커밋 전에 붙들고, sync INSERT가 그 트랜잭션에 막힌 것을 `pg_locks`와 `pg_blocking_pids`로 확인한 뒤 커밋한다) | 해당 없음. 앞 동작의 구현 뒤에 쓴 characterization이라 처음부터 통과했다. 대신 동작을 지워 확인했다. 변환을 `DomainException(kind = CONFLICT)`으로 바꾸면 `./gradlew test --tests 'com.resilientpos.sync.internal.application.SyncCreateOrderRaceIntegrationTest'`이 실패한다. 배치가 예외 없이 끝나고 그 항목이 `REJECTED`, `lastAckedSequence=1`로 확정된다(합의한 결정의 근거). 새 주문의 flush를 지우면 sync가 잠금을 기다리지 않아 대기 단계에서 실패한다. 둘 다 원복했다 | 같은 명령, 1개 통과 | `./gradlew test --tests 'com.resilientpos.sync.*' --tests 'com.resilientpos.order.*'` 193개 통과 |
 | 주문 생성의 경합 예외는 409 CONCURRENT_REQUEST다 (인수 3) `OrderControllerTest`의 `Facade가 경합 예외를 던지면 409 CONCURRENT_REQUEST이고 예외 메시지를 담지 않는다`와 REST Docs `orders-create-concurrent-request` | 해당 없음. `ConcurrencyFailureException` 계열의 409 매핑이 #33부터 있어서 처음부터 통과했다(characterization). 대신 `ApiControllerAdvice`의 그 `@ExceptionHandler`를 지우면 `./gradlew test --tests 'com.resilientpos.order.internal.adapter.web.OrderControllerTest'`에서 이 1개가 상태 코드 409 기대 불일치로 실패하는 것을 확인하고 원복했다 | 같은 명령, 18개 통과. 스니펫 디렉터리 생성 확인 | `./gradlew test --tests 'com.resilientpos.order.internal.adapter.web.*' --tests 'com.resilientpos.platform.ApiAdviceTest'` 통과 |
-| 판별 함수는 SQLState와 제약 이름이 모두 맞을 때만 참이다 (인수 4·5) `UniqueViolationTest` 5개(23505와 따옴표째 제약 이름이면 참 / 다른 제약 이름 거짓 / 다른 SQLState 거짓 / 원인 사슬에 SQLException 없으면 거짓 / 깊은 원인 사슬에서도 찾는다) | 해당 없음. owner·terminal adapter의 private 사본을 `platform`으로 옮긴 함수의 characterization이라 `./gradlew test --tests 'com.resilientpos.platform.UniqueViolationTest'`가 처음부터 5개 통과했다. 대신 제약 이름 비교 조건을 지우면 `다른 제약 이름이면 거짓이다` 1개가 실패하는 것을 확인하고 원복했다 | 같은 명령, 5개 통과 | `./gradlew test --tests 'com.resilientpos.order.*' --tests 'com.resilientpos.platform.*' --tests 'com.resilientpos.owner.*' --tests 'com.resilientpos.terminal.*' --tests 'com.resilientpos.sync.*'`와 구조 테스트 4종(ModuleStructure·EntityVisibility·TransactionDeclaration·DependencyDirection) 415개 통과. owner·terminal의 기존 중복 테스트 포함(인수 5) |
+| 판별 함수는 SQLState와 제약 이름이 모두 맞을 때만 참이다 (인수 4·5) `UniqueViolationTest` 5개(23505와 메시지의 제약 이름이면 참 / 다른 제약 이름 거짓 / 다른 SQLState 거짓 / 원인 사슬에 SQLException 없으면 거짓 / 깊은 원인 사슬에서도 찾는다) | 해당 없음. owner·terminal adapter의 private 사본을 `platform`으로 옮긴 함수의 characterization이라 `./gradlew test --tests 'com.resilientpos.platform.UniqueViolationTest'`가 처음부터 5개 통과했다. 대신 제약 이름 비교 조건을 지우면 `다른 제약 이름이면 거짓이다` 1개가 실패하는 것을 확인하고 원복했다 | 같은 명령, 5개 통과 | `./gradlew test --tests 'com.resilientpos.order.*' --tests 'com.resilientpos.platform.*' --tests 'com.resilientpos.owner.*' --tests 'com.resilientpos.terminal.*' --tests 'com.resilientpos.sync.*'`와 구조 테스트 4종(ModuleStructure·EntityVisibility·TransactionDeclaration·DependencyDirection) 415개 통과. owner·terminal의 기존 중복 테스트 포함(인수 5) |
 | 리뷰 반영, 판별 함수는 따옴표 형식과 관계없이 식별자 경계로 제약 이름을 찾는다 (인수 4) `UniqueViolationTest`의 `독일어 번역 메시지의 »« 따옴표 안 제약 이름도 찾는다`, `프랑스어 번역 메시지의 « » 따옴표 안 제약 이름도 찾는다`, `앞부분만 같은 다른 제약 이름이면 거짓이다` | `./gradlew test --tests 'com.resilientpos.platform.UniqueViolationTest'` — 8개 중 2개(독일어·프랑스어)가 assertion 실패. ASCII 큰따옴표로 감싼 이름만 찾았다. `ux_ab` 사례는 따옴표가 경계 역할을 해서 통과했다(characterization) | 식별자 경계 정규식으로 바꾼 뒤 같은 명령, 8개 통과 | `./gradlew test --tests 'com.resilientpos.platform.*' --tests 'com.resilientpos.owner.*' --tests 'com.resilientpos.terminal.*' --tests 'com.resilientpos.order.internal.application.OrderCommandFacadeIntegrationTest'` 통과 |
 | 리뷰 반영, sync 경합 테스트는 앞 트랜잭션에 막힌 세션만 기다리고, 원인이 그 제약의 unique 위반이며, 재전송 뒤 접수 기록 1행·watermark 1이다 (인수 2) | 해당 없음. 테스트를 좁힌 것이라 구현 변경이 없다 | `./gradlew test --tests 'com.resilientpos.sync.internal.application.SyncCreateOrderRaceIntegrationTest'` 1개 통과. 앞 트랜잭션의 `pg_backend_pid()`에 막힌 세션이 잡혀서, 테스트의 `JdbcTemplate`이 앞 트랜잭션과 같은 연결을 쓴다는 것도 확인됐다 | 아래 결과 절의 전체 실행에 포함 |
 | 리뷰 반영, sync 배치의 경합 예외는 409 CONCURRENT_REQUEST다 (인수 3) `SyncControllerTest`의 `Facade가 경합 예외를 던지면 409 CONCURRENT_REQUEST이고 예외 메시지를 담지 않는다`와 REST Docs `sync-receive-batch-concurrent-request` | 해당 없음. 주문 생성과 같은 `ApiControllerAdvice` handler라 처음부터 통과했다(characterization). handler를 지웠을 때의 실패는 주문 생성 쪽에서 확인했다 | `./gradlew test --tests 'com.resilientpos.sync.internal.adapter.web.SyncControllerTest'` 10개 통과, 스니펫 디렉터리 생성 확인 | 아래 결과 절의 전체 실행에 포함 |
-| 재리뷰 반영, 경계 문자는 PostgreSQL 식별자 문자 전체다 (인수 4) `UniqueViolationTest`의 `제약 이름 뒤에 식별자 문자 $가 이어지면 거짓이다`, `제약 이름 앞에 식별자 문자가 이어지면 거짓이다` | `./gradlew test --tests 'com.resilientpos.platform.UniqueViolationTest'` — 10개 중 1개(`$` 사례)가 assertion 실패. ASCII 경계는 `$`를 식별자 문자로 보지 않았다. 앞쪽 경계 사례는 characterization이라 통과했고, lookbehind를 지우면 그 사례와 `$` 사례가 함께 실패하는 것을 확인한 뒤 그 파일만 원복했다 | 경계 문자를 유니코드 글자·숫자·`_`·`$`로 넓힌 뒤 같은 명령, 10개 통과 | `./gradlew test --tests 'com.resilientpos.platform.*' --tests 'com.resilientpos.owner.*' --tests 'com.resilientpos.terminal.*' --tests 'com.resilientpos.order.internal.application.OrderCommandFacadeIntegrationTest'` 통과 |
+| 재리뷰 반영, 경계 문자는 따옴표 없는 PostgreSQL 식별자 문자다 (인수 4) `UniqueViolationTest`의 `제약 이름 뒤에 식별자 문자 $가 이어지면 거짓이다`, `제약 이름 앞에 식별자 문자가 이어지면 거짓이다` | `./gradlew test --tests 'com.resilientpos.platform.UniqueViolationTest'` — 10개 중 1개(`$` 사례)가 assertion 실패. ASCII 경계는 `$`를 식별자 문자로 보지 않았다. 앞쪽 경계 사례는 characterization이라 통과했고, lookbehind를 지우면 그 사례가 실패하는 것을 확인한 뒤 그 파일만 원복했다(`$` 사례는 RED라 이미 실패 중이었다) | 경계 문자를 유니코드 글자·숫자·`_`·`$`로 넓힌 뒤 같은 명령, 10개 통과 | `./gradlew test --tests 'com.resilientpos.platform.*' --tests 'com.resilientpos.owner.*' --tests 'com.resilientpos.terminal.*' --tests 'com.resilientpos.order.internal.application.OrderCommandFacadeIntegrationTest'` 통과 |
 | 재리뷰 반영, sync 경합 테스트는 `pg_locks`로 기다리고 원인을 SQLState와 메시지로 직접 본다 (인수 2). 경합 예외 메시지에 주문 키가 실린다 (인수 1). sync REST Docs의 재전송 설명 (인수 3) | 해당 없음. 테스트와 문서를 고친 것이라 구현 변경이 없다 | `./gradlew test` 603개 통과. `SyncCreateOrderRaceIntegrationTest` 1개, `OrderCommandFacadeIntegrationTest` 11개, `SyncControllerTest` 10개 포함 | 같은 실행 |
 
 ## 결과
