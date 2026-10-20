@@ -122,7 +122,7 @@
 
 ## 분할 계획
 개발 컨텍스트는 하나다. 같은 키 주문 생성 경합의 HTTP 표현과 unique 위반을 번역하는 자리다. 번역 자리 규칙을 이 PR에서 정하므로 같은 판별 함수를 쓰는 점주·단말을 함께 맞춘다. 버전 충돌은 #34로 끝났고 리스너 경로는 HTTP 500이 아니라서 뺐다.
-겹침 확인(2026-10-20, origin/main 9c34aaf): 열린 PR은 #94(`build.gradle.kts`·`EventPublicationResubmitter`·`docs/wiki/domain-model.md`), #98(이벤트 계약, `contract`·`payment`·`docs/wiki/domain-model.md` 등), #99(spec 문서만)이고 이 PR의 경로와 겹치지 않는다. 판별 방식을 고칠 때 `build.gradle.kts`를 바꾸는 안은 #94와 겹쳐서 버렸다(범위 조정). 이 PR은 `payment`·마이그레이션·이벤트 코드를 건드리지 않는다. 판별 함수는 main에 owner·terminal adapter의 private 사본 둘만 있고 열린 PR에는 없다.
+겹침 확인(2026-10-20, push 직전 origin/main b9449c4로 rebase): #98(이벤트 계약)과 #99(outbox 비교 spec)가 먼저 머지됐고 충돌 없이 rebase했다. 열린 PR은 #94(`build.gradle.kts`·`EventPublicationResubmitter`·`docs/wiki/domain-model.md` §4.3)와 #100(결제 대조)이다. `domain-model.md`는 이 PR이 §4.2만 고쳐서 #94·#100(§4.3 등)과 절이 겹치지 않는다. `entity-map.md`는 4.5 멱등 표에서 #100과 겹친다. 이 PR은 주문 생성 줄을 고치고 #100은 그 아래에 대조 case 줄을 더한다. 먼저 머지된 쪽에 맞춰 다른 쪽이 rebase한다. 판별 방식을 고칠 때 `build.gradle.kts`를 바꾸는 안은 #94와 겹쳐서 버렸다(범위 조정). 이 PR은 `payment`·마이그레이션·이벤트 코드를 건드리지 않는다. 판별 함수는 main에 owner·terminal adapter의 private 사본 둘만 있었고 열린 PR에는 없다.
 
 ## TDD 검증 기록
 | 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
