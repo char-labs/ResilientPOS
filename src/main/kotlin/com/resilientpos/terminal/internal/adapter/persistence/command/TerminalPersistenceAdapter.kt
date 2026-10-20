@@ -75,13 +75,12 @@ class TerminalPersistenceAdapter(
         return terminal
     }
 
-    /** Hibernate는 한 flush에서 UPDATE보다 INSERT를 먼저 보낸다. 새 유효 행의 INSERT가 옛 행의 폐기보다 앞서면 partial unique에 걸리므로 먼저 내보낸다. */
+    /** 폐기와 새 발급은 같은 커밋에 들어가고 `ux_terminal_credential_active`는 커밋 때 검사한다. */
     @Transactional
     override fun update(credential: TerminalCredential): TerminalCredential {
         val entity = entityManager.find(TerminalCredentialEntity::class.java, credential.id)
             ?: error("갱신하려는 credential이 없다: ${credential.id}")
         entity.applyRevokedAt(credential.revokedAt)
-        entityManager.flush()
         return credential
     }
 }
