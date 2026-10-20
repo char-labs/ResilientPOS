@@ -163,8 +163,9 @@
 | `쌓인 fixture를 두 경로가 같게 읽고 지금 버전 fixture의 값을 잃지 않는다` | fixture가 없을 때는 검사할 것이 없어 통과(위 강제 검사가 fixture를 요구한다). fixture를 더한 뒤 임시 사본으로 확인: 이름 변경(`providerReference`를 `providerRef`로) `payment.approved/1.json: providerRef 이 사라졌다`, 삭제(fixture에 `legacyField` 추가) `order.paid/1.json: legacyField 이 사라졌다` | fixture 원본으로 통과 | 같은 명령 6개 통과 |
 | `지금 직렬화가 두 경로 모두 마지막 fixture와 같다` | fixture 없이 `fixture가 없다`. fixture를 더한 뒤 임시로 `OrderPaid`에 `val note: String? = null`을 더해 확인: `order.paid/1.json와 형식이 다르다 … "note":null` | 필드를 되돌리고 통과 | 같은 명령 6개 통과 |
 | `모르는 필드가 더해진 메시지도 두 경로가 읽는다` | fixture 없이 `fixture가 없다` | fixture를 더하고 통과(Jackson 3 기본값이라 구현 변경 없음, characterization) | 같은 명령 6개 통과 |
-| `빠진 필드와 모르는 enum 값을 규칙 표대로 읽거나 거절한다` (multi-review 반영) | 미실행 | 미실행 | 미실행 |
-| `머지된 enum 이름과 null 값을 두 경로가 읽는다` (multi-review 반영) | 미실행 | 미실행 | 미실행 |
+| `빠진 필드와 모르는 enum 값을 규칙 표대로 읽거나 거절한다` (multi-review 반영) | characterization: Jackson 3 기본값이라 처음부터 통과했다. 임시로 `CANCELLATION`에 `@JsonProperty("REFUND")`를 달자 `REFUND`가 아는 값이 되어 `빠진 non-null과 모르는 enum 값은 실패한다`로 실패했다 | 되돌리고 통과 | `./gradlew test --tests 'com.resilientpos.contract.*'` 8개 통과 |
+| `머지된 enum 이름과 null 값을 두 경로가 읽는다` (multi-review 반영) | characterization: 처음부터 통과했다. 위와 같은 임시 변경(`CANCELLATION`의 JSON 이름을 `REFUND`로)에서 `ConversionException: Failed to convert from JSON`으로 실패했다 | 되돌리고 통과 | 같은 명령 8개 통과 |
+| fixture 번호 빈틈 검사 (multi-review 반영, 기존 테스트의 `fixtures`에 더함) | 임시로 `order.paid/3.json`을 두자 `order.paid: fixture 번호는 1부터 빈틈없이 잇는다 … expected [1, 2] but was [1, 3]` | 지우고 통과 | 같은 명령 8개 통과 |
 
 ## 결과
 - **구현**
@@ -181,9 +182,21 @@
 - **인수 조건 3의 "재시도 없이".** 테스트가 보는 것은 DLT 도착, reason counter, 뒤 메시지 처리다. 재시도하지 않는 것은 `KafkaConfiguration`의 허용 목록(`defaultFalse`)에 변환 실패와 `DomainException`이 없어서다. 같은 분류는 기존 `KafkaRetryIntegrationTest`의 `역직렬화할 수 없는 값은 consumer를 멈추지 않고 DLT로 간다`가 고정한다.
 - **구현 중 정한 것.** fixture는 `classpath*:` 패턴으로 찾는다. `classpath:`는 디렉터리가 없으면 `FileNotFoundException`으로 실패한다. 새 이벤트를 더하는 PR이 보는 메시지가 "fixture가 없다"가 되도록 바꿨다.
 - **검증**
-  - `./gradlew test --tests 'com.resilientpos.contract.*'`: 6개 통과.
-  - `./gradlew test` 전체: 97개 클래스 596개 테스트, 실패 0(2분 37초).
+  - `./gradlew test --tests 'com.resilientpos.contract.*'`: 6개 통과, multi-review 반영 뒤 8개 통과.
+  - `./gradlew test` 전체: 97개 클래스 596개 테스트, 실패 0(2분 37초). multi-review 반영 뒤 다시 실행해 598개, 실패 0(2분 20초).
+  - wiki 8절의 SQL(높은 버전의 미완료 발행 기록 찾기): 임시 테스트로 `schemaVersion` 2인 `FAILED` 행을 넣고 실행해 그 행만 나오는 것을 확인했다(커밋하지 않음).
   - `python3 scripts/check_pr.py --base origin/main --worktree`: PASS.
+- **multi-review**(Claude 실행 86/100, Codex 실행 FAIL, Gemini 미실행 CLI 없음)
+  - 2/2 합의(Codex 막는 결함, Claude I3): 버전을 올리지 않는 필드 추가는 가드가 걸리지 않아, 롤링 배포 중 옛 pod의 재전송이 새 필드를 버린다. 사용자와 정해 "빠진 필드는 모름" 규칙과 필드 추가 체크리스트로 다뤘다(범위 절). 가드가 막는다는 서술을 "버전을 올린 변경에서"로 좁혔다.
+  - 2/2: Jackson 동작이 커밋된 테스트로 고정되지 않았다(Codex 5, Claude I1). 고정 테스트를 더했다. 원시 `Int`가 빠진 경우도 실패함을 확인했다(Claude가 신뢰도 낮음으로 남긴 의문).
+  - Claude I2: fixture에 없는 enum 상수와 nullability 축소를 놓친다. 머지된 이름 목록과 null 값 테스트를 더하고 규칙 표에 행 둘을 더했다.
+  - Claude I4: 재전송·롤백의 대가가 덜 적혔다. `RESUBMITTED` 잔류와 5분 지연, 롤백 영향, 찾는 SQL, 두 단계 배포 대안을 wiki에 적었다.
+  - Codex 4: 삭제·이름 변경의 상위 호환 서술을 "non-null이면 실패, nullable·기본값이면 값 손실"로 고쳤다.
+  - Codex 6: fixture 번호 빈틈을 테스트로 검사한다. 수정 금지는 리뷰 명령으로 본다(`check_pr.py` 변경은 제외 절).
+  - Codex 2: DLT 테스트의 TDD 순서 예외를 TDD 기록에 사후 mutation 검증으로 적었다.
+  - Codex 7, Claude: `--worktree` 없는 검사 결과는 제출 직전에 아래에 덧붙인다.
+  - Claude 선택 항목 중 반영한 것: domain-model 요약을 정본 표로 연결, 빠진 `schemaVersion`은 1로 본다는 절차, 라이브러리 업그레이드 때의 탈출구, `__TypeId__` 헤더 고정, counter 첫 건 확인, enum 추가 DLT 가려내기, `EventContract` 파일 분리, 변경 경로 축소, 가드 호출의 이름 있는 인자와 오류 메시지 문구, 버린 대안 기록.
+  - 반영하지 않은 것과 이유는 제외 절에 있다(재전송 통합 테스트, 소수 통화 고정, counter 사전 등록, `@TestFactory`, 배열 비교, 스캔 범위). 스캔 범위(jMolecules `@Externalized`, 설정 빈 방식)는 지금 쓰지 않아 해당 없다.
 - **Wiki.** [이벤트 계약](../wiki/event-contract.md)을 새로 썼다. [도메인 모델](../wiki/domain-model.md) §4.3의 토픽 목록 문장과 저장 형식 문단, §4.7 질문 9, [wiki 인덱스](../wiki/README.md)를 고쳤다. Modulith·Kafka 키워드(볼트)에는 다음을 더했다.
   - 2절: `저장 형식` 항목의 날짜 기록, `Jackson 3의 역직렬화 기본값`, `schemaVersion과 버전 가드`, `golden fixture`.
   - 3절과 6절: 날짜 기록.
