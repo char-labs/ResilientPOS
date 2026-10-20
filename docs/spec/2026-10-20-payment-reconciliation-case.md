@@ -354,6 +354,7 @@ push·PR 생성·머지 직전에 다시 확인하고, 먼저 머지된 쪽에 �
 
 2026-10-20 구현 끝에 다시 확인했다. origin/main은 여전히 9c34aaf다.
 - #79는 PR #97로 열렸다. 겹치는 경로는 `docs/wiki/entity-map.md` 하나이고 고친 줄이 다르다(#97은 `OrderEntity`·4.1·4.2, 이 PR은 1·2절 표, `PaymentAttemptEntity`, 4.4, 4.6, 5절).
+- #99(`docs/outbox-mode-comparison`)는 자기 spec 하나만 바꿔 겹치지 않는다. 열린 PR 가운데 마이그레이션 번호(V016·V017)가 겹치는 것은 없다.
 - #78은 PR #98로 열렸다. 겹치는 경로는 `docs/wiki/domain-model.md`다. #98은 contract 이벤트에 `schemaVersion`과 생성자 가드(`contract.requireKnownSchemaVersion`)를 더하고 golden fixture(`src/test/resources/event-contract/토픽/버전.json`)를 둔다. 이 PR의 새 이벤트 `PaymentReconciliationRequested`도 그 규칙을 따라야 한다. #98이 먼저 머지되면 이 PR이 rebase하면서 `schemaVersion`·가드·fixture를 더한다. 이 PR이 먼저면 #98이 더한다(볼트 modulith-kafka-keywords 8.34).
 
 ## TDD 검증 기록
@@ -395,7 +396,8 @@ push·PR 생성·머지 직전에 다시 확인하고, 먼저 머지된 쪽에 �
 | multi-review 반영 회귀 | - | - | `./gradlew test` 전체 BUILD SUCCESSFUL, 684건 통과·실패 0·건너뜀 0(`build/test-results/test/*.xml` 집계) |
 
 ## 결과
-- 인수 조건 1~15를 위 TDD 기록의 테스트로 확인했다. 16의 최종 실행 결과는 아래 검증 줄에 남긴다.
+- 인수 조건 1~15를 위 TDD 기록의 테스트로 확인했다.
+- 최종 검증(인수 조건 16, 2026-10-20 HEAD 8d58e54 기준): `./gradlew cleanTest test` 684건 통과·실패 0, `python3 scripts/check_pr.py --base origin/main`(제출 전, `--worktree` 없이) PASS.
 - 범위 조정 셋을 구현 전에 spec에 먼저 적었다.
   - `PAYMENT_IN_RECONCILIATION`(409): 이미 넘긴 시도에 조회 확정·불명 기록·넘김이 다시 오면 aggregate가 거절한다.
   - `RECONCILIATION_PAYMENT_ALREADY_CONCLUDED`(409): 결제가 이미 해소 결론과 다른 결말이다. 처음에는 `RECONCILIATION_CASE_ALREADY_RESOLVED`를 빌려 썼다. 하지만 이 경우 case는 해소되지 않은 채라 점주가 "이미 해소됨"으로 오해한다. 그래서 나눴다.
