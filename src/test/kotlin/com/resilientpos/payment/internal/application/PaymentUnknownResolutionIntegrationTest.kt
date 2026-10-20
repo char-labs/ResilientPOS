@@ -14,6 +14,7 @@ import com.resilientpos.payment.internal.adapter.gateway.FakePaymentGateway
 import com.resilientpos.payment.internal.domain.AuthorizationOutcome
 import com.resilientpos.payment.internal.domain.AuthorizationRequest
 import com.resilientpos.payment.internal.domain.PaymentGateway
+import com.resilientpos.platform.Tx
 import jakarta.persistence.EntityManagerFactory
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -22,6 +23,7 @@ import java.util.concurrent.atomic.AtomicInteger
 import javax.sql.DataSource
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -257,5 +259,48 @@ class PaymentUnknownResolutionIntegrationTest(
 
         assertEquals(1, gateway.queryCallsFor(paymentId))
         assertEquals(false, gateway.resourceBoundDuringQuery(paymentId))
+    }
+
+    /** 금액 불일치로 reconciliation에 넘어간 시도를 만든다. */
+    private fun handedOverAttempt(unitPrice: String): PaymentId {
+        val paymentId = unknownAttempt(unitPrice)
+        paymentManagement.resolveUnknown(PaymentCommand.ResolveUnknown(paymentId))
+        assertNotNull(row(paymentId)["reconciliation_requested_at"])
+        return paymentId
+    }
+
+    private fun conclude(paymentId: PaymentId) = paymentManagement.resolveFromReconciliation(
+        PaymentCommand.ResolveFromReconciliation(paymentId, PaymentCommand.ResolveFromReconciliation.Conclusion.APPROVED, "RECON-REF"),
+    )
+
+    @Test
+    fun `호출자 트랜잭션 안에서 넘긴 시도에 승인 결론을 적용하면 APPROVED와 참조와 승인 발행 기록이 같은 커밋에 남는다`() {
+        val paymentId = handedOverAttempt("4535")
+        assertEquals(0, publications(paymentId, "PaymentApproved"))
+
+        val result = Tx.masterTx { conclude(paymentId) }
+
+        assertEquals(PaymentCommand.ResolveFromReconciliation.Result(paymentId, PaymentAttemptStatus.APPROVED), result)
+        val row = row(paymentId)
+        assertEquals(PaymentAttemptStatus.APPROVED.name, row["status"])
+        assertEquals("RECON-REF", row["provider_reference"])
+        assertEquals(1, publications(paymentId, "PaymentApproved"))
+    }
+
+    @Test
+    fun `호출자 트랜잭션이 롤백되면 결론도 발행 기록도 남지 않는다`() {
+        val paymentId = handedOverAttempt("4545")
+
+        assertFailsWith<IllegalStateException> {
+            Tx.masterTx {
+                conclude(paymentId)
+                throw IllegalStateException("호출자가 롤백한다")
+            }
+        }
+
+        val row = row(paymentId)
+        assertEquals(PaymentAttemptStatus.UNKNOWN.name, row["status"])
+        assertNull(row["provider_reference"])
+        assertEquals(0, publications(paymentId, "PaymentApproved"))
     }
 }

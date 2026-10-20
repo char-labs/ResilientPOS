@@ -159,6 +159,30 @@ class PaymentManagement(
         }
     }
 
+    /**
+     * reconciliation의 결론을 넘긴 시도에 적용한다. 호출자(`ReconciliationManagement.resolve`)의 트랜잭션 안에서만 부른다(도메인 모델 §4.6,
+     * `createInCallerTransaction`과 같은 KDoc 계약, 검사 코드 없음). 그 트랜잭션이 case 행을 먼저 잠그고 이 메서드가 시도 행을 잠근다.
+     * 결말이 이미 난 시도면 쓰지 않고 지금 상태를 돌려준다. provider를 부르지 않으므로 `NOT_SUPPORTED`가 아니다. 로그는 호출자가 커밋 뒤 남긴다.
+     */
+    fun resolveFromReconciliation(command: PaymentCommand.ResolveFromReconciliation): PaymentCommand.ResolveFromReconciliation.Result =
+        Tx.masterTx {
+            val current = repository.findByIdForUpdate(command.paymentId) ?: throw PaymentAttempt.notFound()
+            if (current.status != PaymentAttemptStatus.UNKNOWN) {
+                return@masterTx PaymentCommand.ResolveFromReconciliation.Result(current.id, current.status)
+            }
+            val now = clock.instant()
+            val concluded = when (command.conclusion) {
+                PaymentCommand.ResolveFromReconciliation.Conclusion.APPROVED ->
+                    updateAndPublish(
+                        current.concludeApproved(requireNotNull(command.providerReference), identifierGenerator, now),
+                        eventPublisher::publish,
+                    )
+                PaymentCommand.ResolveFromReconciliation.Conclusion.DECLINED ->
+                    updateAndPublish(current.concludeDeclined(command.providerReference, identifierGenerator, now), eventPublisher::publish)
+            }
+            PaymentCommand.ResolveFromReconciliation.Result(concluded.id, concluded.status)
+        }
+
     private fun confirmUnknown(paymentId: PaymentId, outcome: AuthorizationOutcome): PaymentCommand.ResolveUnknown.Result {
         val (result, confirmed) = Tx.masterTx { confirm(paymentId, outcome) }
         if (confirmed != null) {

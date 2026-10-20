@@ -95,6 +95,22 @@ class PaymentAttempt private constructor(
         return declined(providerReference, ids, now)
     }
 
+    /**
+     * 넘긴 `UNKNOWN` 시도에 reconciliation의 승인 결론을 적용한다. 결과 상태와 사실은 [approve]와 같다.
+     * 넘긴 시도는 reconciliation의 결론으로만 확정된다. provider 결과를 처음 적용하는 일이라 "한 번만 적용" 불변식을 깨지 않는다.
+     * `UNKNOWN`이 아니면 [PAYMENT_RESULT_ALREADY_APPLIED], 넘기지 않았으면 [PAYMENT_NOT_IN_RECONCILIATION]으로 거절한다.
+     */
+    fun concludeApproved(providerReference: String, ids: IdentifierGenerator, now: Instant): Transition<PaymentAttempt, PaymentApproved> {
+        requireHandedOver()
+        return approved(providerReference, ids, now)
+    }
+
+    /** 넘긴 `UNKNOWN` 시도에 reconciliation의 거절 결론을 적용한다. 결과 상태와 사실은 [decline]과, 가드는 [concludeApproved]와 같다. */
+    fun concludeDeclined(providerReference: String?, ids: IdentifierGenerator, now: Instant): Transition<PaymentAttempt, PaymentEvent.Declined> {
+        requireHandedOver()
+        return declined(providerReference, ids, now)
+    }
+
     /** 참조가 없는 승인은 [approveIfFree]만 만든다. provider가 승인했다면 참조가 늘 있다. */
     private fun approved(providerReference: String?, ids: IdentifierGenerator, now: Instant): Transition<PaymentAttempt, PaymentApproved> {
         val approved = PaymentApproved(
@@ -236,6 +252,18 @@ class PaymentAttempt private constructor(
         }
     }
 
+    /** reconciliation의 결론이 받는 조건. 넘기지 않은 `UNKNOWN`은 조회로 확정되는 대상이라 결론을 받지 않는다. */
+    private fun requireHandedOver() {
+        requireUnknown()
+        if (reconciliationRequestedAt == null) {
+            throw DomainException(
+                PAYMENT_NOT_IN_RECONCILIATION,
+                "reconciliation으로 넘기지 않은 결제 시도입니다 paymentId=${id.value}",
+                DomainErrorKind.CONFLICT,
+            )
+        }
+    }
+
     /**
      * 조회 확정과 조회 기록·넘김이 받는 조건. 넘긴 시도는 reconciliation의 결론으로만 확정되므로 조회로 확정하거나 다시 넘기지 않는다.
      */
@@ -332,6 +360,7 @@ class PaymentAttempt private constructor(
         const val PAYMENT_ATTEMPT_NOT_FOUND = "PAYMENT_ATTEMPT_NOT_FOUND"
         const val PAYMENT_NOT_RETRYABLE = "PAYMENT_NOT_RETRYABLE"
         const val PAYMENT_IN_RECONCILIATION = "PAYMENT_IN_RECONCILIATION"
+        const val PAYMENT_NOT_IN_RECONCILIATION = "PAYMENT_NOT_IN_RECONCILIATION"
 
         /** 찾는 시도가 없다. 응답은 404다. */
         fun notFound(): DomainException =

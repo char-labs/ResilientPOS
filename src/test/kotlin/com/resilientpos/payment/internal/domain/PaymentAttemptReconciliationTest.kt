@@ -1,5 +1,6 @@
 package com.resilientpos.payment.internal.domain
 
+import com.resilientpos.contract.PaymentApproved
 import com.resilientpos.contract.PaymentAttemptKind
 import com.resilientpos.contract.PaymentReconciliationReason
 import com.resilientpos.contract.PaymentReconciliationRequested
@@ -10,6 +11,7 @@ import com.resilientpos.foundation.IdentifierGenerator
 import com.resilientpos.foundation.Money
 import com.resilientpos.foundation.Transition
 import com.resilientpos.payment.PaymentAttemptStatus
+import com.resilientpos.payment.PaymentEvent
 import com.resilientpos.payment.PaymentId
 import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.TerminalId
@@ -197,5 +199,85 @@ class PaymentAttemptReconciliationTest {
 
         assertEquals(0, retried.queryCount)
         assertNull(retried.reconciliationRequestedAt)
+    }
+
+    @Test
+    fun `넘긴 시도에 승인 결론을 적용하면 APPROVED와 참조가 남고 승인 사실을 낸다`() {
+        val origin = attempt(queryCount = 3, reconciliationRequestedAt = handedAt)
+
+        val concluded = origin.concludeApproved("PROVIDER-REF-7", ids(), now)
+
+        val expectedFact = PaymentApproved(
+            eventId = eventId,
+            occurredAt = now,
+            paymentId = paymentId.value,
+            orderId = orderId,
+            storeId = storeId,
+            terminalId = terminalId,
+            checkoutNo = 2,
+            kind = PaymentAttemptKind.AUTHORIZATION,
+            amount = Money.of("4500", krw),
+            providerReference = "PROVIDER-REF-7",
+        )
+        val expected = attempt(status = PaymentAttemptStatus.APPROVED, queryCount = 3, reconciliationRequestedAt = handedAt)
+        assertEquals(PaymentAttemptStatus.APPROVED, concluded.aggregate.status)
+        assertEquals("PROVIDER-REF-7", concluded.aggregate.providerReference)
+        assertEquals(expected.queryCount, concluded.aggregate.queryCount)
+        assertEquals(expected.reconciliationRequestedAt, concluded.aggregate.reconciliationRequestedAt)
+        assertEquals(listOf(expectedFact), concluded.events)
+        assertEquals(PaymentAttemptStatus.UNKNOWN, origin.status)
+        assertNull(origin.providerReference)
+    }
+
+    @Test
+    fun `넘긴 시도에 거절 결론을 적용하면 DECLINED가 되고 참조는 있으면 남고 거절 사실을 낸다`() {
+        val origin = attempt(queryCount = 3, reconciliationRequestedAt = handedAt)
+
+        val withReference = origin.concludeDeclined("PROVIDER-REF-8", ids(), now)
+        val withoutReference = origin.concludeDeclined(null, ids(), now)
+
+        val expectedFact = PaymentEvent.Declined(
+            eventId = eventId,
+            occurredAt = now,
+            paymentId = paymentId,
+            orderId = orderId,
+            checkoutNo = 2,
+            kind = PaymentAttemptKind.AUTHORIZATION,
+            amount = Money.of("4500", krw),
+            providerReference = "PROVIDER-REF-8",
+        )
+        assertEquals(PaymentAttemptStatus.DECLINED, withReference.aggregate.status)
+        assertEquals("PROVIDER-REF-8", withReference.aggregate.providerReference)
+        assertEquals(listOf(expectedFact), withReference.events)
+        assertEquals(PaymentAttemptStatus.DECLINED, withoutReference.aggregate.status)
+        assertNull(withoutReference.aggregate.providerReference)
+        assertEquals(PaymentAttemptStatus.UNKNOWN, origin.status)
+    }
+
+    @Test
+    fun `UNKNOWN이 아닌 시도는 어느 결론도 받지 않고 원본이 바뀌지 않는다`() {
+        val origin = attempt(status = PaymentAttemptStatus.APPROVED, unknownReason = null, reconciliationRequestedAt = handedAt)
+
+        val approveFailure = assertFailsWith<DomainException> { origin.concludeApproved("REF", ids(), now) }
+        val declineFailure = assertFailsWith<DomainException> { origin.concludeDeclined("REF", ids(), now) }
+
+        assertEquals(PaymentAttempt.PAYMENT_RESULT_ALREADY_APPLIED, approveFailure.code)
+        assertEquals(PaymentAttempt.PAYMENT_RESULT_ALREADY_APPLIED, declineFailure.code)
+        assertEquals(PaymentAttemptStatus.APPROVED, origin.status)
+    }
+
+    @Test
+    fun `넘기지 않은 UNKNOWN 시도는 어느 결론도 받지 않고 원본이 바뀌지 않는다`() {
+        val origin = attempt(queryCount = 1)
+
+        val approveFailure = assertFailsWith<DomainException> { origin.concludeApproved("REF", ids(), now) }
+        val declineFailure = assertFailsWith<DomainException> { origin.concludeDeclined("REF", ids(), now) }
+
+        assertEquals(PaymentAttempt.PAYMENT_NOT_IN_RECONCILIATION, approveFailure.code)
+        assertEquals(DomainErrorKind.CONFLICT, approveFailure.kind)
+        assertEquals(PaymentAttempt.PAYMENT_NOT_IN_RECONCILIATION, declineFailure.code)
+        assertEquals(PaymentAttemptStatus.UNKNOWN, origin.status)
+        assertNull(origin.providerReference)
+        assertNull(origin.reconciliationRequestedAt)
     }
 }
