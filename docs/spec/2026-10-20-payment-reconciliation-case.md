@@ -114,6 +114,7 @@
 - **새 토픽**: `payment.reconciliation-requested`와 그 DLT
 - **새 오류 code**
   - `PAYMENT_NOT_IN_RECONCILIATION`(409)
+  - `PAYMENT_IN_RECONCILIATION`(409): 이미 넘긴 시도에 조회 확정·불명 기록·넘김이 다시 오면 aggregate가 거절한다. Facade가 잠근 뒤 넘김 여부를 다시 확인하므로 정상 경로에서는 오지 않는다(2026-10-20 범위 조정)
   - `RECONCILIATION_CASE_NOT_FOUND`(404)
   - `INVALID_RECONCILIATION_RESOLUTION`(400)
   - `RECONCILIATION_AMOUNT_MISMATCH`(422)
