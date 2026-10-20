@@ -4,12 +4,14 @@ import com.resilientpos.KafkaTestSupport
 import com.resilientpos.PostgresIntegrationTest
 import com.resilientpos.awaitUntil
 import com.resilientpos.foundation.DomainException
+import com.resilientpos.payment.PaymentEvent
 import io.micrometer.core.instrument.MeterRegistry
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFails
+import kotlin.test.assertNull
 import kotlin.test.fail
 import org.apache.kafka.clients.consumer.ConsumerRecord
 import org.springframework.beans.factory.annotation.Autowired
@@ -20,6 +22,7 @@ import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.jdbc.core.queryForObject
 import org.springframework.kafka.core.KafkaTemplate
 import org.springframework.kafka.support.converter.RecordMessageConverter
+import org.springframework.kafka.support.mapping.DefaultJacksonJavaTypeMapper
 import org.springframework.messaging.support.MessageBuilder
 import org.springframework.modulith.events.Externalized
 import org.springframework.modulith.events.core.EventSerializer
@@ -97,6 +100,39 @@ class EventContractCompatibilityTest(
     }
 
     @Test
+    fun `빠진 필드와 모르는 enum 값을 규칙 표대로 읽거나 거절한다`() {
+        val approved = contractOf(PaymentApproved::class.java)
+        val base = jsonMapper.readTree(latest(approved).json) as ObjectNode
+        fun without(vararg names: String) = base.deepCopy().apply { names.forEach { remove(it) } }.toString()
+
+        readBoth(approved, without("providerReference", "schemaVersion")).forEach { read ->
+            read as PaymentApproved
+            assertNull(read.providerReference, "빠진 nullable은 null이다")
+            assertEquals(1, read.schemaVersion, "빠진 schemaVersion은 1이다. 첫 변환 PR이 이 기대를 다시 정한다")
+        }
+        listOf(without("orderId"), without("checkoutNo"), base.deepCopy().put("kind", "REFUND").toString()).forEach { json ->
+            assertFails("빠진 non-null과 모르는 enum 값은 실패한다: $json") { readByKafka(approved, json) }
+            assertFails("빠진 non-null과 모르는 enum 값은 실패한다: $json") { readByRegistry(approved, json) }
+        }
+    }
+
+    @Test
+    fun `머지된 enum 이름과 null 값을 두 경로가 읽는다`() {
+        // 머지된 이름이다. DLT·발행 기록에 남아 있을 수 있어 지우거나 바꾸면 안 된다. 새 값은 여기에 더한다.
+        val mergedKinds = listOf("AUTHORIZATION", "CANCELLATION")
+        listOf(PaymentApproved::class.java, PaymentEvent.AttemptCreated::class.java).map(::contractOf).forEach { contract ->
+            mergedKinds.forEach { kind ->
+                val stored = (jsonMapper.readTree(latest(contract).json) as ObjectNode).put("kind", kind)
+                if (stored.has("providerReference")) stored.putNull("providerReference")
+
+                val (byKafka, byRegistry) = readBoth(contract, stored.toString())
+                assertEquals(byKafka, byRegistry, "${contract.topic} kind=$kind")
+                assertEquals(stored, jsonMapper.readTree(eventSerializer.serialize(byKafka).toString()), "${contract.topic} kind=$kind")
+            }
+        }
+    }
+
+    @Test
     fun `아는 버전보다 높은 schemaVersion은 Kafka 변환기와 발행 기록 복원 모두 도메인 코드로 거절한다`() {
         EventContracts.all.forEach { contract ->
             val newer = serializedWithVersion(contract.sample, contract.schemaVersion + 1)
@@ -123,7 +159,7 @@ class EventContractCompatibilityTest(
 
     /** 고정 인스턴스의 주문만 바꿔 보낸다. */
     private fun sendOrderPaid(orderId: UUID, schemaVersion: Int) {
-        val event = (EventContracts.all.single { it.type == OrderPaid::class.java }.sample as OrderPaid).copy(orderId = orderId)
+        val event = (contractOf(OrderPaid::class.java).sample as OrderPaid).copy(orderId = orderId)
         kafkaTemplate.send(OrderPaid.TOPIC, orderId.toString(), serializedWithVersion(event, schemaVersion).toByteArray())
             .get(5, TimeUnit.SECONDS)
     }
@@ -141,15 +177,20 @@ class EventContractCompatibilityTest(
 
     private data class Fixture(val name: String, val json: String)
 
-    /** `event-contract/토픽/번호.json`을 번호 순으로 읽는다. */
-    private fun fixtures(contract: EventContract): List<Fixture> =
-        PathMatchingResourcePatternResolver().getResources("classpath*:event-contract/${contract.topic}/*.json")
+    /** `event-contract/토픽/번호.json`을 번호 순으로 읽는다. 번호는 1부터 빈틈없이 이어져야 한다. */
+    private fun fixtures(contract: EventContract): List<Fixture> {
+        val numbered = PathMatchingResourcePatternResolver().getResources("classpath*:event-contract/${contract.topic}/*.json")
             .map { resource ->
                 val name = checkNotNull(resource.filename)
-                name.removeSuffix(".json").toInt() to Fixture("${contract.topic}/$name", resource.contentAsByteArray.decodeToString())
+                val number = name.removeSuffix(".json").toIntOrNull() ?: fail("${contract.topic}/$name: fixture 이름은 번호.json이다")
+                number to Fixture("${contract.topic}/$name", resource.contentAsByteArray.decodeToString())
             }
             .sortedBy { it.first }
-            .map { it.second }
+        assertEquals((1..numbered.size).toList(), numbered.map { it.first }, "${contract.topic}: fixture 번호는 1부터 빈틈없이 잇는다")
+        return numbered.map { it.second }
+    }
+
+    private fun contractOf(type: Class<*>) = EventContracts.all.single { it.type == type }
 
     private fun latest(contract: EventContract) = fixtures(contract).lastOrNull() ?: fail("${contract.topic}: fixture가 없다")
 
@@ -162,8 +203,15 @@ class EventContractCompatibilityTest(
         }
     }
 
-    private fun readByKafka(contract: EventContract, json: String): Any =
-        converter.toMessage(ConsumerRecord(contract.topic, 0, 0L, "key", json.toByteArray()), null, null, contract.type).payload
+    /** 다른 클래스 이름의 타입 헤더를 단다. 읽기가 헤더가 아니라 파라미터 타입을 쓰는지(`INFERRED`)도 함께 본다. */
+    private fun readByKafka(contract: EventContract, json: String): Any {
+        val record = ConsumerRecord(contract.topic, 0, 0L, "key", json.toByteArray()).apply {
+            headers().add(DefaultJacksonJavaTypeMapper.DEFAULT_CLASSID_FIELD_NAME, "com.resilientpos.moved.Event".toByteArray())
+        }
+        return converter.toMessage(record, null, null, contract.type).payload
+    }
+
+    private fun readBoth(contract: EventContract, json: String) = listOf(readByKafka(contract, json), readByRegistry(contract, json))
 
     private fun readByRegistry(contract: EventContract, json: String): Any = eventSerializer.deserialize(json, contract.type)
 
