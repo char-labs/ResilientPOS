@@ -58,7 +58,7 @@
 - Spring Kafka의 Serialization, Deserialization, and Message Conversion 문서를 확인했다. "When you use a `@KafkaListener`, the parameter type is provided to the message converter to assist with the conversion"이고, 기본 `TypePrecedence`는 `INFERRED`(헤더가 아니라 파라미터 타입)다.
 - spring-kafka 4.1.1 `JacksonJsonMessageConverter` 소스도 확인했다. 보낼 때 `typeMapper.fromClass`가 클래스 이름 타입 헤더를 붙이지만, 읽을 때는 `INFERRED`라 파라미터 타입을 쓴다. 그래서 헤더가 빠지는 console producer 재투입도 같은 타입으로 읽힌다(domain-model §4.3, 2026-09-26 확인).
 - Spring Modulith 이벤트 문서는 발행 기록이 Boot의 매퍼로 Jackson 직렬화를 한다는 것까지만 말하고, Kafka 직렬화와 스키마 진화는 다루지 않는다. 그 부분은 위 소스 확인이 근거다.
-- 기동 로그의 `ProducerConfig values`·`ConsumerConfig values`에서 `value.serializer`·`value.deserializer`가 바이트 배열 직렬화기인지 구현 중에 확인해 결과 절에 남긴다.
+- 기동 로그(`./gradlew test -i`, kafka-clients 4.2.2)의 `ProducerConfig values`는 `value.serializer = class org.apache.kafka.common.serialization.ByteArraySerializer`였다. 앱 consumer의 `ConsumerConfig values`는 `value.deserializer = class org.apache.kafka.common.serialization.ByteArrayDeserializer`였다. 같은 로그의 `StringDeserializer`는 테스트 도구 `KafkaTestSupport`의 읽기용 consumer다.
 
 ## 제외
 - 변환(upcast) 코드와 그 구조. 버전 2가 생기는 PR이 만든다.
@@ -128,12 +128,34 @@
 
 | 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
 |---|---|---|---|
-| 높은 `schemaVersion`을 두 경로가 code로 거절한다 | 미실행 | 미실행 | 미실행 |
-| 높은 `schemaVersion` 메시지는 재시도 없이 DLT로 가고 reason으로 센다 | 미실행 | 미실행 | 미실행 |
-| `@Externalized` 타입마다 계약과 fixture가 있다 | 미실행 | 미실행 | 미실행 |
-| 쌓인 fixture를 두 경로가 읽고 값을 잃지 않는다 | 미실행 | 미실행 | 미실행 |
-| 지금 직렬화가 마지막 fixture와 같다 | 미실행 | 미실행 | 미실행 |
-| 모르는 필드가 더해진 메시지도 읽는다 | 미실행 | 미실행 | 미실행 |
+| `아는 버전보다 높은 schemaVersion은 Kafka 변환기와 발행 기록 복원 모두 도메인 코드로 거절한다` | `./gradlew test --tests 'com.resilientpos.contract.*'`: 필드와 상수만 선언하고 가드가 없어 `OrderPaymentRequested: 높은 버전을 읽었다. Expected an exception to be thrown, but was completed successfully`(`schemaVersion=2`로 읽힘) | 같은 명령, 가드(`requireKnownSchemaVersion`)를 넣고 통과 | 헬퍼 추출 뒤 같은 명령 6개 통과 |
+| `아는 버전보다 높은 메시지는 DLT로 가고 도메인 코드로 세며 뒤 메시지는 처리된다` | 가드 뒤에 쓴 테스트라 가드 조건을 임시로 끄고 실행: `20초 안에 충족되지 않았다: DLT에 들어간다`(높은 버전이 그대로 처리됨) | 가드를 되돌리고 통과 | 같은 명령 6개 통과 |
+| `Externalized 이벤트마다 계약과 fixture가 있고 마지막 fixture가 지금 버전이다` | fixture 없이 실행: `order.payment-requested: fixture가 없다`. 클래스패스 스캔 집합은 목록 넷과 같아 그 단언은 통과 | fixture 1 넷을 더하고 통과 | 같은 명령 6개 통과 |
+| `쌓인 fixture를 두 경로가 같게 읽고 지금 버전 fixture의 값을 잃지 않는다` | fixture가 없을 때는 검사할 것이 없어 통과(위 강제 검사가 fixture를 요구한다). fixture를 더한 뒤 임시 사본으로 확인: 이름 변경(`providerReference`를 `providerRef`로) `payment.approved/1.json: providerRef 이 사라졌다`, 삭제(fixture에 `legacyField` 추가) `order.paid/1.json: legacyField 이 사라졌다` | fixture 원본으로 통과 | 같은 명령 6개 통과 |
+| `지금 직렬화가 두 경로 모두 마지막 fixture와 같다` | fixture 없이 `fixture가 없다`. fixture를 더한 뒤 임시로 `OrderPaid`에 `val note: String? = null`을 더해 확인: `order.paid/1.json와 형식이 다르다 … "note":null` | 필드를 되돌리고 통과 | 같은 명령 6개 통과 |
+| `모르는 필드가 더해진 메시지도 두 경로가 읽는다` | fixture 없이 `fixture가 없다` | fixture를 더하고 통과(Jackson 3 기본값이라 구현 변경 없음, characterization) | 같은 명령 6개 통과 |
 
 ## 결과
-개발 전 작성. 개발 후 실행 결과와 변경 이유를 추가한다.
+- **구현**
+  - `contract.requireKnownSchemaVersion`과 `UNSUPPORTED_EVENT_SCHEMA_VERSION`을 더했다(`EventSchemaVersion.kt`).
+  - 이벤트 넷에 `schemaVersion`, `SCHEMA_VERSION = 1`, `init` 가드를 더했다.
+  - 계약 테스트 `EventContractCompatibilityTest`와 고정 인스턴스 목록 `EventContracts`를 만들고, fixture 1 넷을 지금 `EventSerializer` 출력으로 만들었다. 손으로 쓰지 않으려고 커밋하지 않는 임시 테스트로 파일을 썼다.
+- **Kotlin 모듈 동작 실측**(앱 `JsonMapper`, 커밋하지 않은 임시 테스트, 2026-10-20)
+  - 빠진 nullable 인자는 `null`, 빠진 기본값 인자는 기본값으로 채워졌다.
+  - 빠진 non-null 인자는 `MismatchedInputException: Missing required creator property`로 실패했다.
+  - 모르는 enum 값 `REFUND`는 `InvalidFormatException`으로 실패했다.
+  - 모르는 필드는 무시됐다.
+  - 범위 절의 서술과 같다.
+- **가드의 원인 체인.** Kafka 변환기와 `EventSerializer` 모두에서 던진 예외의 원인 체인에 `DomainException`이 있었다. `KafkaConfiguration`이 그 code를 DLT reason으로 셌다(인수 조건 3 테스트).
+- **인수 조건 3의 "재시도 없이".** 테스트가 보는 것은 DLT 도착, reason counter, 뒤 메시지 처리다. 재시도하지 않는 것은 `KafkaConfiguration`의 허용 목록(`defaultFalse`)에 변환 실패와 `DomainException`이 없어서다. 같은 분류는 기존 `KafkaRetryIntegrationTest`의 `역직렬화할 수 없는 값은 consumer를 멈추지 않고 DLT로 간다`가 고정한다.
+- **구현 중 정한 것.** fixture는 `classpath*:` 패턴으로 찾는다. `classpath:`는 디렉터리가 없으면 `FileNotFoundException`으로 실패한다. 새 이벤트를 더하는 PR이 보는 메시지가 "fixture가 없다"가 되도록 바꿨다.
+- **검증**
+  - `./gradlew test --tests 'com.resilientpos.contract.*'`: 6개 통과.
+  - `./gradlew test` 전체: 97개 클래스 596개 테스트, 실패 0(2분 37초).
+  - `python3 scripts/check_pr.py --base origin/main --worktree`: PASS.
+- **Wiki.** [이벤트 계약](../wiki/event-contract.md)을 새로 썼다. [도메인 모델](../wiki/domain-model.md) §4.3의 토픽 목록 문장과 저장 형식 문단, §4.7 질문 9, [wiki 인덱스](../wiki/README.md)를 고쳤다. Modulith·Kafka 키워드(볼트)에는 다음을 더했다.
+  - 2절: `저장 형식` 항목의 날짜 기록, `Jackson 3의 역직렬화 기본값`, `schemaVersion과 버전 가드`, `golden fixture`.
+  - 3절과 6절: 날짜 기록.
+  - 7절: 쌍 둘.
+  - 8절: 8.20 날짜 기록, 8.29~8.32.
+  - 출처.
