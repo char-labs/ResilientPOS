@@ -16,7 +16,7 @@ Kotlin으로 엔티티를 어떤 형태로 쓰는지(생성자 `private`, `var �
 | `OrderEntity` | `t_order` | order | 루트 `Order` | — | 상태·line 변경 시 `apply`. 루트만 `@Version` |
 | `OrderLineEntity` | `t_order_line` | order | `Order`의 자식(판매 시점 품목) | `order_id` | 루트를 통해 `apply`(line을 바꾸는 명령은 아직 없다) |
 | `OrderCheckoutEntity` | `t_order_checkout` | order | `Order`의 자식(회차별 확정 금액) | `order_id` | 넣기만 한다 |
-| `PaymentAttemptEntity` | `t_payment_attempt` | payment | 루트 `PaymentAttempt` | `order_id`, `checkout_no`(회차 번호), `retried_from`(같은 표의 `id`) | 결말(`status`·`provider_reference`)만 `applyResult` |
+| `PaymentAttemptEntity` | `t_payment_attempt` | payment | 루트 `PaymentAttempt` | `order_id`, `checkout_no`(회차 번호), `retried_from`(같은 표의 `id`) | 결말(`status`·`provider_reference`)과 결과 불명의 기록(`unknown_reason`·`query_count`·`reconciliation_requested_at`)만 바뀐다. 행을 잠그고 바꾼다 |
 | `FulfillmentEntity` | `t_fulfillment` | fulfillment | 루트 `Fulfillment` | `order_id` | 넣기만 한다 |
 | `WatermarkEntity` | `t_sync_watermark` | sync | 루트 `Watermark`(단말당 하나) | `terminal_id`가 PK | `last_acked_sequence`만 `apply`. 행을 잠그고 바꾼다 |
 | `SyncOperationEntity` | `t_sync_operation` | sync | `Watermark`와 같은 트랜잭션의 접수 기록 | `terminal_id`, `operation_id`(단말이 만든 값), `order_id` | 넣기만 한다 |
@@ -24,6 +24,8 @@ Kotlin으로 엔티티를 어떤 형태로 쓰는지(생성자 `private`, `var �
 | `TerminalCredentialEntity` | `t_terminal_credential` | terminal | `Terminal`과 같은 트랜잭션의 credential 이력 | `terminal_id` | `revoked_at`만 `applyRevokedAt`(회전 때 한 번) |
 | `OwnerEntity` | `t_owner` | owner | 루트 `Owner`(점주 계정) | — | 넣기만 한다 |
 | `StoreEntity` | `t_store` | store | 루트 `Store` | `owner_id` | 넣기만 한다 |
+| `ReconciliationCaseEntity` | `t_reconciliation_case` | reconciliation | 루트 `ReconciliationCase` | `payment_id`(unique), `order_id`, `store_id`, `terminal_id` | `status`만 바뀐다(`MANUAL_REVIEW`→`RESOLVED`). 행을 잠그고 바꾼다 |
+| `ReconciliationCaseActionEntity` | `t_reconciliation_case_action` | reconciliation | `ReconciliationCase`의 자식(감사 기록) | `case_id`, `owner_id` | 넣기만 한다 |
 
 `event_publication`(Spring Modulith 발행 기록)은 우리 엔티티가 아니다. Modulith의 JPA 엔티티가 스키마를 정하고 `t_` 접두어 규칙의 예외다([도메인 모델 §4.3](domain-model.md)).
 
@@ -42,6 +44,9 @@ t_fulfillment.order_id ───────────────────
 t_terminal_credential.terminal_id ─────────────────────────────────────────────────────────► t_terminal.id
 t_terminal.store_id ───────────────────────────────────────────────────────────────────────► t_store.id
 t_store.owner_id ──────────────────────────────────────────────────────────────────────────► t_owner.id
+t_reconciliation_case.payment_id ──────────────────────────────────────────────────────────► t_payment_attempt.id
+t_reconciliation_case_action.case_id ──────────────────────────────────────────────────────► t_reconciliation_case.id
+t_reconciliation_case_action.owner_id ─────────────────────────────────────────────────────► t_owner.id
 ```
 
 - 화살표는 "값이 저 행의 ID다"라는 뜻이고 DB가 검사하지 않는다. `t_order.id`를 가리키는 표가 다섯(line·checkout·payment·fulfillment·sync)이지만 서로 조인하는 코드는 없다. 모듈 경계 밖의 값은 이벤트로 건너간다(`OrderPaymentRequested`·`PaymentApproved`·`OrderPaid`).
@@ -69,10 +74,22 @@ t_store.owner_id ─────────────────────
 - 만드는 곳: `OrderCommandFacade.requestCheckout`(HTTP와 sync의 `REQUEST_CHECKOUT` 항목). 바꾸지도 지우지도 않는다.
 
 ### `PaymentAttemptEntity` — provider에게 보낸 요청 1회
-- 역할: 결제 승인(`AUTHORIZATION`)이나 취소·환불(`CANCELLATION`) 요청 한 번과 그 결말(`REQUESTED`→`APPROVED`/`DECLINED`/`UNKNOWN`, `UNKNOWN`→`APPROVED`/`DECLINED`는 provider 조회 확정)을 든다. 금액·통화를 직접 가진다. 결제 정본은 이 표이고 Redis·Kafka는 정본이 아니다.
+- 역할: 결제 승인(`AUTHORIZATION`)이나 취소·환불(`CANCELLATION`) 요청 한 번과 그 결말(`REQUESTED`→`APPROVED`/`DECLINED`/`UNKNOWN`, `UNKNOWN`→`APPROVED`/`DECLINED`는 provider 조회 확정 또는 넘긴 뒤 reconciliation의 결론)을 든다. 금액·통화를 직접 가진다. 결제 정본은 이 표이고 Redis·Kafka는 정본이 아니다.
 - 관계: `order_id`·`checkout_no`로 어느 주문의 몇 회차인지, `retried_from`으로 재결제의 원래 시도를 가리킨다. `store_id`·`terminal_id`는 이벤트에서 받아 복사한다.
 - 방어선: partial unique `ux_payment_attempt_inflight_authorization`(진행 중인 승인은 회차당 하나), `ux_payment_attempt_first_authorization`(사실로 만든 첫 승인 시도는 회차당 하나, 재결제는 `retried_from`이 있어 술어 밖). 행 잠금 아래에서 결말을 적용한다. `PaymentId`(이 행의 `id`)가 provider 멱등 키다.
-- 만드는 곳: `PaymentManagement.createAttempt`(`OrderPaymentRequested` consumer, `Lock` 블록)·`retryAuthorization`. 바꾸는 곳: `authorize`의 결말 적용, `resolveUnknown`의 `UNKNOWN` 확정(주기 작업이 provider 조회로 `APPROVED`·`DECLINED`로 바꾼다. 대상은 partial index `ix_payment_attempt_unknown_authorization`로 고른다). 지우지 않는다(감사·reconciliation 근거).
+- 만드는 곳: `PaymentManagement.createAttempt`(`OrderPaymentRequested` consumer, `Lock` 블록)·`retryAuthorization`. 바꾸는 곳: `authorize`의 결말 적용, `resolveUnknown`의 `UNKNOWN` 확정(주기 작업이 provider 조회로 `APPROVED`·`DECLINED`로 바꾼다. 대상은 partial index `ix_payment_attempt_unknown_authorization`로 고른다), 같은 작업의 조회 횟수 기록과 case 넘김, `resolveFromReconciliation`의 결론 적용(점주 해소 트랜잭션에 합류). 지우지 않는다(감사·reconciliation 근거).
+- 결과 불명의 기록: `unknown_reason`은 `UNKNOWN`이 된 까닭(`RESULT_UNCONFIRMED`·`AMOUNT_MISMATCH`)이고 그때 정한 뒤 바꾸지 않는다. `query_count`는 조회로도 불명이었던 횟수, `reconciliation_requested_at`은 case로 넘긴 시각이다. 넘긴 시도는 조회 대상이 아니고 reconciliation의 결론으로만 확정된다.
+
+### `ReconciliationCaseEntity` — 결제 시도 하나의 대조 case
+- 역할: `payment`가 스스로 확정하지 못하고 넘긴 시도 하나의 사유(`QUERY_LIMIT_EXCEEDED`·`AMOUNT_MISMATCH`), 상태, 분류 규칙 버전, 넘겨받은 근거(시도 금액, 불명 사유, 조회 횟수, 조회가 알려 준 금액·참조)를 든다. 근거는 넘긴 시점의 사본이고, 시도 금액은 바뀌지 않는 값이라 정본과 어긋나지 않는다.
+- 관계: `payment_id`로 시도를, `order_id`·`store_id`·`terminal_id`로 주문·매장·단말을 가리키지만 그 표들을 읽지 않는다.
+- 방어선: unique `ux_reconciliation_case_payment`가 "시도 하나에 case 하나"의 마지막 방어선이다(재전달 멱등, 삭제 행에도 걸린다). 해소는 행 잠금(대기 3초) 아래에서 한다. `@Version`은 없다.
+- 만드는 곳: `ReconciliationManagement.open`(`PaymentReconciliationRequested` consumer). 바꾸는 곳: `resolve`(점주 API).
+
+### `ReconciliationCaseActionEntity` — case의 감사 기록 한 줄
+- 역할: case 상태 전이 하나를 남긴다. 전이한 뒤 상태, 행위자 종류(`SYSTEM`·`OWNER`), 점주 ID, 시각(`occurred_at`, 여는 줄은 넘긴 시각)이다. 해소 줄에는 결론·PG 참조·승인 금액·사유가 더 들어간다.
+- 관계: `case_id`로 case를 가리킨다. 루트와 같은 트랜잭션에서 넣는다.
+- 바꾸지 않고 지우지 않는다. DB가 감사의 정본이다.
 
 ### `FulfillmentEntity` — 결제된 주문 하나를 이행하는 단위
 - 역할: "이 주문은 이행 대상이다"라는 사실 한 줄. 상태·품목·매장은 아직 없다(읽는 화면이 없다). 업종(주방·바·픽업)을 가리지 않는다.
@@ -168,7 +185,12 @@ provider 응답이 끊기면 `t_payment_attempt.status`가 `UNKNOWN`으로 남�
 | 1. 주기 작업(1분)이 `UNKNOWN` 승인 시도를 지난 주기의 마지막 `id` 다음부터 최대 100건 고른다(끝에 닿으면 처음부터) | gauge `payment_attempt_unknown` | partial index `ix_payment_attempt_unknown_authorization`(V013) |
 | 2. provider 조회가 승인 | INFO `결과 불명 결제를 확정했다` | 행을 잠그고 `UNKNOWN`을 다시 확인한 뒤 `APPROVED`. 4.1의 6단계(주문 `PAID`)로 이어진다 |
 | 2'. provider 조회가 거절 | INFO 같은 줄 | `DECLINED`. 주문은 `CHECKOUT_REQUESTED`에 머물고 4.3의 재결제 대상이 된다 |
-| 2''. 조회로도 불명 | WARN `조회로도 결과를 확인하지 못했다` | 아무것도 바뀌지 않고 다음 주기에 다시 묻는다. 넘겨받을 `ReconciliationCase`는 아직 없다 |
+| 2''. 조회로도 불명 | WARN `조회로도 결과를 확인하지 못했다` | 행을 잠그고 `query_count`만 올린다. 다음 주기에 다시 묻는다 |
+| 3. `query_count`가 상한(60)에 닿거나 조회가 다른 금액의 승인을 알려 줌 | WARN(넘김), gauge `payment_attempt_reconciliation_pending` | 같은 커밋에 `reconciliation_requested_at` + `event_publication`(`PaymentReconciliationRequested`). 이 시도는 더 조회하지 않는다 |
+| 4. Kafka `payment.reconciliation-requested` → `reconciliation` | 점주 목록에 case(`MANUAL_REVIEW`) | `t_reconciliation_case` 1행 + `t_reconciliation_case_action` 3행(`OPEN`·`INVESTIGATING`·`MANUAL_REVIEW`). **한 커밋**. 같은 사실이 다시 와도 기존 case를 돌려준다 |
+| 5. 점주가 `POST /owner/v1/stores/{storeId}/reconciliation-cases/{caseId}/resolve` | 200, `RESOLVED`와 결제 상태 | case 행 잠금 → 시도 행 잠금 → 시도 `APPROVED`/`DECLINED` + `event_publication`(승인이면 `PaymentApproved`) + case `RESOLVED` + 감사 1행. **한 커밋**. 승인이면 4.1의 6단계(주문 `PAID`), 거절이면 4.3의 재결제로 이어진다 |
+
+승인 요청 응답의 금액이 시도와 다르면 그 승인을 믿지 않고 `UNKNOWN`(`unknown_reason`=`AMOUNT_MISMATCH`)으로 둔다. 다음 조회도 다른 금액이면 3단계로 넘어간다.
 
 ### 4.5 같은 요청이 다시 올 때(멱등)
 
@@ -186,7 +208,7 @@ provider 응답이 끊기면 `t_payment_attempt.status`가 `UNKNOWN`으로 남�
 |---|---|---|
 | 결제는 승인됐는데 주문이 `CHECKOUT_REQUESTED`다 | `t_payment_attempt`(`APPROVED`)와 `t_order.status` | Kafka `payment.approved.DLT`와 `DLT로 보냄` 로그(회차·금액 불일치는 `PAYMENT_APPROVAL_MISMATCH`) |
 | 주문은 `PAID`인데 fulfillment가 없다 | `t_fulfillment`에 `order_id`가 없는지 | `order.paid.DLT` |
-| 시도가 `REQUESTED`·`UNKNOWN`에 오래 머문다 | `t_payment_attempt.updated_at` | `UNKNOWN`이면 그 `paymentId`의 WARN `조회로도 결과를 확인하지 못했다`가 매분 반복되는지 본다. 그다음 provider 원장. 재호출은 `PaymentId` 멱등성에 기댄다 |
+| 시도가 `REQUESTED`·`UNKNOWN`에 오래 머문다 | `t_payment_attempt.updated_at` | `UNKNOWN`이면 `query_count`와 `reconciliation_requested_at`을 본다. 넘겼으면 `t_reconciliation_case`(`payment_id`)가 있는지, 없으면 `payment.reconciliation-requested.DLT`를 본다. 점주가 해소하지 않은 case는 점주에게 연락한다. 그다음 provider 원장. 재호출은 `PaymentId` 멱등성에 기댄다 |
 | 단말이 같은 배치를 계속 보낸다 | `t_sync_watermark.last_acked_sequence`와 `t_sync_operation`의 마지막 `sequence` | `sync 충돌` WARN 로그(`terminalId`·`operationId`·`sequence`). `CONFLICT`는 단말 상태가 서버와 갈라진 것이라 사람이 본다 |
 | 이벤트가 나가지 않았다 | `event_publication`에서 `completion_date`가 빈 행 | 매분 도는 재전송과 `event.publication.incomplete` gauge |
 
@@ -204,7 +226,7 @@ provider 응답이 끊기면 `t_payment_attempt.status`가 `UNKNOWN`으로 남�
 
 ## 5. 아직 엔티티가 없는 것
 
-`Store`의 판매 정책·통화, `ReconciliationCase`(불일치 근거·조치), `ReceiptDelivery`(영수증 전달)는 [도메인 모델 §2](domain-model.md)에 자리만 있고 표와 엔티티는 없다. 주문의 `store_id`는 인증된 단말의 매장과 대조할 뿐 매장 표로 검증하지 않는다(볼트의 현재 상태 `docs/wiki/current-state.md`).
+`Store`의 판매 정책·통화, `ReceiptDelivery`(영수증 전달)는 [도메인 모델 §2](domain-model.md)에 자리만 있고 표와 엔티티는 없다. 주문의 `store_id`는 인증된 단말의 매장과 대조할 뿐 매장 표로 검증하지 않는다(볼트의 현재 상태 `docs/wiki/current-state.md`).
 
 ## 관련 문서
 - [도메인 모델](domain-model.md) — aggregate 경계(§2), 용어집(§3), 스키마 변경 검토(§4.7)
