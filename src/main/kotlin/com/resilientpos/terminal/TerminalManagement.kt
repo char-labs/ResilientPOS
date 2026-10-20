@@ -2,10 +2,12 @@ package com.resilientpos.terminal
 
 import com.resilientpos.foundation.IdentifierGenerator
 import com.resilientpos.platform.Tx
+import com.resilientpos.platform.isUniqueViolationOf
 import com.resilientpos.terminal.internal.domain.Terminal
 import com.resilientpos.terminal.internal.domain.TerminalCredential
 import com.resilientpos.terminal.internal.domain.TerminalRepository
 import java.time.Clock
+import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.stereotype.Service
 
 /**
@@ -22,13 +24,22 @@ class TerminalManagement(
     private val clock: Clock,
 ) {
 
-    /** 단말과 첫 credential을 한 트랜잭션에 넣고 평문 토큰을 돌려준다. 매장 존재는 확인하지 않는다. */
-    fun register(command: TerminalCommand.Register): TerminalCommand.Register.Result = Tx.masterTx {
-        val terminal = repository.save(Terminal.register(command.storeId, command.terminalCode, identifierGenerator))
-        val issued = TerminalCredential.issue(terminal.id, identifierGenerator)
-        repository.save(issued.credential)
-        TerminalCommand.Register.Result(terminal.id, command.terminalCode, issued.token)
-    }
+    /**
+     * 단말과 첫 credential을 한 트랜잭션에 넣고 평문 토큰을 돌려준다. 매장 존재는 확인하지 않는다.
+     * 같은 매장·코드면 커밋에서 드러난 unique 위반을 여기서 `TERMINAL_CODE_DUPLICATED`로 번역한다. 커밋이 이 블록에서 일어나야 하므로 바깥 트랜잭션 안에서 부르지 않는다.
+     */
+    fun register(command: TerminalCommand.Register): TerminalCommand.Register.Result =
+        try {
+            Tx.masterTx {
+                val terminal = repository.save(Terminal.register(command.storeId, command.terminalCode, identifierGenerator))
+                val issued = TerminalCredential.issue(terminal.id, identifierGenerator)
+                repository.save(issued.credential)
+                TerminalCommand.Register.Result(terminal.id, command.terminalCode, issued.token)
+            }
+        } catch (e: DataIntegrityViolationException) {
+            if (e.isUniqueViolationOf(TERMINAL_CODE_CONSTRAINT)) throw Terminal.codeDuplicated()
+            throw e
+        }
 
     /** 유효한 토큰이면 단말과 매장을, 모르는 토큰·회전된 토큰·비활성 단말이면 null을 돌려준다. */
     fun authenticate(token: String): AuthenticatedTerminal? = Tx.readOnlyTx {
@@ -52,5 +63,9 @@ class TerminalManagement(
         terminal.requireStore(command.storeId)
         val after = repository.update(terminal.deactivate())
         TerminalCommand.Deactivate.Result(terminal.id, terminal.status, after.status)
+    }
+
+    private companion object {
+        const val TERMINAL_CODE_CONSTRAINT = "ux_terminal_store_code"
     }
 }

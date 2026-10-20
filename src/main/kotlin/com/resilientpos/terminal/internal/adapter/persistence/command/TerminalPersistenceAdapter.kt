@@ -1,7 +1,6 @@
 package com.resilientpos.terminal.internal.adapter.persistence.command
 
 import com.resilientpos.platform.JdslQueryExecutor
-import com.resilientpos.platform.isUniqueViolationOf
 import com.resilientpos.platform.selectFrom
 import com.resilientpos.terminal.TerminalId
 import com.resilientpos.terminal.TerminalStatus
@@ -9,7 +8,6 @@ import com.resilientpos.terminal.internal.domain.Terminal
 import com.resilientpos.terminal.internal.domain.TerminalCredential
 import com.resilientpos.terminal.internal.domain.TerminalRepository
 import jakarta.persistence.EntityManager
-import jakarta.persistence.PersistenceException
 import org.springframework.stereotype.Component
 import org.springframework.transaction.annotation.Transactional
 
@@ -57,14 +55,8 @@ class TerminalPersistenceAdapter(
 
     @Transactional
     override fun save(terminal: Terminal): Terminal {
+        // 같은 매장·코드는 unique가 막고 위반은 커밋에서 드러나 `TerminalManagement.register`가 번역한다.
         entityManager.persist(TerminalEntity.from(terminal))
-        try {
-            entityManager.flush()
-        } catch (e: PersistenceException) {
-            // 사전 조회 없이 unique가 막는다. 다른 제약 위반은 그대로 던진다. 예외 뒤 영속성 컨텍스트는 쓰지 않고 트랜잭션은 롤백된다.
-            if (e.isUniqueViolationOf(TERMINAL_CODE_CONSTRAINT)) throw Terminal.codeDuplicated()
-            throw e
-        }
         return terminal
     }
 
@@ -91,9 +83,5 @@ class TerminalPersistenceAdapter(
         entity.applyRevokedAt(credential.revokedAt)
         entityManager.flush()
         return credential
-    }
-
-    private companion object {
-        const val TERMINAL_CODE_CONSTRAINT = "ux_terminal_store_code"
     }
 }

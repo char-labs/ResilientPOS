@@ -13,6 +13,7 @@ import com.resilientpos.platform.SessionStoreUnavailableException
 import com.resilientpos.platform.Tx
 import com.resilientpos.platform.TxRunner
 import com.resilientpos.platform.UnauthenticatedException
+import java.sql.SQLException
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -21,6 +22,7 @@ import kotlin.test.assertNotEquals
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import org.mockito.Mockito.mock
+import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.data.redis.RedisConnectionFailureException
 import org.springframework.data.redis.core.StringRedisTemplate
 
@@ -174,11 +176,17 @@ class OwnerManagementTest {
         var lookups = 0
 
         override fun save(owner: Owner): Owner {
-            if (byEmail.putIfAbsent(owner.email.value, owner) != null) throw Owner.emailDuplicated()
+            if (byEmail.putIfAbsent(owner.email.value, owner) != null) throw uniqueViolation()
             return owner
         }
 
         override fun findByEmail(email: OwnerEmail): Owner? = byEmail[email.value].also { lookups++ }
+
+        /** DB처럼 커밋에서 unique 위반을 던진다. 도메인 예외로의 번역은 Facade가 한다. */
+        private fun uniqueViolation() = DataIntegrityViolationException(
+            "could not execute statement",
+            SQLException("ERROR: duplicate key value violates unique constraint \"ux_owner_email\"", "23505"),
+        )
     }
 
     private class InMemoryCounter : LoginFailureCounter {

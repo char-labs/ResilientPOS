@@ -9,6 +9,8 @@ import com.resilientpos.owner.internal.domain.OwnerPassword
 import com.resilientpos.owner.internal.domain.OwnerRepository
 import com.resilientpos.platform.Tx
 import com.resilientpos.platform.UnauthenticatedException
+import com.resilientpos.platform.isUniqueViolationOf
+import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.security.crypto.factory.PasswordEncoderFactories
 import org.springframework.stereotype.Service
 
@@ -29,12 +31,20 @@ class OwnerManagement(
     /** 없는 계정도 이 해시와 비교해 응답 시간을 맞춘다. */
     private val dummyHash: String = checkNotNull(passwordEncoder.encode(DUMMY_PASSWORD))
 
-    /** 이메일·비밀번호를 검증하고 계정을 만든다. 사전 조회 없이 넣고, 같은 이메일이면 `OWNER_EMAIL_DUPLICATED`다. */
+    /**
+     * 이메일·비밀번호를 검증하고 계정을 만든다. 사전 조회 없이 넣고, 같은 이메일이면 커밋에서 드러난 unique 위반을 여기서 `OWNER_EMAIL_DUPLICATED`로 번역한다.
+     * 커밋이 이 블록에서 일어나야 번역할 수 있으므로 바깥 트랜잭션 안에서 부르지 않는다.
+     */
     fun signUp(command: OwnerCommand.SignUp): OwnerCommand.SignUp.Result {
         val email = OwnerEmail.of(command.email)
         OwnerPassword.requireValid(command.password)
         val owner = Owner.register(email, checkNotNull(passwordEncoder.encode(command.password)), identifierGenerator)
-        Tx.masterTx { repository.save(owner) }
+        try {
+            Tx.masterTx { repository.save(owner) }
+        } catch (e: DataIntegrityViolationException) {
+            if (e.isUniqueViolationOf(OWNER_EMAIL_CONSTRAINT)) throw Owner.emailDuplicated()
+            throw e
+        }
         return OwnerCommand.SignUp.Result(owner.id, email.value)
     }
 
@@ -61,6 +71,7 @@ class OwnerManagement(
     }
 
     private companion object {
+        const val OWNER_EMAIL_CONSTRAINT = "ux_owner_email"
         const val MAX_FAILURES = 5
         const val DUMMY_PASSWORD = "dummy-password-for-timing-only"
     }
