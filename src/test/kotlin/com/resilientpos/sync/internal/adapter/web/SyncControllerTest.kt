@@ -19,6 +19,8 @@ import com.resilientpos.terminal.TerminalManagement
 import java.math.BigDecimal
 import java.util.UUID
 import kotlin.test.Test
+import org.hamcrest.Matchers.containsString
+import org.hamcrest.Matchers.not
 import org.junit.jupiter.api.BeforeEach
 import org.mockito.BDDMockito.given
 import org.mockito.Mockito.verify
@@ -26,6 +28,7 @@ import org.mockito.Mockito.verifyNoInteractions
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.restdocs.test.autoconfigure.AutoConfigureRestDocs
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest
+import org.springframework.dao.ConcurrencyFailureException
 import org.springframework.http.MediaType
 import org.springframework.restdocs.mockmvc.MockMvcRestDocumentation.document
 import org.springframework.restdocs.mockmvc.RestDocumentationRequestBuilders.post
@@ -40,6 +43,7 @@ import org.springframework.restdocs.request.RequestDocumentation.pathParameters
 import org.springframework.test.context.bean.override.mockito.MockitoBean
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.ResultActions
+import org.springframework.test.web.servlet.result.MockMvcResultMatchers.content
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers.header
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
@@ -245,6 +249,37 @@ class SyncControllerTest(
                         fieldWithPath("data").type(JsonFieldType.NULL).description("실패 응답에서는 null"),
                         fieldWithPath("error.errorCode").type(JsonFieldType.STRING).description("도메인 오류 코드"),
                         fieldWithPath("error.message").type(JsonFieldType.STRING).description("오류 메시지"),
+                    ),
+                ),
+            )
+    }
+
+    @Test
+    fun `Facade가 경합 예외를 던지면 409 CONCURRENT_REQUEST이고 예외 메시지를 담지 않는다`() {
+        given(facade.receiveBatch(command(operation(1, ORDER_COMMAND))))
+            .willThrow(ConcurrencyFailureException("같은 키의 주문이 동시에 저장됐다 terminalId=$TERMINAL_ID clientOrderId=$CLIENT_ORDER_ID"))
+
+        postBatch(requestJson(operationJson(OPERATION_ID_1, 1)))
+            .andExpect(status().isConflict)
+            .andExpect(jsonPath("$.result").value("FAIL"))
+            .andExpect(jsonPath("$.data").value(null))
+            .andExpect(jsonPath("$.error.errorCode").value("CONCURRENT_REQUEST"))
+            .andExpect(jsonPath("$.error.message").value("동시 처리 충돌로 요청을 완료하지 못했습니다."))
+            .andExpect(content().string(not(containsString(CLIENT_ORDER_ID))))
+            .andDo(
+                document(
+                    "sync-receive-batch-concurrent-request",
+                    AUTHORIZATION_HEADER, PATH_PARAMETERS,
+                    requestFields(subsectionWithPath("operations").description("operation 배열. 항목 필드는 sync-receive-batch를 본다")),
+                    responseFields(
+                        fieldWithPath("result").type(JsonFieldType.STRING).description("SUCCESS 또는 FAIL"),
+                        fieldWithPath("data").type(JsonFieldType.NULL).description("실패 응답에서는 null"),
+                        fieldWithPath("error.errorCode").type(JsonFieldType.STRING).description(
+                            "CONCURRENT_REQUEST 고정 코드. 같은 clientOrderId의 주문 생성이 POST /v1/orders와 겹쳤거나 잠금 대기가 한도를 넘었다. " +
+                                "이 배치에서 앞서 적용된 항목은 남고 실패한 항목은 기록되지 않으므로, 같은 배치를 다시 보내면 앞 항목은 DUPLICATE이고 " +
+                                "실패한 항목부터 이어서 적용된다(주문 생성이 겹쳤으면 앞 주문으로 APPLIED)",
+                        ),
+                        fieldWithPath("error.message").type(JsonFieldType.STRING).description("고정 문구. 예외 메시지는 담지 않는다"),
                     ),
                 ),
             )
