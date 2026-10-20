@@ -1,6 +1,6 @@
 # 엔티티 지도
 
-JPA 엔티티 11개가 각각 무엇을 맡고, 서로를 어떻게 가리키며, 단말·점주·운영자가 쓰는 흐름에서 어느 순서로 생기고 바뀌는지를 한곳에 모은 문서다.
+JPA 엔티티 12개가 각각 무엇을 맡고, 서로를 어떻게 가리키며, 단말·점주·운영자가 쓰는 흐름에서 어느 순서로 생기고 바뀌는지를 한곳에 모은 문서다.
 엔티티 클래스의 KDoc 첫 문단이 같은 내용을 짧게 갖고, 여기가 전체 그림이다. 용어·aggregate 경계는 [도메인 모델](domain-model.md)이 정본이고,
 Kotlin으로 엔티티를 어떤 형태로 쓰는지(생성자 `private`, `var … protected set`, `from`/`apply`/`toDomain`)는 볼트 규칙 `domain-modeling-kotlin.md` §5가 정본이다.
 
@@ -24,8 +24,7 @@ Kotlin으로 엔티티를 어떤 형태로 쓰는지(생성자 `private`, `var �
 | `TerminalCredentialEntity` | `t_terminal_credential` | terminal | `Terminal`과 같은 트랜잭션의 credential 이력 | `terminal_id` | `revoked_at`만 `applyRevokedAt`(회전 때 한 번) |
 | `OwnerEntity` | `t_owner` | owner | 루트 `Owner`(점주 계정) | — | 넣기만 한다 |
 | `StoreEntity` | `t_store` | store | 루트 `Store` | `owner_id` | 넣기만 한다 |
-| `ReconciliationCaseEntity` | `t_reconciliation_case` | reconciliation | 루트 `ReconciliationCase` | `payment_id`(unique), `order_id`, `store_id`, `terminal_id` | `status`만 바뀐다(`MANUAL_REVIEW`→`RESOLVED`). 행을 잠그고 바꾼다 |
-| `ReconciliationCaseActionEntity` | `t_reconciliation_case_action` | reconciliation | `ReconciliationCase`의 자식(감사 기록) | `case_id`, `owner_id` | 넣기만 한다 |
+| `ReconciliationCaseEntity` | `t_reconciliation_case` | reconciliation | 루트 `ReconciliationCase`(자식 없음) | `payment_id`(unique), `order_id`, `store_id`, `terminal_id`, `resolved_by_owner_id` | `status`(`MANUAL_REVIEW`→`RESOLVED`)와 해소 컬럼만 한 번 바뀐다. 행을 잠그고 바꾼다 |
 
 `event_publication`(Spring Modulith 발행 기록)은 우리 엔티티가 아니다. Modulith의 JPA 엔티티가 스키마를 정하고 `t_` 접두어 규칙의 예외다([도메인 모델 §4.3](domain-model.md)).
 
@@ -45,11 +44,10 @@ t_terminal_credential.terminal_id ───────────────�
 t_terminal.store_id ───────────────────────────────────────────────────────────────────────► t_store.id
 t_store.owner_id ──────────────────────────────────────────────────────────────────────────► t_owner.id
 t_reconciliation_case.payment_id ──────────────────────────────────────────────────────────► t_payment_attempt.id
-t_reconciliation_case_action.case_id ──────────────────────────────────────────────────────► t_reconciliation_case.id
-t_reconciliation_case_action.owner_id ─────────────────────────────────────────────────────► t_owner.id
+t_reconciliation_case.resolved_by_owner_id ────────────────────────────────────────────────► t_owner.id
 ```
 
-- 화살표는 "값이 저 행의 ID다"라는 뜻이고 DB가 검사하지 않는다. `t_order.id`를 가리키는 표가 다섯(line·checkout·payment·fulfillment·sync)이지만 서로 조인하는 코드는 없다. 모듈 경계 밖의 값은 이벤트로 건너간다(`OrderPaymentRequested`·`PaymentApproved`·`OrderPaid`).
+- 화살표는 "값이 저 행의 ID다"라는 뜻이고 DB가 검사하지 않는다. `t_order.id`를 가리키는 표가 여섯(line·checkout·payment·fulfillment·sync·reconciliation case)이지만 서로 조인하는 코드는 없다. 모듈 경계 밖의 값은 이벤트로 건너간다(`OrderPaymentRequested`·`PaymentApproved`·`PaymentReconciliationRequested`·`OrderPaid`). case의 `order_id`·`store_id`·`terminal_id`는 넘겨받은 근거의 사본이다.
 - `t_payment_attempt`는 checkout 회차를 `checkout_no`(1, 2, …)로 가리킨다. `t_order_checkout.id`가 아니다. 결제 승인을 주문에 대조할 때 `order.markPaid`가 최신 회차 번호·금액과 비교한다.
 - `t_terminal`이 생겼지만 `t_order`·`t_sync_*`·`t_payment_attempt`의 `terminal_id`는 그 표와 FK·조인이 없다. 대신 요청을 받을 때 인증된 단말과 대조한다. 주문 생성은 본문의 `terminalId`·`storeId`를, sync는 경로의 `terminalId`와 `CREATE_ORDER` 항목의 `storeId`를 본다. `t_store`는 점주가 만든 매장의 표다. 단말 관리 API만 `t_terminal.store_id`를 `t_store`의 소유와 대조한다. 주문·결제의 `store_id`와 V015 전에 등록된 단말의 `store_id`는 매장 행과 대조하지 않는다.
 
@@ -81,15 +79,10 @@ t_reconciliation_case_action.owner_id ──────────────
 - 결과 불명의 기록: `unknown_reason`은 `UNKNOWN`이 된 까닭(`RESULT_UNCONFIRMED`·`AMOUNT_MISMATCH`)이고 그때 정한 뒤 바꾸지 않는다. `query_count`는 조회로도 불명이었던 횟수, `reconciliation_requested_at`은 case로 넘긴 시각이다. 넘긴 시도는 조회 대상이 아니고 reconciliation의 결론으로만 확정된다.
 
 ### `ReconciliationCaseEntity` — 결제 시도 하나의 대조 case
-- 역할: `payment`가 스스로 확정하지 못하고 넘긴 시도 하나의 사유(`QUERY_LIMIT_EXCEEDED`·`AMOUNT_MISMATCH`), 상태, 분류 규칙 버전, 넘겨받은 근거(시도 금액, 불명 사유, 조회 횟수, 조회가 알려 준 금액·참조)를 든다. 근거는 넘긴 시점의 사본이고, 시도 금액은 바뀌지 않는 값이라 정본과 어긋나지 않는다.
+- 역할: `payment`가 스스로 확정하지 못하고 넘긴 시도 하나의 사유(`QUERY_LIMIT_EXCEEDED`·`AMOUNT_MISMATCH`), 상태, 분류 규칙 버전, 연 시각(`opened_at`, 넘긴 시각), 넘겨받은 근거(시도 금액, 불명 사유, 조회 횟수, 조회가 알려 준 금액·참조), 해소 기록(`resolved_at`·`resolved_by_owner_id`·`decision`·`provider_reference`·`approved_amount`·`approved_currency`·`note`)을 든다. 해소 기록이 감사의 정본이다. 근거는 넘긴 시점의 사본이고, 시도 금액은 바뀌지 않는 값이라 정본과 어긋나지 않는다.
 - 관계: `payment_id`로 시도를, `order_id`·`store_id`·`terminal_id`로 주문·매장·단말을 가리키지만 그 표들을 읽지 않는다.
 - 방어선: unique `ux_reconciliation_case_payment`가 "시도 하나에 case 하나"의 마지막 방어선이다(재전달 멱등, 삭제 행에도 걸린다). 해소는 행 잠금(대기 3초) 아래에서 한다. `@Version`은 없다.
-- 만드는 곳: `ReconciliationManagement.open`(`PaymentReconciliationRequested` consumer). 바꾸는 곳: `resolve`(점주 API).
-
-### `ReconciliationCaseActionEntity` — case의 감사 기록 한 줄
-- 역할: case 상태 전이 하나를 남긴다. 전이한 뒤 상태, 행위자 종류(`SYSTEM`·`OWNER`), 점주 ID, 시각(`occurred_at`, 여는 줄은 넘긴 시각)이다. 해소 줄에는 결론·PG 참조·승인 금액·사유가 더 들어간다.
-- 관계: `case_id`로 case를 가리킨다. 루트와 같은 트랜잭션에서 넣는다.
-- 바꾸지 않고 지우지 않는다. DB가 감사의 정본이다.
+- 만드는 곳: `ReconciliationManagement.open`(`PaymentReconciliationRequested` consumer). 바꾸는 곳: `resolve`(점주 API). 지우지 않는다.
 
 ### `FulfillmentEntity` — 결제된 주문 하나를 이행하는 단위
 - 역할: "이 주문은 이행 대상이다"라는 사실 한 줄. 상태·품목·매장은 아직 없다(읽는 화면이 없다). 업종(주방·바·픽업)을 가리지 않는다.
@@ -187,7 +180,7 @@ provider 응답이 끊기면 `t_payment_attempt.status`가 `UNKNOWN`으로 남�
 | 2'. provider 조회가 거절 | INFO 같은 줄 | `DECLINED`. 주문은 `CHECKOUT_REQUESTED`에 머물고 4.3의 재결제 대상이 된다 |
 | 2''. 조회로도 불명 | WARN `조회로도 결과를 확인하지 못했다` | 행을 잠그고 `query_count`만 올린다. 다음 주기에 다시 묻는다 |
 | 3. `query_count`가 상한(60)에 닿거나 조회가 다른 금액의 승인을 알려 줌 | WARN(넘김), gauge `payment_attempt_reconciliation_pending` | 같은 커밋에 `reconciliation_requested_at` + `event_publication`(`PaymentReconciliationRequested`). 이 시도는 더 조회하지 않는다 |
-| 4. Kafka `payment.reconciliation-requested` → `reconciliation` | 점주 목록에 case(`MANUAL_REVIEW`) | `t_reconciliation_case` 1행 + `t_reconciliation_case_action` 3행(`OPEN`·`INVESTIGATING`·`MANUAL_REVIEW`). **한 커밋**. 같은 사실이 다시 와도 기존 case를 돌려준다 |
+| 4. Kafka `payment.reconciliation-requested` → `reconciliation` | 점주 목록에 case(`MANUAL_REVIEW`) | `t_reconciliation_case` 1행(`MANUAL_REVIEW`, `opened_at`=넘긴 시각). **한 커밋**. 같은 사실이 다시 와도 기존 case를 돌려준다 |
 | 5. 점주가 `POST /owner/v1/stores/{storeId}/reconciliation-cases/{caseId}/resolve` | 200, `RESOLVED`와 결제 상태 | case 행 잠금 → 시도 행 잠금 → 시도 `APPROVED`/`DECLINED` + `event_publication`(승인이면 `PaymentApproved`) + case `RESOLVED` + 감사 1행. **한 커밋**. 승인이면 4.1의 6단계(주문 `PAID`), 거절이면 4.3의 재결제로 이어진다 |
 
 승인 요청 응답의 금액이 시도와 다르면 그 승인을 믿지 않고 `UNKNOWN`(`unknown_reason`=`AMOUNT_MISMATCH`)으로 둔다. 다음 조회도 다른 금액이면 3단계로 넘어간다.
@@ -200,6 +193,8 @@ provider 응답이 끊기면 `t_payment_attempt.status`가 `UNKNOWN`으로 남�
 | 같은 주문의 checkout | `t_order` 행 잠금 + 상태 | 200, 같은 회차·금액 |
 | 같은 `OrderPaymentRequested` 재배달 | `t_payment_attempt` 조회 + partial unique | 기존 시도를 돌려주고 이벤트를 다시 내지 않는다 |
 | 같은 `PaymentApproved`·`OrderPaid` 재배달 | 주문 상태 / `t_fulfillment` unique | 아무것도 하지 않는다 |
+| 같은 `PaymentReconciliationRequested` 재배달 | `t_reconciliation_case` unique `payment_id` | 기존 case를 돌려준다. 겹친 처리는 unique 위반이 Kafka 재시도로 다시 처리되어 기존 case를 찾는다 |
+| 같은 결론의 해소 재요청 | case 행 잠금 + 상태 | 200, 같은 결과. 해소 기록·감사 로그·counter는 그대로. 다른 결론이면 `409 RECONCILIATION_CASE_ALREADY_RESOLVED` |
 | 같은 sync operation | `t_sync_operation` unique + `payload_hash` | `DUPLICATE`(같은 결과) 또는 `CONFLICT` |
 
 ### 4.6 운영자가 무엇을 볼 것인가
@@ -232,4 +227,4 @@ provider 응답이 끊기면 `t_payment_attempt.status`가 `UNKNOWN`으로 남�
 - [도메인 모델](domain-model.md) — aggregate 경계(§2), 용어집(§3), 스키마 변경 검토(§4.7)
 - 현재 상태(`docs/wiki/current-state.md`, 볼트) — 모듈별 구현 상태와 알려진 빈틈
 - 볼트 규칙 `domain-modeling-kotlin.md` §5 — 엔티티 작성 규칙(`.claude/rules`로 복사된다)
-- 마이그레이션 `src/main/resources/db/migration/V002`·`V003`·`V005`~`V008`·`V010`~`V015` — 각 표의 DDL과 주석
+- 마이그레이션 `src/main/resources/db/migration/V002`·`V003`·`V005`~`V008`·`V010`~`V017` — 각 표의 DDL과 주석
