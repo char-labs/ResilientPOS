@@ -178,6 +178,7 @@ class OrderCommandFacadeIntegrationTest(
         val e = assertFailsWith<ConcurrencyFailureException> { repository.save(duplicate) }
 
         assertTrue(e.mostSpecificCause.message.orEmpty().contains("t_order_terminal_id_client_order_id_key"))
+        assertTrue(e.message.orEmpty().contains(clientOrderId.value.toString()), "WARN 로그로 대상을 찾을 수 있게 주문 키를 남긴다")
         assertEquals(1L, orderRowCount(terminalId, clientOrderId))
     }
 
