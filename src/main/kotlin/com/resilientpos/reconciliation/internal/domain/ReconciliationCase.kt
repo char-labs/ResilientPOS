@@ -86,6 +86,9 @@ class ReconciliationCase private constructor(
         if (command.note.isBlank() || command.note.length > MAX_NOTE_LENGTH) {
             throw invalidResolution("사유는 비어 있지 않고 ${MAX_NOTE_LENGTH}자 이하여야 합니다")
         }
+        if ((command.providerReference?.length ?: 0) > MAX_PROVIDER_REFERENCE_LENGTH) {
+            throw invalidResolution("PG 승인 참조는 ${MAX_PROVIDER_REFERENCE_LENGTH}자 이하여야 합니다")
+        }
         when (command.decision) {
             ReconciliationDecision.APPROVED -> {
                 if (command.providerReference.isNullOrBlank() || command.approvedAmount == null) {
@@ -128,6 +131,9 @@ class ReconciliationCase private constructor(
 
         /** 컬럼 `t_reconciliation_case_action.note varchar(500)`을 따라간다. 컬럼을 바꾸면 함께 바꾼다. */
         const val MAX_NOTE_LENGTH = 500
+
+        /** 컬럼 `provider_reference varchar(255)`(`t_reconciliation_case_action`, `t_payment_attempt`)를 따라간다. 넘으면 커밋에서 실패해 500이 된다. */
+        const val MAX_PROVIDER_REFERENCE_LENGTH = 255
 
         fun notFound(): DomainException =
             DomainException(RECONCILIATION_CASE_NOT_FOUND, "대조 case를 찾을 수 없습니다", DomainErrorKind.NOT_FOUND)

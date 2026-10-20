@@ -137,6 +137,16 @@ class ReconciliationCaseResolveTest {
     }
 
     @Test
+    fun `PG 승인 참조 255자는 통과하고 256자는 거절한다`() {
+        assertEquals(ReconciliationCaseStatus.RESOLVED, resolve(manualReview(), providerReference = "R".repeat(255)).aggregate.status)
+        listOf(ReconciliationDecision.APPROVED, ReconciliationDecision.DECLINED).forEach { decision ->
+            assertRejected(ReconciliationCase.INVALID_RECONCILIATION_RESOLUTION, DomainErrorKind.INVALID) {
+                resolve(it, decision = decision, providerReference = "R".repeat(256), approvedAmount = if (decision == ReconciliationDecision.APPROVED) it.amount else null)
+            }
+        }
+    }
+
+    @Test
     fun `거절에 승인 금액을 실으면 거절한다`() {
         assertRejected(ReconciliationCase.INVALID_RECONCILIATION_RESOLUTION, DomainErrorKind.INVALID) {
             resolve(it, ReconciliationDecision.DECLINED, providerReference = null, approvedAmount = ReconciliationFixtures.amount)
