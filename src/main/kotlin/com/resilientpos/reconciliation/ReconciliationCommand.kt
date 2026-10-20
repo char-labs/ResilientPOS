@@ -16,7 +16,7 @@ object ReconciliationCommand {
 
     /**
      * 넘겨받은 시도로 case를 연다. 필드는 contract `PaymentReconciliationRequested`와 같고 `eventId`만 없다.
-     * [occurredAt]은 넘긴 시각이며 case를 여는 감사 줄의 시각이 된다. `orderId`가 raw `UUID`인 이유는 그 이벤트와 같다.
+     * [occurredAt]은 넘긴 시각이며 case의 연 시각(`openedAt`)이 된다. `orderId`가 raw `UUID`인 이유는 그 이벤트와 같다.
      */
     data class Open(
         val occurredAt: Instant,

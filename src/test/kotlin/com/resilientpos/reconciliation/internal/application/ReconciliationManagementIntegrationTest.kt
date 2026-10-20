@@ -13,13 +13,14 @@ import com.resilientpos.reconciliation.ReconciliationCommand
 import com.resilientpos.reconciliation.ReconciliationDecision
 import com.resilientpos.reconciliation.ReconciliationFixtures
 import com.resilientpos.reconciliation.ReconciliationManagement
-import com.resilientpos.reconciliation.actionRows
 import com.resilientpos.reconciliation.attemptRow
 import com.resilientpos.reconciliation.caseCountFor
+import com.resilientpos.reconciliation.caseRow
 import com.resilientpos.reconciliation.caseStatus
 import com.resilientpos.reconciliation.insertHandedOverAttempt
 import com.resilientpos.reconciliation.insertUnhandedUnknownAttempt
 import com.resilientpos.reconciliation.internal.domain.ReconciliationCase
+import com.resilientpos.reconciliation.isUnresolved
 import com.resilientpos.reconciliation.publicationCount
 import com.resilientpos.store.StoreId
 import io.micrometer.core.instrument.MeterRegistry
@@ -27,6 +28,7 @@ import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import org.springframework.beans.factory.annotation.Autowired
@@ -56,7 +58,7 @@ class ReconciliationManagementIntegrationTest(
         paymentId to reconciliationManagement.open(openCommand(paymentId)).caseId
 
     @Test
-    fun `case를 열면 MANUAL_REVIEW와 규칙 버전 1과 SYSTEM 감사 세 줄이 남고 opened counter가 사유 태그로 하나 오른다`() {
+    fun `case를 열면 MANUAL_REVIEW와 규칙 버전 1과 연 시각이 남고 해소 기록은 없으며 opened counter가 사유 태그로 하나 오른다`() {
         val paymentId = jdbcTemplate.insertHandedOverAttempt()
         val before = opened(PaymentReconciliationReason.AMOUNT_MISMATCH)
 
@@ -64,34 +66,34 @@ class ReconciliationManagementIntegrationTest(
 
         assertEquals(ReconciliationCaseStatus.MANUAL_REVIEW, result.status)
         val row = jdbcTemplate.queryForList(
-            "select status, rule_version, reason, payment_id from t_reconciliation_case where id = ?", result.caseId.value,
+            "select status, rule_version, reason, payment_id, opened_at from t_reconciliation_case where id = ?", result.caseId.value,
         ).single()
         assertEquals("MANUAL_REVIEW", row["status"])
         assertEquals(ReconciliationCase.RULE_VERSION, row["rule_version"])
         assertEquals("AMOUNT_MISMATCH", row["reason"])
         assertEquals(paymentId.value, row["payment_id"])
-        val actions = jdbcTemplate.actionRows(result.caseId)
-        assertEquals(listOf("OPEN", "INVESTIGATING", "MANUAL_REVIEW"), actions.map { it["status"] })
-        assertEquals(listOf("SYSTEM", "SYSTEM", "SYSTEM"), actions.map { it["actor_kind"] })
+        assertEquals(ReconciliationFixtures.handedAt, (row["opened_at"] as java.sql.Timestamp).toInstant())
+        assertTrue(jdbcTemplate.isUnresolved(result.caseId))
         assertEquals(before + 1, opened(PaymentReconciliationReason.AMOUNT_MISMATCH))
     }
 
     @Test
-    fun `같은 시도의 사실이 다시 와도 기존 case를 돌려주고 case와 감사 줄과 counter는 그대로다`() {
+    fun `같은 시도의 사실이 다시 와도 기존 case를 돌려주고 case와 열린 행과 counter는 그대로다`() {
         val paymentId = jdbcTemplate.insertHandedOverAttempt()
         val first = reconciliationManagement.open(openCommand(paymentId))
+        val rowBefore = jdbcTemplate.caseRow(first.caseId)
         val before = opened(PaymentReconciliationReason.QUERY_LIMIT_EXCEEDED)
 
         val again = reconciliationManagement.open(openCommand(paymentId))
 
         assertEquals(first, again)
         assertEquals(1, jdbcTemplate.caseCountFor(paymentId))
-        assertEquals(3, jdbcTemplate.actionRows(first.caseId).size)
+        assertEquals(rowBefore, jdbcTemplate.caseRow(first.caseId))
         assertEquals(before, opened(PaymentReconciliationReason.QUERY_LIMIT_EXCEEDED))
     }
 
     @Test
-    fun `승인으로 해소하면 한 커밋에 case RESOLVED와 OWNER 감사 줄과 시도 APPROVED와 승인 발행 기록이 남고 resolved counter가 오른다`() {
+    fun `승인으로 해소하면 한 커밋에 case RESOLVED와 해소 기록과 시도 APPROVED와 승인 발행 기록이 남고 resolved counter가 오른다`() {
         val (paymentId, caseId) = openedCase()
         val before = resolved(ReconciliationDecision.APPROVED)
 
@@ -104,12 +106,14 @@ class ReconciliationManagementIntegrationTest(
             result,
         )
         assertEquals("RESOLVED", jdbcTemplate.caseStatus(caseId))
-        val last = jdbcTemplate.actionRows(caseId).last()
-        assertEquals("RESOLVED", last["status"])
-        assertEquals("OWNER", last["actor_kind"])
-        assertEquals(ReconciliationFixtures.ownerId.value, last["owner_id"])
-        assertEquals("APPROVED", last["decision"])
-        assertEquals("PG-REF-7", last["provider_reference"])
+        val row = jdbcTemplate.caseRow(caseId)
+        assertEquals(ReconciliationFixtures.ownerId.value, row["resolved_by_owner_id"])
+        assertNotNull(row["resolved_at"])
+        assertEquals("APPROVED", row["decision"])
+        assertEquals("PG-REF-7", row["provider_reference"])
+        assertEquals(0, ReconciliationFixtures.amount.amount.compareTo(row["approved_amount"] as java.math.BigDecimal))
+        assertEquals("KRW", row["approved_currency"])
+        assertEquals("PG 가맹점 화면에서 승인 확인", row["note"])
         val attempt = jdbcTemplate.attemptRow(paymentId)
         assertEquals("APPROVED", attempt["status"])
         assertEquals("PG-REF-7", attempt["provider_reference"])
@@ -146,7 +150,7 @@ class ReconciliationManagementIntegrationTest(
 
         assertEquals(ReconciliationCase.RECONCILIATION_AMOUNT_MISMATCH, e.code)
         assertEquals("MANUAL_REVIEW", jdbcTemplate.caseStatus(caseId))
-        assertEquals(3, jdbcTemplate.actionRows(caseId).size)
+        assertTrue(jdbcTemplate.isUnresolved(caseId))
         assertEquals("UNKNOWN", jdbcTemplate.attemptRow(paymentId)["status"])
         assertEquals(0, jdbcTemplate.publicationCount(paymentId, "PaymentApproved"))
     }
@@ -163,22 +167,24 @@ class ReconciliationManagementIntegrationTest(
         assertEquals(DomainErrorKind.NOT_FOUND, e.kind)
         assertEquals("MANUAL_REVIEW", jdbcTemplate.caseStatus(caseId))
         assertEquals("UNKNOWN", jdbcTemplate.attemptRow(paymentId)["status"])
-        assertEquals(3, jdbcTemplate.actionRows(caseId).size)
+        assertTrue(jdbcTemplate.isUnresolved(caseId))
     }
 
     @Test
-    fun `해소된 case에 같은 결론이 다시 오면 같은 결과이고 감사 줄 수와 counter는 그대로이며 payment를 부르지 않는다`() {
+    fun `해소된 case에 같은 결론이 다시 오면 같은 결과이고 해소 기록과 counter는 그대로이며 payment를 부르지 않는다`() {
         val (paymentId, caseId) = openedCase()
         val first = reconciliationManagement.resolve(ReconciliationFixtures.resolve(caseId))
-        val actionCount = jdbcTemplate.actionRows(caseId).size
+        val rowAfterFirst = jdbcTemplate.caseRow(caseId)
         val counterAfterFirst = resolved(ReconciliationDecision.APPROVED)
         // payment가 불렸다면 다시 확정해 승인 발행 기록이 둘이 된다. 그러지 못하게 시도를 되돌려 두고 아무 일도 없는지 본다.
         jdbcTemplate.update("update t_payment_attempt set status = 'UNKNOWN', provider_reference = null where id = ?", paymentId.value)
 
-        val again = reconciliationManagement.resolve(ReconciliationFixtures.resolve(caseId))
+        val again = reconciliationManagement.resolve(
+            ReconciliationFixtures.resolve(caseId, providerReference = "PG-REF-LATER", note = "응답을 잃어 다시 보냄"),
+        )
 
         assertEquals(first, again)
-        assertEquals(actionCount, jdbcTemplate.actionRows(caseId).size)
+        assertEquals(rowAfterFirst, jdbcTemplate.caseRow(caseId))
         assertEquals(counterAfterFirst, resolved(ReconciliationDecision.APPROVED))
         assertEquals("UNKNOWN", jdbcTemplate.attemptRow(paymentId)["status"])
         assertEquals(1, jdbcTemplate.publicationCount(paymentId, "PaymentApproved"))
@@ -188,7 +194,7 @@ class ReconciliationManagementIntegrationTest(
     fun `해소된 case에 다른 결론이 오면 RECONCILIATION_CASE_ALREADY_RESOLVED이고 그대로다`() {
         val (paymentId, caseId) = openedCase()
         reconciliationManagement.resolve(ReconciliationFixtures.resolve(caseId))
-        val actionCount = jdbcTemplate.actionRows(caseId).size
+        val rowBefore = jdbcTemplate.caseRow(caseId)
 
         val e = assertFailsWith<DomainException> {
             reconciliationManagement.resolve(
@@ -198,7 +204,7 @@ class ReconciliationManagementIntegrationTest(
 
         assertEquals(ReconciliationCase.RECONCILIATION_CASE_ALREADY_RESOLVED, e.code)
         assertEquals(DomainErrorKind.CONFLICT, e.kind)
-        assertEquals(actionCount, jdbcTemplate.actionRows(caseId).size)
+        assertEquals(rowBefore, jdbcTemplate.caseRow(caseId))
         assertEquals("APPROVED", jdbcTemplate.attemptRow(paymentId)["status"])
     }
 
@@ -217,7 +223,7 @@ class ReconciliationManagementIntegrationTest(
         assertEquals(DomainErrorKind.CONFLICT, e.kind)
         assertTrue("APPROVED" in e.message, e.message)
         assertEquals("MANUAL_REVIEW", jdbcTemplate.caseStatus(caseId))
-        assertEquals(3, jdbcTemplate.actionRows(caseId).size)
+        assertTrue(jdbcTemplate.isUnresolved(caseId))
         assertEquals("APPROVED", jdbcTemplate.attemptRow(paymentId)["status"])
     }
 
@@ -242,7 +248,7 @@ class ReconciliationManagementIntegrationTest(
 
         assertEquals("PAYMENT_NOT_IN_RECONCILIATION", e.code)
         assertEquals("MANUAL_REVIEW", jdbcTemplate.caseStatus(caseId))
-        assertEquals(3, jdbcTemplate.actionRows(caseId).size)
+        assertTrue(jdbcTemplate.isUnresolved(caseId))
         assertEquals("UNKNOWN", jdbcTemplate.attemptRow(paymentId)["status"])
         assertNull(jdbcTemplate.attemptRow(paymentId)["provider_reference"])
     }

@@ -9,7 +9,8 @@ import com.resilientpos.platform.logInNewOwner
 import com.resilientpos.reconciliation.ReconciliationCaseId
 import com.resilientpos.reconciliation.ReconciliationFixtures
 import com.resilientpos.reconciliation.ReconciliationManagement
-import com.resilientpos.reconciliation.actionRows
+import com.resilientpos.reconciliation.caseRow
+import com.resilientpos.reconciliation.isUnresolved
 import com.resilientpos.reconciliation.attemptRow
 import com.resilientpos.reconciliation.caseStatus
 import com.resilientpos.reconciliation.insertHandedOverAttempt
@@ -107,7 +108,7 @@ class ReconciliationCaseOwnerApiIntegrationTest(
     }
 
     @Test
-    fun `승인으로 해소하면 case는 RESOLVED가 되고 시도는 APPROVED가 되며 같은 결론의 재요청은 같은 결과에 감사 줄도 그대로이고 다른 결론은 409다`(output: CapturedOutput) {
+    fun `승인으로 해소하면 case는 RESOLVED가 되고 시도는 APPROVED가 되며 같은 결론의 재요청은 같은 결과에 해소 기록도 그대로이고 다른 결론은 409다`(output: CapturedOutput) {
         val (caseId, paymentId) = openCase(storeId)
 
         approve(caseId = caseId).andExpect {
@@ -122,9 +123,10 @@ class ReconciliationCaseOwnerApiIntegrationTest(
         assertEquals("RESOLVED", jdbcTemplate.caseStatus(caseId))
         assertEquals("APPROVED", jdbcTemplate.attemptRow(paymentId)["status"])
         assertEquals("PG-REF-1", jdbcTemplate.attemptRow(paymentId)["provider_reference"])
-        val actions = jdbcTemplate.actionRows(caseId)
-        assertEquals(listOf("OPEN", "INVESTIGATING", "MANUAL_REVIEW", "RESOLVED"), actions.map { it["status"] })
-        assertEquals(owner.ownerId, actions.last()["owner_id"])
+        val resolvedRow = jdbcTemplate.caseRow(caseId)
+        assertEquals(owner.ownerId, resolvedRow["resolved_by_owner_id"])
+        assertEquals("APPROVED", resolvedRow["decision"])
+        assertEquals("PG-REF-1", resolvedRow["provider_reference"])
         val audit = auditLines(output, caseId).single()
         listOf("ownerId=${owner.ownerId}", "storeId=$storeId", "paymentId=${paymentId.value}", "decision=APPROVED", "paymentStatus=APPROVED")
             .forEach { assertTrue(it in audit, "$it 가 감사 줄에 없다: $audit") }
@@ -136,18 +138,18 @@ class ReconciliationCaseOwnerApiIntegrationTest(
             jsonPath("$.data.decision") { value("APPROVED") }
             jsonPath("$.data.paymentStatus") { value("APPROVED") }
         }
-        assertEquals(actions.size, jdbcTemplate.actionRows(caseId).size)
+        assertEquals(resolvedRow, jdbcTemplate.caseRow(caseId))
 
         decline(caseId).andExpect {
             status { isConflict() }
             jsonPath("$.error.errorCode") { value("RECONCILIATION_CASE_ALREADY_RESOLVED") }
         }
         assertEquals("APPROVED", jdbcTemplate.attemptRow(paymentId)["status"])
-        assertEquals(actions.size, jdbcTemplate.actionRows(caseId).size)
+        assertEquals(resolvedRow, jdbcTemplate.caseRow(caseId))
     }
 
     @Test
-    fun `승인 금액이 다르면 422이고 case와 시도와 감사 줄이 바뀌지 않으며 참조가 없으면 400이다`(output: CapturedOutput) {
+    fun `승인 금액이 다르면 422이고 case와 시도와 해소 기록이 바뀌지 않으며 참조가 없으면 400이다`(output: CapturedOutput) {
         val (caseId, paymentId) = openCase(storeId)
 
         approve(amount = "4600", caseId = caseId).andExpect {
@@ -161,7 +163,7 @@ class ReconciliationCaseOwnerApiIntegrationTest(
 
         assertEquals("MANUAL_REVIEW", jdbcTemplate.caseStatus(caseId))
         assertEquals("UNKNOWN", jdbcTemplate.attemptRow(paymentId)["status"])
-        assertEquals(3, jdbcTemplate.actionRows(caseId).size)
+        assertTrue(jdbcTemplate.isUnresolved(caseId))
         assertEquals(emptyList(), auditLines(output, caseId))
     }
 

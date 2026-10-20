@@ -39,7 +39,7 @@ class ReconciliationManagement(
             repository.findByPaymentId(command.paymentId)?.let {
                 return@masterTx ReconciliationCommand.Open.Result(it.id, it.status) to null
             }
-            val saved = repository.save(ReconciliationCase.open(command, identifierGenerator, clock.instant()).aggregate)
+            val saved = repository.save(ReconciliationCase.open(command, identifierGenerator).aggregate)
             ReconciliationCommand.Open.Result(saved.id, saved.status) to saved
         }
         if (opened != null) {
@@ -71,7 +71,7 @@ class ReconciliationManagement(
 
     private fun resolveInTransaction(command: ReconciliationCommand.Resolve): Pair<ReconciliationCommand.Resolve.Result, Boolean> {
         val current = repository.findByIdAndStoreIdForUpdate(command.caseId, command.storeId) ?: throw ReconciliationCase.notFound()
-        val resolved = current.resolve(command, identifierGenerator, clock.instant()).aggregate
+        val resolved = current.resolve(command, clock.instant()).aggregate
         val expectedStatus = when (command.decision) {
             ReconciliationDecision.APPROVED -> PaymentAttemptStatus.APPROVED
             ReconciliationDecision.DECLINED -> PaymentAttemptStatus.DECLINED

@@ -57,7 +57,6 @@ class SchemaMigrationTest(
                 "t_owner",
                 "t_payment_attempt",
                 "t_reconciliation_case",
-                "t_reconciliation_case_action",
                 "t_store",
                 "t_sync_operation",
                 "t_sync_watermark",

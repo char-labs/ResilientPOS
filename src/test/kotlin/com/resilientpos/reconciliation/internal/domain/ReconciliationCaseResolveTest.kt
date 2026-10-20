@@ -12,14 +12,13 @@ import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 class ReconciliationCaseResolveTest {
 
-    private val opened = Instant.parse("2026-10-20T01:00:00Z")
     private val now = Instant.parse("2026-10-20T09:00:00Z")
-    private val resolutionActionId = UUID.fromString("00000000-0000-0000-0000-0000000000f9")
     private val krw = ReconciliationFixtures.krw
 
     private class FixedIdentifierGenerator(ids: List<UUID>) : IdentifierGenerator {
@@ -27,10 +26,8 @@ class ReconciliationCaseResolveTest {
         override fun next(): UUID = remaining.removeFirstOrNull() ?: error("준비한 식별자를 다 썼다")
     }
 
-    private fun ids() = FixedIdentifierGenerator(listOf(resolutionActionId))
-
     private fun manualReview(): ReconciliationCase =
-        ReconciliationCase.open(ReconciliationFixtures.open(), FixedIdentifierGenerator((1L..4L).map { UUID(0, it) }), opened).aggregate
+        ReconciliationCase.open(ReconciliationFixtures.open(), FixedIdentifierGenerator(listOf(UUID(0, 1)))).aggregate
 
     private fun resolve(
         target: ReconciliationCase,
@@ -38,38 +35,37 @@ class ReconciliationCaseResolveTest {
         providerReference: String? = "PG-REF-1",
         approvedAmount: Money? = ReconciliationFixtures.amount,
         note: String = "PG 가맹점 화면에서 승인 확인",
-    ) = target.resolve(ReconciliationFixtures.resolve(target.id, decision, providerReference, approvedAmount, note), ids(), now)
+    ) = target.resolve(ReconciliationFixtures.resolve(target.id, decision, providerReference, approvedAmount, note), now)
 
     private fun assertRejected(code: String, kind: DomainErrorKind, block: (ReconciliationCase) -> Unit) {
         val target = manualReview()
-        val actionsBefore = target.actions
 
         val error = assertFailsWith<DomainException> { block(target) }
 
         assertEquals(code, error.code)
         assertEquals(kind, error.kind)
         assertEquals(ReconciliationCaseStatus.MANUAL_REVIEW, target.status)
-        assertEquals(actionsBefore, target.actions)
+        assertNull(target.resolution)
     }
 
     @Test
-    fun `승인으로 해소하면 RESOLVED가 되고 OWNER 줄 하나가 결론과 근거를 담는다`() {
+    fun `승인으로 해소하면 RESOLVED가 되고 해소 기록이 점주와 시각과 결론과 근거를 담는다`() {
         val target = manualReview()
 
         val transition = resolve(target)
 
         assertEquals(ReconciliationCaseStatus.RESOLVED, transition.aggregate.status)
         assertTrue(transition.events.isEmpty())
-        assertEquals(target.actions + transition.aggregate.actions.last(), transition.aggregate.actions)
         assertEquals(
-            ReconciliationCaseAction(
-                ReconciliationCaseActionId(resolutionActionId), ReconciliationCaseStatus.RESOLVED, ReconciliationActorKind.OWNER,
+            Resolution(
                 ReconciliationFixtures.ownerId, now, ReconciliationDecision.APPROVED, "PG-REF-1", ReconciliationFixtures.amount,
                 "PG 가맹점 화면에서 승인 확인",
             ),
-            transition.aggregate.actions.last(),
+            transition.aggregate.resolution,
         )
+        assertEquals(target.openedAt, transition.aggregate.openedAt)
         assertEquals(ReconciliationCaseStatus.MANUAL_REVIEW, target.status)
+        assertNull(target.resolution)
     }
 
     @Test
@@ -77,11 +73,11 @@ class ReconciliationCaseResolveTest {
         val transition = resolve(manualReview(), ReconciliationDecision.DECLINED, providerReference = null, approvedAmount = null, note = "PG에서 취소")
 
         assertEquals(ReconciliationCaseStatus.RESOLVED, transition.aggregate.status)
-        val line = transition.aggregate.actions.last()
-        assertEquals(ReconciliationDecision.DECLINED, line.decision)
-        assertEquals(null, line.providerReference)
-        assertEquals(null, line.approvedAmount)
-        assertEquals("PG에서 취소", line.note)
+        val resolution = checkNotNull(transition.aggregate.resolution)
+        assertEquals(ReconciliationDecision.DECLINED, resolution.decision)
+        assertNull(resolution.providerReference)
+        assertNull(resolution.approvedAmount)
+        assertEquals("PG에서 취소", resolution.note)
     }
 
     @Test
@@ -90,20 +86,21 @@ class ReconciliationCaseResolveTest {
     }
 
     @Test
-    fun `해소된 case에 같은 결론이 다시 오면 같은 인스턴스를 돌려주고 감사 기록을 더하지 않는다`() {
+    fun `해소된 case에 같은 결론이 다시 오면 같은 인스턴스를 돌려주고 해소 기록을 바꾸지 않는다`() {
         val resolved = resolve(manualReview()).aggregate
 
-        val again = resolve(resolved, note = "응답을 잃어 다시 보냄")
+        val again = resolved.resolve(ReconciliationFixtures.resolve(resolved.id, note = "응답을 잃어 다시 보냄"), now.plusSeconds(60))
 
         assertSame(resolved, again.aggregate)
         assertTrue(again.events.isEmpty())
-        assertEquals(4, again.aggregate.actions.size)
+        assertEquals(now, again.aggregate.resolution?.resolvedAt)
+        assertEquals("PG 가맹점 화면에서 승인 확인", again.aggregate.resolution?.note)
     }
 
     @Test
     fun `해소된 case에 다른 결론이 오면 거절하고 원본은 그대로다`() {
         val resolved = resolve(manualReview()).aggregate
-        val actionsBefore = resolved.actions
+        val resolutionBefore = resolved.resolution
 
         val error = assertFailsWith<DomainException> {
             resolve(resolved, ReconciliationDecision.DECLINED, providerReference = null, approvedAmount = null)
@@ -112,7 +109,7 @@ class ReconciliationCaseResolveTest {
         assertEquals(ReconciliationCase.RECONCILIATION_CASE_ALREADY_RESOLVED, error.code)
         assertEquals(DomainErrorKind.CONFLICT, error.kind)
         assertEquals(ReconciliationCaseStatus.RESOLVED, resolved.status)
-        assertEquals(actionsBefore, resolved.actions)
+        assertEquals(resolutionBefore, resolved.resolution)
     }
 
     @Test

@@ -10,7 +10,7 @@ import java.util.UUID
 
 /**
  * 대조 case의 읽기 투영. aggregate를 거치지 않고 저장된 행에서 바로 만든다.
- * 금액은 넘긴 시점의 사본이고, [openedAt]은 case를 여는 감사 줄(`OPEN`)의 시각, 곧 `payment`가 넘긴 시각이다.
+ * 금액은 넘긴 시점의 사본이고, [openedAt]은 case를 연 시각(`opened_at`), 곧 `payment`가 넘긴 시각이다.
  */
 data class ReconciliationCaseView(
     val caseId: ReconciliationCaseId,

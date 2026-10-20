@@ -20,7 +20,7 @@ import com.resilientpos.reconciliation.ReconciliationCaseId
 import com.resilientpos.reconciliation.ReconciliationDecision
 import com.resilientpos.reconciliation.ReconciliationFixtures
 import com.resilientpos.reconciliation.ReconciliationManagement
-import com.resilientpos.reconciliation.actionRows
+import com.resilientpos.reconciliation.caseRow
 import com.resilientpos.reconciliation.attemptRow
 import com.resilientpos.reconciliation.caseCountFor
 import com.resilientpos.reconciliation.publicationCount
@@ -30,6 +30,7 @@ import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import org.apache.kafka.clients.producer.ProducerRecord
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.TestConfiguration
@@ -113,21 +114,21 @@ class ReconciliationFlowIntegrationTest(
     }
 
     @Test
-    fun `상한까지 조회가 불명이면 case가 MANUAL_REVIEW와 규칙 버전 1과 SYSTEM 감사 세 줄로 열리고 같은 사실을 다시 받아도 하나다`() {
+    fun `상한까지 조회가 불명이면 case가 MANUAL_REVIEW와 규칙 버전 1과 넘긴 시각의 연 시각으로 열리고 같은 사실을 다시 받아도 하나다`() {
         val (paymentId, caseId) = handedOver("4524", queries = 3)
 
         val row = jdbcTemplate.queryForList("select status, rule_version, reason, order_id from t_reconciliation_case where id = ?", caseId.value).single()
         assertEquals("MANUAL_REVIEW", row["status"])
         assertEquals(1, row["rule_version"])
         assertEquals("QUERY_LIMIT_EXCEEDED", row["reason"])
-        val actions = jdbcTemplate.actionRows(caseId)
-        assertEquals(listOf("OPEN", "INVESTIGATING", "MANUAL_REVIEW"), actions.map { it["status"] })
-        assertEquals(listOf("SYSTEM", "SYSTEM", "SYSTEM"), actions.map { it["actor_kind"] })
+        val openedRow = jdbcTemplate.caseRow(caseId)
+        assertNotNull(openedRow["opened_at"])
+        assertNull(openedRow["resolved_at"])
 
         resend(row["order_id"] as UUID)
 
         assertEquals(1, jdbcTemplate.caseCountFor(paymentId))
-        assertEquals(3, jdbcTemplate.actionRows(caseId).size)
+        assertEquals(openedRow, jdbcTemplate.caseRow(caseId))
     }
 
     @Test
@@ -158,7 +159,7 @@ class ReconciliationFlowIntegrationTest(
         )
 
         assertEquals("RESOLVED", jdbcTemplate.queryForList("select status from t_reconciliation_case where id = ?", caseId.value).single()["status"])
-        assertEquals("OWNER", jdbcTemplate.actionRows(caseId).last()["actor_kind"])
+        assertEquals(ReconciliationFixtures.ownerId.value, jdbcTemplate.caseRow(caseId)["resolved_by_owner_id"])
         assertEquals(mapOf<String, Any?>("status" to "APPROVED", "provider_reference" to "PG-REF-FLOW"), jdbcTemplate.attemptRow(paymentId))
         assertEquals(1, jdbcTemplate.publicationCount(paymentId, "PaymentApproved"))
         val orderId = jdbcTemplate.queryForObject("select order_id from t_payment_attempt where id = ?", UUID::class.java, paymentId.value)!!

@@ -188,7 +188,7 @@ class ReconciliationCaseOwnerControllerTest(
                         fieldWithPath("providerReference").type(JsonFieldType.STRING).optional().description("PG 승인 참조. 승인(APPROVED)에는 필수이고 255자 이하"),
                         fieldWithPath("approvedAmount").type(JsonFieldType.STRING).optional().description("PG 화면에서 본 승인 금액. 통화 기준 decimal string. 승인에는 필수이며 case의 시도 금액과 통화까지 같아야 한다. 거절에는 싣지 않는다. approvedCurrency와 함께만 온다"),
                         fieldWithPath("approvedCurrency").type(JsonFieldType.STRING).optional().description("승인 금액의 통화 코드(ISO 4217). approvedAmount와 함께만 온다"),
-                        fieldWithPath("reason").type(JsonFieldType.STRING).description("해소 사유. 비어 있지 않고 500자 이하. 감사 기록에 남고 로그에는 남지 않는다"),
+                        fieldWithPath("reason").type(JsonFieldType.STRING).description("해소 사유. 비어 있지 않고 500자 이하. 해소 기록에 남고 로그에는 남지 않는다"),
                     ),
                     responseFields(
                         fieldWithPath("result").type(JsonFieldType.STRING).description("SUCCESS 또는 FAIL"),

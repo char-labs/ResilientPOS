@@ -16,6 +16,6 @@ interface ReconciliationCaseRepository {
      */
     fun findByIdAndStoreIdForUpdate(id: ReconciliationCaseId, storeId: StoreId): ReconciliationCase?
 
-    /** aggregate를 저장한다. 새 case면 넣고 기존 case면 바뀐 값과 새 감사 줄을 반영한다. 트랜잭션 안에서 부른다. */
+    /** aggregate를 저장한다. 새 case면 넣고 기존 case면 바뀐 상태와 해소 기록을 반영한다. 트랜잭션 안에서 부른다. */
     fun save(reconciliationCase: ReconciliationCase): ReconciliationCase
 }
