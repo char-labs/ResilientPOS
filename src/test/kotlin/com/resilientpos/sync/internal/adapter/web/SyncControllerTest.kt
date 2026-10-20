@@ -276,8 +276,8 @@ class SyncControllerTest(
                         fieldWithPath("data").type(JsonFieldType.NULL).description("실패 응답에서는 null"),
                         fieldWithPath("error.errorCode").type(JsonFieldType.STRING).description(
                             "CONCURRENT_REQUEST 고정 코드. 같은 clientOrderId의 주문 생성이 POST /v1/orders와 겹쳤거나 잠금 대기가 한도를 넘었다. " +
-                                "이 배치에서 앞서 적용된 항목은 남고 실패한 항목은 기록되지 않으므로, 같은 배치를 다시 보내면 앞 항목은 DUPLICATE이고 " +
-                                "실패한 항목부터 이어서 적용된다(주문 생성이 겹쳤으면 앞 주문으로 APPLIED)",
+                                "이 배치에서 앞서 확정된 항목은 남고 실패한 항목은 기록되지 않는다. 같은 배치를 다시 보내면 앞서 확정된 항목(APPLIED·REJECTED)은 DUPLICATE이고 " +
+                                "실패한 항목부터 다시 처리된다. 주문 생성이 겹친 항목은 앞 주문과 내용이 같으면 그 orderId로 APPLIED, 다르면 REJECTED(IDEMPOTENCY_CONFLICT)다",
                         ),
                         fieldWithPath("error.message").type(JsonFieldType.STRING).description("고정 문구. 예외 메시지는 담지 않는다"),
                     ),
