@@ -56,7 +56,7 @@ t_reconciliation_case.resolved_by_owner_id ────────────�
 ### `OrderEntity` — 주문의 머리
 - 역할: 주문 하나의 소유 단말·매장·통화·상태(`OPEN`→`CHECKOUT_REQUESTED`→`PAID`)를 든다. 금액 합계는 컬럼으로 두지 않는다(파생 값, line에서 접는다).
 - 관계: 자식 `OrderLineEntity`·`OrderCheckoutEntity`가 `order_id`로 가리킨다. 다른 모듈(`payment`·`fulfillment`·`sync`)도 `order_id`로 가리키지만 이 표를 읽지 않는다.
-- 방어선: unique `(terminal_id, client_order_id)`가 "같은 단말의 같은 주문 요청은 하나"의 마지막 방어선이다(멱등 키, 삭제 행에도 걸린다). `@Version`은 루트인 이 표에만 있다. 상태 전이는 행 잠금(`for no key update`, 대기 3초) 아래에서 한다.
+- 방어선: unique `(terminal_id, client_order_id)`가 "같은 단말의 같은 주문 요청은 하나"의 마지막 방어선이다(멱등 키, 삭제 행에도 걸린다). 같은 키의 생성이 겹쳐 걸린 위반은 persistence adapter가 제약 이름으로 가려 경합 예외로 바꾸고 HTTP에서는 `409 CONCURRENT_REQUEST`다(sync에서는 배치가 409다). `@Version`은 루트인 이 표에만 있다. 상태 전이는 행 잠금(`for no key update`, 대기 3초) 아래에서 한다.
 - 만드는 곳: `OrderCommandFacade.create`(HTTP, `Lock` 블록)와 `createInCallerTransaction`(sync 항목 트랜잭션). 바꾸는 곳: `requestCheckout`·`markPaid`. `requestCheckout`은 `orderId`로 찾는 것(HTTP)과 `(terminalId, clientOrderId)`로 찾는 것(sync 항목 트랜잭션에 합류) 둘이고 둘 다 주문 행을 잠근다.
 
 ### `OrderLineEntity` — 판매 시점의 품목 한 줄
@@ -135,7 +135,7 @@ t_reconciliation_case.resolved_by_owner_id ────────────�
 
 | 단계 | 단말·운영자에게 보이는 것 | 표 | 트랜잭션·전달 |
 |---|---|---|---|
-| 1. 단말이 `POST /v1/orders` | 201, `orderId`·`status=OPEN` | `t_order` 1행 + `t_order_line` N행 | **한 커밋**(`Lock` 블록, 같은 `clientOrderId` 동시 요청은 줄 서서 같은 주문을 받는다) |
+| 1. 단말이 `POST /v1/orders` | 201, `orderId`·`status=OPEN` | `t_order` 1행 + `t_order_line` N행 | **한 커밋**(`Lock` 블록, 같은 `clientOrderId` 동시 요청은 줄 서서 같은 주문을 받는다. 락이 통하지 않거나 sync와 겹치면 늦은 쪽은 `409 CONCURRENT_REQUEST`이고 다시 보내면 같은 주문을 받는다) |
 | 2. 단말이 `POST /v1/orders/{id}/checkout` | 200, `checkoutNo=1`·`amount`·`status=CHECKOUT_REQUESTED` | `t_order.status` 갱신 + `t_order_checkout` 1행 + `event_publication`(`OrderPaymentRequested`) | **한 커밋**(주문 행 잠금). 응답은 커밋 직후 |
 | 3. Kafka `order.payment-requested` → `payment` | 단말에는 아직 아무것도 없다 | `t_payment_attempt` 1행(`REQUESTED`, 0원이면 바로 `APPROVED`) + `event_publication`(`AttemptCreated`) | **한 커밋**(`Lock` 블록). 같은 사실이 두 번 와도 기존 시도를 돌려준다 |
 | 4. Kafka `payment.attempt-created` → provider 호출 | 없음 | 호출은 **트랜잭션 밖** | provider 응답 뒤 행을 잠그고 결말 적용 |
@@ -159,7 +159,7 @@ t_reconciliation_case.resolved_by_owner_id ────────────�
 | 3. 응답의 `lastAckedSequence` | 단말은 그 다음 순번부터 다시 보내고 `APPLIED`·`DUPLICATE`·`REJECTED`는 큐에서 지운다 | — | — |
 | 4. 이후 | 결제 요청을 배치에 싣지 않았으면 단말은 받은 `orderId`로 4.1의 2단계(checkout)부터 이어 간다 | 4.1과 같다 | — |
 
-배치 전체가 409·500이면(잠금 대기 초과, DB 장애, unique 위반) 이미 커밋된 항목은 남고 재전송 때 `DUPLICATE`로 돌아온다.
+배치 전체가 409(잠금 대기 초과, 같은 `clientOrderId`의 주문 생성 경합)나 500(DB 장애, 그 밖의 unique 위반)이면 이미 커밋된 항목은 남고 재전송 때 `DUPLICATE`로 돌아온다.
 
 ### 4.3 결제 거절 뒤 재결제
 
