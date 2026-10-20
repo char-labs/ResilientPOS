@@ -34,7 +34,7 @@ sealed interface PaymentEvent : DomainEvent {
         val schemaVersion: Int = SCHEMA_VERSION,
     ) : PaymentEvent {
         init {
-            requireKnownSchemaVersion(javaClass.simpleName, schemaVersion, SCHEMA_VERSION)
+            requireKnownSchemaVersion(javaClass.simpleName, version = schemaVersion, known = SCHEMA_VERSION)
         }
 
         companion object {

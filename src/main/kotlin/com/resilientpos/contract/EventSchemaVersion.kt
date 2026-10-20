@@ -15,7 +15,7 @@ fun requireKnownSchemaVersion(event: String, version: Int, known: Int) {
     if (version > known) {
         throw DomainException(
             UNSUPPORTED_EVENT_SCHEMA_VERSION,
-            "$event 형식 버전 ${version}을 처리할 수 없습니다. 이 버전은 ${known}까지 압니다",
+            "$event 형식 버전 $version 메시지는 이 배포가 읽을 수 없습니다. 이 배포가 읽는 최대 버전: $known",
             DomainErrorKind.UNPROCESSABLE,
         )
     }
