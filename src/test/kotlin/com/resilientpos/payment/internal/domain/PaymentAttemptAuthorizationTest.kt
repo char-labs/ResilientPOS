@@ -1,6 +1,7 @@
 package com.resilientpos.payment.internal.domain
 
 import com.resilientpos.contract.PaymentAttemptKind
+import com.resilientpos.contract.PaymentUnknownReason
 import com.resilientpos.foundation.DomainErrorKind
 import com.resilientpos.foundation.DomainException
 import com.resilientpos.foundation.IdentifierGenerator
@@ -80,13 +81,23 @@ class PaymentAttemptAuthorizationTest {
     fun `미확인을 적용하면 UNKNOWN이 되고 참조가 없다`() {
         val attempt = requested()
 
-        val transition = attempt.markUnknown(ids(1), now)
+        val transition = attempt.markUnknown(PaymentUnknownReason.RESULT_UNCONFIRMED, ids(1), now)
 
         assertEquals(PaymentAttemptStatus.UNKNOWN, transition.aggregate.status)
         // provider가 무엇을 했는지 모르는 상태다. 참조를 지어내면 그 참조가 거짓이 된다.
         assertNull(transition.aggregate.providerReference)
         val unknown = transition.events.single()
         assertEquals(attempt.id, unknown.paymentId)
+    }
+
+    @Test
+    fun `미확인을 적용하면 받은 사유가 시도에 남고 처음 시도에는 사유가 없다`() {
+        val attempt = requested()
+
+        assertNull(attempt.unknownReason)
+        PaymentUnknownReason.entries.forEach { reason ->
+            assertEquals(reason, attempt.markUnknown(reason, ids(1), now).aggregate.unknownReason, reason.name)
+        }
     }
 
     @Test
@@ -105,7 +116,7 @@ class PaymentAttemptAuthorizationTest {
         val applications = mapOf<String, (PaymentAttempt) -> Unit>(
             "approve" to { it.approve("PROVIDER-REF-6", ids(2), now) },
             "decline" to { it.decline(null, ids(2), now) },
-            "markUnknown" to { it.markUnknown(ids(2), now) },
+            "markUnknown" to { it.markUnknown(PaymentUnknownReason.RESULT_UNCONFIRMED, ids(2), now) },
         )
 
         for ((name, apply) in applications) {

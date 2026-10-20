@@ -1,6 +1,7 @@
 package com.resilientpos.payment
 
 import com.resilientpos.contract.PaymentAttemptKind
+import com.resilientpos.contract.PaymentUnknownReason
 import com.resilientpos.foundation.DomainEvent
 import com.resilientpos.foundation.IdentifierGenerator
 import com.resilientpos.foundation.Transition
@@ -155,11 +156,23 @@ class PaymentManagement(
         val now = clock.instant()
         val applied = when (outcome) {
             is AuthorizationOutcome.Approved ->
-                updateAndPublish(current.approve(outcome.providerReference, identifierGenerator, now), eventPublisher::publish)
+                if (outcome.amount == current.amount) {
+                    updateAndPublish(current.approve(outcome.providerReference, identifierGenerator, now), eventPublisher::publish)
+                } else {
+                    // provider가 분명히 승인했어도 다른 금액은 믿지 않고 결과 불명으로 둔다. 굳히면 주문의 markPaid가 거절해 DLT로 간다.
+                    log.warn {
+                        "승인 응답의 금액이 시도와 다르다 paymentId=${current.id.value} expected=${current.amount} " +
+                            "reported=${outcome.amount} providerReference=${outcome.providerReference}"
+                    }
+                    updateAndPublish(
+                        current.markUnknown(PaymentUnknownReason.AMOUNT_MISMATCH, identifierGenerator, now),
+                        eventPublisher::publish,
+                    )
+                }
             is AuthorizationOutcome.Declined ->
                 updateAndPublish(current.decline(outcome.providerReference, identifierGenerator, now), eventPublisher::publish)
             AuthorizationOutcome.Unknown ->
-                updateAndPublish(current.markUnknown(identifierGenerator, now), eventPublisher::publish)
+                updateAndPublish(current.markUnknown(PaymentUnknownReason.RESULT_UNCONFIRMED, identifierGenerator, now), eventPublisher::publish)
         }
         return PaymentCommand.Authorize.Result(applied.id, applied.status)
     }

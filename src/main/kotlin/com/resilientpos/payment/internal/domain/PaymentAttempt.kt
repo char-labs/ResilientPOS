@@ -2,6 +2,7 @@ package com.resilientpos.payment.internal.domain
 
 import com.resilientpos.contract.PaymentApproved
 import com.resilientpos.contract.PaymentAttemptKind
+import com.resilientpos.contract.PaymentUnknownReason
 import com.resilientpos.foundation.DomainErrorKind
 import com.resilientpos.foundation.DomainException
 import com.resilientpos.foundation.IdentifierGenerator
@@ -39,6 +40,7 @@ class PaymentAttempt private constructor(
     val status: PaymentAttemptStatus,
     val providerReference: String?,
     val retriedFrom: PaymentId?,
+    val unknownReason: PaymentUnknownReason?,
 ) {
 
     /**
@@ -125,9 +127,11 @@ class PaymentAttempt private constructor(
 
     /**
      * provider 결과를 확인하지 못한 결말을 적용한다. 거절 조건은 [approve]와 같다.
+     * [reason]은 `UNKNOWN`이 된 사유이고 이때 정해져 확정되어도 지워지지 않는다. 결과를 받지 못했으면 [PaymentUnknownReason.RESULT_UNCONFIRMED],
+     * 승인이라는 결과는 받았지만 금액이 다르면 [PaymentUnknownReason.AMOUNT_MISMATCH]다.
      * provider가 무엇을 했는지 모르므로 참조를 남기지 않는다. 참조를 지어내면 그 참조가 거짓이 된다.
      */
-    fun markUnknown(ids: IdentifierGenerator, now: Instant): Transition<PaymentAttempt, PaymentEvent.Unknown> {
+    fun markUnknown(reason: PaymentUnknownReason, ids: IdentifierGenerator, now: Instant): Transition<PaymentAttempt, PaymentEvent.Unknown> {
         requireRequested()
         val unknown = PaymentEvent.Unknown(
             eventId = ids.next(),
@@ -138,7 +142,7 @@ class PaymentAttempt private constructor(
             kind = kind,
             amount = amount,
         )
-        return Transition(copy(PaymentAttemptStatus.UNKNOWN, null), listOf(unknown))
+        return Transition(copy(PaymentAttemptStatus.UNKNOWN, null, reason), listOf(unknown))
     }
 
     private fun requireRequested() {
@@ -189,6 +193,7 @@ class PaymentAttempt private constructor(
             // 새 provider 요청이다. 거절된 시도의 참조를 옮기면 다른 요청을 가리킨다.
             providerReference = null,
             retriedFrom = id,
+            unknownReason = null,
         )
         val created = PaymentEvent.AttemptCreated(
             eventId = ids.next(),
@@ -204,8 +209,12 @@ class PaymentAttempt private constructor(
         return Transition(retried, listOf(created))
     }
 
-    /** 결말만 바뀐 새 인스턴스. 나머지 값은 시도가 만들어질 때 확정됐고 바뀌지 않는다. */
-    private fun copy(status: PaymentAttemptStatus, providerReference: String?) = PaymentAttempt(
+    /** 결말만 바뀐 새 인스턴스. 나머지 값은 시도가 만들어질 때 확정됐고 바뀌지 않는다. 사유는 `UNKNOWN`이 될 때만 정하고 확정 전이는 지우지 않는다. */
+    private fun copy(
+        status: PaymentAttemptStatus,
+        providerReference: String?,
+        unknownReason: PaymentUnknownReason? = this.unknownReason,
+    ) = PaymentAttempt(
         id = id,
         orderId = orderId,
         storeId = storeId,
@@ -216,6 +225,7 @@ class PaymentAttempt private constructor(
         status = status,
         providerReference = providerReference,
         retriedFrom = retriedFrom,
+        unknownReason = unknownReason,
     )
 
     override fun equals(other: Any?) = other is PaymentAttempt && other.id == id
@@ -247,8 +257,9 @@ class PaymentAttempt private constructor(
             status: PaymentAttemptStatus,
             providerReference: String?,
             retriedFrom: PaymentId?,
+            unknownReason: PaymentUnknownReason?,
         ): PaymentAttempt =
-            PaymentAttempt(id, orderId, storeId, terminalId, checkoutNo, kind, amount, status, providerReference, retriedFrom)
+            PaymentAttempt(id, orderId, storeId, terminalId, checkoutNo, kind, amount, status, providerReference, retriedFrom, unknownReason)
 
         /**
          * 한 주문의 **승인** 시도를 `REQUESTED`로 만든다. 0원 시도는 이어서 [approveIfFree]로 승인한다.
@@ -280,6 +291,7 @@ class PaymentAttempt private constructor(
                 // provider를 부르지 않았으므로 참조가 없다. 값을 지어내면 그 참조가 거짓이 된다.
                 providerReference = null,
                 retriedFrom = null,
+                unknownReason = null,
             )
 
             val created = PaymentEvent.AttemptCreated(

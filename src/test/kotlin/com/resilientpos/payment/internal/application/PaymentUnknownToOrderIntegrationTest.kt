@@ -48,7 +48,7 @@ class PaymentUnknownToOrderIntegrationTest(
         override fun authorize(request: AuthorizationRequest): AuthorizationOutcome {
             val first = firstSeen.putIfAbsent(request.amount, request.paymentId)
             return if (request.amount.amount.toPlainString().startsWith(RETRY_APPROVED_AMOUNT) && first != null && first != request.paymentId) {
-                AuthorizationOutcome.Approved("APPROVED-${request.paymentId.value}")
+                AuthorizationOutcome.Approved("APPROVED-${request.paymentId.value}", request.amount)
             } else {
                 delegate.authorize(request)
             }

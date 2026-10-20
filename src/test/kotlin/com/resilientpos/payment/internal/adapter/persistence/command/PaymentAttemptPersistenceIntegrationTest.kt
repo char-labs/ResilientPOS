@@ -84,6 +84,7 @@ class PaymentAttemptPersistenceIntegrationTest(
         status = status,
         providerReference = providerReference,
         retriedFrom = retriedFrom,
+        unknownReason = null,
     )
 
     private fun save(vararg attempts: PaymentAttempt) =

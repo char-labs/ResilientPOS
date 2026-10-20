@@ -88,7 +88,7 @@ class PaymentAuthorizationIntegrationTest(
         orderFacade.createAndRequestCheckout(OrderFixtures.createOrderCommand(lines = listOf(OrderFixtures.line(unitPrice)))).value
 
     private fun attempt(orderId: UUID): Map<String, Any?>? = jdbcTemplate.queryForList(
-        "select id, status, provider_reference from t_payment_attempt where order_id = ?",
+        "select id, status, provider_reference, unknown_reason from t_payment_attempt where order_id = ?",
         orderId,
     ).singleOrNull()
 
@@ -136,6 +136,17 @@ class PaymentAuthorizationIntegrationTest(
         val row = awaitStatus(orderId, PaymentAttemptStatus.UNKNOWN)
 
         assertNull(row["provider_reference"])
+        assertEquals("RESULT_UNCONFIRMED", row["unknown_reason"])
+    }
+
+    @Test
+    fun `승인 응답의 금액이 시도와 다르면 UNKNOWN이고 사유는 AMOUNT_MISMATCH이며 참조는 남지 않는다`() {
+        val orderId = checkoutOrder("4506")
+
+        val row = awaitStatus(orderId, PaymentAttemptStatus.UNKNOWN)
+
+        assertNull(row["provider_reference"])
+        assertEquals("AMOUNT_MISMATCH", row["unknown_reason"])
     }
 
     @Test

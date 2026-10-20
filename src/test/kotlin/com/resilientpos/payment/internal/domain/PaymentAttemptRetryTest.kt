@@ -53,6 +53,7 @@ class PaymentAttemptRetryTest {
         status = status,
         providerReference = "PROVIDER-REF-1",
         retriedFrom = null,
+        unknownReason = null,
     )
 
     @Test

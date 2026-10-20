@@ -102,7 +102,7 @@ class PaymentAttemptPersistenceAdapter(
     override fun update(attempt: PaymentAttempt): PaymentAttempt {
         val entity: PaymentAttemptEntity = entityManager.find(PaymentAttemptEntity::class.java, attempt.id.value)
             ?: error("갱신하려는 결제 시도가 없다: ${attempt.id.value}")
-        entity.applyResult(attempt.status, attempt.providerReference)
+        entity.applyResult(attempt.status, attempt.providerReference, attempt.unknownReason)
         return attempt
     }
 

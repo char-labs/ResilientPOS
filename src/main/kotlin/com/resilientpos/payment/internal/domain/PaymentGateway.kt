@@ -49,8 +49,12 @@ data class AuthorizationRequest(
  */
 sealed interface AuthorizationOutcome {
 
-    /** provider가 승인했다. 참조는 그쪽 원장을 가리키므로 반드시 있다. */
-    data class Approved(val providerReference: String) : AuthorizationOutcome
+    /**
+     * provider가 승인했다. 참조는 그쪽 원장을 가리키므로 반드시 있다.
+     * [amount]는 provider가 승인했다고 말한 금액(통화 포함)이다. 요청한 금액과 같다고 가정하지 않는다 —
+     * 다르면 승인으로 굳히지 않고 호출자가 결과 불명으로 다룬다.
+     */
+    data class Approved(val providerReference: String, val amount: Money) : AuthorizationOutcome
 
     /** provider가 거절했다. 결과를 받았다는 점에서 [Unknown]과 다르다. 참조를 주지 않는 provider도 있다. */
     data class Declined(val providerReference: String?) : AuthorizationOutcome

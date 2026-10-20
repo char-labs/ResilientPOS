@@ -82,4 +82,31 @@ class FakePaymentGatewayTest {
         assertIs<AuthorizationOutcome.Declined>(authorize("45.01", usd))
         assertIs<AuthorizationOutcome.Approved>(authorize("45.00", usd))
     }
+
+    @Test
+    fun `승인에는 시도와 같은 금액이 실린다`() {
+        assertEquals(Money.of("4500", krw), assertIs<AuthorizationOutcome.Approved>(authorize("4500")).amount)
+        assertEquals(Money.of("4502", krw), assertIs<AuthorizationOutcome.Approved>(query("4502")).amount)
+    }
+
+    @Test
+    fun `끝자리가 5이면 승인 요청은 결과를 모르고 조회는 1단위 많은 금액으로 승인한다`() {
+        assertIs<AuthorizationOutcome.Unknown>(authorize("4505"))
+
+        val outcome = assertIs<AuthorizationOutcome.Approved>(query("4505"))
+        assertEquals(Money.of("4506", krw), outcome.amount)
+        assertEquals("FAKE-${paymentId.value}", outcome.providerReference)
+    }
+
+    @Test
+    fun `끝자리가 6이면 승인 요청도 조회도 1단위 많은 금액으로 승인한다`() {
+        assertEquals(Money.of("4607", krw), assertIs<AuthorizationOutcome.Approved>(authorize("4606")).amount)
+        assertEquals(Money.of("4607", krw), assertIs<AuthorizationOutcome.Approved>(query("4606")).amount)
+    }
+
+    @Test
+    fun `1단위 많음은 그 통화의 최소 단위 하나다`() {
+        assertEquals(Money.of("45.07", usd), assertIs<AuthorizationOutcome.Approved>(authorize("45.06", usd)).amount)
+        assertEquals(Money.of("45.06", usd), assertIs<AuthorizationOutcome.Approved>(query("45.05", usd)).amount)
+    }
 }

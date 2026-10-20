@@ -2,6 +2,7 @@ package com.resilientpos.payment.internal.adapter.persistence.command
 
 import com.resilientpos.foundation.Money
 import com.resilientpos.contract.PaymentAttemptKind
+import com.resilientpos.contract.PaymentUnknownReason
 import com.resilientpos.payment.PaymentAttemptStatus
 import com.resilientpos.payment.PaymentId
 import com.resilientpos.payment.internal.domain.PaymentAttempt
@@ -53,6 +54,7 @@ class PaymentAttemptEntity private constructor(
     status: PaymentAttemptStatus,
     providerReference: String?,
     retriedFrom: UUID?,
+    unknownReason: PaymentUnknownReason?,
 ) : BaseEntity() {
 
     @Id
@@ -93,13 +95,18 @@ class PaymentAttemptEntity private constructor(
     var retriedFrom: UUID? = retriedFrom
         protected set
 
+    @Enumerated(EnumType.STRING)
+    var unknownReason: PaymentUnknownReason? = unknownReason
+        protected set
+
     /**
-     * provider 결과를 반영한다. 바꿀 수 있는 것이 이 둘뿐이라는 사실을 시그니처로 말한다.
+     * provider 결과를 반영한다. 바꿀 수 있는 것이 이 셋뿐이라는 사실을 시그니처로 말한다.
      * 무엇으로 바꿀 수 있는지는 aggregate의 `approve`·`decline`·`markUnknown`이 정하고, 여기는 그 결과를 옮기기만 한다.
      */
-    fun applyResult(status: PaymentAttemptStatus, providerReference: String?) {
+    fun applyResult(status: PaymentAttemptStatus, providerReference: String?, unknownReason: PaymentUnknownReason?) {
         this.status = status
         this.providerReference = providerReference
+        this.unknownReason = unknownReason
     }
 
     fun toDomain(): PaymentAttempt = PaymentAttempt.restore(
@@ -113,6 +120,8 @@ class PaymentAttemptEntity private constructor(
         status = status,
         providerReference = providerReference,
         retriedFrom = retriedFrom?.let(::PaymentId),
+        // 롤링 배포 중 이전 버전이 만든 UNKNOWN 행은 사유가 null이다. 그 버전에는 금액 대조가 없어 불명 사유가 이것 하나였다.
+        unknownReason = unknownReason ?: PaymentUnknownReason.RESULT_UNCONFIRMED.takeIf { status == PaymentAttemptStatus.UNKNOWN },
     )
 
     companion object {
@@ -128,6 +137,7 @@ class PaymentAttemptEntity private constructor(
             status = attempt.status,
             providerReference = attempt.providerReference,
             retriedFrom = attempt.retriedFrom?.value,
+            unknownReason = attempt.unknownReason,
         )
     }
 }
