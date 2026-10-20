@@ -111,8 +111,8 @@ t_reconciliation_case.resolved_by_owner_id ────────────�
 ### `TerminalCredentialEntity` — 단말을 인증하는 비밀값 한 건
 - 역할: 토큰의 SHA-256 hex(`token_hash`)와 폐기 시각(`revoked_at`)을 든다. 평문 토큰은 저장하지 않는다. 폐기된 행도 이력으로 남는다. 만료는 없다.
 - 관계: `terminal_id`로 단말을 가리킨다. 인증은 이 표와 `t_terminal`을 한 조회로 읽는다(해시가 같고 폐기되지 않았으며 단말이 `ACTIVE`).
-- 방어선: unique `ux_terminal_credential_token_hash`(해시 하나가 두 단말을 가리키지 않는다), partial unique `ux_terminal_credential_active`(`revoked_at is null`인 행은 단말당 하나). 둘 다 삭제 행에도 걸린다.
-- 만드는 곳: `register`와 `rotateCredential`. 회전은 옛 행에 `revoked_at`을 찍고 flush한 뒤 새 행을 넣는다. 먼저 내보내지 않으면 Hibernate가 INSERT를 먼저 보내 partial unique에 걸린다.
+- 방어선: unique `ux_terminal_credential_token_hash`(해시 하나가 두 단말을 가리키지 않는다), 커밋 때 검사하는 exclusion 제약 `ux_terminal_credential_active`(`revoked_at is null`인 행은 단말당 하나). 둘 다 삭제 행에도 걸린다.
+- 만드는 곳: `register`와 `rotateCredential`. 회전은 옛 행에 `revoked_at`을 찍고 새 행을 넣어 한 커밋으로 끝낸다. Hibernate가 INSERT를 UPDATE보다 먼저 보내도 제약은 커밋 때 검사하므로 flush로 순서를 맞추지 않는다.
 
 ### `OwnerEntity` — 점주 계정 하나
 - 역할: 점주(SaaS 고객)의 로그인 이메일과 비밀번호 해시(`{bcrypt}` 접두어)를 든다. 이메일은 앱이 소문자로 정규화해 넣는다. 평문 비밀번호는 저장하지 않는다. 로그인 실패 횟수와 세션은 Redis에 있고 이 표에 없다.
