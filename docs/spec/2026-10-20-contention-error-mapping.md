@@ -16,7 +16,7 @@
   - 점주 이메일(`OwnerManagement.signUp`)과 단말 코드(`TerminalManagement.register`)도 이 규칙으로 옮긴다. 응답(`409 OWNER_EMAIL_DUPLICATED`, `409 TERMINAL_CODE_DUPLICATED`)은 그대로다. 두 어댑터의 `save`에서 flush와 번역이 빠진다.
   - SQL 순서를 맞추려는 flush(`TerminalPersistenceAdapter.update(credential)`이 새 유효 행보다 옛 행의 폐기를 먼저 내보내는 것)는 번역과 무관해서 남는다.
   - 블록 밖에서 잡는 이유: `Tx.masterTx`와 `Lock` 블록의 커밋은 블록이 끝날 때 일어난다. 세 Facade 메서드는 바깥 트랜잭션 없이 불린다(`Tx.masterTx`는 `REQUIRED`라 바깥이 있으면 커밋이 바깥으로 간다). 호출자 트랜잭션에 합류하는 `createInCallerTransaction`은 번역하지 않는다. 이 계약은 각 KDoc에 적는다.
-  - 구조 테스트(ArchUnit)가 `..adapter.persistence..` 패키지에서 판별 함수(`isUniqueViolationOf`) 호출을 막는다. 규칙은 볼트 rules `domain-modeling-kotlin.md`(§5·§7)에 적고, `effective-java-for-kotlin.md`의 Item 73 줄에 DB 제약 위반은 Facade가 번역한다는 예외를 단다.
+  - 구조 테스트(ArchUnit)가 `..adapter.persistence..` 패키지에서 판별 함수(`isUniqueViolationOf`) 호출을 막는다. 결정은 [도메인 모델](../wiki/domain-model.md) §4.2에, 코드 형태는 볼트 rules `domain-modeling-kotlin.md`(§5·§7)에 적고, `effective-java-for-kotlin.md`의 Item 73 줄에 DB 제약 위반은 Facade가 번역한다는 예외를 단다.
 - 제약 이름 판별 함수 `isUniqueViolationOf`를 `platform`의 최상위 확장 함수 하나로 옮긴다. main에는 `OwnerPersistenceAdapter`와 `TerminalPersistenceAdapter`에 같은 private 사본이 있었다. 사용처는 세 Facade다. 판별 방식은 아래 범위 조정에서 바꿨다.
 - 실패·재시도·복구: 늦은 요청의 트랜잭션은 롤백되고 아무것도 남지 않는다. `POST /v1/orders`는 `clientOrderId`로 멱등이라 단말이 다시 보내면 먼저 저장된 주문과 내용이 같을 때 그 주문을 받고, 다르면 `409 IDEMPOTENCY_CONFLICT`를 받는다. sync 항목이 늦은 쪽이면 배치가 500이고 그 항목은 기록되지 않는다. 재전송하면 다시 처리되어 먼저 저장된 주문과 내용이 같을 때 `APPLIED`, 다르면 `REJECTED`(`IDEMPOTENCY_CONFLICT`)다.
 - 관측성: HTTP 경로는 ERROR 로그의 `INTERNAL_ERROR`에서 WARN 로그의 `errorCode=CONCURRENT_REQUEST`로 옮겨 가고 5xx 지표에서 빠진다. 경합 예외 메시지의 주문 키로 대상을 찾는다. sync 경로는 그대로다. 더하는 로그와 metric은 없다.
@@ -95,6 +95,7 @@
 - src/test/kotlin/com/resilientpos/platform/**
 - src/test/kotlin/com/resilientpos/ConstraintTranslationTest.kt
 - docs/wiki/entity-map.md
+- docs/wiki/domain-model.md
 - docs/spec/2026-10-20-contention-error-mapping.md
 
 ## 인수 조건
@@ -116,7 +117,7 @@
 - [엔티티 지도](../wiki/entity-map.md): `t_order` 방어선 줄에 주문 생성 API에서 겹친 위반은 Facade가 409 `CONCURRENT_REQUEST`로 바꾸고 sync 항목이 지면 배치 500이라는 것을 적는다. 4.1 흐름 표의 주문 생성 줄과 4.5 멱등 표의 주문 생성 줄에 늦은 HTTP 요청은 409이고 재요청 결과는 먼저 저장된 주문과 내용이 같을 때 그 주문이라는 것을 적는다. 4.2의 "배치 전체가 409·500이면" 줄은 main 그대로다. 단말·점주 방어선 줄의 "persistence adapter가 제약 이름으로 가려"를 Facade로 고친다.
 - 현재 상태(`docs/wiki/current-state.md`, 볼트)는 볼트에서 갱신한다. 주문 생성의 락이 통하지 않을 때 "오류를 받는다", 주문 API의 "같은 키의 동시 요청이 unique 제약 위반으로 끝나는 것은 알려진 빈틈이다", `CONCURRENT_REQUEST` 설명의 "unique 제약 위반은 계속 500이다"를 고친다. sync 배치 오류의 409/500 서술은 main 그대로다.
 - 볼트 rules: `domain-modeling-kotlin.md` §5에 저장 메서드는 저장만 하고 제약 위반은 커밋을 소유한 Facade가 번역한다는 규칙을, §7에 하지 말 것 한 줄을 더한다. `effective-java-for-kotlin.md` Item 73 줄에 DB 제약 위반의 예외를 단다. 고친 뒤 `make bootstrap`으로 다시 복사한다. 저장소에 추적되지 않는 경로라 커밋은 없다.
-- [도메인 모델](../wiki/domain-model.md)은 번역 자리를 서술하지 않아 바꾸지 않는다. Kafka·Modulith 작업이 아니라 Modulith·Kafka 키워드(볼트)도 바꾸지 않는다.
+- [도메인 모델](../wiki/domain-model.md) §4.2에 저장 메서드는 저장만 하고 제약 위반은 커밋을 소유한 Facade가 번역한다는 결정을 한 줄 더한다. 열린 PR #94·#98은 같은 파일의 §4.3·§4.7을 고쳐서 절이 겹치지 않는다. Kafka·Modulith 작업이 아니라 Modulith·Kafka 키워드(볼트)도 바꾸지 않는다.
 - 요구사항 변화: 없다. 같은 키의 겹친 생성은 여전히 늦은 쪽이 실패하고 정합성은 unique가 지킨다. 실패의 HTTP 표현만 재시도할 수 있는 409가 된다.
 
 ## 분할 계획
