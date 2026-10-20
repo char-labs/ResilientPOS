@@ -218,4 +218,4 @@
 - 모듈 안 리스너 실험 변경(`PaymentEvent.kt`, `PaymentAttemptCreatedListener.kt`, 결과 불명 리스너, 측정 테스트)도 되돌렸다.
 - 상대 링크: 가리키는 저장소 파일이 모두 있다. #94의 spec은 아직 main에 없어 PR 링크와 경로로 적었다.
 - 외부 링크 9개가 모두 HTTP 200으로 열렸다.
-- `python3 scripts/check_pr.py --base origin/main --worktree`: PASS.
+- `python3 scripts/check_pr.py --base origin/main --worktree`: PASS. 제출 전 `python3 scripts/check_pr.py --base origin/main`: PASS.
