@@ -22,7 +22,7 @@
 - `UNKNOWN`이 된 사유를 시도 행에 남긴다(`unknown_reason`). 값은 `RESULT_UNCONFIRMED`(전송 실패·시간 초과처럼 결과를 받지 못함)와 `AMOUNT_MISMATCH`(받은 승인의 금액이 다름) 둘이다. `UNKNOWN`이 될 때 정하고 그 뒤로 바꾸지 않는다. 승인 요청 응답의 금액·참조는 WARN 로그에 남긴다.
 
 **6. case 상태는 System Design §5의 다섯 개다: `OPEN → INVESTIGATING → AUTO_REPAIRED 또는 MANUAL_REVIEW → RESOLVED`.**
-- 분류 규칙 v1은 두 사유 모두 `MANUAL_REVIEW`로 보낸다. 두 조건 모두 사람 없이 안전하게 내릴 결론이 없기 때문이다. case를 여는 명령이 `OPEN` 생성, `INVESTIGATING`(규칙 v1 평가), `MANUAL_REVIEW` 분류를 한 커밋에 처리하고 행에는 분류 결과만 남는다. `OPEN`·`INVESTIGATING`은 같은 커밋 안의 중간 상태라 관측되지도 따로 기록되지도 않는다. 그 전이는 연 시각(`opened_at`, 넘긴 시각)·분류 규칙 버전·상태가 말한다. 처음에는 전이마다 감사 줄을 남겼지만, 세 줄이 같은 시각에 새 정보 없이 생겨 없앴다(2026-10-20 범위 조정).
+- 분류 규칙 v1은 두 사유 모두 `MANUAL_REVIEW`로 보낸다. 두 조건 모두 사람 없이 안전하게 내릴 결론이 없기 때문이다. case를 여는 명령이 `OPEN` 생성, `INVESTIGATING`(규칙 v1 평가), `MANUAL_REVIEW` 분류를 한 커밋에 처리하고 행에는 분류 결과만 남는다. `OPEN`·`INVESTIGATING`은 같은 커밋 안의 중간 상태라 관측되지도 따로 기록되지도 않는다. 그 전이는 연 시각(`opened_at`, 넘긴 시각)·분류 규칙 버전·상태가 말한다. 처음에는 전이마다 감사 줄을 남겼지만, 세 줄이 새 정보 없이 생겨 없앴다. 넘긴 시각은 `opened_at`에, 분류한 시각은 `created_at`에 그대로 남는다(2026-10-20 범위 조정).
 - `AUTO_REPAIRED`는 enum 값과 상태 모델 문서에만 있다. 그리로 가는 전이와 규칙은 자동 조치 규칙을 만드는 PR이 더한다.
 - 분류는 사유에 대한 else 없는 `when`이다. 사유가 늘면 분류를 정하지 않고는 컴파일되지 않는다. 규칙이 하나라 전략 객체로 올리지 않는다.
 - case는 분류 규칙 버전(정수, 지금 1)을 저장한다. 규칙이 바뀌어도 옛 case가 왜 `MANUAL_REVIEW`로 갔는지 남는다. 여는 조건 자체는 버전 대신 사유와 그때의 `query_count`를 근거로 남긴다. 상한은 설정 값이라 버전을 붙여도 설정 이력과 맞출 수 없다.
@@ -121,7 +121,7 @@
   - `RECONCILIATION_AMOUNT_MISMATCH`(422)
   - `RECONCILIATION_CASE_ALREADY_RESOLVED`(409)
   - `RECONCILIATION_PAYMENT_ALREADY_CONCLUDED`(409): 결제 시도가 이미 해소 결론과 다른 결말이다. case는 해소되지 않은 채라 `RECONCILIATION_CASE_ALREADY_RESOLVED`와 구분한다(2026-10-20 범위 조정)
-- **스키마**: `t_payment_attempt` 컬럼 셋, 새 표 둘(스키마 변경 검토)
+- **스키마**: `t_payment_attempt` 컬럼 셋, 새 표 하나(스키마 변경 검토)
 - **바뀌지 않는 것**: `PaymentAttemptStatus`에 새 값이 없다. 기존 이벤트의 `event_type`·`listener_id`도 바뀌지 않는다.
 
 ### 실패와 복구
@@ -190,7 +190,7 @@
 6. 같은 `paymentId`의 사실이 두 번 와도 case는 하나다. 열린 case는 `MANUAL_REVIEW`이고 분류 규칙 버전 1이며, 연 시각은 넘긴 시각이고 해소 기록은 없다.
 7. 점주가 자기 매장의 case를 `APPROVED`(참조·같은 금액·사유)로 해소하면 한 커밋에 다음이 모두 남는다. case는 `RESOLVED`가 되고 해소 기록(점주·시각·결론·참조·승인 금액·사유)이 남는다. 시도는 `APPROVED`와 그 참조가 되고 `PaymentApproved` 발행 기록이 생긴다. 그 뒤 주문이 `PAID`가 된다(Kafka 포함 통합).
 8. `DECLINED`로 해소하면 시도가 `DECLINED`, 주문은 `CHECKOUT_REQUESTED`다. 그 시도의 재결제가 승인되면 주문이 `PAID`가 된다.
-9. 승인 금액이 다르면 `422 RECONCILIATION_AMOUNT_MISMATCH`이고 아무것도 바뀌지 않는다. 승인에 참조나 금액이 없거나, 금액 불일치 case의 거절에 참조가 없거나, 사유가 비었거나 500자를 넘거나, 사유·참조에 NUL 문자가 있으면 `400 INVALID_RECONCILIATION_RESOLUTION`이다.
+9. 승인 금액이 다르면 `422 RECONCILIATION_AMOUNT_MISMATCH`이고 아무것도 바뀌지 않는다. 승인에 참조나 금액이 없거나, 금액 불일치 case의 거절에 참조가 없거나, 사유가 비었거나 500자를 넘거나, 참조가 255자를 넘거나, 사유·참조에 NUL 문자가 있으면 `400 INVALID_RECONCILIATION_RESOLUTION`이다.
 10. 다른 매장의 case와 없는 case는 `404 RECONCILIATION_CASE_NOT_FOUND`, 남의 매장 경로는 `404 STORE_NOT_FOUND`, 세션이 없으면 401이다.
 11. 해소된 case에 같은 결론이 다시 오면 200과 같은 결과이고 해소 기록이 바뀌지 않는다. 다른 결론이면 `409 RECONCILIATION_CASE_ALREADY_RESOLVED`다.
 12. 같은 case의 해소가 동시에 둘 와도 결제 확정은 한 번이고 해소 기록은 먼저 커밋한 요청의 것이다.
@@ -267,14 +267,14 @@ create index ix_reconciliation_case_store on t_reconciliation_case (store_id, st
    - case의 근거 컬럼(금액·불명 사유·조회 횟수·알려 준 금액)은 넘긴 시점의 사본이다(질문 5). 알려 준 금액·참조는 다른 곳에 없다.
    - 해소 컬럼(`resolved_at`·`resolved_by_owner_id`·`decision`·`provider_reference`·`approved_amount`·`approved_currency`·`note`)은 누가·언제·무엇으로·왜 해소했는지 남기는 유일한 기록이다.
    - `resolved_by_owner_id`는 행위자 ID라 `t_store.owner_id`에서 도출하지 않는다. 지금은 매장당 점주가 하나라 같은 값이지만, 해소 기록은 그 시점에 누가 했는지를 남긴다.
-   - 근거와 해소 기록을 따로 표(evidence·이력)로 빼지 않는다. 근거는 출처가 payment 하나라 모양이 고정이고, 해소는 case당 한 번이다. 상태 전이마다 줄을 남기는 이력 표도 두지 않는다. `OPEN`·`INVESTIGATING`·`MANUAL_REVIEW`는 같은 커밋·같은 시각이라 `status`·`rule_version`·`opened_at` 이상의 정보가 없다. POS·provider 같은 출처나 재개·배정 같은 이력이 생기면 그 PR이 뺀다(질문 3으로 기존 행을 이 컬럼에서 채울 수 있다).
+   - 근거와 해소 기록을 따로 표(evidence·이력)로 빼지 않는다. 근거는 출처가 payment 하나라 모양이 고정이고, 해소는 case당 한 번이다. 상태 전이마다 줄을 남기는 이력 표도 두지 않는다. `OPEN`·`INVESTIGATING`·`MANUAL_REVIEW`는 같은 커밋이라 `status`·`rule_version`·`opened_at`(넘긴 시각)·`created_at`(분류한 시각) 이상의 정보가 없다. POS·provider 같은 출처나 재개·배정 같은 이력이 생기면 그 PR이 뺀다(질문 3으로 기존 행을 이 컬럼에서 채울 수 있다).
    - `opened_at`은 `created_at`과 다르다. consumer가 처리한 때가 아니라 넘긴 시각(이벤트의 `occurredAt`)이다. `resolved_at`도 같은 이유로 `updated_at`과 따로 둔다. 감사 컬럼에 업무 시각을 싣지 않는다.
 2. **지금 읽는가.**
    - `query_count`: 상한 판정과 넘김 이벤트가 읽는다.
    - `unknown_reason`: 넘김 이벤트가 읽고, case 근거로 점주 목록에 보인다.
    - `reconciliation_requested_at`: 주기 작업의 대상 조회, gauge, 조회 확정·결론 적용의 허용 판정이 읽는다.
    - case 컬럼은 점주 목록·해소 대조·결론 적용이 읽는다. `rule_version`은 점주 목록이 보여 준다.
-   - 해소의 멱등 판정이 `decision`을, 점주 목록이 `opened_at`(`openedAt`)을 읽는다. 해소 기록의 나머지(점주·시각·참조·승인 금액·사유)는 이 PR에서 읽는 API가 없다. 하지만 "근거·감사 없이 해결하지 않는다"(domain-model §2)가 쓰기 시점에 요구하는 기록이고 나중에 채울 수 없는 값이라 질문 4로 둔다.
+   - 해소의 멱등 판정이 `resolved_at`(해소 여부)과 `decision`을, 점주 목록이 `opened_at`(`openedAt`)을 읽는다. 해소 기록의 나머지(점주·시각·참조·승인 금액·사유)는 이 PR에서 읽는 API가 없다. 하지만 "근거·감사 없이 해결하지 않는다"(domain-model §2)가 쓰기 시점에 요구하는 기록이고 나중에 채울 수 없는 값이라 질문 4로 둔다.
 3. **기존 행은 채울 수 있는가.**
    - `query_count`는 0이다. 기존 `UNKNOWN` 행은 이미 여러 번 조회됐을 수 있지만 기록이 없어 0부터 센다. 그래서 배포 뒤 최대 60회(약 1시간) 더 조회한 뒤 넘어간다.
    - `unknown_reason`은 기존 `UNKNOWN` 행만 `RESULT_UNCONFIRMED`로 채운다. 이 PR 전에는 금액을 대조하지 않았으므로 불명 사유는 그것 하나였고, 그래서 정확히 채울 수 있다. 이미 확정된 행은 null로 둔다(기록 이전).
@@ -310,7 +310,7 @@ create index ix_reconciliation_case_store on t_reconciliation_case (store_id, st
 9. **payload에 실리는가.**
    - `query_count`·`unknown_reason`·넘긴 시각(`occurredAt`)은 새 이벤트 `PaymentReconciliationRequested`에 실린다. 첫 버전이라 하위 호환을 따질 이전 형식이 없고, 필드 목록이 계약이다(#78).
    - case 표는 이벤트나 캐시에 실리지 않는다. 점주 API 응답은 DTO다.
-- 대조 기록: 재대조 대기(2026-10-20 감사 표를 case 한 표로 접어 V017과 답이 바뀌었다). 이전 기록: code-reviewer 에이전트(읽기 전용), 2026-10-20, 수정 후 재대조 불일치 없음, 첫 대조의 불일치 2건(질문 7 V016 update 술어의 kind 누락, 질문 2 감사 기록을 읽는 코드 누락)은 33d48df·ad8d1b8에서 고쳐졌다(V006·V013·V016·V017, PaymentAttemptEntity·PaymentAttemptPersistenceAdapter, ReconciliationCaseEntity·ReconciliationCaseActionEntity·ReconciliationCasePersistenceAdapter·ReconciliationCaseQueries, PaymentAttempt·PaymentManagement·UnknownPaymentResolver, ReconciliationCase·ReconciliationCaseAction·ReconciliationManagement·PaymentReconciliationRequestedListener, PaymentReconciliationRequested, JdslQueryExecutor·BaseEntity·ApiControllerAdvice, SchemaMigrationTest·ReconciliationCaseResolveTest)
+- 대조 기록: code-reviewer 에이전트(읽기 전용), 2026-10-20, 세 번째 대조 불일치 없음(계약 요약의 표 수를 고친 뒤 확인, 감사 표를 case 한 표로 접은 뒤의 스키마), 앞선 이력은 첫 대조 2건(질문 7 V016 술어, 질문 2 감사 기록 읽기)을 33d48df·ad8d1b8에서 고쳤고 두 번째 대조는 불일치 없음(V016·V017, PaymentAttemptEntity, ReconciliationCaseEntity·ReconciliationCasePersistenceAdapter·ReconciliationCaseQueries, ReconciliationCase·Resolution·ReconciliationManagement, PaymentManagement, JdslQueryExecutor·BaseEntity·EventPublicationResubmitter, SchemaMigrationTest·ReconciliationRows·ReconciliationManagementIntegrationTest·ReconciliationCaseResolveTest, entity-map)
 
 ## 검증
 - **정상**
@@ -399,7 +399,7 @@ push·PR 생성·머지 직전에 다시 확인하고, 먼저 머지된 쪽에 �
 - 범위 조정 셋을 구현 전에 spec에 먼저 적었다.
   - `PAYMENT_IN_RECONCILIATION`(409): 이미 넘긴 시도에 조회 확정·불명 기록·넘김이 다시 오면 aggregate가 거절한다.
   - `RECONCILIATION_PAYMENT_ALREADY_CONCLUDED`(409): 결제가 이미 해소 결론과 다른 결말이다. 처음에는 `RECONCILIATION_CASE_ALREADY_RESOLVED`를 빌려 썼다. 하지만 이 경우 case는 해소되지 않은 채라 점주가 "이미 해소됨"으로 오해한다. 그래서 나눴다.
-  - 감사 기록 자식 표(`t_reconciliation_case_action`)를 없애고 case 한 표로 접었다(사용자 결정). 전이마다 남기던 SYSTEM 세 줄은 같은 시각에 새 정보가 없었고, 해소는 case당 한 번이라 목록이 필요 없었다. 자식 엔티티·저장소·도메인 타입 다섯 개와 목록 조회의 조인이 사라졌다.
+  - 감사 기록 자식 표(`t_reconciliation_case_action`)를 없애고 case 한 표로 접었다(사용자 결정). 전이마다 남기던 SYSTEM 세 줄은 상태·규칙 버전·두 시각 이상의 정보가 없었고, 해소는 case당 한 번이라 목록이 필요 없었다. 자식 엔티티·저장소·도메인 타입 다섯 개와 목록 조회의 조인이 사라졌다.
 - **구현에서 정한 것**
   - 시도의 전이 이름은 `recordUnknownQuery`(불명 조회 기록, 상한에 닿으면 넘김), `requestReconciliationForAmountMismatch`(금액 불일치 넘김), `concludeApproved`·`concludeDeclined`(reconciliation 결론)다.
   - case 전이는 `ReconciliationCase.open`·`resolve`이고, 이벤트가 없어 사실 타입 자리에 `Nothing`을 둔 `Transition`을 돌려준다.
