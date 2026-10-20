@@ -4,10 +4,10 @@ import com.resilientpos.owner.internal.domain.Owner
 import com.resilientpos.owner.internal.domain.OwnerEmail
 import com.resilientpos.owner.internal.domain.OwnerRepository
 import com.resilientpos.platform.JdslQueryExecutor
+import com.resilientpos.platform.isUniqueViolationOf
 import com.resilientpos.platform.selectFrom
 import jakarta.persistence.EntityManager
 import jakarta.persistence.PersistenceException
-import java.sql.SQLException
 import org.springframework.stereotype.Component
 import org.springframework.transaction.annotation.Transactional
 
@@ -42,10 +42,5 @@ class OwnerPersistenceAdapter(
 
     private companion object {
         const val OWNER_EMAIL_CONSTRAINT = "ux_owner_email"
-        const val UNIQUE_VIOLATION = "23505"
-
-        fun Throwable.isUniqueViolationOf(constraint: String): Boolean =
-            generateSequence(this) { it.cause }.filterIsInstance<SQLException>()
-                .any { it.sqlState == UNIQUE_VIOLATION && it.message.orEmpty().contains("\"$constraint\"") }
     }
 }

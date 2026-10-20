@@ -1,6 +1,7 @@
 package com.resilientpos.terminal.internal.adapter.persistence.command
 
 import com.resilientpos.platform.JdslQueryExecutor
+import com.resilientpos.platform.isUniqueViolationOf
 import com.resilientpos.platform.selectFrom
 import com.resilientpos.terminal.TerminalId
 import com.resilientpos.terminal.TerminalStatus
@@ -9,7 +10,6 @@ import com.resilientpos.terminal.internal.domain.TerminalCredential
 import com.resilientpos.terminal.internal.domain.TerminalRepository
 import jakarta.persistence.EntityManager
 import jakarta.persistence.PersistenceException
-import java.sql.SQLException
 import org.springframework.stereotype.Component
 import org.springframework.transaction.annotation.Transactional
 
@@ -97,10 +97,5 @@ class TerminalPersistenceAdapter(
 
     private companion object {
         const val TERMINAL_CODE_CONSTRAINT = "ux_terminal_store_code"
-        const val UNIQUE_VIOLATION = "23505"
-
-        fun Throwable.isUniqueViolationOf(constraint: String): Boolean =
-            generateSequence(this) { it.cause }.filterIsInstance<SQLException>()
-                .any { it.sqlState == UNIQUE_VIOLATION && it.message.orEmpty().contains("\"$constraint\"") }
     }
 }
