@@ -150,6 +150,7 @@
   - #94는 `docs/wiki/domain-model.md` §4.3의 Modulith 버전 올리기 절차 5번과 재전송 문단을 고친다. 이 PR이 고칠 저장 형식 문단과는 다른 줄이라(사이에 바뀌지 않는 줄이 있다) 겹치지만 충돌은 작다. 먼저 머지된 쪽에 맞춰 rebase한다.
   - 진행 중인 #96(`feature/payment-reconciliation-case`)과 #79(`fix/contention-error-mapping`)는 아직 push되지 않았다. #96이 `contract`에 이벤트를 더하면 강제 테스트가 fixture를 요구한다. 먼저 머지된 쪽에 맞춰 rebase하고, #96이 먼저면 그 이벤트의 fixture와 `schemaVersion`을 이 PR에서 더한다.
   - push·PR 생성·머지 직전에 같은 확인을 다시 하고 결과를 여기에 덧붙인다.
+  - push 직전 재확인(2026-10-20): origin/main은 9c34aaf 그대로다. 열린 PR은 #94와 #97(`fix/contention-error-mapping`)이다. #97은 이 PR과 경로가 겹치지 않는다. `git merge-tree`로 #94·#97 모두와 충돌이 없음을 확인했다. #96은 아직 push되지 않았다.
   - #94는 이 PR이 기대는 재전송 서술(재전송 루프가 역직렬화 실패에 실행 전체를 끊는다, #1904)이 있는 문단도 고친다. #94가 먼저 머지되면 rebase할 때 그 서술이 그대로인지 다시 대조한다.
 
 ## TDD 검증 기록
@@ -185,7 +186,7 @@
   - `./gradlew test --tests 'com.resilientpos.contract.*'`: 6개 통과, multi-review 반영 뒤 8개 통과.
   - `./gradlew test` 전체: 97개 클래스 596개 테스트, 실패 0(2분 37초). multi-review 반영 뒤 다시 실행해 598개, 실패 0(2분 20초).
   - wiki 8절의 SQL(높은 버전의 미완료 발행 기록 찾기): 임시 테스트로 `schemaVersion` 2인 `FAILED` 행을 넣고 실행해 그 행만 나오는 것을 확인했다(커밋하지 않음).
-  - `python3 scripts/check_pr.py --base origin/main --worktree`: PASS.
+  - `python3 scripts/check_pr.py --base origin/main --worktree`: PASS. 제출 전 `--worktree` 없이: PASS.
 - **multi-review**(Claude 실행 86/100, Codex 실행 FAIL, Gemini 미실행 CLI 없음)
   - 2/2 합의(Codex 막는 결함, Claude I3): 버전을 올리지 않는 필드 추가는 가드가 걸리지 않아, 롤링 배포 중 옛 pod의 재전송이 새 필드를 버린다. 사용자와 정해 "빠진 필드는 모름" 규칙과 필드 추가 체크리스트로 다뤘다(범위 절). 가드가 막는다는 서술을 "버전을 올린 변경에서"로 좁혔다.
   - 2/2: Jackson 동작이 커밋된 테스트로 고정되지 않았다(Codex 5, Claude I1). 고정 테스트를 더했다. 원시 `Int`가 빠진 경우도 실패함을 확인했다(Claude가 신뢰도 낮음으로 남긴 의문).
@@ -194,7 +195,7 @@
   - Codex 4: 삭제·이름 변경의 상위 호환 서술을 "non-null이면 실패, nullable·기본값이면 값 손실"로 고쳤다.
   - Codex 6: fixture 번호 빈틈을 테스트로 검사한다. 수정 금지는 리뷰 명령으로 본다(`check_pr.py` 변경은 제외 절).
   - Codex 2: DLT 테스트의 TDD 순서 예외를 TDD 기록에 사후 mutation 검증으로 적었다.
-  - Codex 7, Claude: `--worktree` 없는 검사 결과는 제출 직전에 아래에 덧붙인다.
+  - Codex 7, Claude: `--worktree` 없는 검사 결과와 push 직전 겹침 재확인을 기록했다(검증, 분할 계획).
   - Claude 선택 항목 중 반영한 것: domain-model 요약을 정본 표로 연결, 빠진 `schemaVersion`은 1로 본다는 절차, 라이브러리 업그레이드 때의 탈출구, `__TypeId__` 헤더 고정, counter 첫 건 확인, enum 추가 DLT 가려내기, `EventContract` 파일 분리, 변경 경로 축소, 가드 호출의 이름 있는 인자와 오류 메시지 문구, 버린 대안 기록.
   - 반영하지 않은 것과 이유는 제외 절에 있다(재전송 통합 테스트, 소수 통화 고정, counter 사전 등록, `@TestFactory`, 배열 비교, 스캔 범위). 스캔 범위(jMolecules `@Externalized`, 설정 빈 방식)는 지금 쓰지 않아 해당 없다.
 - **Wiki.** [이벤트 계약](../wiki/event-contract.md)을 새로 썼다. [도메인 모델](../wiki/domain-model.md) §4.3의 토픽 목록 문장과 저장 형식 문단, §4.7 질문 9, [wiki 인덱스](../wiki/README.md)를 고쳤다. Modulith·Kafka 키워드(볼트)에는 다음을 더했다.
