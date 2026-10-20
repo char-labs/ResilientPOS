@@ -159,7 +159,7 @@ t_reconciliation_case.resolved_by_owner_id ────────────�
 | 3. 응답의 `lastAckedSequence` | 단말은 그 다음 순번부터 다시 보내고 `APPLIED`·`DUPLICATE`·`REJECTED`는 큐에서 지운다 | — | — |
 | 4. 이후 | 결제 요청을 배치에 싣지 않았으면 단말은 받은 `orderId`로 4.1의 2단계(checkout)부터 이어 간다 | 4.1과 같다 | — |
 
-배치 전체가 409(잠금 대기 초과, 같은 `clientOrderId`의 주문 생성 경합)나 500(DB 장애, 그 밖의 unique 위반)이면 이미 커밋된 항목은 남고 재전송 때 `DUPLICATE`로 돌아온다.
+배치 전체가 409(잠금 대기 초과, 같은 `clientOrderId`의 주문 생성 경합)나 500(DB 장애, 그 밖의 unique 위반)이면 이미 커밋된 항목은 남고 재전송 때 `DUPLICATE`로 돌아온다. 실패한 항목은 기록되지 않아 재전송 때 다시 적용되고, 주문 생성이 겹친 것이었으면 앞 주문으로 `APPLIED`다.
 
 ### 4.3 결제 거절 뒤 재결제
 
@@ -189,7 +189,7 @@ provider 응답이 끊기면 `t_payment_attempt.status`가 `UNKNOWN`으로 남�
 
 | 다시 오는 것 | 판정하는 표·제약 | 결과 |
 |---|---|---|
-| 같은 `(terminalId, clientOrderId)` 주문 생성 | `t_order` unique + `Lock` | 201, 같은 `orderId`. 내용이 다르면 `409 IDEMPOTENCY_CONFLICT` |
+| 같은 `(terminalId, clientOrderId)` 주문 생성 | `t_order` unique + `Lock` | 201, 같은 `orderId`. 내용이 다르면 `409 IDEMPOTENCY_CONFLICT`. 겹쳐서 늦은 쪽이 unique에 걸리면 `409 CONCURRENT_REQUEST`이고 다시 보내면 같은 `orderId` |
 | 같은 주문의 checkout | `t_order` 행 잠금 + 상태 | 200, 같은 회차·금액 |
 | 같은 `OrderPaymentRequested` 재배달 | `t_payment_attempt` 조회 + partial unique | 기존 시도를 돌려주고 이벤트를 다시 내지 않는다 |
 | 같은 `PaymentApproved`·`OrderPaid` 재배달 | 주문 상태 / `t_fulfillment` unique | 아무것도 하지 않는다 |
