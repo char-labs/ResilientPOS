@@ -90,6 +90,7 @@ class SyncCreateOrderRaceIntegrationTest(
             val cause = assertIs<ConcurrencyFailureException>(failure.cause)
             val violation = assertIs<SQLException>(cause.mostSpecificCause)
             assertEquals("23505", violation.sqlState, "잠금 대기 초과가 아니라 unique 위반이다")
+            // DB에 실제로 붙은 이름을 고정하려고 운영 코드의 상수 대신 리터럴로 든다. 이름을 바꾸면 상수와 함께 고친다.
             assertTrue(violation.message.orEmpty().contains("t_order_terminal_id_client_order_id_key"))
             assertEquals(0, count("t_sync_operation"), "REJECTED 등 접수 기록이 남지 않는다")
             assertEquals(0L, storedWatermark(), "watermark가 전진하지 않는다")

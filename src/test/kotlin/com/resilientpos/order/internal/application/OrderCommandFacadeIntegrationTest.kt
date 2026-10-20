@@ -177,7 +177,9 @@ class OrderCommandFacadeIntegrationTest(
 
         val e = assertFailsWith<ConcurrencyFailureException> { repository.save(duplicate) }
 
+        // DB에 실제로 붙은 이름을 고정하려고 운영 코드의 상수 대신 리터럴로 든다. 이름을 바꾸면 상수와 함께 고친다.
         assertTrue(e.mostSpecificCause.message.orEmpty().contains("t_order_terminal_id_client_order_id_key"))
+        assertTrue(e.message.orEmpty().contains(terminalId.value.toString()), "WARN 로그로 대상을 찾을 수 있게 주문 키를 남긴다")
         assertTrue(e.message.orEmpty().contains(clientOrderId.value.toString()), "WARN 로그로 대상을 찾을 수 있게 주문 키를 남긴다")
         assertEquals(1L, orderRowCount(terminalId, clientOrderId))
     }
