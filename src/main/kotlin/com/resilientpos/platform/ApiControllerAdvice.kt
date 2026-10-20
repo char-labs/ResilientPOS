@@ -78,7 +78,7 @@ class ApiControllerAdvice : ResponseEntityExceptionHandler() {
             .body(failBody(ErrorType.ACCESS_DENIED, null, request.describe()))
 
     /**
-     * 같은 대상에 요청이 겹쳐서 난 잠금 대기 초과, 버전 충돌, 같은 키의 동시 생성(persistence adapter가 제약 이름으로 가려 이 계열로 바꾼다). 서버 오류로 집계하지 않는다.
+     * 같은 대상에 요청이 겹쳐서 난 잠금 대기 초과, 버전 충돌, 같은 키의 동시 생성(커밋을 소유한 Facade가 제약 이름으로 가려 이 계열로 바꾼다). 서버 오류로 집계하지 않는다.
      * 다시 보내도 되는지는 endpoint가 멱등인지에 달려 있어서 문구로 약속하지 않는다.
      */
     @ExceptionHandler(ConcurrencyFailureException::class)

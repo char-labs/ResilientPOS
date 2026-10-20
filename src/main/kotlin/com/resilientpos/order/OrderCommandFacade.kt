@@ -9,8 +9,11 @@ import com.resilientpos.order.internal.domain.OrderRepository
 import com.resilientpos.platform.Lock
 import com.resilientpos.platform.logger
 import com.resilientpos.platform.Tx
+import com.resilientpos.platform.isUniqueViolationOf
 import com.resilientpos.terminal.TerminalId
 import java.time.Clock
+import org.springframework.dao.ConcurrencyFailureException
+import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.stereotype.Service
 
 /**
@@ -28,7 +31,9 @@ class OrderCommandFacade(
     /**
      * 같은 `(terminalId, clientOrderId)` 요청이 여러 인스턴스에 동시에 오면 [Lock]이 줄 세운다. 늦게 온 요청은 앞 요청의
      * 커밋을 기다렸다가 그 주문을 돌려받는다. 락은 최선 노력이고 방어선은 unique `(terminal_id, client_order_id)`다.
-     * 락이 통하지 않으면 늦은 요청은 커밋에서 unique 위반으로 실패한다.
+     * 락이 통하지 않거나 같은 키의 sync 항목과 겹쳐 이 요청이 늦으면 블록의 커밋에서 unique 위반이 나고,
+     * 이 메서드가 그것을 [ConcurrencyFailureException]으로 바꾼다. 다시 보내면 먼저 저장된 주문과 내용이 같을 때 그 주문을 받고,
+     * 다르면 `IDEMPOTENCY_CONFLICT`로 거절된다. 바깥 트랜잭션 안에서 부르지 않는다([Lock] 블록이 새 트랜잭션으로 커밋한다).
      */
     fun create(command: OrderCommand.Create): OrderCommand.Create.Result {
         // 가장 싼 거절을 가장 먼저 한다. line 개수는 command만 보면 알 수 있는데 뒤로 미루면
@@ -36,8 +41,17 @@ class OrderCommandFacade(
         // Redis도 커넥션도 건드리지 않는다.
         Order.requireLineCountWithinLimit(command.lines.size)
 
-        return Lock.executeWithLock(createLockKey(command.terminalId, command.clientOrderId)) {
-            createInCallerTransaction(command)
+        return try {
+            Lock.executeWithLock(createLockKey(command.terminalId, command.clientOrderId)) {
+                createInCallerTransaction(command)
+            }
+        } catch (e: DataIntegrityViolationException) {
+            // 락이 통하지 않거나 sync 항목과 겹친 경합이라 도메인 거절이 아니다.
+            if (!e.isUniqueViolationOf(CLIENT_ORDER_CONSTRAINT)) throw e
+            throw ConcurrencyFailureException(
+                "같은 키의 주문이 동시에 저장됐다 terminalId=${command.terminalId.value} clientOrderId=${command.clientOrderId.value}",
+                e,
+            )
         }
     }
 
@@ -45,6 +59,7 @@ class OrderCommandFacade(
      * 호출자 트랜잭션에 합류하는 생성. 잠그지 않는다 — 같은 키의 경합을 호출자가 스스로 줄 세우고 한 커밋으로 묶어야 할 때
      * (sync intake, watermark 행 잠금 아래) 부른다. 방어선은 [create]와 같은 unique `(terminal_id, client_order_id)`다.
      * 트랜잭션 안에서만 부른다. 밖에서 부르면 주문 행만 어댑터의 안전망 트랜잭션으로 커밋되어 호출자가 묶으려던 커밋이 갈라진다. 검사는 두지 않는다(계약은 이 KDoc이다).
+     * 같은 키가 겹치면 호출자의 커밋에서 [DataIntegrityViolationException]으로 실패하고 여기서는 번역하지 않는다(커밋이 호출자의 것이다).
      */
     fun createInCallerTransaction(command: OrderCommand.Create): OrderCommand.Create.Result {
         val existing = repository.findByClientOrderId(command.terminalId, command.clientOrderId)
@@ -116,6 +131,7 @@ class OrderCommandFacade(
     companion object {
         private val log by logger()
         private const val CREATE_LOCK_PREFIX = "order:create-lock"
+        private const val CLIENT_ORDER_CONSTRAINT = "t_order_terminal_id_client_order_id_key"
 
         fun createLockKey(terminalId: TerminalId, clientOrderId: ClientOrderId): String =
             "$CREATE_LOCK_PREFIX:${terminalId.value}:${clientOrderId.value}"
