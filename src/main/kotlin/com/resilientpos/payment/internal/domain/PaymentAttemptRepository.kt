@@ -31,8 +31,11 @@ interface PaymentAttemptRepository {
      */
     fun findUnknownAuthorizationIds(after: PaymentId?, limit: Int): List<PaymentId>
 
-    /** 결과를 모른 채 남은 승인 시도(kind=AUTHORIZATION, status=UNKNOWN)의 수. */
+    /** 결과를 모른 채 남은 승인 시도(kind=AUTHORIZATION, status=UNKNOWN)의 수. 넘긴 시도도 센다. */
     fun countUnknownAuthorizations(): Long
+
+    /** reconciliation case로 넘긴 뒤 아직 결과를 모르는 승인 시도(kind=AUTHORIZATION, status=UNKNOWN, 넘긴 시각 있음)의 수. */
+    fun countReconciliationPendingAuthorizations(): Long
 
     /**
      * 시도 행을 잠그고 읽는다. 결과를 적용하는 전이가 같은 시도에서 겹치지 않게 한다. 트랜잭션 안에서만 부른다.

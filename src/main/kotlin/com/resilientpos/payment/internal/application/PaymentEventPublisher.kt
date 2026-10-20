@@ -1,6 +1,7 @@
 package com.resilientpos.payment.internal.application
 
 import com.resilientpos.contract.PaymentApproved
+import com.resilientpos.contract.PaymentReconciliationRequested
 import com.resilientpos.payment.PaymentEvent
 import org.springframework.context.ApplicationEventPublisher
 import org.springframework.stereotype.Component
@@ -23,4 +24,6 @@ class PaymentEventPublisher(
     fun publish(event: PaymentEvent.Unknown) = publisher.publishEvent(event)
 
     fun publish(event: PaymentApproved) = publisher.publishEvent(event)
+
+    fun publish(event: PaymentReconciliationRequested) = publisher.publishEvent(event)
 }

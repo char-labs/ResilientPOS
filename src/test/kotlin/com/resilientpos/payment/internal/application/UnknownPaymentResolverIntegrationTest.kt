@@ -196,6 +196,7 @@ class UnknownPaymentResolverIntegrationTest(
         val queries: Array<String> = statistics.queries
         val rendered = queries.single { "PaymentAttemptEntity" in it }
         assertTrue("PaymentAttemptStatus.UNKNOWN" in rendered && "PaymentAttemptKind.AUTHORIZATION" in rendered, "리터럴이 없다: $rendered")
+        assertTrue("reconciliationRequestedAt" in rendered, "넘긴 시도를 거르지 않는다: $rendered")
         assertTrue("?" !in rendered && ":" !in rendered, "바인드 파라미터가 있다: $rendered")
     }
 
@@ -257,6 +258,46 @@ class UnknownPaymentResolverIntegrationTest(
         resolver.resolveUnknown()
 
         assertEquals(expectedAtStart.toDouble(), meterRegistry.get("payment.attempt.unknown").gauge().value())
+    }
+
+    /** 넘긴 시도를 만든다. 조회 횟수가 상한(3)에 닿아 넘긴 것과 같은 행 상태다. */
+    private fun markHandedOver(paymentId: PaymentId) {
+        jdbcTemplate.update(
+            "update t_payment_attempt set query_count = 3, reconciliation_requested_at = now() where id = ?",
+            paymentId.value,
+        )
+    }
+
+    @Test
+    fun `넘긴 시도는 작업이 고르지 않고 조회하지 않는다`() {
+        val handedOver = attemptAt("4684", PaymentAttemptStatus.UNKNOWN)
+        val resolvable = attemptAt("4692", PaymentAttemptStatus.UNKNOWN)
+        markHandedOver(handedOver)
+
+        resolver.resolveUnknown()
+
+        assertTrue(handedOver !in gateway.queried, "넘긴 시도를 조회했다")
+        assertEquals("UNKNOWN", status(handedOver))
+        assertEquals("APPROVED", status(resolvable))
+        assertTrue(handedOver !in repository.findUnknownAuthorizationIds(null, 10_000))
+    }
+
+    @Test
+    fun `한 주기 뒤 pending gauge가 넘긴 뒤 아직 UNKNOWN인 승인 시도 수와 같다`() {
+        markHandedOver(attemptAt("4694", PaymentAttemptStatus.UNKNOWN))
+        markHandedOver(attemptAt("4704", PaymentAttemptStatus.UNKNOWN))
+        attemptAt("4714", PaymentAttemptStatus.UNKNOWN)
+        val expected = jdbcTemplate.queryForObject(
+            "select count(*) from t_payment_attempt where kind = 'AUTHORIZATION' and status = 'UNKNOWN' and reconciliation_requested_at is not null and deleted_at is null",
+            Long::class.java,
+        )!!
+
+        resolver.resolveUnknown()
+
+        assertTrue(expected >= 2)
+        assertEquals(expected.toDouble(), meterRegistry.get("payment.attempt.reconciliation.pending").gauge().value())
+        // 기존 gauge의 뜻(넘긴 시도를 포함한 결과 불명 전체)은 그대로다.
+        assertTrue(meterRegistry.get("payment.attempt.unknown").gauge().value() >= expected)
     }
 
     @Test

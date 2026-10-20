@@ -28,8 +28,10 @@ import org.springframework.stereotype.Component
  * 새 건은 늦어도 ceil(불명 건수 / [BATCH_SIZE]) 주기 안에 조회된다. 커서는 pod마다 따로이고 재기동하면 처음부터라 조회가 겹치거나 늦어질 뿐 정합성에는 닿지 않는다.
  * 스케줄러는 `Lock` 블록 안에서 줄 서므로 한 인스턴스의 커서가 동시에 바뀌지 않지만 테스트가 직접 부를 수 있어 `@Volatile`이다.
  *
- * 결과 불명 시도 수는 gauge `payment.attempt.unknown`으로 낸다. 한 주기의 시작(락 밖)에 세어 갱신하므로 scrape가 DB를 부르지 않는다.
- * 세기가 던지면 그 주기를 건너뛰고 값은 마지막 성공값으로 남는다.
+ * 대상 조회는 reconciliation으로 넘긴 시도를 고르지 않는다. 넘긴 시도는 `payment`가 더 조회하지 않고 reconciliation의 결론으로만 확정된다.
+ *
+ * 결과 불명 시도 수는 gauge `payment.attempt.unknown`(넘긴 시도 포함), 넘긴 뒤 아직 불명인 시도 수는 `payment.attempt.reconciliation.pending`으로 낸다.
+ * 한 주기의 시작(락 밖)에 세어 갱신하므로 scrape가 DB를 부르지 않는다. 세기가 던지면 그 주기를 건너뛰고 값은 마지막 성공값으로 남는다.
  */
 @Component
 class UnknownPaymentResolver(
@@ -38,6 +40,7 @@ class UnknownPaymentResolver(
     meterRegistry: MeterRegistry,
 ) {
     private val unknownCount = AtomicLong(0)
+    private val reconciliationPendingCount = AtomicLong(0)
 
     @Volatile
     private var cursor: PaymentId? = null
@@ -45,6 +48,9 @@ class UnknownPaymentResolver(
     init {
         Gauge.builder("payment.attempt.unknown", unknownCount) { it.toDouble() }
             .description("결과 불명 승인 시도 수, 작업 주기마다 갱신")
+            .register(meterRegistry)
+        Gauge.builder("payment.attempt.reconciliation.pending", reconciliationPendingCount) { it.toDouble() }
+            .description("reconciliation으로 넘긴 뒤 아직 결과 불명인 승인 시도 수, 작업 주기마다 갱신")
             .register(meterRegistry)
     }
 
@@ -54,6 +60,7 @@ class UnknownPaymentResolver(
     )
     fun resolveUnknown() {
         unknownCount.set(repository.countUnknownAuthorizations())
+        reconciliationPendingCount.set(repository.countReconciliationPendingAuthorizations())
         Lock.executeWithLockNoTx(LOCK_KEY) {
             val ids = repository.findUnknownAuthorizationIds(cursor, BATCH_SIZE)
             ids.forEach { resolveOne(it) }

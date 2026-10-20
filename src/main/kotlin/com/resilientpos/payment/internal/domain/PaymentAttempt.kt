@@ -2,6 +2,8 @@ package com.resilientpos.payment.internal.domain
 
 import com.resilientpos.contract.PaymentApproved
 import com.resilientpos.contract.PaymentAttemptKind
+import com.resilientpos.contract.PaymentReconciliationReason
+import com.resilientpos.contract.PaymentReconciliationRequested
 import com.resilientpos.contract.PaymentUnknownReason
 import com.resilientpos.foundation.DomainErrorKind
 import com.resilientpos.foundation.DomainException
@@ -28,6 +30,9 @@ import java.util.UUID
  * 재결제로 만든 시도는 [retriedFrom]에 거절된 원래 시도를 가진다. 사실(`OrderPaymentRequested`)로 만든 시도는 null이고,
  * DB가 그런 승인 시도를 checkout 회차당 하나로 묶는다(`ux_payment_attempt_first_authorization`).
  * 그 `orderId`가 raw `UUID`인 이유는 `PaymentEvent`에 있다.
+ *
+ * [queryCount]는 `UNKNOWN`을 provider에 조회해도 결과를 못 얻은 횟수이고, [reconciliationRequestedAt]은 reconciliation case로 넘긴 시각이다(넘기지 않았으면 null).
+ * 넘긴 시도는 조회로 확정하지 않고 reconciliation의 결론으로만 확정된다.
  */
 class PaymentAttempt private constructor(
     val id: PaymentId,
@@ -41,6 +46,8 @@ class PaymentAttempt private constructor(
     val providerReference: String?,
     val retriedFrom: PaymentId?,
     val unknownReason: PaymentUnknownReason?,
+    val queryCount: Int,
+    val reconciliationRequestedAt: Instant?,
 ) {
 
     /**
@@ -74,17 +81,17 @@ class PaymentAttempt private constructor(
      * 결과를 모르던([markUnknown]) 시도를 provider 조회가 승인으로 가려낸 결말을 적용한다. 결과 상태와 사실은 [approve]와 같다.
      * `UNKNOWN`은 결과가 아니라 결과가 없다는 기록이라, 확정은 "provider 결과는 한 번만 적용한다"를 깨지 않고 결과를 처음 적용하는 일이다.
      *
-     * [PaymentAttemptStatus.UNKNOWN]이 아니면 거절한다. 조회 대상은 `UNKNOWN`만 고르고 Facade가 잠근 뒤 다시 확인하므로
+     * 넘긴 시도는 [PAYMENT_IN_RECONCILIATION]으로 거절한다. [PaymentAttemptStatus.UNKNOWN]이 아니면 거절한다. 조회 대상은 `UNKNOWN`만 고르고 Facade가 잠근 뒤 다시 확인하므로
      * `REQUESTED`는 이 경로로 오지 않는다. 이미 승인·거절된 시도에 덮어쓰면 결과가 조용히 바뀐다.
      */
     fun confirmApproved(providerReference: String, ids: IdentifierGenerator, now: Instant): Transition<PaymentAttempt, PaymentApproved> {
-        requireUnknown()
+        requireUnknownNotHandedOver()
         return approved(providerReference, ids, now)
     }
 
     /** 결과를 모르던 시도를 provider 조회가 거절로 가려낸 결말을 적용한다. 결과 상태와 사실은 [decline]과, 거절 조건은 [confirmApproved]와 같다. */
     fun confirmDeclined(providerReference: String?, ids: IdentifierGenerator, now: Instant): Transition<PaymentAttempt, PaymentEvent.Declined> {
-        requireUnknown()
+        requireUnknownNotHandedOver()
         return declined(providerReference, ids, now)
     }
 
@@ -145,6 +152,70 @@ class PaymentAttempt private constructor(
         return Transition(copy(PaymentAttemptStatus.UNKNOWN, null, reason), listOf(unknown))
     }
 
+    /**
+     * 조회로도 결과를 확인하지 못했다는 사실을 기록한다. 조회 횟수를 하나 올리고, 그 값이 [limit] 이상이면 시도를 reconciliation case로 넘긴다.
+     * 넘기면 넘긴 시각을 [now]로 정하고 [PaymentReconciliationRequested]([PaymentReconciliationReason.QUERY_LIMIT_EXCEEDED])를 낸다.
+     * 상한 전이면 사실 없이 횟수만 오른 새 인스턴스다. 경과 시간이 아니라 횟수로 세므로 provider에 실제로 그만큼 물은 근거가 남는다.
+     *
+     * 넘기지 않은 [PaymentAttemptStatus.UNKNOWN]만 받는다([requireUnknownNotHandedOver]).
+     */
+    fun recordUnknownQuery(limit: Int, ids: IdentifierGenerator, now: Instant): Transition<PaymentAttempt, PaymentReconciliationRequested> {
+        requireUnknownNotHandedOver()
+        val queried = queryCount + 1
+        if (queried < limit) return Transition(copy(status, providerReference, queryCount = queried), emptyList())
+        val handedOver = copy(status, providerReference, queryCount = queried, reconciliationRequestedAt = now)
+        return Transition(
+            handedOver,
+            listOf(handedOver.reconciliationRequested(PaymentReconciliationReason.QUERY_LIMIT_EXCEEDED, null, null, ids, now)),
+        )
+    }
+
+    /**
+     * 조회가 승인이라고 답했지만 그 금액([reportedAmount], 통화 포함)이 시도 금액과 달라 확정하지 않고 바로 reconciliation case로 넘긴다.
+     * 조회 횟수를 하나 올리고 넘긴 시각을 [now]로 정하며 [PaymentReconciliationRequested]([PaymentReconciliationReason.AMOUNT_MISMATCH])에
+     * 알려 준 금액과 참조를 싣는다. 받는 조건은 [recordUnknownQuery]와 같다.
+     */
+    fun requestReconciliationForAmountMismatch(
+        reportedAmount: Money,
+        reportedProviderReference: String?,
+        ids: IdentifierGenerator,
+        now: Instant,
+    ): Transition<PaymentAttempt, PaymentReconciliationRequested> {
+        requireUnknownNotHandedOver()
+        val handedOver = copy(status, providerReference, queryCount = queryCount + 1, reconciliationRequestedAt = now)
+        return Transition(
+            handedOver,
+            listOf(
+                handedOver.reconciliationRequested(
+                    PaymentReconciliationReason.AMOUNT_MISMATCH, reportedAmount, reportedProviderReference, ids, now,
+                ),
+            ),
+        )
+    }
+
+    /** 넘긴 뒤의 값(조회 횟수·불명 사유)을 싣는다. `UNKNOWN`이 된 때 사유가 정해지므로 없으면 불변식이 깨진 것이다(adapter는 이전 버전 행에 `RESULT_UNCONFIRMED`를 채운다). */
+    private fun reconciliationRequested(
+        reason: PaymentReconciliationReason,
+        reportedAmount: Money?,
+        reportedProviderReference: String?,
+        ids: IdentifierGenerator,
+        now: Instant,
+    ) = PaymentReconciliationRequested(
+        eventId = ids.next(),
+        occurredAt = now,
+        paymentId = id.value,
+        orderId = orderId,
+        storeId = storeId,
+        terminalId = terminalId,
+        checkoutNo = checkoutNo,
+        amount = amount,
+        reason = reason,
+        unknownReason = checkNotNull(unknownReason) { "UNKNOWN 시도는 불명 사유를 가진다 paymentId=${id.value}" },
+        queryCount = queryCount,
+        reportedAmount = reportedAmount,
+        reportedProviderReference = reportedProviderReference,
+    )
+
     private fun requireRequested() {
         if (status != PaymentAttemptStatus.REQUESTED) {
             throw DomainException(
@@ -160,6 +231,20 @@ class PaymentAttempt private constructor(
             throw DomainException(
                 PAYMENT_RESULT_ALREADY_APPLIED,
                 "결과를 모르는 결제 시도만 확정할 수 있습니다 paymentId=${id.value} status=$status",
+                DomainErrorKind.CONFLICT,
+            )
+        }
+    }
+
+    /**
+     * 조회 확정과 조회 기록·넘김이 받는 조건. 넘긴 시도는 reconciliation의 결론으로만 확정되므로 조회로 확정하거나 다시 넘기지 않는다.
+     */
+    private fun requireUnknownNotHandedOver() {
+        requireUnknown()
+        if (reconciliationRequestedAt != null) {
+            throw DomainException(
+                PAYMENT_IN_RECONCILIATION,
+                "reconciliation으로 넘긴 결제 시도입니다 paymentId=${id.value}",
                 DomainErrorKind.CONFLICT,
             )
         }
@@ -194,6 +279,8 @@ class PaymentAttempt private constructor(
             providerReference = null,
             retriedFrom = id,
             unknownReason = null,
+            queryCount = 0,
+            reconciliationRequestedAt = null,
         )
         val created = PaymentEvent.AttemptCreated(
             eventId = ids.next(),
@@ -209,11 +296,16 @@ class PaymentAttempt private constructor(
         return Transition(retried, listOf(created))
     }
 
-    /** 결말만 바뀐 새 인스턴스. 나머지 값은 시도가 만들어질 때 확정됐고 바뀌지 않는다. 사유는 `UNKNOWN`이 될 때만 정하고 확정 전이는 지우지 않는다. */
+    /**
+     * 바뀐 값만 반영한 새 인스턴스. 나머지 값은 시도가 만들어질 때 확정됐고 바뀌지 않는다.
+     * 사유는 `UNKNOWN`이 될 때만 정하고 확정 전이는 지우지 않는다. 조회 횟수와 넘긴 시각은 넘김 전이만 바꾼다.
+     */
     private fun copy(
         status: PaymentAttemptStatus,
         providerReference: String?,
         unknownReason: PaymentUnknownReason? = this.unknownReason,
+        queryCount: Int = this.queryCount,
+        reconciliationRequestedAt: Instant? = this.reconciliationRequestedAt,
     ) = PaymentAttempt(
         id = id,
         orderId = orderId,
@@ -226,6 +318,8 @@ class PaymentAttempt private constructor(
         providerReference = providerReference,
         retriedFrom = retriedFrom,
         unknownReason = unknownReason,
+        queryCount = queryCount,
+        reconciliationRequestedAt = reconciliationRequestedAt,
     )
 
     override fun equals(other: Any?) = other is PaymentAttempt && other.id == id
@@ -237,6 +331,7 @@ class PaymentAttempt private constructor(
         const val PAYMENT_RESULT_ALREADY_APPLIED = "PAYMENT_RESULT_ALREADY_APPLIED"
         const val PAYMENT_ATTEMPT_NOT_FOUND = "PAYMENT_ATTEMPT_NOT_FOUND"
         const val PAYMENT_NOT_RETRYABLE = "PAYMENT_NOT_RETRYABLE"
+        const val PAYMENT_IN_RECONCILIATION = "PAYMENT_IN_RECONCILIATION"
 
         /** 찾는 시도가 없다. 응답은 404다. */
         fun notFound(): DomainException =
@@ -258,8 +353,13 @@ class PaymentAttempt private constructor(
             providerReference: String?,
             retriedFrom: PaymentId?,
             unknownReason: PaymentUnknownReason?,
+            queryCount: Int,
+            reconciliationRequestedAt: Instant?,
         ): PaymentAttempt =
-            PaymentAttempt(id, orderId, storeId, terminalId, checkoutNo, kind, amount, status, providerReference, retriedFrom, unknownReason)
+            PaymentAttempt(
+                id, orderId, storeId, terminalId, checkoutNo, kind, amount, status, providerReference, retriedFrom,
+                unknownReason, queryCount, reconciliationRequestedAt,
+            )
 
         /**
          * 한 주문의 **승인** 시도를 `REQUESTED`로 만든다. 0원 시도는 이어서 [approveIfFree]로 승인한다.
@@ -292,6 +392,8 @@ class PaymentAttempt private constructor(
                 providerReference = null,
                 retriedFrom = null,
                 unknownReason = null,
+                queryCount = 0,
+                reconciliationRequestedAt = null,
             )
 
             val created = PaymentEvent.AttemptCreated(

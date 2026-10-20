@@ -3,6 +3,7 @@ package com.resilientpos
 import com.resilientpos.contract.OrderPaid
 import com.resilientpos.contract.OrderPaymentRequested
 import com.resilientpos.contract.PaymentApproved
+import com.resilientpos.contract.PaymentReconciliationRequested
 import com.resilientpos.payment.PaymentEvent
 import com.tngtech.archunit.core.importer.ClassFileImporter
 import com.tngtech.archunit.core.importer.ImportOption
@@ -73,6 +74,7 @@ class ModuleStructureTest {
         assertEquals("com.resilientpos.contract.OrderPaymentRequested", OrderPaymentRequested::class.java.name)
         assertEquals("com.resilientpos.contract.PaymentApproved", PaymentApproved::class.java.name)
         assertEquals("com.resilientpos.contract.OrderPaid", OrderPaid::class.java.name)
+        assertEquals("com.resilientpos.contract.PaymentReconciliationRequested", PaymentReconciliationRequested::class.java.name)
     }
 
     @Test

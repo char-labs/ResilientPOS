@@ -105,7 +105,7 @@ class PaymentUnknownResolutionIntegrationTest(
     }
 
     private fun row(paymentId: PaymentId): Map<String, Any?> = jdbcTemplate.queryForList(
-        "select status, provider_reference from t_payment_attempt where id = ?",
+        "select status, provider_reference, query_count, unknown_reason, reconciliation_requested_at from t_payment_attempt where id = ?",
         paymentId.value,
     ).single()
 
@@ -113,6 +113,17 @@ class PaymentUnknownResolutionIntegrationTest(
     private fun publications(paymentId: PaymentId, eventSuffix: String): Int = requireNotNull(jdbcTemplate.queryForObject<Int>(
         "select count(*) from event_publication where event_type like ? and serialized_event like ?",
         "%$eventSuffix",
+        "%${paymentId.value}%",
+    ))
+
+    private fun completedPublications(paymentId: PaymentId): Int = requireNotNull(jdbcTemplate.queryForObject<Int>(
+        "select count(*) from event_publication where event_type like '%PaymentReconciliationRequested' and serialized_event like ? and completion_date is not null",
+        "%${paymentId.value}%",
+    ))
+
+    /** 그 시도의 넘김 사실을 직렬화한 발행 기록. */
+    private fun serializedFact(paymentId: PaymentId): String = requireNotNull(jdbcTemplate.queryForObject<String>(
+        "select serialized_event from event_publication where event_type like '%PaymentReconciliationRequested' and serialized_event like ?",
         "%${paymentId.value}%",
     ))
 
@@ -145,7 +156,7 @@ class PaymentUnknownResolutionIntegrationTest(
     }
 
     @Test
-    fun `조회로도 불명이면 행도 발행 기록도 바뀌지 않는다`() {
+    fun `조회로도 불명이면 query_count만 하나 오르고 상태와 참조와 발행 기록은 바뀌지 않는다`() {
         val paymentId = unknownAttempt("4504")
         val unknownPublications = publications(paymentId, "Unknown")
 
@@ -155,9 +166,74 @@ class PaymentUnknownResolutionIntegrationTest(
         val row = row(paymentId)
         assertEquals(PaymentAttemptStatus.UNKNOWN.name, row["status"])
         assertNull(row["provider_reference"])
+        assertEquals(1, row["query_count"])
+        assertNull(row["reconciliation_requested_at"])
         assertEquals(unknownPublications, publications(paymentId, "Unknown"))
         assertEquals(0, publications(paymentId, "PaymentApproved"))
+        assertEquals(0, publications(paymentId, "PaymentReconciliationRequested"))
         assertEquals(0, declinedEvents.countFor(paymentId))
+    }
+
+    @Test
+    fun `조회 불명이 상한에 닿으면 넘긴 시각이 정해지고 QUERY_LIMIT_EXCEEDED 발행 기록이 같은 커밋에 남고 그 뒤로 조회하지 않는다`() {
+        val paymentId = unknownAttempt("4514")
+
+        repeat(2) { paymentManagement.resolveUnknown(PaymentCommand.ResolveUnknown(paymentId)) }
+        // 상한(3) 전에는 횟수만 오르고 발행 기록이 없다.
+        assertEquals(2, row(paymentId)["query_count"])
+        assertNull(row(paymentId)["reconciliation_requested_at"])
+        assertEquals(0, publications(paymentId, "PaymentReconciliationRequested"))
+
+        val result = paymentManagement.resolveUnknown(PaymentCommand.ResolveUnknown(paymentId))
+
+        assertEquals(PaymentCommand.ResolveUnknown.Result(paymentId, PaymentAttemptStatus.UNKNOWN), result)
+        val row = row(paymentId)
+        assertEquals(3, row["query_count"])
+        assertNotNull(row["reconciliation_requested_at"])
+        // 발행 기록이 넘김과 같은 커밋에 들어갔으므로 반환 직후 이미 있다.
+        assertEquals(1, publications(paymentId, "PaymentReconciliationRequested"))
+        val fact = serializedFact(paymentId)
+        assertTrue("QUERY_LIMIT_EXCEEDED" in fact && "RESULT_UNCONFIRMED" in fact && "\"queryCount\":3" in fact, fact)
+        // 토픽이 선언돼 있어야 브로커로 나가 발행 기록이 완료된다(자동 토픽 생성은 꺼져 있다).
+        awaitUntil("넘김 발행 기록이 브로커 전송을 마친다") { completedPublications(paymentId) == 1 }
+
+        // 넘긴 시도는 직접 넘겨도 provider를 부르지 않는다.
+        val queriesAtHandOver = gateway.queryCallsFor(paymentId)
+        val again = paymentManagement.resolveUnknown(PaymentCommand.ResolveUnknown(paymentId))
+        assertEquals(PaymentAttemptStatus.UNKNOWN, again.status)
+        assertEquals(queriesAtHandOver, gateway.queryCallsFor(paymentId))
+        assertEquals(3, row(paymentId)["query_count"])
+        assertEquals(1, publications(paymentId, "PaymentReconciliationRequested"))
+    }
+
+    @Test
+    fun `조회가 다른 금액의 승인이면 확정하지 않고 바로 넘기고 AMOUNT_MISMATCH 발행 기록에 알려 준 금액과 참조가 남는다`() {
+        val paymentId = unknownAttempt("4525")
+
+        val result = paymentManagement.resolveUnknown(PaymentCommand.ResolveUnknown(paymentId))
+
+        assertEquals(PaymentCommand.ResolveUnknown.Result(paymentId, PaymentAttemptStatus.UNKNOWN), result)
+        val row = row(paymentId)
+        assertEquals(PaymentAttemptStatus.UNKNOWN.name, row["status"])
+        assertNull(row["provider_reference"])
+        assertEquals(1, row["query_count"])
+        assertNotNull(row["reconciliation_requested_at"])
+        assertEquals(0, publications(paymentId, "PaymentApproved"))
+        assertEquals(1, publications(paymentId, "PaymentReconciliationRequested"))
+        val fact = serializedFact(paymentId)
+        assertTrue("AMOUNT_MISMATCH" in fact && "4526" in fact && "FAKE-" in fact, fact)
+    }
+
+    @Test
+    fun `승인 요청에서 UNKNOWN(AMOUNT_MISMATCH)이 된 시도도 조회에서 다른 금액이 오면 넘어간다`() {
+        val paymentId = unknownAttempt("4536")
+        assertEquals("AMOUNT_MISMATCH", row(paymentId)["unknown_reason"])
+
+        paymentManagement.resolveUnknown(PaymentCommand.ResolveUnknown(paymentId))
+
+        assertNotNull(row(paymentId)["reconciliation_requested_at"])
+        val fact = serializedFact(paymentId)
+        assertTrue("\"reason\":\"AMOUNT_MISMATCH\"" in fact && "\"unknownReason\":\"AMOUNT_MISMATCH\"" in fact, fact)
     }
 
     @Test
