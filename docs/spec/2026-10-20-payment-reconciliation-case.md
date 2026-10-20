@@ -352,6 +352,16 @@ create index ix_reconciliation_case_store on t_reconciliation_case (store_id, st
 
 push·PR 생성·머지 직전에 다시 확인하고, 먼저 머지된 쪽에 맞춰 rebase한다. 마이그레이션 번호가 겹치면 옮긴다.
 
+2026-10-20 PR #100을 연 뒤 열린 PR과 합쳐 확인했다(`git merge-tree`, 임시 worktree).
+- #94·#97·#98·#99 모두 글자 충돌이 없다(`domain-model.md`는 자동 병합된다).
+- #98과 합치면 #98의 계약 테스트 `Externalized 이벤트마다 계약과 fixture가 있고 마지막 fixture가 지금 버전이다` 1건이 `PaymentReconciliationRequested` 때문에 실패한다. 이 테스트는 클래스패스의 `@Externalized` 타입을 모두 훑는다.
+- 나중에 머지되는 쪽이 할 일은 넷이다.
+  - 이벤트에 마지막 생성자 인자 `val schemaVersion: Int = SCHEMA_VERSION`, `init`의 `requireKnownSchemaVersion`, `const val SCHEMA_VERSION = 1`을 둔다.
+  - `EventContracts`에 고정 인스턴스 한 줄을 더한다. nullable 필드도 fixture에 남도록 `AMOUNT_MISMATCH`로 고정한다.
+  - fixture `src/test/resources/event-contract/payment.reconciliation-requested/1.json`을 더한다.
+  - `docs/wiki/event-contract.md`의 표에 한 행을 더한다.
+- 이렇게 맞춘 합친 상태에서 `./gradlew test`가 692건 통과했다.
+
 2026-10-20 구현 끝에 다시 확인했다. origin/main은 여전히 9c34aaf다.
 - #79는 PR #97로 열렸다. 겹치는 경로는 `docs/wiki/entity-map.md` 하나이고 고친 줄이 다르다(#97은 `OrderEntity`·4.1·4.2, 이 PR은 1·2절 표, `PaymentAttemptEntity`, 4.4, 4.6, 5절).
 - #99(`docs/outbox-mode-comparison`)는 자기 spec 하나만 바꿔 겹치지 않는다. 열린 PR 가운데 마이그레이션 번호(V016·V017)가 겹치는 것은 없다.
