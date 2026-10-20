@@ -102,17 +102,20 @@ class OrderPersistenceAdapter(
         order.checkouts.filter { it.id.value !in storedCheckoutIds }
             .map { OrderCheckoutEntity.from(orderId, it) }
             .forEach(entityManager::persist)
-        if (existing == null) flushNewOrder()
+        if (existing == null) flushNewOrder(order)
         return order
     }
 
-    private fun flushNewOrder() {
+    private fun flushNewOrder(order: Order) {
         try {
             entityManager.flush()
         } catch (e: PersistenceException) {
             // 사전 조회 뒤 같은 키의 주문이 먼저 들어온 경합이라 도메인 거절이 아니다. 커밋이 호출자(sync 항목) 트랜잭션에 있어도 여기서 가리도록 저장에서 flush한다.
             if (e.isUniqueViolationOf(CLIENT_ORDER_CONSTRAINT)) {
-                throw ConcurrencyFailureException("같은 terminal_id와 client_order_id의 주문이 동시에 저장됐다", e)
+                throw ConcurrencyFailureException(
+                    "같은 키의 주문이 동시에 저장됐다 terminalId=${order.terminalId.value} clientOrderId=${order.clientOrderId.value}",
+                    e,
+                )
             }
             throw e
         }

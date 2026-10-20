@@ -56,7 +56,7 @@ class OrderInsertStatementCountIntegrationTest(
 
     /**
      * 한 트랜잭션에서 [prepare]로 저장할 주문을 만든 뒤 `save`부터 커밋까지 나간 JDBC 문장 수.
-     * INSERT와 UPDATE는 커밋의 flush에서 나가므로 커밋까지 센다. [prepare]의 조회는 세지 않는다.
+     * 새 주문의 INSERT는 `save`의 flush에서, 기존 주문의 INSERT·UPDATE는 커밋의 flush에서 나가므로 커밋까지 센다. [prepare]의 조회는 세지 않는다.
      */
     private fun statementsOfSave(prepare: () -> Order): Long {
         var beforeSave = 0L
