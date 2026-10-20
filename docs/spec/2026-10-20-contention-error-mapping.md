@@ -96,6 +96,8 @@
 - src/main/kotlin/com/resilientpos/order/internal/adapter/persistence/command/OrderPersistenceAdapter.kt
 - src/main/kotlin/com/resilientpos/owner/internal/adapter/persistence/command/OwnerPersistenceAdapter.kt
 - src/main/kotlin/com/resilientpos/terminal/internal/adapter/persistence/command/TerminalPersistenceAdapter.kt
+- src/main/kotlin/com/resilientpos/terminal/internal/adapter/persistence/command/TerminalCredentialEntity.kt
+- src/main/kotlin/com/resilientpos/terminal/internal/domain/TerminalRepository.kt
 - src/main/resources/db/migration/*__terminal_credential_active_deferrable.sql
 - src/test/kotlin/com/resilientpos/order/**
 - src/test/kotlin/com/resilientpos/owner/**
@@ -121,12 +123,12 @@
 V016은 `t_terminal_credential`의 partial unique 인덱스 `ux_terminal_credential_active`를 같은 조건·같은 이름의 exclusion 제약 `EXCLUDE USING btree (terminal_id WITH =) WHERE (revoked_at IS NULL) DEFERRABLE INITIALLY DEFERRED`로 바꾼다. 컬럼과 테이블은 바뀌지 않는다.
 1. 기존 데이터로 대신할 수 있는가: 새 값을 더하지 않는다. 이미 있는 방어선의 검사 시점만 문장 끝에서 커밋으로 옮긴다.
 2. 지금 읽는 코드가 있는가: `TerminalManagement.rotateCredential`이 한 트랜잭션에서 옛 행을 폐기하고 새 유효 행을 넣는다. 이 제약이 그 순서를 강제해서 어댑터가 flush로 폐기를 먼저 내보내고 있었다.
-3. 기존 행을 채울 수 있는가: 채울 컬럼이 없다. 기존 행은 지금 인덱스가 같은 조건을 강제하고 있어 새 제약을 만들 때의 검증을 통과한다.
+3. 기존 행을 채울 수 있는가: 채울 컬럼이 없다. 기존 행은 지금 인덱스가 같은 조건을 강제하고 있어 새 제약을 만들 때의 검증을 통과한다. 배포 전 확인 쿼리는 `select terminal_id from t_terminal_credential where revoked_at is null group by terminal_id having count(*) > 1`이고 V012 인덱스가 있는 한 0행이다.
 4. 불변식의 마지막 방어선인가: 그대로 "유효 credential은 단말당 하나"의 마지막 방어선이고 PostgreSQL 제약으로 남는다. 커밋 때 검사하므로 한 트랜잭션 안에서 잠시 유효 행이 둘이어도 커밋 전에 하나가 되면 통과하고, 커밋 때 둘이면 실패한다. 술어는 이전처럼 `revoked_at IS NULL`뿐이라 soft delete된 행에도 걸린다. 지우는 명령이 없고 이력 삭제 금지가 불변식이라는 V012의 판단을 따른다.
 5. 정본은 하나인가: 바뀌지 않는다. 정본은 `revoked_at is null`인 행이다.
-6. 읽고 판단한 뒤 쓰는 경로가 있는가: 회전은 단말 행 잠금(`PESSIMISTIC_WRITE`, 대기 3초)이 직렬화하고 이 제약은 그 뒤의 방어선이다. 잠금 밖에서 두 트랜잭션이 같은 단말의 유효 행을 넣으면 exclusion 제약은 먼저 들어온 트랜잭션이 끝나기를 기다렸다가 늦은 쪽의 커밋을 거절한다.
-7. 락과 크기: `DROP INDEX`와 `ADD CONSTRAINT ... EXCLUDE`는 `t_terminal_credential`에 ACCESS EXCLUSIVE를 잡고 인덱스를 다시 만든다. 행 수는 단말 수에 회전 횟수를 곱한 정도라 작다. V008과 같이 `set local lock_timeout = '5s'`로 대기를 제한한다. 한 마이그레이션 트랜잭션 안에서 바꾸므로 제약이 없는 순간이 밖에서 보이지 않는다.
-8. 이전 버전 호환: 이전 버전 코드(폐기를 먼저 flush)는 새 스키마에서도 그대로 동작한다. 순서가 맞으면 커밋 때 검사도 통과한다. 새 코드(flush 없음)는 이전 스키마에서 회전이 실패하므로 스키마가 먼저 바뀌어야 하는데, Flyway가 새 버전이 기동할 때 먼저 적용한다. 애플리케이션을 되돌려도 이전 코드가 새 스키마에서 동작한다. 엔티티는 바뀌지 않고 `ddl-auto: validate`는 제약을 보지 않는다. 위반의 SQLState가 `23505`(unique)에서 `23P01`(exclusion)으로 바뀌지만 이 제약을 번역하는 코드는 없고, 위반은 지금처럼 500이다.
+6. 읽고 판단한 뒤 쓰는 경로가 있는가: 회전은 단말 행 잠금(`PESSIMISTIC_WRITE`, 대기 3초)이 직렬화하고 이 제약은 그 뒤의 방어선이다. 잠금 밖에서 두 트랜잭션이 같은 단말의 유효 행을 넣으면 INSERT는 기다리지 않고, 커밋 때 검사가 상대의 미확정 행을 기다린다. 둘 다 커밋하려 하면 교착(40P01)으로 한쪽이 실패하고, 한쪽이 먼저 커밋됐으면 늦은 쪽이 23P01로 실패한다. 어느 쪽이든 유효 행은 하나다. 앱 경로(회전은 행 잠금, 등록은 새 단말)는 이 상황에 닿지 않는다.
+7. 락과 크기: `DROP INDEX`와 `ADD CONSTRAINT ... EXCLUDE`는 `t_terminal_credential`에 ACCESS EXCLUSIVE를 잡고 인덱스를 다시 만든다. 행 수는 단말 수에 회전 횟수를 곱한 정도라 작다. V008과 같이 `set local lock_timeout = '5s'`로 대기를 제한한다. DDL이 잠금을 쥐는 동안에는 `/v1` 요청마다 하는 인증 조회(`findActiveByTokenHash`)도 이 표를 읽으므로 그만큼 멈춘다(표가 작아 짧다, V014와 같은 판단). 한 마이그레이션 트랜잭션 안에서 바꾸므로 제약이 없는 순간이 밖에서 보이지 않는다.
+8. 이전 버전 호환: 이전 버전 코드(폐기를 먼저 flush)는 새 스키마에서도 그대로 동작한다. 순서가 맞으면 커밋 때 검사도 통과한다. 새 코드(flush 없음)는 이전 스키마에서 회전이 실패하므로 스키마가 먼저 바뀌어야 하는데, Flyway가 새 버전이 기동할 때 먼저 적용한다. 애플리케이션을 되돌려도 이전 코드가 새 스키마에서 동작한다. 엔티티는 바뀌지 않고 `ddl-auto: validate`는 제약을 보지 않는다. 위반은 문장이 아니라 커밋에서 드러나고 SQLState가 `23505`(unique)에서 `23P01`(exclusion)으로 바뀐다. 이 제약을 번역하는 코드는 없어 지금처럼 오류 응답(500, 교착이면 경합 계열 409)이다.
 9. 이벤트·캐시에 실리는가: 실리지 않는다. 인증 결과는 캐시하지 않는다.
 - 대조 기록: 미실행
 
@@ -159,7 +161,7 @@ V016은 `t_terminal_credential`의 partial unique 인덱스 `ux_terminal_credent
 | 두 번째 반영 리뷰 반영, 경계는 비ASCII 글자도 식별자 문자로 본다 (인수 4) `UniqueViolationTest`의 `제약 이름 뒤에 비ASCII 글자가 이어지면 거짓이다` | 해당 없음. 이미 넓힌 경계를 고정하는 characterization이라 처음부터 통과했다. 대신 경계를 `[A-Za-z0-9_$]`로 되돌리면 `./gradlew test --tests 'com.resilientpos.platform.UniqueViolationTest' --rerun`에서 11개 중 이 1개만 실패하는 것을 확인하고 그 파일만 원복했다 | 같은 명령, 11개 통과 | `./gradlew test` 604개 통과 |
 | 주문 생성 Facade가 같은 키 경합을 경합 예외로 바꾼다 (인수 1) `OrderCreateRaceIntegrationTest`의 `커밋 전인 같은 키 생성과 겹친 create는 경합 예외로 끝나고 다시 요청하면 앞 주문을 받는다`(테스트 트랜잭션이 같은 키 주문을 넣고 flush한 뒤 커밋 전에 붙들고, `create`의 INSERT가 그 트랜잭션에 막힌 것을 `pg_locks`와 `pg_blocking_pids`로 확인한 뒤 커밋한다) | 어댑터를 main으로 되돌린 상태에서 `./gradlew test --tests 'com.resilientpos.order.internal.application.OrderCreateRaceIntegrationTest'` — 1개 실패. 기대한 `ConcurrencyFailureException` 대신 `DataIntegrityViolationException`이 나왔다 | `create`가 `Lock` 블록 밖에서 잡아 번역한 뒤 같은 명령, 1개 통과 | `./gradlew test --tests 'com.resilientpos.order.*' --tests 'com.resilientpos.sync.*'`와 구조 테스트 3종(TransactionDeclaration·ModuleStructure·DependencyDirection) 통과 |
 | 저장 메서드는 번역하지 않고 점주·단말 번역을 Facade로 옮긴다 (인수 2·5) `ConstraintTranslationTest`의 `persistence 어댑터는 unique 위반 판별 함수를 부르지 않는다` | `./gradlew test --tests 'com.resilientpos.ConstraintTranslationTest'` — 1개 실패. 위반 2건(`OwnerPersistenceAdapter.save`, `TerminalPersistenceAdapter.save`가 `isUniqueViolationOf`를 부른다) | 두 어댑터에서 flush와 번역을 빼고 `OwnerManagement.signUp`·`TerminalManagement.register`가 블록 밖에서 번역한 뒤 같은 명령, 1개 통과. 어댑터에 판별 호출을 잠깐 넣으면 다시 실패하는 것을 확인하고 원복했다 | owner·terminal·order·platform과 구조 테스트 353개 통과. 중복 409 통합 테스트와 Controller 테스트는 기대값을 바꾸지 않고 통과했다(인수 2). `OwnerManagementTest`의 가짜 저장소는 DB처럼 `DataIntegrityViolationException`을 던지게 바꿨다 |
-| 어댑터는 flush하지 않고 credential 제약은 커밋 때 검사한다 (인수 5·6) | 미실행 | 미실행 | 미실행 |
+| 어댑터는 flush하지 않고 credential 제약은 커밋 때 검사한다 (인수 5·6) `ConstraintTranslationTest`의 `persistence 어댑터는 EntityManager flush를 부르지 않는다`, `TerminalCredentialSchemaIntegrationTest`의 `한 트랜잭션에서 새 유효 행을 넣은 뒤 옛 행을 폐기하면 커밋되고 유효 행은 하나다`·`한 트랜잭션에서 같은 단말의 유효 행 둘을 넣으면 커밋에서 실패한다`·`같은 단말의 revoked_at이 null인 행 두 개는 exclusion 위반이다`(기존 unique 위반 테스트의 기대를 제약 종류에 맞게 바꾸고 SQLState `23P01`을 단언), 기존 회전 테스트 | 구조: `./gradlew test --tests 'com.resilientpos.ConstraintTranslationTest'` 2개 중 1개 실패(`TerminalPersistenceAdapter.kt:84`의 flush). flush를 지우자 `./gradlew test --tests 'com.resilientpos.terminal.*'` 61개 중 회전 테스트 5개가 partial unique 위반으로 실패. 스키마 테스트는 V016 없이 5개 중 3개 실패(커밋 때 검사 2개, exclusion SQLState 1개) | V016(partial unique 인덱스를 같은 조건·같은 이름의 `DEFERRABLE INITIALLY DEFERRED` exclusion 제약으로 바꿈) 뒤 같은 명령 모두 통과 | terminal·owner·구조 테스트·`SchemaMigrationTest`(적용 버전 목록에 016 추가) 121개 통과. 전체는 결과 절 |
 
 ## 결과
 - 인수 조건 1~7을 충족했다. origin/main(b9449c4)으로 rebase한 뒤 `./gradlew test`는 612개 중 실패 0이다(신규 14개: `UniqueViolationTest` 11, `OrderCreateRaceIntegrationTest` 1, `OrderControllerTest` 1, `ConstraintTranslationTest` 1). REST Docs 스니펫 `orders-create-concurrent-request`가 `build/generated-snippets`에 생겼다.
