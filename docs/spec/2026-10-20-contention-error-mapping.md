@@ -103,6 +103,7 @@
 - src/test/kotlin/com/resilientpos/sync/**
 - src/test/kotlin/com/resilientpos/platform/**
 - src/test/kotlin/com/resilientpos/ConstraintTranslationTest.kt
+- src/test/kotlin/com/resilientpos/SchemaMigrationTest.kt
 - docs/wiki/entity-map.md
 - docs/wiki/domain-model.md
 - docs/spec/2026-10-20-contention-error-mapping.md
