@@ -103,7 +103,7 @@
   - `GET /owner/v1/stores/{storeId}/reconciliation-cases`: 미해소 목록. 항목은 `caseId`, `paymentId`, `orderId`, `terminalId`, `checkoutNo`, `reason`, `unknownReason`, `status`, `ruleVersion`, `amount`·`currency`(시도), `queryCount`, `reportedAmount`·`reportedCurrency`·`reportedProviderReference`(있을 때), `openedAt`이다.
   - `POST /owner/v1/stores/{storeId}/reconciliation-cases/{caseId}/resolve`: 본문은 `decision`, `providerReference`, `approvedAmount`, `approvedCurrency`, `note`(사유)다. 목록 응답의 `reason`(넘김 사유)과 한 단어가 두 뜻이 되지 않게 사유는 `note`라 부른다(2026-10-20 범위 조정, multi-review). 금액·통화 형식이 틀리면 기존 `Money` 변환의 오류 code(`INVALID_MONEY_FORMAT` 등)다. 응답은 `caseId`, `status`, `decision`, `paymentId`, `paymentStatus`다.
   - 금액은 기존 응답처럼 통화 기준 decimal string과 통화 코드다. 다른 매장의 case와 없는 case는 같은 `404 RECONCILIATION_CASE_NOT_FOUND`다.
-  - 처음 해소가 커밋된 뒤 Controller가 감사 INFO 한 줄을 남긴다(operator-authentication 결정 11과 같은 모양). 같은 결론의 재요청은 남기지 않는다(해소 건수를 이중으로 세지 않게, 2026-10-20 범위 조정). 항목은 `ownerId`, `action=RECONCILIATION_CASE_RESOLVED`, `storeId`, `caseId`, `paymentId`, `decision`, `paymentStatus`다. 사유 원문은 로그에 남기지 않는다. 자유 입력이라 개인정보가 섞일 수 있고, DB 감사 기록이 정본이다.
+  - 처음 해소가 커밋된 뒤 감사 INFO 한 줄을 남긴다(operator-authentication 결정 11과 같은 모양). 같은 결론의 재요청은 남기지 않는다(해소 건수를 이중으로 세지 않게). 처음 해소인지 아는 곳이 Facade(counter를 올리는 분기)라 이 줄은 Controller가 아니라 `ReconciliationManagement.resolve`가 트랜잭션 반환 뒤에 남긴다. 공개 결과 타입에 로그용 플래그를 더하지 않으려는 것이다(2026-10-20 범위 조정). 항목은 `ownerId`, `action=RECONCILIATION_CASE_RESOLVED`, `storeId`, `caseId`, `paymentId`, `decision`, `paymentStatus`다. 사유 원문은 로그에 남기지 않는다. 자유 입력이라 개인정보가 섞일 수 있고, DB 감사 기록이 정본이다.
   - REST Docs를 붙인다.
 
 ### 계약 요약
