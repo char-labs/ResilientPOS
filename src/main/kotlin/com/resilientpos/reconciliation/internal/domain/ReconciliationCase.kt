@@ -46,7 +46,7 @@ class ReconciliationCase private constructor(
      *
      * `MANUAL_REVIEW`에서만 해소한다. 이미 `RESOLVED`인 case에 같은 결론이 다시 오면(응답을 잃은 재요청) 감사 줄을 더하지 않고
      * 같은 인스턴스를 돌려주고, 다른 결론이면 [RECONCILIATION_CASE_ALREADY_RESOLVED]다.
-     * 검증: 사유는 비어 있지 않고 [MAX_NOTE_LENGTH]자 이하여야 하고, 승인은 참조와 승인 금액이 필수, 거절은 승인 금액이 없어야 하며
+     * 검증: 사유는 비어 있지 않고 [MAX_NOTE_LENGTH]자 이하, 참조는 [MAX_PROVIDER_REFERENCE_LENGTH]자 이하여야 하고, 승인은 참조와 승인 금액이 필수, 거절은 승인 금액이 없어야 하며
      * (모두 [INVALID_RECONCILIATION_RESOLUTION]), 승인 금액은 통화까지 [amount]와 같아야 한다([RECONCILIATION_AMOUNT_MISMATCH]).
      */
     fun resolve(command: ReconciliationCommand.Resolve, ids: IdentifierGenerator, now: Instant): Transition<ReconciliationCase, Nothing> =

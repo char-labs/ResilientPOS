@@ -277,6 +277,7 @@ create index ix_reconciliation_case_action_case on t_reconciliation_case_action 
    - `owner_id`는 행위자 ID라 `t_store.owner_id`에서 도출하지 않는다. 지금은 매장당 점주가 하나라 같은 값이지만, 감사 기록은 그 시점에 누가 했는지를 남긴다.
    - 근거 컬럼과 감사 컬럼을 따로 표(evidence)로 빼지 않는다. 출처가 payment 하나라 모양이 고정이다. POS·provider 같은 출처가 늘면 그 PR이 뺀다.
    - `occurred_at`은 `created_at`과 다르다. 여는 줄의 시각은 consumer가 처리한 때가 아니라 넘긴 시각(이벤트의 `occurredAt`)이다. 감사 컬럼(`created_at`)에 업무 시각을 싣지 않는다.
+   - case 루트에는 결론 컬럼과 연 시각 컬럼을 두지 않는다. 둘 다 감사 줄(`RESOLVED` 줄의 `decision`, `OPEN` 줄의 `occurred_at`)에서 읽을 수 있다(질문 2).
 2. **지금 읽는가.**
    - `query_count`: 상한 판정과 넘김 이벤트가 읽는다.
    - `unknown_reason`: 넘김 이벤트가 읽고, case 근거로 점주 목록에 보인다.
@@ -318,7 +319,7 @@ create index ix_reconciliation_case_action_case on t_reconciliation_case_action 
 9. **payload에 실리는가.**
    - `query_count`·`unknown_reason`·넘긴 시각(`occurredAt`)은 새 이벤트 `PaymentReconciliationRequested`에 실린다. 첫 버전이라 하위 호환을 따질 이전 형식이 없고, 필드 목록이 계약이다(#78).
    - case 표는 이벤트나 캐시에 실리지 않는다. 점주 API 응답은 DTO다.
-- 대조 기록: 미작성
+- 대조 기록: code-reviewer 에이전트(읽기 전용), 2026-10-20, 수정 후 재대조 불일치 없음, 첫 대조의 불일치 2건(질문 7 V016 update 술어의 kind 누락, 질문 2 감사 기록을 읽는 코드 누락)은 33d48df·ad8d1b8에서 고쳐졌다(V006·V013·V016·V017, PaymentAttemptEntity·PaymentAttemptPersistenceAdapter, ReconciliationCaseEntity·ReconciliationCaseActionEntity·ReconciliationCasePersistenceAdapter·ReconciliationCaseQueries, PaymentAttempt·PaymentManagement·UnknownPaymentResolver, ReconciliationCase·ReconciliationCaseAction·ReconciliationManagement·PaymentReconciliationRequestedListener, PaymentReconciliationRequested, JdslQueryExecutor·BaseEntity·ApiControllerAdvice, SchemaMigrationTest·ReconciliationCaseResolveTest)
 
 ## 검증
 - **정상**
