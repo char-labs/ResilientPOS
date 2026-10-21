@@ -169,6 +169,7 @@
 - 이 PR은 inbound 빈도 상한 하나의 개발 컨텍스트다. 상한 값의 실측은 #77(`perf/k6-capacity-measurement`)의 몫이고, 이 PR은 draft로 그 결과를 기다린다(결정 8).
 - 겹침 확인(2026-10-21, origin/main `c7810af`): 열린 PR은 #94(draft, `refactor/modulith-2-1-2-resubmit`)뿐이고 그 경로(`build.gradle.kts`, `EventPublicationResubmitter`와 그 테스트, `domain-model.md`, 자기 spec)는 이 PR과 겹치지 않는다. 진행 중이지만 아직 push되지 않은 브랜치 중 `feature/platform-operator-dlt-redrive`(#91)는 `ApiControllerAdvice`·`ErrorType`·보안 설정을, `feature/observability-alerts-tracing`(#76)은 `observability.md`와 metric 규칙을 고칠 수 있다. push·PR 생성·머지 직전에 다시 확인하고 먼저 머지된 쪽에 맞춰 rebase한다.
 - 공용 헬퍼: main과 #94에 rate limiter나 429 처리가 없다.
+- #106·#107 머지 뒤 rebase(2026-10-21, origin/main `8221d79`): 줄 단위 충돌은 셋이었다. `ApiControllerAdvice`는 429 처리와 #107이 고친 403 주석을 함께 두었다. `PlatformConfiguration`은 두 import를 모두 두었다. `observability.md`는 #106·#107 본문을 두고 이 PR의 "단말 빈도 상한" 항목과 Redis 항목의 fail-open 문장을 다시 넣었다. #107의 `DeadLetterControllerTest`도 `@WebMvcTest`라 단말 인증 인터셉터를 싣는다. 그래서 다른 슬라이스 테스트처럼 limiter mock을 더했다(슬라이스 13개). #106 spec이 이 PR에 남긴 두 가지는 이렇다. 두 관측 항목을 모두 살렸다. `inbound_rate_limited_total`의 알림 규칙은 상한 값이 자리값인 동안 더하지 않는다(결정 8). #77 값으로 바꿀 때 `docker/prometheus/alerts.yaml`에 둘지 정한다. 429와 fail-open은 #106 `OwnerSessionStoreUnavailable`(503)과 #107의 `/admin` 503 경로를 바꾸지 않는다.
 
 ## TDD 검증 기록
 
