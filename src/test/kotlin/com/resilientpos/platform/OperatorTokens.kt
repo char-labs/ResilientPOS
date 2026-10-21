@@ -39,19 +39,19 @@ object OperatorTokens {
     /** 같은 kid의 다른 키. 이 키로 서명한 토큰은 키 조회가 아니라 서명 검사에서 거절된다. */
     val impostorKey: RSAKey = RSAKeyGenerator(2048).keyID(KEY_ID).generate()
 
-    /** `Authorization` 헤더 값. 기본값은 통과하는 운영자 토큰이고, 인자 하나만 바꿔 실패 사례를 만든다. */
+    /** `Authorization` 헤더 값. 기본값은 통과하는 운영자 토큰이고, 인자 하나만 바꿔 실패 사례를 만든다. [audience]가 null이면 aud 클레임이 없다. */
     fun bearer(
         subject: String = SUBJECT,
         roles: List<String> = listOf(AdminSecurityFilterChain.OPERATOR_AUTHORITY),
         issuer: String = ISSUER,
-        audience: String = AUDIENCE,
+        audience: String? = AUDIENCE,
         expiresAt: Instant = Instant.now().plus(Duration.ofMinutes(5)),
         key: RSAKey = signingKey,
     ): String {
         val claims = JwtClaimsSet.builder()
             .issuer(issuer)
             .subject(subject)
-            .audience(listOf(audience))
+            .apply { audience?.let { audience(listOf(it)) } }
             .issuedAt(expiresAt.minus(Duration.ofMinutes(10)))
             .expiresAt(expiresAt)
             .claim("roles", roles)

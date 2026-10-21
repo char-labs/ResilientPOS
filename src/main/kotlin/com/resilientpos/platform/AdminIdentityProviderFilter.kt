@@ -31,7 +31,8 @@ class AdminIdentityProviderFilter(private val resolver: () -> HandlerExceptionRe
 
     private fun unavailable(request: HttpServletRequest, response: HttpServletResponse, e: RuntimeException) {
         if (response.isCommitted) throw e
-        response.reset()
+        // 본문만 비운다. reset은 Security가 이미 쓴 응답 헤더(nosniff·Cache-Control 등)까지 지운다.
+        response.resetBuffer()
         resolver().resolveException(request, response, null, DependencyUnavailableException("operator IdP", e))
     }
 }

@@ -1,10 +1,10 @@
 package com.resilientpos.platform
 
 import jakarta.servlet.FilterChain
+import jakarta.servlet.http.HttpServletResponse
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
-import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import org.springframework.beans.factory.support.StaticListableBeanFactory
 import org.springframework.boot.security.autoconfigure.web.servlet.SecurityFilterProperties
@@ -23,23 +23,27 @@ class AdminIdentityProviderFilterTest {
     private val response = MockHttpServletResponse()
 
     private fun assertResolvedAsUnavailable(cause: RuntimeException) {
-        response.setHeader("X-Partial", "1")
-
-        filter.doFilter(request, response, FilterChain { _, _ -> throw cause })
+        filter.doFilter(request, response, FilterChain { _, chainResponse ->
+            // Security 필터가 쓴 헤더와 아직 커밋되지 않은 본문
+            (chainResponse as HttpServletResponse).setHeader("X-Content-Type-Options", "nosniff")
+            chainResponse.writer.write("partial")
+            throw cause
+        })
 
         val thrown = resolved.single()
         assertTrue(thrown is DependencyUnavailableException, thrown.toString())
         assertEquals(cause, thrown.cause)
-        assertNull(response.getHeader("X-Partial"))
+        assertEquals("nosniff", response.getHeader("X-Content-Type-Options"))
+        assertEquals("", response.contentAsString)
     }
 
     @Test
-    fun `issuer discovery 실패인 JwtDecoderInitializationException은 응답을 비우고 DependencyUnavailableException으로 resolver에 넘긴다`() {
+    fun `issuer discovery 실패인 JwtDecoderInitializationException은 헤더는 두고 본문만 비워 DependencyUnavailableException으로 resolver에 넘긴다`() {
         assertResolvedAsUnavailable(JwtDecoderInitializationException("Failed to lazily resolve the supplied JwtDecoder instance", IllegalArgumentException("issuer")))
     }
 
     @Test
-    fun `JWK Set 조회 실패인 AuthenticationServiceException은 응답을 비우고 DependencyUnavailableException으로 resolver에 넘긴다`() {
+    fun `JWK Set 조회 실패인 AuthenticationServiceException은 헤더는 두고 본문만 비워 DependencyUnavailableException으로 resolver에 넘긴다`() {
         assertResolvedAsUnavailable(AuthenticationServiceException("Couldn't retrieve remote JWK set"))
     }
 
@@ -62,12 +66,17 @@ class AdminIdentityProviderFilterTest {
     }
 
     @Test
-    fun `등록은 admin 아래 경로만 걸고 Spring Security 필터보다 앞선다`() {
-        val registration = PlatformConfiguration().adminIdentityProviderFilter(
+    fun `등록은 admin 아래 경로만 걸고 설정된 Spring Security 필터 순서 바로 앞이다`() {
+        fun register(security: SecurityFilterProperties) = PlatformConfiguration().adminIdentityProviderFilter(
             StaticListableBeanFactory(mapOf("handlerExceptionResolver" to resolver)).getBeanProvider(HandlerExceptionResolver::class.java),
+            security,
         )
 
-        assertEquals(listOf("/admin/*"), registration.urlPatterns.toList())
-        assertTrue(registration.order < SecurityFilterProperties.DEFAULT_FILTER_ORDER, "order=${registration.order}")
+        val byDefault = register(SecurityFilterProperties())
+        val configured = register(SecurityFilterProperties().apply { order = 10 })
+
+        assertEquals(listOf("/admin/*"), byDefault.urlPatterns.toList())
+        assertEquals(SecurityFilterProperties.DEFAULT_FILTER_ORDER - 1, byDefault.order)
+        assertEquals(9, configured.order)
     }
 }

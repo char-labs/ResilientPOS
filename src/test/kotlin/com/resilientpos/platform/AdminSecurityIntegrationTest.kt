@@ -1,6 +1,7 @@
 package com.resilientpos.platform
 
 import com.jayway.jsonpath.JsonPath
+import com.nimbusds.jose.util.Base64URL
 import com.resilientpos.PostgresIntegrationTest
 import com.resilientpos.terminal.TerminalManagement
 import com.resilientpos.terminal.registerTerminal
@@ -10,8 +11,13 @@ import java.time.Instant
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
+import org.junit.jupiter.api.extension.ExtendWith
 import org.springframework.beans.factory.annotation.Autowired
+import org.springframework.boot.test.system.CapturedOutput
+import org.springframework.boot.test.system.OutputCaptureExtension
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc
 import org.springframework.context.annotation.Import
 import org.springframework.http.HttpHeaders
@@ -21,7 +27,7 @@ import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.get
 import org.springframework.test.web.servlet.post
 
-/** `/admin` Controller가 아직 없어서, 체인을 통과한 요청은 없는 경로의 404 envelope가 된다. */
+/** Controller가 없는 경로라 체인을 통과하면 404 envelope다. DLT endpoint(Kafka 읽기)와 무관하게 체인만 본다. */
 private const val ADMIN_PATH = "/admin/v1/chain-probe"
 
 /**
@@ -29,6 +35,7 @@ private const val ADMIN_PATH = "/admin/v1/chain-probe"
  * IdP의 discovery·JWK Set 응답만 [OperatorTokens.IdpStub]이 대신 준다. 그 설정 때문에 컨텍스트가 하나 더 뜬다(받아들임).
  */
 @AutoConfigureMockMvc
+@ExtendWith(OutputCaptureExtension::class)
 @Import(OperatorTokens.IdpStub::class)
 class AdminSecurityIntegrationTest(
     @Autowired private val mockMvc: MockMvc,
@@ -65,6 +72,8 @@ class AdminSecurityIntegrationTest(
             "만료" to OperatorTokens.bearer(expiresAt = Instant.now().minus(Duration.ofMinutes(5))),
             "다른 issuer" to OperatorTokens.bearer(issuer = "https://other-idp.test"),
             "다른 audience" to OperatorTokens.bearer(audience = "other-app"),
+            "aud 없음" to OperatorTokens.bearer(audience = null),
+            "서명 없음(alg none)" to unsigned(OperatorTokens.bearer()),
         )
 
         cases.forEach { (case, authorization) ->
@@ -72,6 +81,32 @@ class AdminSecurityIntegrationTest(
             assertUnauthenticated(response, UnauthenticatedException.BEARER, case)
             assertNull(response.getHeader(HttpHeaders.SET_COOKIE), case)
         }
+    }
+
+    @Test
+    fun `만료 토큰과 서명 틀린 토큰의 401은 원인 예외와 메시지를 INFO로 남기고 토큰 조각은 출력에 없다`(output: CapturedOutput) {
+        val cases = mapOf(
+            "expired" to OperatorTokens.bearer(expiresAt = Instant.now().minus(Duration.ofMinutes(5))),
+            "Invalid signature" to OperatorTokens.bearer(key = OperatorTokens.impostorKey),
+        )
+
+        cases.forEach { (reason, bearer) ->
+            val mark = output.all.length
+            assertUnauthenticated(callAdmin(bearer), UnauthenticatedException.BEARER, reason)
+
+            val out = output.all.substring(mark)
+            val line = out.lines().single { it.contains("operator unauthenticated") }
+            assertTrue(line.contains(" INFO "), line)
+            assertTrue(line.contains("uri=$ADMIN_PATH cause=InvalidBearerTokenException: "), line)
+            assertTrue(line.contains(reason), line)
+            bearer.removePrefix("Bearer ").split(".").drop(1).forEach { assertFalse(out.contains(it), "$reason token segment in output") }
+        }
+    }
+
+    /** 같은 클레임에서 서명만 뺀(`alg: none`) 토큰. */
+    private fun unsigned(bearer: String): String {
+        val payload = bearer.removePrefix("Bearer ").split(".")[1]
+        return "Bearer ${Base64URL.encode("""{"alg":"none"}""")}.$payload."
     }
 
     @Test

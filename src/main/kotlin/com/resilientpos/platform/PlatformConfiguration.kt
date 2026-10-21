@@ -61,11 +61,17 @@ class PlatformConfiguration {
             order = SessionRepositoryFilter.DEFAULT_ORDER - 1
         }
 
-    /** admin 아래 경로만 맡는다. Spring Security 필터보다 앞이어야 운영자 체인이 던지는 IdP 장애 예외를 잡는다. resolver를 늦게 꺼내는 이유는 위와 같다. */
+    /**
+     * admin 아래 경로만 맡는다. Spring Security 필터보다 앞이어야 운영자 체인이 던지는 IdP 장애 예외를 잡는다. resolver를 늦게 꺼내는 이유는 위와 같다.
+     * Security 필터 순서는 설정(`spring.security.filter.order`)으로 바뀔 수 있어 상수가 아니라 그 설정 바로 앞에 둔다.
+     */
     @Bean
-    fun adminIdentityProviderFilter(@Qualifier("handlerExceptionResolver") resolver: ObjectProvider<HandlerExceptionResolver>) =
+    fun adminIdentityProviderFilter(
+        @Qualifier("handlerExceptionResolver") resolver: ObjectProvider<HandlerExceptionResolver>,
+        securityFilter: SecurityFilterProperties,
+    ) =
         FilterRegistrationBean(AdminIdentityProviderFilter(resolver::getObject)).apply {
             addUrlPatterns("/admin/*")
-            order = SecurityFilterProperties.DEFAULT_FILTER_ORDER - 1
+            order = securityFilter.order - 1
         }
 }

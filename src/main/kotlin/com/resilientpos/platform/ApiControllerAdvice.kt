@@ -60,7 +60,7 @@ class ApiControllerAdvice : ResponseEntityExceptionHandler() {
 
     /**
      * 원인에 관계없이 같은 응답이다. 원인을 나누면 토큰·계정 추측에 단서를 준다.
-     * `WWW-Authenticate`는 예외의 challenge가 있을 때만 붙인다(단말 토큰은 `Bearer`, 쿠키 세션인 점주 경로는 없다).
+     * `WWW-Authenticate`는 예외의 challenge가 있을 때만 붙인다(단말 토큰과 운영자 토큰은 `Bearer`, 쿠키 세션인 점주 경로는 없다).
      */
     @ExceptionHandler(UnauthenticatedException::class)
     fun handleUnauthenticated(e: UnauthenticatedException, request: HttpServletRequest): ResponseEntity<ApiResponse<Nothing>> =
@@ -69,7 +69,7 @@ class ApiControllerAdvice : ResponseEntityExceptionHandler() {
             .body(failBody(ErrorType.UNAUTHENTICATED, e, request.describe()))
 
     /**
-     * 점주 경로의 CSRF 토큰이 없거나 쿠키와 다르다(`CsrfException`). 인증과 달리 권한 역할은 두지 않는다.
+     * 점주 경로의 CSRF 토큰이 없거나 쿠키와 다르다(`CsrfException`). 운영자 토큰에 운영자 권한이 없을 때([AdminSecurityFilterChain])도 여기로 온다.
      * `InvalidCsrfTokenException`의 메시지에 제출된 토큰 값이 실리므로 예외 메시지와 스택은 로그에도 남기지 않고 code만 남긴다.
      */
     @ExceptionHandler(AccessDeniedException::class)
