@@ -138,7 +138,8 @@
 ## Wiki 영향
 - [아키텍처](../wiki/architecture.md) — 요청 흐름 1번(인증) 뒤에 빈도 상한 단계와 429 재시도 규약을 넣는다.
 - [관측성](../wiki/observability.md) — counter `inbound_rate_limited_total{scope}`, 거절 INFO 로그, Redis 오류 WARN을 적는다.
-- 현재 상태(`docs/wiki/current-state.md`, 볼트) — "속도 제한(rate limit)도 없다"를 이 PR의 상태로 바꾸고 Redis 쓰임에 단말 rate limit을 더한다. 볼트 파일이라 이 PR diff에는 없다.
+- 현재 상태(`docs/wiki/current-state.md`, 볼트) — "속도 제한(rate limit)도 없다"를 이 PR의 상태로 바꾸고 Redis 쓰임에 단말 rate limit을 더한다. 볼트 파일이라 이 PR diff에는 없다. **머지할 때 고친다.** 볼트는 모든 worktree가 main의 현재 상태로 읽는다. 이 PR이 #77을 기다리며 draft로 머무는 동안 먼저 적으면, 다른 작업(특히 #77의 k6 측정)이 main에 상한이 있다고 잘못 읽는다.
+- `application.yaml`의 Redis 주석 — 쓰는 곳에 빈도 상한을 더하고, "단말 경로는 Redis 장애에 영향이 없다"를 "막히지 않는다(잠금과 빈도 상한은 fail-open)"로 고친다.
 - Modulith·Kafka 키워드(`docs/wiki/modulith-kafka-keywords.md`, 볼트) — 무영향. Kafka·Modulith 작업이 아니다.
 - 요구사항 변화: 인증된 단말 요청에 단말·매장 단위 빈도 상한이 생기고, 넘으면 429와 `Retry-After`다. 단말은 `Retry-After` 뒤 같은 요청을 다시 보낸다.
 
@@ -149,17 +150,25 @@
 
 ## TDD 검증 기록
 
+limiter의 token bucket 동작은 Lua 스크립트 하나가 함께 구현한다. 그래서 첫 동작의 GREEN 뒤에 더한 테스트는 처음부터 통과했다. 각 테스트가 실제로 결함을 잡는지는 스크립트에 그 결함 하나를 일부러 넣어 실패를 본 뒤 원복하는 방식으로 확인했다(아래 "판별력"). 명령은 모두 `./gradlew test --tests 'com.resilientpos.terminal.internal.adapter.redis.*'`(아래 "limiter 명령")다.
+
 | 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
 |---|---|---|---|
-| capacity만큼 통과하고 다음 요청을 거절한다 | 미실행 | 미실행 | 미실행 |
-| 쉬면 refill 속도로 다시 차고 capacity를 넘지 않는다 | 미실행 | 미실행 | 미실행 |
-| 매장 bucket이 거절하면 단말 토큰을 차감하지 않는다 | 미실행 | 미실행 | 미실행 |
-| 거절은 토큰을 쓰지 않고 대기 시간을 돌려준다 | 미실행 | 미실행 | 미실행 |
-| Redis 오류면 통과시키고 WARN을 남긴다 | 미실행 | 미실행 | 미실행 |
-| 설정 값이 범위 밖이면 기동하지 못한다 | 미실행 | 미실행 | 미실행 |
-| 인증 뒤 limiter가 거절하면 429와 Retry-After이고 Controller에 닿지 않는다 | 미실행 | 미실행 | 미실행 |
-| 인증 실패는 limiter를 부르지 않는다 | 미실행 | 미실행 | 미실행 |
-| 거절이 counter와 INFO 로그로 남는다 | 미실행 | 미실행 | 미실행 |
+| `단말 bucket은 capacity만큼 연달아 통과시키고 다음 요청을 거절한다` | limiter 명령. `acquire`가 빈 껍데기라 네 번째 요청에서 `RateLimitedException`이 나지 않아 AssertionFailedError | 같은 명령. 두 키 token bucket Lua 스크립트를 넣은 뒤 통과(1개) | limiter 명령 통과(9개) |
+| `쉬면 refill 속도만큼 다시 찬다` | 처음부터 통과(characterization). 판별력: 경과 시간만큼 채우는 항을 지운 결함으로 FAILED | 같은 명령 통과 | limiter 명령 통과(9개) |
+| `capacity를 넘어 차지 않는다` | 처음부터 통과. 판별력: 첫 판은 0.3초를 쉬어 키 TTL(빈 bucket이 가득 차는 시간, 0.1초)이 지나 상한을 지운 결함을 잡지 못했다. 토큰이 남은 bucket을 TTL 안에서만 쉬게 고친 뒤 같은 결함으로 FAILED | 같은 명령 통과 | limiter 명령 통과(9개) |
+| `매장 bucket은 그 매장 단말 전부가 나눠 쓰고 다른 매장은 영향을 받지 않는다` | 처음부터 통과. 판별력: 매장 키를 단말마다 따로 두는 결함으로 FAILED | 같은 명령 통과 | limiter 명령 통과(9개) |
+| `매장 bucket이 거절하면 단말 bucket의 토큰을 차감하지 않는다` | 처음부터 통과. 판별력: 다른 bucket을 보기 전에 토큰을 가져가는 결함으로 FAILED | 같은 명령 통과 | limiter 명령 통과(9개) |
+| `거절은 토큰을 쓰지 않고 Retry-After는 토큰 1개를 다시 얻는 시간을 초로 올림한다` | 처음부터 통과. 판별력: 거절도 토큰을 쓰는 결함으로 FAILED | 같은 명령 통과 | limiter 명령 통과(9개) |
+| `Redis 오류면 제한 없이 통과시키고 WARN을 남긴다` | limiter 명령. `RedisConnectionFailureException`이 그대로 올라와 FAILED | 같은 명령. `DataAccessException`·`IllegalStateException`을 잡아 WARN을 남기고 반환한 뒤 통과 | limiter 명령 통과(9개) |
+| `capacity가 1 미만이거나 refill이 0 이하이면 만들지 못한다` | limiter 명령. 범위 밖 값으로도 만들어져 AssertionFailedError | 같은 명령. 생성 때 `require`를 넣은 뒤 통과 | limiter 명령 통과(9개) |
+| `거절은 거절한 bucket의 scope로 counter를 올리고 두 scope는 처음부터 0으로 있다` | limiter 명령. 생성 직후 counter가 등록되지 않아 AssertionFailedError | 같은 명령. 생성 때 두 scope 등록, 거절 때 증가를 넣은 뒤 통과 | limiter 명령 통과(9개) |
+| `TerminalAuthenticationInterceptorTest`의 `limiter가 거절하면 429 RATE_LIMITED와 Retry-After이고 Controller에 닿지 않으며 INFO 한 줄에 토큰이 남지 않는다`(tdd-driver) | `./gradlew test --tests 'com.resilientpos.terminal.internal.adapter.web.TerminalAuthenticationInterceptorTest'`. 인터셉터가 limiter를 부르지 않아 429가 아니라 200이라 FAILED | 같은 명령. 인터셉터의 `acquire` 한 줄, `ErrorType.RATE_LIMITED`(INFO), advice의 429·`Retry-After` 처리를 넣은 뒤 통과. 로그 줄이 INFO이고 scope·terminalId·storeId를 담으며 토큰이 없다 | `./gradlew test --tests 'com.resilientpos.*.internal.adapter.web.*' --tests 'com.resilientpos.platform.*'` 통과 |
+| `SyncControllerTest`의 `limiter가 거절하면 429 RATE_LIMITED와 Retry-After이고 Facade를 부르지 않는다`(tdd-driver) | `./gradlew test --tests 'com.resilientpos.sync.internal.adapter.web.SyncControllerTest'`. 상태 429 기대에 200이라 FAILED | 같은 명령 통과. REST Docs 스니펫 `sync-receive-batch-rate-limited`(응답 헤더 `Retry-After` 포함)가 `build/generated-snippets`에 생겼다 | 위 회귀 명령 통과 |
+| 기존 `형식이 토큰과 다른 값은 authenticate를 부르지 않고 같은 401이다`에 limiter 무상호작용 확인을 더함 | 처음부터 통과(characterization). 인증 실패 경로는 원래 limiter를 부르지 않고, limiter는 인증 결과를 인자로 받아 앞에 둘 수 없다 | 같은 명령 통과 | 위 회귀 명령 통과 |
+| 웹 슬라이스 테스트 12개에 limiter mock을 더함 | 해당 없음(동작 변경 아님). 인터셉터가 limiter를 받으면서 모든 `@WebMvcTest`가 그 빈을 필요로 한다 | — | 위 회귀 명령 통과 |
+
+전체 회귀: `./gradlew test` 통과(724개, 실패 0).
 
 ## 결과
 개발 전 작성.
