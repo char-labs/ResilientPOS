@@ -3,6 +3,7 @@ package com.resilientpos.platform
 import com.resilientpos.foundation.DomainErrorKind
 import com.resilientpos.foundation.DomainException
 import com.resilientpos.terminal.TerminalManagement
+import com.resilientpos.terminal.internal.adapter.redis.RedisTerminalRateLimiter
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -39,6 +40,9 @@ class ApiAdviceTest(@Autowired private val mockMvc: MockMvc) {
     // 슬라이스에 단말 인증 인터셉터 설정이 실린다. 이 테스트의 경로는 v1이 아니라 인증을 타지 않지만 의존성은 채워야 한다.
     @MockitoBean
     private lateinit var terminals: TerminalManagement
+
+    @MockitoBean
+    private lateinit var rateLimiter: RedisTerminalRateLimiter
 
     @Test
     fun `객체 응답은 SUCCESS envelope의 data로 나간다`() {

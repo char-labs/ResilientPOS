@@ -47,11 +47,11 @@ spring:
   data:
     redis:
       # 쓰는 곳: (1) 결제 시도 생성·주문 생성의 중복 완화 잠금과 발행 기록 재전송·결과 불명 확정 작업의 pod 간 줄 세우기(platform.Lock),
-      # (2) 점주 세션(Spring Session), (3) 점주 로그인 실패 카운터. 정합성의 정본은 DB다.
-      # 세션은 필수다. Redis가 죽으면 점주 요청(/owner)이 실패하고 단말 경로(/v1)는 영향이 없다.
+      # (2) 점주 세션(Spring Session), (3) 점주 로그인 실패 카운터, (4) 단말·매장 빈도 상한(RedisTerminalRateLimiter). 정합성의 정본은 DB다.
+      # 세션은 필수다. Redis가 죽으면 점주 요청(/owner)이 실패하고 단말 경로(/v1)는 막히지 않는다(잠금과 빈도 상한은 fail-open).
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
-      # 잠금은 Redis가 느리거나 없으면 잠금 없이 진행한다(fail-open). 기본 60초를 기다리면 그동안 결제와 주문 생성이 멈춘다.
+      # 잠금과 빈도 상한은 Redis가 느리거나 없으면 그것 없이 진행한다(fail-open). 기본 60초를 기다리면 그동안 결제와 주문 생성, 단말 요청이 멈춘다.
       # 세션과 로그인 실패 카운터는 fail-closed다. 이 시간 안에 응답이 없으면 그 점주 요청은 503이고, 로그인은 비밀번호를 비교하지 않는다.
       timeout: 1s
       connect-timeout: 1s
@@ -193,8 +193,8 @@ management:
         enabled: false
   health:
     redis:
-      # 켜면 Redis 장애에 모든 pod의 readiness가 빠져 Redis를 쓰지 않는 단말 핫패스(/v1)까지 막힌다. 점주 요청만 실패하는 편이 낫다.
-      # 잠금은 fail-open이라 결제와 주문 생성은 Redis 없이도 계속된다. 세션과 로그인 카운터는 fail-closed라 점주 요청만 503이다.
+      # 켜면 Redis 장애에 모든 pod의 readiness가 빠져 Redis 없이도 도는 단말 핫패스(/v1)까지 막힌다. 점주 요청만 실패하는 편이 낫다.
+      # 잠금과 빈도 상한은 fail-open이라 결제와 주문 생성, 단말 요청은 Redis 없이도 계속된다. 세션과 로그인 카운터는 fail-closed라 점주 요청만 503이다.
       enabled: false
   endpoints:
     web:

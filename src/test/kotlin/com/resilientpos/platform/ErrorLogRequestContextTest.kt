@@ -5,6 +5,7 @@ import ch.qos.logback.classic.Logger
 import ch.qos.logback.classic.spi.ILoggingEvent
 import ch.qos.logback.core.read.ListAppender
 import com.resilientpos.terminal.TerminalManagement
+import com.resilientpos.terminal.internal.adapter.redis.RedisTerminalRateLimiter
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
@@ -28,6 +29,9 @@ class ErrorLogRequestContextTest(@Autowired private val mockMvc: MockMvc) {
     // 슬라이스에 단말 인증 인터셉터 설정이 실린다. 이 테스트의 경로는 v1이 아니라 인증을 타지 않지만 의존성은 채워야 한다.
     @MockitoBean
     private lateinit var terminals: TerminalManagement
+
+    @MockitoBean
+    private lateinit var rateLimiter: RedisTerminalRateLimiter
 
     private val logger = LoggerFactory.getLogger(ApiControllerAdvice::class.java) as Logger
     private val appender = object : ListAppender<ILoggingEvent>() {

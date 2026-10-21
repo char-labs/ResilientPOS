@@ -3,6 +3,7 @@ package com.resilientpos.sync.internal.adapter.web
 import com.resilientpos.foundation.DomainException
 import com.resilientpos.order.ClientOrderId
 import com.resilientpos.order.OrderId
+import com.resilientpos.platform.RateLimitedException
 import com.resilientpos.store.StoreId
 import com.resilientpos.sync.internal.application.SyncCommand
 import com.resilientpos.sync.internal.application.SyncCommandFacade
@@ -16,11 +17,13 @@ import com.resilientpos.terminal.TerminalFixtures.BEARER
 import com.resilientpos.terminal.TerminalFixtures.TOKEN
 import com.resilientpos.terminal.TerminalId
 import com.resilientpos.terminal.TerminalManagement
+import com.resilientpos.terminal.internal.adapter.redis.RedisTerminalRateLimiter
 import java.math.BigDecimal
 import java.util.UUID
 import kotlin.test.Test
 import org.junit.jupiter.api.BeforeEach
 import org.mockito.BDDMockito.given
+import org.mockito.BDDMockito.willThrow
 import org.mockito.Mockito.verify
 import org.mockito.Mockito.verifyNoInteractions
 import org.springframework.beans.factory.annotation.Autowired
@@ -29,6 +32,8 @@ import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest
 import org.springframework.http.MediaType
 import org.springframework.restdocs.mockmvc.MockMvcRestDocumentation.document
 import org.springframework.restdocs.mockmvc.RestDocumentationRequestBuilders.post
+import org.springframework.restdocs.headers.HeaderDocumentation.headerWithName
+import org.springframework.restdocs.headers.HeaderDocumentation.responseHeaders
 import org.springframework.restdocs.payload.FieldDescriptor
 import org.springframework.restdocs.payload.JsonFieldType
 import org.springframework.restdocs.payload.PayloadDocumentation.fieldWithPath
@@ -59,6 +64,9 @@ class SyncControllerTest(
 
     @MockitoBean
     private lateinit var terminals: TerminalManagement
+
+    @MockitoBean
+    private lateinit var rateLimiter: RedisTerminalRateLimiter
 
     @BeforeEach
     fun authenticate() {
@@ -167,6 +175,38 @@ class SyncControllerTest(
             .andExpect(header().string("WWW-Authenticate", "Bearer"))
             .andExpect(jsonPath("$.result").value("FAIL"))
             .andExpect(jsonPath("$.error.errorCode").value("UNAUTHENTICATED"))
+
+        verifyNoInteractions(facade)
+    }
+
+    @Test
+    fun `limiter가 거절하면 429 RATE_LIMITED와 Retry-After이고 Facade를 부르지 않는다`() {
+        willThrow(RateLimitedException(2, "scope=terminal terminalId=$TERMINAL_ID storeId=$STORE_ID"))
+            .given(rateLimiter).acquire(AuthenticatedTerminal(TerminalId(UUID.fromString(TERMINAL_ID)), StoreId(UUID.fromString(STORE_ID))))
+
+        postBatch(requestJson(operationJson(OPERATION_ID_1, 1)))
+            .andExpect(status().isTooManyRequests)
+            .andExpect(header().string("Retry-After", "2"))
+            .andExpect(jsonPath("$.result").value("FAIL"))
+            .andExpect(jsonPath("$.data").value(null))
+            .andExpect(jsonPath("$.error.errorCode").value("RATE_LIMITED"))
+            .andExpect(jsonPath("$.error.message").value("요청이 많아 잠시 후 다시 시도해 주세요."))
+            .andDo(
+                document(
+                    "sync-receive-batch-rate-limited",
+                    AUTHORIZATION_HEADER, PATH_PARAMETERS,
+                    requestFields(REQUEST_FIELDS),
+                    responseHeaders(
+                        headerWithName("Retry-After").description("다시 보내기까지 기다릴 정수 초(1 이상). 같은 요청을 이 초에 0~1초 jitter를 더한 뒤 그대로 다시 보낸다"),
+                    ),
+                    responseFields(
+                        fieldWithPath("result").type(JsonFieldType.STRING).description("FAIL"),
+                        fieldWithPath("data").type(JsonFieldType.NULL).description("실패 응답에서는 null"),
+                        fieldWithPath("error.errorCode").type(JsonFieldType.STRING).description("RATE_LIMITED. 단말이나 매장의 요청 빈도가 상한을 넘었다. 어느 쪽인지는 구분하지 않는다"),
+                        fieldWithPath("error.message").type(JsonFieldType.STRING).description("사람이 읽는 설명"),
+                    ),
+                ),
+            )
 
         verifyNoInteractions(facade)
     }

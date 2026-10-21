@@ -1,6 +1,7 @@
 package com.resilientpos.platform
 
 import com.resilientpos.terminal.TerminalManagement
+import com.resilientpos.terminal.internal.adapter.redis.RedisTerminalRateLimiter
 import kotlin.test.Test
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest
@@ -21,6 +22,9 @@ class DemoPageHiddenByDefaultTest(@Autowired private val mockMvc: MockMvc) {
     @MockitoBean
     private lateinit var terminals: TerminalManagement
 
+    @MockitoBean
+    private lateinit var rateLimiter: RedisTerminalRateLimiter
+
     @Test
     fun `기본 프로필에서는 시연 화면이 404다`() {
         mockMvc.get(DEMO_PAGE).andExpect {
@@ -36,6 +40,9 @@ class DemoPageOpenInDemoProfileTest(@Autowired private val mockMvc: MockMvc) {
 
     @MockitoBean
     private lateinit var terminals: TerminalManagement
+
+    @MockitoBean
+    private lateinit var rateLimiter: RedisTerminalRateLimiter
 
     @Test
     fun `demo 프로필에서는 시연 화면을 서빙한다`() {

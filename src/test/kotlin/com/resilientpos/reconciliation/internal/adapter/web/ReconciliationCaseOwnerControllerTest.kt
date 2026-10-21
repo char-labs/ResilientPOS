@@ -22,6 +22,7 @@ import com.resilientpos.store.StoreId
 import com.resilientpos.store.StoreManagement
 import com.resilientpos.terminal.TerminalId
 import com.resilientpos.terminal.TerminalManagement
+import com.resilientpos.terminal.internal.adapter.redis.RedisTerminalRateLimiter
 import java.time.Instant
 import java.util.Currency
 import java.util.UUID
@@ -78,6 +79,9 @@ class ReconciliationCaseOwnerControllerTest(
     /** 슬라이스가 싣는 단말 인증 인터셉터의 의존성이다. 이 API는 단말을 쓰지 않는다. */
     @MockitoBean
     private lateinit var terminals: TerminalManagement
+
+    @MockitoBean
+    private lateinit var rateLimiter: RedisTerminalRateLimiter
 
     private val owner: RequestPostProcessor = authentication(UsernamePasswordAuthenticationToken.authenticated(OWNER_ID, null, emptyList()))
 

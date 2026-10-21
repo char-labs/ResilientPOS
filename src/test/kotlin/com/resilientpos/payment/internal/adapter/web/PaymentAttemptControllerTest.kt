@@ -18,6 +18,7 @@ import com.resilientpos.terminal.TerminalFixtures.BEARER
 import com.resilientpos.terminal.TerminalFixtures.TOKEN
 import com.resilientpos.terminal.TerminalId
 import com.resilientpos.terminal.TerminalManagement
+import com.resilientpos.terminal.internal.adapter.redis.RedisTerminalRateLimiter
 import java.util.Currency
 import java.util.UUID
 import kotlin.test.Test
@@ -63,6 +64,9 @@ class PaymentAttemptControllerTest(
 
     @MockitoBean
     private lateinit var terminals: TerminalManagement
+
+    @MockitoBean
+    private lateinit var rateLimiter: RedisTerminalRateLimiter
 
     @BeforeEach
     fun authenticate() {
