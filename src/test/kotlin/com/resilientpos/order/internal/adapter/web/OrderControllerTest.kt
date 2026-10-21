@@ -28,6 +28,7 @@ import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.restdocs.test.autoconfigure.AutoConfigureRestDocs
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest
 import org.springframework.dao.ConcurrencyFailureException
+import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.http.MediaType
 import org.springframework.restdocs.headers.HeaderDocumentation.headerWithName
 import org.springframework.restdocs.headers.HeaderDocumentation.responseHeaders
@@ -223,7 +224,12 @@ class OrderControllerTest(
     @Test
     fun `Facade가 경합 예외를 던지면 409 CONCURRENT_REQUEST이고 예외 메시지를 담지 않는다`() {
         given(facade.create(command()))
-            .willThrow(ConcurrencyFailureException("같은 키의 주문이 동시에 저장됐다 terminalId=$TERMINAL_ID clientOrderId=$CLIENT_ORDER_ID"))
+            .willThrow(
+                ConcurrencyFailureException(
+                    "같은 키의 주문이 동시에 저장됐다 terminalId=$TERMINAL_ID clientOrderId=$CLIENT_ORDER_ID",
+                    DataIntegrityViolationException("duplicate key value violates unique constraint \"t_order_terminal_id_client_order_id_key\""),
+                ),
+            )
 
         postOrder(requestJson()).andExpect {
             status { isEqualTo(409) }
@@ -231,7 +237,8 @@ class OrderControllerTest(
             jsonPath("$.data") { value(null) }
             jsonPath("$.error.errorCode") { value("CONCURRENT_REQUEST") }
             jsonPath("$.error.message") { value("동시 처리 충돌로 요청을 완료하지 못했습니다.") }
-            content { string(not(containsString("clientOrderId="))) }
+            content { string(not(containsString(CLIENT_ORDER_ID))) }
+            content { string(not(containsString("t_order_terminal_id_client_order_id_key"))) }
         }.andDo {
             handle(
                 document(
