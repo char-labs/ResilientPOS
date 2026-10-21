@@ -35,22 +35,24 @@ class RedisTerminalRateLimiter(
 ) {
 
     init {
-        // 0이면 스크립트가 나눗셈에서 실패하고 fail-open이 그 실패를 삼켜 보호가 조용히 꺼진다. 기동에서 막는다.
+        // 0·무한대·NaN이면 스크립트가 계산에서 실패하고 fail-open이 그 실패를 삼켜 보호가 조용히 꺼진다. 기동에서 막는다.
         require(terminalCapacity >= 1 && storeCapacity >= 1) { "rate-limit capacity는 1 이상이어야 한다" }
-        require(terminalRefillPerSecond > 0 && storeRefillPerSecond > 0) { "rate-limit refill-per-second는 0보다 커야 한다" }
+        require(listOf(terminalRefillPerSecond, storeRefillPerSecond).all { it > 0 && it.isFinite() }) {
+            "rate-limit refill-per-second는 0보다 큰 유한값이어야 한다"
+        }
         // 첫 거절 전에도 시계열이 있어야 increase()가 첫 증가를 잡는다.
         SCOPES.forEach { meterRegistry.counter(METRIC, SCOPE_TAG, it) }
     }
 
     /** 스크립트의 ARGV. 키 순서(단말, 매장)와 같은 순서로 capacity와 초당 refill이 번갈아 온다. */
-    private val bucketArgs = listOf(terminalCapacity, terminalRefillPerSecond, storeCapacity, storeRefillPerSecond).map { it.toString() }
+    private val bucketArgs = listOf(terminalCapacity, terminalRefillPerSecond, storeCapacity, storeRefillPerSecond).map { it.toString() }.toTypedArray()
 
     /** 거절하면 [RateLimitedException]을 던진다. */
     fun acquire(terminal: AuthenticatedTerminal) {
         val store = terminal.storeId.value
         val keys = listOf("rate-limit:{$store}:terminal:${terminal.terminalId.value}", "rate-limit:{$store}:store")
         val result = try {
-            redis.execute(ACQUIRE, keys, *bucketArgs.toTypedArray())
+            redis.execute(ACQUIRE, keys, *bucketArgs)
         } catch (e: DataAccessException) {
             return proceedUnlimited(terminal, e)
         } catch (e: IllegalStateException) {
@@ -68,9 +70,16 @@ class RedisTerminalRateLimiter(
         )
     }
 
-    // shortcut: Redis가 느리면 /v1 요청마다 timeout(1초)을 기다린 뒤 통과한다. 지연이 관측되면 circuit breaker로 Redis 호출 자체를 건너뛴다.
+    /**
+     * 장애 중에는 /v1 요청마다 남으므로 스택 없이 한 줄이다. 스택을 붙이면 로그가 장애를 키운다.
+     * 연결이 끊긴 것을 Lettuce가 아는 동안에는 명령이 바로 거절된다(`PlatformConfiguration`의 `REJECT_COMMANDS`).
+     */
+    // shortcut: Redis가 느리거나 패킷이 사라지는 단절(RST 없음)이면 /v1 요청마다 timeout(1초)을 기다린 뒤 통과한다. 지연이 관측되면 circuit breaker로 Redis 호출 자체를 건너뛴다.
     private fun proceedUnlimited(terminal: AuthenticatedTerminal, e: RuntimeException) =
-        log.warn(e) { "제한 없이 통과시킨다(Redis 오류) terminalId=${terminal.terminalId.value} storeId=${terminal.storeId.value}" }
+        log.warn {
+            "제한 없이 통과시킨다(Redis 오류) terminalId=${terminal.terminalId.value} storeId=${terminal.storeId.value} " +
+                "cause=${e.javaClass.simpleName}: ${e.message}"
+        }
 
     private companion object {
         val log by logger()
@@ -93,13 +102,14 @@ class RedisTerminalRateLimiter(
             """
             local time = redis.call('TIME')
             local now = tonumber(time[1]) * 1000000 + tonumber(time[2])
-            local filled, rejected, wait = {}, 0, 0
+            local filled, ttl, rejected, wait = {}, {}, 0, 0
             for i, key in ipairs(KEYS) do
               local capacity, rate = tonumber(ARGV[i * 2 - 1]), tonumber(ARGV[i * 2]) / 1000000
               local state = redis.call('HMGET', key, 'tokens', 'at')
               local tokens = tonumber(state[1]) or capacity
               local at = tonumber(state[2]) or now
               filled[i] = math.min(capacity, tokens + math.max(0, now - at) * rate)
+              ttl[i] = math.ceil(capacity / rate / 1000)
               if filled[i] < 1 then
                 local needed = math.ceil((1 - filled[i]) / rate)
                 if needed > wait then rejected, wait = i, needed end
@@ -107,9 +117,8 @@ class RedisTerminalRateLimiter(
             end
             if rejected == 0 then
               for i, key in ipairs(KEYS) do
-                local capacity, rate = tonumber(ARGV[i * 2 - 1]), tonumber(ARGV[i * 2]) / 1000000
                 redis.call('HSET', key, 'tokens', filled[i] - 1, 'at', now)
-                redis.call('PEXPIRE', key, math.ceil(capacity / rate / 1000))
+                redis.call('PEXPIRE', key, ttl[i])
               end
             end
             return {rejected, wait}

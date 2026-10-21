@@ -71,12 +71,13 @@ class ApiControllerAdvice : ResponseEntityExceptionHandler() {
     /**
      * 단말이나 매장의 요청 빈도가 상한을 넘었다. 단말 bucket과 매장 bucket을 구분하지 않고 같은 응답이다.
      * 단말은 `Retry-After`(정수 초)만큼 기다린 뒤 같은 요청을 그대로 다시 보낸다.
+     * 예외 메시지(scope·단말·매장)를 로그 줄에 붙이고 예외는 cause로 넘기지 않는다. 넘기면 예외 줄이 하나 더 찍힌다.
      */
     @ExceptionHandler(RateLimitedException::class)
     fun handleRateLimited(e: RateLimitedException, request: HttpServletRequest): ResponseEntity<ApiResponse<Nothing>> =
         ResponseEntity.status(ErrorType.RATE_LIMITED.status)
             .header(HttpHeaders.RETRY_AFTER, e.retryAfterSeconds.toString())
-            .body(failBody(ErrorType.RATE_LIMITED, e, request.describe()))
+            .body(failBody(ErrorType.RATE_LIMITED, null, "${request.describe()} ${e.message}"))
 
     /**
      * 점주 경로의 CSRF 토큰이 없거나 쿠키와 다르다(`CsrfException`). 운영자 토큰에 운영자 권한이 없을 때([AdminSecurityFilterChain])도 여기로 온다.

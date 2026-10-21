@@ -10,6 +10,7 @@ import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import org.junit.jupiter.api.extension.ExtendWith
 import org.mockito.Mockito.mock
 import org.springframework.boot.test.system.CapturedOutput
@@ -36,7 +37,7 @@ class RedisTerminalRateLimiterTest {
     private fun redisReturning(scriptResult: List<Long>) = mock(StringRedisTemplate::class.java) { scriptResult }
 
     @Test
-    fun `Redis 오류면 제한 없이 통과시키고 WARN을 남긴다`(output: CapturedOutput) {
+    fun `Redis 오류면 제한 없이 통과시키고 스택 없는 WARN 한 줄을 남긴다`(output: CapturedOutput) {
         listOf(
             RedisConnectionFailureException("Unable to connect to Redis"),
             IllegalStateException("LettuceConnectionFactory was destroyed"),
@@ -46,21 +47,29 @@ class RedisTerminalRateLimiterTest {
 
             limiter(failing).acquire(terminal)
 
+            // 장애 중에는 /v1 요청마다 남으므로 스택이 붙으면 로그가 장애를 키운다.
             val logged = output.all.substring(mark)
-            assertContains(logged, "WARN")
-            assertContains(logged, "제한 없이 통과시킨다(Redis 오류)")
-            assertContains(logged, "terminalId=${terminal.terminalId.value}")
+            assertFalse(logged.contains("\tat "), "스택 프레임이 찍혔다")
+            assertFalse(logged.contains(error.javaClass.name), "예외 줄이 따로 찍혔다")
+            val line = logged.lines().single { it.contains("제한 없이 통과시킨다") }
+            assertContains(line, "WARN")
+            assertContains(line, "제한 없이 통과시킨다(Redis 오류)")
+            assertContains(line, "terminalId=${terminal.terminalId.value}")
+            assertContains(line, "${error.javaClass.simpleName}: ${error.message}")
         }
     }
 
     @Test
-    fun `capacity가 1 미만이거나 refill이 0 이하이면 만들지 못한다`() {
+    fun `capacity가 1 미만이거나 refill이 0 이하·무한대·NaN이면 만들지 못한다`() {
         val redis = redisReturning(listOf(0L, 0L))
         listOf<() -> Unit>(
             { limiter(redis, terminalCapacity = 0) },
             { limiter(redis, terminalRefillPerSecond = 0.0) },
             { limiter(redis, storeCapacity = 0) },
             { limiter(redis, storeRefillPerSecond = -1.0) },
+            { limiter(redis, terminalRefillPerSecond = Double.POSITIVE_INFINITY) },
+            { limiter(redis, storeRefillPerSecond = Double.POSITIVE_INFINITY) },
+            { limiter(redis, storeRefillPerSecond = Double.NaN) },
         ).forEach { assertFailsWith<IllegalArgumentException>(block = it) }
     }
 

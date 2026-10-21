@@ -107,6 +107,8 @@ class TerminalAuthenticationInterceptorTest(@Autowired private val mockMvc: Mock
         val line = logged.lines().single { it.contains("errorCode=RATE_LIMITED") }
         assertTrue(line.contains(" INFO "), "거절은 INFO여야 한다: $line")
         assertTrue(line.contains(reason), "scope·terminalId·storeId가 로그에 없다: $line")
+        // 메시지가 이미 그 줄에 있으므로 예외를 cause로 붙여 예외 줄이 하나 더 찍히지 않게 한다.
+        assertFalse(logged.contains(RateLimitedException::class.java.name), "거절 로그에 예외 줄이 붙었다")
         assertFalse(logged.contains(TOKEN), "토큰 값(Authorization 헤더 값)이 출력에 남았다")
     }
 }
