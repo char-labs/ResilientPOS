@@ -1,11 +1,14 @@
 package com.resilientpos.platform
 
 import com.zaxxer.hikari.HikariDataSource
+import io.lettuce.core.ClientOptions
 import jakarta.persistence.EntityManagerFactory
+import java.time.Duration
 import javax.sql.DataSource
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import org.springframework.beans.factory.annotation.Autowired
+import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory
 import com.resilientpos.PostgresIntegrationTest
 import org.springframework.transaction.support.AbstractPlatformTransactionManager
 import org.springframework.transaction.PlatformTransactionManager
@@ -20,6 +23,7 @@ class ResourceLimitConfigurationTest(
     @Autowired private val dataSource: DataSource,
     @Autowired private val entityManagerFactory: EntityManagerFactory,
     @Autowired private val transactionManager: PlatformTransactionManager,
+    @Autowired private val redisConnectionFactory: LettuceConnectionFactory,
 ) : PostgresIntegrationTest() {
 
     @Test
@@ -48,5 +52,13 @@ class ResourceLimitConfigurationTest(
             entityManagerFactory.properties["jakarta.persistence.query.timeout"].toString(),
         )
         assertEquals(30, (transactionManager as AbstractPlatformTransactionManager).defaultTimeout)
+    }
+
+    @Test
+    fun `Redis 연결이 끊긴 동안 명령을 버퍼에 쌓지 않고 바로 거절하며 connect timeout은 그대로다`() {
+        val options = redisConnectionFactory.clientConfiguration.clientOptions.orElseThrow()
+
+        assertEquals(ClientOptions.DisconnectedBehavior.REJECT_COMMANDS, options.disconnectedBehavior)
+        assertEquals(Duration.ofSeconds(1), options.socketOptions.connectTimeout)
     }
 }

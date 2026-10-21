@@ -2,12 +2,14 @@ package com.resilientpos.platform
 
 import com.resilientpos.foundation.IdentifierGenerator
 import com.resilientpos.foundation.UuidV7IdentifierGenerator
+import io.lettuce.core.ClientOptions
 import jakarta.servlet.http.HttpServletRequest
 import jakarta.servlet.http.HttpServletResponse
 import java.time.Clock
 import org.springframework.beans.factory.InitializingBean
 import org.springframework.beans.factory.ObjectProvider
 import org.springframework.beans.factory.annotation.Qualifier
+import org.springframework.boot.data.redis.autoconfigure.LettuceClientOptionsBuilderCustomizer
 import org.springframework.boot.security.autoconfigure.web.servlet.SecurityFilterProperties
 import org.springframework.boot.web.servlet.FilterRegistrationBean
 import org.springframework.context.annotation.Bean
@@ -43,6 +45,15 @@ class PlatformConfiguration {
         override fun retrieveAndUpdate(request: HttpServletRequest, response: HttpServletResponse): FlashMap? = null
         override fun saveOutputFlashMap(flashMap: FlashMap, request: HttpServletRequest, response: HttpServletResponse) = Unit
     }
+
+    /**
+     * Lettuce 기본값은 연결이 끊긴 동안 명령을 버퍼에 받아 둔다. 그러면 Redis가 재시작하는 동안 단말 요청(빈도 상한)마다 timeout을 다 기다리고,
+     * 끝난 명령도 재연결 전까지 버퍼에 남아 장애가 길면 힙이 불어난다. 바로 거절하면 빈도 상한과 잠금은 즉시 fail-open, 세션과 로그인은 즉시 503이다.
+     * Boot가 connect timeout과 `TimeoutOptions`를 넣은 뒤에 적용되므로 그 설정은 남는다.
+     */
+    @Bean
+    fun rejectRedisCommandsWhileDisconnected() =
+        LettuceClientOptionsBuilderCustomizer { it.disconnectedBehavior(ClientOptions.DisconnectedBehavior.REJECT_COMMANDS) }
 
     @Bean
     fun txInitializer(txRunner: TxRunner) = InitializingBean { Tx.initialize(txRunner) }

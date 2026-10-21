@@ -53,6 +53,7 @@ spring:
       port: ${REDIS_PORT:6379}
       # 잠금과 빈도 상한은 Redis가 느리거나 없으면 그것 없이 진행한다(fail-open). 기본 60초를 기다리면 그동안 결제와 주문 생성, 단말 요청이 멈춘다.
       # 세션과 로그인 실패 카운터는 fail-closed다. 이 시간 안에 응답이 없으면 그 점주 요청은 503이고, 로그인은 비밀번호를 비교하지 않는다.
+      # 연결이 끊긴 것을 Lettuce가 아는 동안에는 이 시간을 기다리지 않고 명령을 바로 거절한다(PlatformConfiguration의 REJECT_COMMANDS).
       timeout: 1s
       connect-timeout: 1s
   web:
