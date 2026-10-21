@@ -7,13 +7,13 @@
 
 기대 결과:
 - `load-test/`의 k6 스크립트 다섯 개로 누구나 같은 측정을 다시 돌릴 수 있다.
-- 락 대기·보유 시간, fail-open 횟수, sync 항목 결과를 metric으로 본다.
+- 락 대기·보유 시간을 metric으로 본다. fail-open 횟수와 sync 항목 결과·수렴 시간은 #76의 metric으로 본다.
 - 락 상수, Redis 타임아웃, Hikari 풀, sync 배치 상한, consumer 설정, 실행기 큐가 실측 근거를 가진 값이 된다.
 - provider 호출 구조를 규칙으로 고르고 바꾼다.
 - Redisson이 필요해지는 시점이 측정값과 지켜볼 metric 조건으로 wiki에 남는다.
 
 ## 범위
-소유 모듈은 `platform`(락·실행기·Kafka 설정), `payment`(provider 호출·가짜 provider), `sync`(항목 결과 metric), `order`(락 호출부)다. 부하 스크립트는 저장소 루트 `load-test/`다.
+소유 모듈은 `platform`(락 시간 metric·실행기·Kafka 설정)과 `payment`(provider 호출·가짜 provider)다. `sync`는 판정 규칙이 배치 크기 상한이나 동시 실행 상한을 바꾸게 할 때만 바뀐다. 부하 스크립트는 저장소 루트 `load-test/`다.
 
 ### 트래픽 가정
 원문 NFR([시스템 설계 §7](../references/02_System_Design.md#7-nfr-and-observability), [PRD 2.2](../references/01_Product_Planning_PRD.md))을 그대로 쓴다.
@@ -45,14 +45,18 @@
 | S4 | 느린 provider | 판매 초당 50건 고정, 가짜 provider 지연 0·300ms·1초·3초, 각 3분 | `payment.attempt-created` group lag, checkout부터 `PAID`까지의 시간(k6가 결제 시도 조회 API로 확인), 메시지당 provider 밖 처리 시간 | provider 호출 구조, 파티션·concurrency, provider timeout, `max-poll-records` |
 | S5 | Kafka 정지 | S1 포화의 70%에서 `kafka`를 60초 멈췄다 다시 띄운다 | 실행기 큐 길이와 증가율, 힙, 요청 지연, `event_publication_incomplete`가 0으로 돌아오는 시간 | 실행기 큐 상한 |
 
-### 새 metric
-#76의 미뤄진 metric 중 이 측정에 쓰는 것을 이 PR이 더한다(#76 이슈에 코멘트로 남긴다).
-- **`distributed_lock_wait_seconds{lock, outcome}`**(Timer): `tryAcquire`가 시작부터 끝날 때까지 걸린 시간이다. `outcome`은 `acquired`(바로든 기다린 뒤든 얻음), `timeout`(대기 한도 초과로 잠금 없이 진행), `redis_error`(Redis 오류로 잠금 없이 진행)다. fail-open 횟수는 `outcome!="acquired"`의 count다. 대기 빈도는 histogram bucket으로 구한다(첫 시도에 얻은 요청은 1ms bucket 안에 든다).
-- **`distributed_lock_held_seconds{lock}`**(Timer): 잠금을 얻은 뒤 해제할 때까지 걸린 시간이다. TTL과 watchdog 판단에 쓴다. fail-open이면 기록하지 않는다.
-- `lock` 태그는 호출부가 넘긴다. `Lock.executeWithLock(name, key)`·`executeWithLockNoTx(name, key)`로 바뀌고 `DistributedLock.tryAcquire`·`release`도 이름을 받는다. 네 사용처는 이미 가진 접두어 상수를 넘긴다(`order:create-lock`, `payment:checkout-lock`, `payment:unknown-resolve`, `platform:event-publication:resubmit`). 키 모양에 기대지 않아 ID가 태그로 새지 않는다. 키 값은 바뀌지 않아 롤링 배포 중에도 두 버전이 서로를 막는다.
-- **`sync_operation_total{kind, status}`**(Counter): 배치 항목 하나의 결과마다 오른다. `status`는 `SyncItemStatus` 이름이고 GAP 수는 `status="GAP"`이다(시스템 설계의 `sync_gap_total` 자리). `terminalId`는 태그로 쓰지 않는다.
+### metric
+같은 metric을 두 PR이 따로 만들지 않는다. #76(`feature/observability-alerts-tracing`, spec `docs/spec/2026-10-21-observability-alerts-tracing.md`)이 아래를 만들고 이 측정은 그것을 쓴다.
+- `sync_operation_total{status}`: 배치 항목 결과마다 오른다. GAP 수는 `status="GAP"`이다.
+- `sync_convergence_seconds`: 단말이 operation을 만든 시각(sync 항목의 선택 필드 `createdAt`)부터 서버가 처음 확정한 시각까지다. k6 스크립트는 항목마다 `createdAt`을 싣는다. 이 앱의 Jackson은 모르는 필드를 거절하지 않으므로 #76 머지 전에도 그대로 받는다.
+- `lock_fail_open_total{lock, reason}`: `reason`은 `timeout`과 `error`다. `lock`은 키의 앞 두 마디이고, 그 규칙("모듈:이름:식별자…")은 #76이 `Lock` KDoc에 적는다.
+
+이 PR이 더하는 것은 #76이 계획하지 않은 락 시간 두 개다. Redisson이 필요해지는 시점을 운영에서 지켜보려면 이 둘이 있어야 한다.
+- **`distributed_lock_wait_seconds{lock, outcome}`**(Timer): `tryAcquire`의 시작부터 끝까지 걸린 시간이다. `outcome`은 `acquired`(바로든 기다린 뒤든 얻음), `timeout`, `error`다(#76의 `reason`과 같은 값). 대기 빈도는 histogram bucket으로 구한다. 첫 시도에 얻은 요청은 재시도 간격보다 짧은 bucket 안에 든다.
+- **`distributed_lock_held_seconds{lock}`**(Timer): 잠금을 얻은 뒤 해제할 때까지다. TTL과 watchdog 판단에 쓴다. 잠그지 못했으면 기록하지 않는다.
+- `lock` 태그는 #76이 만드는 키 앞 두 마디 함수를 그대로 쓴다. 태그 규칙을 둘로 만들지 않고, `Lock`의 호출 모양과 네 사용처는 바뀌지 않는다. 호출부가 이름을 넘기는 API는 #76이 기각했고 다시 볼 조건(키를 만드는 호출부가 다섯 곳을 넘거나 규칙 밖 키가 필요해질 때)도 그 spec에 있다.
 - 두 Timer는 `management.metrics.distribution.percentiles-histogram`으로 bucket을 내보낸다.
-- 수렴 시간 서버 metric은 만들지 않는다(제외 절).
+- 순서: 같은 파일(`RedisDistributedLock.kt`)을 #76이 고치므로 이 Timer는 #76이 main에 머지된 뒤 그 위로 rebase해서 구현한다. 그동안 k6 스크립트, 가짜 provider 지연, 실행기 넘침 처리를 먼저 한다. 측정은 #76 머지 뒤 이 브랜치로 한다. #76이 늦어지면 두 브랜치를 로컬에서만 합친 빌드로 재고 그 커밋 SHA를 결과에 남긴 뒤, 머지 뒤 S2를 다시 돌려 같은 수치인지 확인한다. 합친 빌드는 push하지 않는다(스택 PR이 아니다).
 
 ### 코드 변경(동작이 바뀌는 것은 TDD)
 - **가짜 provider 지연**: `FakePaymentGateway`가 `resilientpos.payment.fake-gateway.latency`(기본 `PT0S`)만큼 `authorize`·`query`에서 잠든다. 기본값 0이라 지금 동작은 그대로다. compose `app` 서비스 환경 변수 한 줄(`RESILIENTPOS_PAYMENT_FAKE_GATEWAY_LATENCY`, 기본 `PT0S`)로 켠다.
@@ -69,7 +73,7 @@
 | `spring.data.redis.timeout` | 1초 | S1·S2에서 Lettuce 명령 p99.9 × 10이 1초를 넘으면 그 값으로 올린다. 세션·로그인 카운터(fail-closed)도 이 값을 쓰므로 내리지 않는다 |
 | Hikari `maximum-pool-size` | 10 | 목표 부하에서 `hikaricp_connections_pending`이 0보다 큰 상태가 1분 넘게 이어지고 PostgreSQL CPU에 여유(70% 미만)가 있으면 pending이 사라지는 가장 작은 값으로 올린다 |
 | sync `MAX_OPERATIONS` | 500 | S3에서 500 op 배치 p95가 2초를 넘으면 2초 안에 드는 가장 큰 100 단위 값으로 줄이고 단말 계약(배치 크기 상한)을 wiki에 고친다 |
-| sync 동시 실행 상한 | 없음 | S3에서 pending이 생기기 시작하는 동시 배치 수를 인스턴스당 상한으로 정한다. 입구 구현(거절 응답·`Retry-After`)은 #87이 맡는다 |
+| sync 동시 실행 상한 | 없음 | S3에서 단말 100대 동시 재연결이 커넥션 대기 초과(Hikari `connection-timeout` 3초)로 배치를 실패시키거나 60초 안에 수렴하지 못하면, pending이 생기기 시작하는 동시 배치 수를 인스턴스별 상한으로 이 PR에서 구현한다. 거절 응답은 그때 범위 조정으로 정하고 #87의 429 규약과 맞춘다. 둘 다 아니면 상한을 두지 않고, 둘 조건과 측정값을 [용량 기준](../wiki/capacity.md)에 남긴다. #87은 같은 단말의 동시 sync 상한을 제외했다(행 잠금이 직렬화하고 rate가 간접 제한한다) |
 | 실행기 큐 | 무제한 | S5의 큐 증가율과 작업당 힙으로 힙 여유(최대 힙의 25%) 안의 가장 큰 값을 상한으로 둔다 |
 | `max-poll-records` | 50 | 레코드 최대 처리 시간(provider deadline 3초 + provider 밖 처리 p99) × 이 값이 `max.poll.interval.ms`(300초)의 절반을 넘으면 줄인다 |
 | provider 호출 구조 | consumer 스레드에서 동기 | 필요 동시 호출 수 = 승인 TPS(450) × 설계 p99(1초)다. S4로 Little의 법칙(처리량 = 동시성 ÷ 지연)과 메시지당 provider 밖 처리 시간을 확인한 뒤, 필요 동시 호출 수가 24 이하면 파티션·concurrency를 그 수로 늘리고 provider timeout(deadline 3초, 넘으면 `UNKNOWN`)을 더한다. 24를 넘으면 `PaymentAttemptCreatedListener`를 비동기 반환(Spring Kafka 4.1.1의 `CompletableFuture` 또는 `suspend`) listener로 바꾸고 in-flight 상한(bulkhead)을 둔다. 지금 가정으로는 450이라 비동기 반환이 될 가능성이 높다 |
@@ -93,20 +97,21 @@
   - 키 형식이 문자열 `SET`에서 hash로 바뀐다. 롤링 배포 중에는 옛 pod와 새 pod가 서로를 막지 못하고 `WRONGTYPE` 오류로 둘 다 fail-open한다. 그동안 DB 제약이 막는다.
 
 ### #87 권장 상한
-- 출발값: 단말 피크 평균 0.5 RPS(500 RPS ÷ 1,000대)의 4배인 단말 2 RPS, 매장 8 RPS(단말 4대분). burst와 sync 동시 실행 상한은 S1·S3 측정값으로 정한다.
-- 검증: 오작동 단말 몇 대가 상한 속도로 보내는 동안 정상 단말의 p95가 NFR 안인지, 상한 합계가 인스턴스 포화 RPS의 70% 안인지 k6로 본다. 넘으면 값을 낮추고 이유를 결과에 적는다.
+#87(`feature/inbound-rate-limit`, spec `docs/spec/2026-10-21-inbound-rate-limit.md`)은 단말·매장 token bucket을 `resilientpos.rate-limit.{terminal,store}.capacity`와 `refill-per-second`로 받는다. 대상 endpoint 다섯 개가 bucket 하나를 쓰고 sync 요청은 항목 수와 무관하게 1이다. 권장 값도 이 네 값으로 낸다.
+- 출발값: 단말 refill은 피크 평균 0.5 RPS(500 RPS ÷ 1,000대)의 4배인 초당 2, 매장 refill은 단말 4대분인 초당 8이다. capacity는 #87 결정 6의 조건으로 정한다. 단말 capacity는 재연결 직후 보낼 sync 요청 수(backlog ÷ 배치 크기)와 그동안의 실시간 요청 수의 합 이상이고, 매장 capacity는 매장 단말 수 × 단말 capacity 이상이다.
+- 검증: 오작동 단말 몇 대가 상한 속도로 보내는 동안 정상 단말의 p95가 NFR 안인지, 상한 합계가 인스턴스 포화 RPS의 70% 안인지 k6로 본다. 넘으면 값을 낮추고 이유를 결과에 적는다. #87 limiter가 아직 main에 없으므로 상한 속도로 보내는 부하를 k6가 직접 만들어 흉내 낸다.
 - 결과 값과 근거는 이 spec의 결과 절과 [용량 기준](../wiki/capacity.md)에 남긴다. #87 이슈에 위치를 코멘트로 남긴다.
 
 **계약**: HTTP 응답 모양, 이벤트, 오류 code, 스키마는 바뀌지 않는다. 바뀌는 것은 metric 추가, 값 변경, provider 호출 구조, 실행기의 넘침 처리다. sync 배치 크기 상한이 줄면 단말 계약이 바뀌므로 그때 wiki와 결과에 적는다.
 
 **실패와 복구**: 실행기가 버린 이벤트는 발행 기록 재전송이 다시 보낸다. provider timeout은 `UNKNOWN`이고 결과 불명 확정 작업이 조회한다. 락 metric 기록이 실패해도 락 동작은 바뀌지 않는다(Micrometer 기록은 던지지 않는다).
 
-**관측성**: 위 새 metric 셋과 실행기 거절 counter. [관측성](../wiki/observability.md)에 이름·태그·쓰는 법을 적는다.
+**관측성**: 락 시간 Timer 둘과 실행기 거절 counter. [관측성](../wiki/observability.md)에 이름·태그·쓰는 법을 적는다.
 
 ## 제외
-- **서버 쪽 sync 수렴 시간 metric(`sync_convergence_seconds`).** operation에 `occurredAt`이 없어 서버는 단말이 언제 재연결했는지, 단말 큐가 언제 비었는지 모른다. 수렴 시간은 k6가 단말 쪽에서 잰다(모든 항목이 확정될 때까지). 서버에서 재려면 operation 계약에 시각을 더해야 하고 그것은 계약 변경 PR의 일이다.
-- **sync 동시 실행 상한의 입구 구현.** 상한을 넘는 요청의 거절 응답(429인지 503인지, `Retry-After`)과 filter는 #87이 inbound rate limit과 같은 규약으로 만든다. 이 PR은 값만 정한다.
-- #76의 나머지(알림 규칙, runbook, trace, 재전송 작업 생존 metric). 락 metric은 재전송 작업의 fail-open도 `lock="platform:event-publication:resubmit"`로 센다.
+- **sync 항목 결과 counter, sync 수렴 시간, 락 fail-open counter.** #76이 만든다. 이 PR은 쓰기만 한다. 수렴 시간은 k6도 단말 쪽에서 잰다(배치의 모든 항목이 확정될 때까지).
+- #76의 나머지(알림 규칙, runbook, trace, 재전송 작업 생존 metric). #76의 시작값 임계(LockFailOpen 10분 등)는 그 spec이 "부하테스트 뒤 다시 본다"고 했다. 이 PR은 측정값을 [용량 기준](../wiki/capacity.md)에 남기고 규칙 파일은 고치지 않는다.
+- 같은 단말의 동시 sync 상한. #87과 같은 이유로 두지 않는다.
 - 앱 여러 대로 재는 것. pod 사이 경합은 인스턴스 하나 안의 스레드 경합으로만 잰다. Redis 왕복 비용은 같아 락 판단에는 충분하다. 앱을 늘리면 compose와 Alloy 설정이 바뀌어 #76과 겹친다.
 - Kafka share group(KIP-932) 전환. Kafka 4.2에서 production-ready가 됐지만 브로커를 4.2.1 이상으로 올려야 하고 재시도·DLT가 전달 횟수 한도와 보관 방식으로 바뀌어 지금 DLT 기반 복구 설계를 다시 열어야 한다.
 - 실제 PG adapter와 그 HTTP client 설정(connect timeout, 서킷 브레이커). provider timeout은 이 PR이 정한 deadline을 가짜 provider와 호출 구조에 반영하는 데까지다.
@@ -120,9 +125,6 @@
 - .gitignore
 - docker/docker-compose.yaml
 - src/main/kotlin/com/resilientpos/platform/**
-- src/main/kotlin/com/resilientpos/order/OrderCommandFacade.kt
-- src/main/kotlin/com/resilientpos/payment/PaymentManagement.kt
-- src/main/kotlin/com/resilientpos/payment/internal/application/UnknownPaymentResolver.kt
 - src/main/kotlin/com/resilientpos/payment/internal/application/PaymentAttemptCreatedListener.kt
 - src/main/kotlin/com/resilientpos/payment/internal/adapter/gateway/FakePaymentGateway.kt
 - src/main/kotlin/com/resilientpos/sync/internal/application/SyncCommandFacade.kt
@@ -130,7 +132,6 @@
 - src/test/kotlin/com/resilientpos/platform/**
 - src/test/kotlin/com/resilientpos/payment/**
 - src/test/kotlin/com/resilientpos/sync/**
-- src/test/kotlin/com/resilientpos/order/**
 - docs/wiki/capacity.md
 - docs/wiki/README.md
 - docs/wiki/observability.md
@@ -139,8 +140,8 @@
 
 ## 인수 조건
 1. `load-test/`에 공용 setup과 시나리오 S1~S5 스크립트, 실행 방법을 적은 `load-test/README.md`가 있다. README의 명령으로 compose 스택 위에서 각 시나리오가 끝까지 돌고 summary JSON이 `load-test/results/`에 남는다. 이 디렉터리는 git이 추적하지 않는다.
-2. `Lock` 블록이 잠금을 얻으면 `distributed_lock_wait_seconds{lock, outcome="acquired"}`와 `distributed_lock_held_seconds{lock}`이 하나씩 기록된다. 대기 한도를 넘기면 `outcome="timeout"`, Redis 오류면 `outcome="redis_error"`가 기록되고 보유 시간은 기록되지 않는다. `lock` 태그는 호출부가 넘긴 이름이고 키의 ID는 태그에 없다. 키 값은 바뀌지 않는다.
-3. sync 배치를 받으면 항목마다 `sync_operation_total{kind, status}`가 하나씩 오른다. GAP 항목은 `status="GAP"`이다.
+2. `Lock` 블록이 잠금을 얻으면 `distributed_lock_wait_seconds{lock, outcome="acquired"}`와 `distributed_lock_held_seconds{lock}`이 하나씩 기록된다. 대기 한도를 넘기면 `outcome="timeout"`, Redis 오류면 `outcome="error"`가 기록되고 보유 시간은 기록되지 않는다. `lock` 태그는 #76의 `lock_fail_open_total`과 같은 값(키 앞 두 마디)이고 키의 식별자는 태그에 없다. `Lock`의 호출 모양과 키 값은 바뀌지 않는다.
+3. k6 sync 배치가 항목마다 `createdAt`을 싣고, 측정 빌드에서 #76의 `sync_operation_total`·`sync_convergence_seconds`·`lock_fail_open_total`이 결과 표의 근거로 쓰인다.
 4. `resilientpos.payment.fake-gateway.latency`를 주면 가짜 provider의 `authorize`·`query`가 그만큼 늦게 답하고, 주지 않으면 지금처럼 바로 답한다.
 5. 비동기 실행기의 큐가 차면 넘친 작업을 던지지 않고 버린다. 그 이벤트를 발행한 요청은 성공 응답을 받고, `task_execution_rejected_total`이 오르고 WARN이 남으며, 발행 기록은 미완료로 남는다.
 6. 결과 절에 S1~S5의 원시 수치, 환경, 재현 명령이 있다. 판정 규칙 표의 항목마다 바꿨는지와 근거 수치가 있다.
@@ -154,30 +155,31 @@
 - `./gradlew test`(Docker 필요). 좁힐 때는 `./gradlew test --tests 'com.resilientpos.platform.*Lock*'`처럼 실행한다.
 - 측정: `load-test/README.md`의 명령. 시나리오마다 Grafana에서 읽은 PromQL을 결과 표에 함께 적는다.
 - 정상 시나리오: 기본 설정에서 기존 테스트가 그대로 통과하고 새 metric이 `/actuator/prometheus`에 보인다.
-- 실패 시나리오: Redis가 없으면 `outcome="redis_error"`가 오르고 블록은 실행된다. 실행기 큐가 차면 요청은 성공하고 거절 counter가 오른다. provider가 deadline을 넘기면 시도는 `UNKNOWN`이 된다.
+- 실패 시나리오: Redis가 없으면 `outcome="error"`가 오르고 블록은 실행된다. 실행기 큐가 차면 요청은 성공하고 거절 counter가 오른다. provider가 deadline을 넘기면 시도는 `UNKNOWN`이 된다.
 
 ## Wiki 영향
 - [용량 기준](../wiki/capacity.md)(새 페이지): 트래픽 가정, 인스턴스 포화 RPS, 채택한 값과 근거 spec 링크, #87 권장 상한, Redisson이 필요해지는 시점, 다시 재는 방법. [wiki 인덱스](../wiki/README.md)에 진입점을 더한다.
 - [관측성](../wiki/observability.md): 새 metric 셋과 실행기 거절 counter, "아직 없는 것"에서 이 PR이 채운 항목을 걷어낸다.
-- [도메인 모델](../wiki/domain-model.md): "분산 락은 `Lock` 블록으로 건다"의 호출 모양(`name` 인자)과 바꾼 시간 값, provider 호출 구조를 바꾸면 그 설명.
+- [도메인 모델](../wiki/domain-model.md): "분산 락은 `Lock` 블록으로 건다"의 시간 값을 바꾸면 그 값, provider 호출 구조를 바꾸면 그 설명.
 - Modulith·Kafka 키워드(`docs/wiki/modulith-kafka-keywords.md`, 볼트): consumer 설정이나 listener 모양을 바꾸면 갱신 규칙대로 고친다. 볼트 파일이라 저장소 커밋이 없다.
 - 현재 상태(`docs/wiki/current-state.md`, 볼트): 바꾼 값과 구조를 볼트에서 고친다.
 
 ## 분할 계획
-개발 컨텍스트는 "용량 실측과 그 결과로 정하는 값·구조" 하나다. 측정과 그 측정이 정하는 값·구조 변경을 한 PR에 둔다(사용자 결정). sync 동시 실행 상한의 입구 구현은 #87, #76의 알림·runbook·trace는 #76에 둔다.
+개발 컨텍스트는 "용량 실측과 그 결과로 정하는 값·구조" 하나다. 측정과 그 측정이 정하는 값·구조 변경을 한 PR에 둔다(사용자 결정). sync 항목 결과·수렴 시간·락 fail-open metric과 알림·runbook·trace는 #76, 단말·매장 token bucket은 #87에 둔다.
 
-작업 시작 시점(origin/main c7810af)의 겹침 확인:
-- 열린 PR은 draft #94(`refactor/modulith-2-1-2-resubmit`, Modulith 2.1.2 대기)뿐이다. `src/main/kotlin/com/resilientpos/platform/EventPublicationResubmitter.kt`가 겹친다. 이 PR은 그 파일의 `Lock.executeWithLockNoTx` 호출 한 줄만 바꾼다. #94는 외부 릴리스를 기다려 언제 머지될지 모르므로 기다리지 않고, 늦게 머지되는 쪽이 rebase한다. `docs/wiki/domain-model.md`도 겹치며 같은 방식으로 다룬다.
-- 진행 중인 `feature/observability-alerts-tracing`(#76), `feature/inbound-rate-limit`(#87), `feature/platform-operator-dlt-redrive`(#91)는 시작 시점에 커밋이 없다. #76은 `docker/docker-compose.yaml`·`docs/wiki/observability.md`·platform metric, #87은 platform·sync 입구, #91은 `KafkaConfiguration`과 겹칠 수 있다. push·PR 생성·머지 직전에 다시 확인하고 먼저 머지된 쪽에 맞춰 rebase한다.
-- compose는 `app` 서비스 환경 변수 한 줄만 더한다.
+겹침 확인(origin/main c7810af, spec 첫 커밋 뒤):
+- 열린 PR은 draft #94(`refactor/modulith-2-1-2-resubmit`, Modulith 2.1.2 대기)뿐이다. #94의 `build.gradle.kts`, `EventPublicationResubmitter.kt`, 그 통합 테스트는 이 PR이 건드리지 않는다. `docs/wiki/domain-model.md`가 겹칠 수 있고, 늦게 머지되는 쪽이 rebase한다.
+- #76(`feature/observability-alerts-tracing`, 아직 PR 없음)은 `RedisDistributedLock.kt`·`Lock.kt`(fail-open counter와 키 규칙), `application.yaml`의 `spring.task.execution`(`propagate-context`), `docs/wiki/observability.md`, `docker/docker-compose.yaml`(Prometheus 규칙 마운트, OTLP endpoint)을 고친다. 락 Timer는 #76 머지 뒤 rebase해서 구현한다. 실행기 설정과 compose 환경 변수는 같은 블록의 다른 줄이라 rebase 때 합친다.
+- #87(`feature/inbound-rate-limit`, 아직 PR 없음)은 `terminal` 모듈과 sync web 테스트를 고치고 #77 결과를 기다리는 draft로 열 예정이다. 이 PR이 먼저 머지된다. sync 동시 실행 상한을 구현하게 되면 #87과 같은 거절 응답 규약을 쓰도록 그때 다시 맞춘다.
+- #91(`feature/platform-operator-dlt-redrive`)은 spec만 있다. provider 구조 변경이 `KafkaConfiguration.kt`를 고치게 되면 그 시점에 다시 확인한다.
+- push·PR 생성·머지 직전에 다시 확인하고 먼저 머지된 쪽에 맞춰 rebase한다.
 
 ## TDD 검증 기록
-동작이 바뀌는 것(락 metric, sync 항목 counter, 가짜 provider 지연, 실행기 넘침 처리, provider 호출 구조)에 적용한다. k6 스크립트, 값만 바꾸는 설정, 문서는 적용하지 않는다. 값 변경은 기존 테스트의 회귀 실행으로 확인한다.
+동작이 바뀌는 것(락 시간 metric, 가짜 provider 지연, 실행기 넘침 처리, provider 호출 구조, 판정 규칙이 고르면 sync 동시 실행 상한)에 적용한다. k6 스크립트, 값만 바꾸는 설정, 문서는 적용하지 않는다. 값 변경은 기존 테스트의 회귀 실행으로 확인한다.
 
 | 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
 |---|---|---|---|
-| 인수 2, 락 metric: 얻으면 대기·보유 시간을, 대기 초과·Redis 오류면 그 outcome의 대기 시간만 기록한다 | 미실행 | 미실행 | 미실행 |
-| 인수 3, sync 항목 결과마다 `sync_operation_total{kind, status}`가 오른다 | 미실행 | 미실행 | 미실행 |
+| 인수 2, 락 시간 metric: 얻으면 대기·보유 시간을, 대기 초과·Redis 오류면 그 outcome의 대기 시간만 기록한다 | 미실행 | 미실행 | 미실행 |
 | 인수 4, 가짜 provider가 설정한 지연만큼 늦게 답하고 기본값이면 바로 답한다 | 미실행 | 미실행 | 미실행 |
 | 인수 5, 실행기 큐가 차면 넘친 외부화 작업을 버리고 요청은 성공하며 발행 기록은 미완료로 남는다 | 미실행 | 미실행 | 미실행 |
 | 인수 7, provider 호출 구조(측정 뒤 범위 조정에서 동작을 적는다) | 미실행 | 미실행 | 미실행 |
