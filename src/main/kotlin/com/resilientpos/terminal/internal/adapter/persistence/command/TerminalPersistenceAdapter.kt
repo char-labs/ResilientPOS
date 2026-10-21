@@ -8,8 +8,6 @@ import com.resilientpos.terminal.internal.domain.Terminal
 import com.resilientpos.terminal.internal.domain.TerminalCredential
 import com.resilientpos.terminal.internal.domain.TerminalRepository
 import jakarta.persistence.EntityManager
-import jakarta.persistence.PersistenceException
-import java.sql.SQLException
 import org.springframework.stereotype.Component
 import org.springframework.transaction.annotation.Transactional
 
@@ -57,16 +55,8 @@ class TerminalPersistenceAdapter(
 
     @Transactional
     override fun save(terminal: Terminal): Terminal {
+        // 같은 매장·코드는 unique가 막고 위반은 커밋에서 드러나 `TerminalManagement.register`가 번역한다.
         entityManager.persist(TerminalEntity.from(terminal))
-        try {
-            entityManager.flush()
-        } catch (e: PersistenceException) {
-            // 사전 조회 없이 unique가 막는다. 다른 제약 위반은 그대로 던진다. 예외 뒤 영속성 컨텍스트는 쓰지 않고 트랜잭션은 롤백된다.
-            // Hibernate의 constraintName은 영어 메시지 템플릿에서 꺼내서 서버 lc_messages가 다르면 비어 있다.
-            // SQLState와, 어느 언어의 메시지에도 그대로 실리는 제약 이름으로 가린다.
-            if (e.isUniqueViolationOf(TERMINAL_CODE_CONSTRAINT)) throw Terminal.codeDuplicated()
-            throw e
-        }
         return terminal
     }
 
@@ -85,22 +75,12 @@ class TerminalPersistenceAdapter(
         return terminal
     }
 
-    /** Hibernate는 한 flush에서 UPDATE보다 INSERT를 먼저 보낸다. 새 유효 행의 INSERT가 옛 행의 폐기보다 앞서면 partial unique에 걸리므로 먼저 내보낸다. */
+    /** 폐기와 새 발급은 같은 커밋에 들어가고 `ux_terminal_credential_active`는 커밋 때 검사한다. */
     @Transactional
     override fun update(credential: TerminalCredential): TerminalCredential {
         val entity = entityManager.find(TerminalCredentialEntity::class.java, credential.id)
             ?: error("갱신하려는 credential이 없다: ${credential.id}")
         entity.applyRevokedAt(credential.revokedAt)
-        entityManager.flush()
         return credential
-    }
-
-    private companion object {
-        const val TERMINAL_CODE_CONSTRAINT = "ux_terminal_store_code"
-        const val UNIQUE_VIOLATION = "23505"
-
-        fun Throwable.isUniqueViolationOf(constraint: String): Boolean =
-            generateSequence(this) { it.cause }.filterIsInstance<SQLException>()
-                .any { it.sqlState == UNIQUE_VIOLATION && it.message.orEmpty().contains("\"$constraint\"") }
     }
 }

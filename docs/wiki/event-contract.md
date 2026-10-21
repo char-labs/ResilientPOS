@@ -6,7 +6,7 @@
 
 ## 1. 대상
 
-`@Externalized`가 붙은 이벤트 넷이다. 모듈 안 이벤트(`PaymentEvent.Declined`·`Unknown`, `order`의 모듈 안 이벤트)는 받는 모듈 안 리스너가 없어 어디에도 저장되지 않으므로 대상이 아니다. 외부로 내보내는 순간 대상이 된다(7절).
+`@Externalized`가 붙은 이벤트 다섯이다. 모듈 안 이벤트(`PaymentEvent.Declined`·`Unknown`, `order`의 모듈 안 이벤트)는 받는 모듈 안 리스너가 없어 어디에도 저장되지 않으므로 대상이 아니다. 외부로 내보내는 순간 대상이 된다(7절).
 
 | 이벤트 | 토픽 | fixture |
 |---|---|---|
@@ -14,6 +14,7 @@
 | `payment.PaymentEvent.AttemptCreated` | `payment.attempt-created` | `src/test/resources/event-contract/payment.attempt-created/` |
 | `contract.PaymentApproved` | `payment.approved` | `src/test/resources/event-contract/payment.approved/` |
 | `contract.OrderPaid` | `order.paid` | `src/test/resources/event-contract/order.paid/` |
+| `contract.PaymentReconciliationRequested` | `payment.reconciliation-requested` | `src/test/resources/event-contract/payment.reconciliation-requested/` |
 
 ## 2. 무엇이 저장되나
 

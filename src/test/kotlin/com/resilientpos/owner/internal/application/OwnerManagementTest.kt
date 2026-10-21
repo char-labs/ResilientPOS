@@ -13,6 +13,7 @@ import com.resilientpos.platform.SessionStoreUnavailableException
 import com.resilientpos.platform.Tx
 import com.resilientpos.platform.TxRunner
 import com.resilientpos.platform.UnauthenticatedException
+import java.sql.SQLException
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -21,6 +22,7 @@ import kotlin.test.assertNotEquals
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import org.mockito.Mockito.mock
+import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.data.redis.RedisConnectionFailureException
 import org.springframework.data.redis.core.StringRedisTemplate
 
@@ -60,6 +62,24 @@ class OwnerManagementTest {
         assertEquals(Owner.INVALID_EMAIL, assertFailsWith<DomainException> { management.signUp(OwnerCommand.SignUp("nope", password)) }.code)
         assertEquals(Owner.INVALID_PASSWORD, assertFailsWith<DomainException> { management.signUp(OwnerCommand.SignUp(email, "short")) }.code)
         assertTrue(owners.byEmail.isEmpty())
+    }
+
+    @Test
+    fun `같은 이메일로 다시 가입하면 저장소의 이메일 unique 위반을 OWNER_EMAIL_DUPLICATED로 바꾼다`() {
+        signUp()
+
+        assertEquals(Owner.OWNER_EMAIL_DUPLICATED, assertFailsWith<DomainException> { signUp() }.code)
+    }
+
+    @Test
+    fun `다른 제약의 위반은 번역하지 않고 그대로 던진다`() {
+        val other = DataIntegrityViolationException(
+            "could not execute statement",
+            SQLException("ERROR: duplicate key value violates unique constraint \"ux_other\"", "23505"),
+        )
+        owners.failure = other
+
+        assertSame(other, assertFailsWith<DataIntegrityViolationException> { signUp() })
     }
 
     @Test
@@ -172,13 +192,21 @@ class OwnerManagementTest {
     private class InMemoryOwners : OwnerRepository {
         val byEmail = mutableMapOf<String, Owner>()
         var lookups = 0
+        var failure: RuntimeException? = null
 
         override fun save(owner: Owner): Owner {
-            if (byEmail.putIfAbsent(owner.email.value, owner) != null) throw Owner.emailDuplicated()
+            failure?.let { throw it }
+            if (byEmail.putIfAbsent(owner.email.value, owner) != null) throw uniqueViolation()
             return owner
         }
 
         override fun findByEmail(email: OwnerEmail): Owner? = byEmail[email.value].also { lookups++ }
+
+        /** DB처럼 커밋에서 unique 위반을 던진다. 도메인 예외로의 번역은 Facade가 한다. */
+        private fun uniqueViolation() = DataIntegrityViolationException(
+            "could not execute statement",
+            SQLException("ERROR: duplicate key value violates unique constraint \"ux_owner_email\"", "23505"),
+        )
     }
 
     private class InMemoryCounter : LoginFailureCounter {

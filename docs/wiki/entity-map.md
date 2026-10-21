@@ -56,7 +56,7 @@ t_reconciliation_case.resolved_by_owner_id ────────────�
 ### `OrderEntity` — 주문의 머리
 - 역할: 주문 하나의 소유 단말·매장·통화·상태(`OPEN`→`CHECKOUT_REQUESTED`→`PAID`)를 든다. 금액 합계는 컬럼으로 두지 않는다(파생 값, line에서 접는다).
 - 관계: 자식 `OrderLineEntity`·`OrderCheckoutEntity`가 `order_id`로 가리킨다. 다른 모듈(`payment`·`fulfillment`·`sync`)도 `order_id`로 가리키지만 이 표를 읽지 않는다.
-- 방어선: unique `(terminal_id, client_order_id)`가 "같은 단말의 같은 주문 요청은 하나"의 마지막 방어선이다(멱등 키, 삭제 행에도 걸린다). `@Version`은 루트인 이 표에만 있다. 상태 전이는 행 잠금(`for no key update`, 대기 3초) 아래에서 한다.
+- 방어선: unique `(terminal_id, client_order_id)`가 "같은 단말의 같은 주문 요청은 하나"의 마지막 방어선이다(멱등 키, 삭제 행에도 걸린다). 주문 생성 API에서 겹쳐 걸린 위반은 커밋을 연 `OrderCommandFacade.create`가 제약 이름으로 가려 `409 CONCURRENT_REQUEST`로 바꾼다. sync 항목이 지면 커밋이 sync 트랜잭션이라 바꾸지 않고 배치가 500이다. `@Version`은 루트인 이 표에만 있다. 상태 전이는 행 잠금(`for no key update`, 대기 3초) 아래에서 한다.
 - 만드는 곳: `OrderCommandFacade.create`(HTTP, `Lock` 블록)와 `createInCallerTransaction`(sync 항목 트랜잭션). 바꾸는 곳: `requestCheckout`·`markPaid`. `requestCheckout`은 `orderId`로 찾는 것(HTTP)과 `(terminalId, clientOrderId)`로 찾는 것(sync 항목 트랜잭션에 합류) 둘이고 둘 다 주문 행을 잠근다.
 
 ### `OrderLineEntity` — 판매 시점의 품목 한 줄
@@ -105,19 +105,19 @@ t_reconciliation_case.resolved_by_owner_id ────────────�
 ### `TerminalEntity` — 매장에 속한 단말 하나
 - 역할: 단말의 소속 매장(`store_id`), 매장 안의 단말 코드(`terminal_code`), 활성 상태(`ACTIVE`/`INACTIVE`)를 든다. 소속 매장과 코드의 정본이고 둘 다 바뀌지 않는다. V014 전에 있던 행의 코드는 매장별 `LEGACY-순번`이다.
 - 관계: `TerminalCredentialEntity`가 `terminal_id`로 가리킨다. `store_id`는 `t_store.id`다. 단말 관리 API는 그 매장이 로그인한 점주의 것인지 먼저 확인한다.
-- 방어선: 회전·비활성화는 이 행을 잠그고 시작한다(`for no key update`, 대기 3초). 잠금 없이 바꾸는 경로가 없어 `@Version`이 없다. unique `ux_terminal_store_code`(`store_id`, `terminal_code`)가 매장 안 코드 유일의 유일한 방어선이다. 사전 조회가 없어 위반은 persistence adapter가 제약 이름으로 가려 `409 TERMINAL_CODE_DUPLICATED`로 바꾼다.
+- 방어선: 회전·비활성화는 이 행을 잠그고 시작한다(`for no key update`, 대기 3초). 잠금 없이 바꾸는 경로가 없어 `@Version`이 없다. unique `ux_terminal_store_code`(`store_id`, `terminal_code`)가 매장 안 코드 유일의 유일한 방어선이다. 사전 조회가 없어 위반은 커밋에서 드러나고, 커밋을 연 `TerminalManagement.register`가 제약 이름으로 가려 `409 TERMINAL_CODE_DUPLICATED`로 바꾼다.
 - 만드는 곳: `TerminalManagement.register`(첫 credential과 한 커밋). 바꾸는 곳: `deactivate`(멱등, 되돌리지 않는다). HTTP 입구는 점주 경로 `/owner/v1/stores/{storeId}/terminals` 아래에 있다([operator-authentication](../spec/2026-10-06-operator-authentication.md)).
 
 ### `TerminalCredentialEntity` — 단말을 인증하는 비밀값 한 건
 - 역할: 토큰의 SHA-256 hex(`token_hash`)와 폐기 시각(`revoked_at`)을 든다. 평문 토큰은 저장하지 않는다. 폐기된 행도 이력으로 남는다. 만료는 없다.
 - 관계: `terminal_id`로 단말을 가리킨다. 인증은 이 표와 `t_terminal`을 한 조회로 읽는다(해시가 같고 폐기되지 않았으며 단말이 `ACTIVE`).
-- 방어선: unique `ux_terminal_credential_token_hash`(해시 하나가 두 단말을 가리키지 않는다), partial unique `ux_terminal_credential_active`(`revoked_at is null`인 행은 단말당 하나). 둘 다 삭제 행에도 걸린다.
-- 만드는 곳: `register`와 `rotateCredential`. 회전은 옛 행에 `revoked_at`을 찍고 flush한 뒤 새 행을 넣는다. 먼저 내보내지 않으면 Hibernate가 INSERT를 먼저 보내 partial unique에 걸린다.
+- 방어선: unique `ux_terminal_credential_token_hash`(해시 하나가 두 단말을 가리키지 않는다), 커밋 때 검사하는 exclusion 제약 `ux_terminal_credential_active`(`revoked_at is null`인 행은 단말당 하나). 둘 다 삭제 행에도 걸린다.
+- 만드는 곳: `register`와 `rotateCredential`. 회전은 옛 행에 `revoked_at`을 찍고 새 행을 넣어 한 커밋으로 끝낸다. Hibernate가 INSERT를 UPDATE보다 먼저 보내도 제약은 커밋 때 검사하므로 flush로 순서를 맞추지 않는다.
 
 ### `OwnerEntity` — 점주 계정 하나
 - 역할: 점주(SaaS 고객)의 로그인 이메일과 비밀번호 해시(`{bcrypt}` 접두어)를 든다. 이메일은 앱이 소문자로 정규화해 넣는다. 평문 비밀번호는 저장하지 않는다. 로그인 실패 횟수와 세션은 Redis에 있고 이 표에 없다.
 - 관계: `StoreEntity`가 `owner_id`로 가리킨다.
-- 방어선: unique `ux_owner_email`이 "이메일은 계정 하나"의 유일한 방어선이다. 사전 조회가 없어 위반은 persistence adapter가 제약 이름으로 가려 `409 OWNER_EMAIL_DUPLICATED`로 바꾼다.
+- 방어선: unique `ux_owner_email`이 "이메일은 계정 하나"의 유일한 방어선이다. 사전 조회가 없어 위반은 커밋에서 드러나고, 커밋을 연 `OwnerManagement.signUp`이 제약 이름으로 가려 `409 OWNER_EMAIL_DUPLICATED`로 바꾼다.
 - 만드는 곳: `OwnerManagement.signUp`. 바꾸는 명령은 없다(비밀번호 변경·재설정은 #92).
 
 ### `StoreEntity` — 점주가 만든 매장 하나
@@ -135,7 +135,7 @@ t_reconciliation_case.resolved_by_owner_id ────────────�
 
 | 단계 | 단말·운영자에게 보이는 것 | 표 | 트랜잭션·전달 |
 |---|---|---|---|
-| 1. 단말이 `POST /v1/orders` | 201, `orderId`·`status=OPEN` | `t_order` 1행 + `t_order_line` N행 | **한 커밋**(`Lock` 블록, 같은 `clientOrderId` 동시 요청은 줄 서서 같은 주문을 받는다) |
+| 1. 단말이 `POST /v1/orders` | 201, `orderId`·`status=OPEN` | `t_order` 1행 + `t_order_line` N행 | **한 커밋**(`Lock` 블록, 같은 `clientOrderId` 동시 요청은 줄 서서 같은 주문을 받는다. 락이 통하지 않거나 sync와 겹쳐 이 요청이 늦으면 `409 CONCURRENT_REQUEST`다. 다시 보내면 먼저 저장된 주문과 내용이 같을 때 그 주문을, 다르면 `409 IDEMPOTENCY_CONFLICT`를 받는다) |
 | 2. 단말이 `POST /v1/orders/{id}/checkout` | 200, `checkoutNo=1`·`amount`·`status=CHECKOUT_REQUESTED` | `t_order.status` 갱신 + `t_order_checkout` 1행 + `event_publication`(`OrderPaymentRequested`) | **한 커밋**(주문 행 잠금). 응답은 커밋 직후 |
 | 3. Kafka `order.payment-requested` → `payment` | 단말에는 아직 아무것도 없다 | `t_payment_attempt` 1행(`REQUESTED`, 0원이면 바로 `APPROVED`) + `event_publication`(`AttemptCreated`) | **한 커밋**(`Lock` 블록). 같은 사실이 두 번 와도 기존 시도를 돌려준다 |
 | 4. Kafka `payment.attempt-created` → provider 호출 | 없음 | 호출은 **트랜잭션 밖** | provider 응답 뒤 행을 잠그고 결말 적용 |
@@ -189,7 +189,7 @@ provider 응답이 끊기면 `t_payment_attempt.status`가 `UNKNOWN`으로 남�
 
 | 다시 오는 것 | 판정하는 표·제약 | 결과 |
 |---|---|---|
-| 같은 `(terminalId, clientOrderId)` 주문 생성 | `t_order` unique + `Lock` | 201, 같은 `orderId`. 내용이 다르면 `409 IDEMPOTENCY_CONFLICT` |
+| 같은 `(terminalId, clientOrderId)` 주문 생성 | `t_order` unique + `Lock` | 201, 같은 `orderId`. 내용이 다르면 `409 IDEMPOTENCY_CONFLICT`. 겹쳐서 이 요청이 늦으면 `409 CONCURRENT_REQUEST`이고, 다시 보내면 먼저 저장된 주문과 내용이 같을 때 같은 `orderId`(다르면 `409 IDEMPOTENCY_CONFLICT`) |
 | 같은 주문의 checkout | `t_order` 행 잠금 + 상태 | 200, 같은 회차·금액 |
 | 같은 `OrderPaymentRequested` 재배달 | `t_payment_attempt` 조회 + partial unique | 기존 시도를 돌려주고 이벤트를 다시 내지 않는다 |
 | 같은 `PaymentApproved`·`OrderPaid` 재배달 | 주문 상태 / `t_fulfillment` unique | 아무것도 하지 않는다 |
@@ -227,4 +227,4 @@ provider 응답이 끊기면 `t_payment_attempt.status`가 `UNKNOWN`으로 남�
 - [도메인 모델](domain-model.md) — aggregate 경계(§2), 용어집(§3), 스키마 변경 검토(§4.7)
 - 현재 상태(`docs/wiki/current-state.md`, 볼트) — 모듈별 구현 상태와 알려진 빈틈
 - 볼트 규칙 `domain-modeling-kotlin.md` §5 — 엔티티 작성 규칙(`.claude/rules`로 복사된다)
-- 마이그레이션 `src/main/resources/db/migration/V002`·`V003`·`V005`~`V008`·`V010`~`V017` — 각 표의 DDL과 주석
+- 마이그레이션 `src/main/resources/db/migration/V002`·`V003`·`V005`~`V008`·`V010`~`V018` — 각 표의 DDL과 주석

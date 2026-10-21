@@ -18,6 +18,8 @@ import com.resilientpos.terminal.TerminalManagement
 import java.util.Currency
 import java.util.UUID
 import kotlin.test.Test
+import org.hamcrest.Matchers.containsString
+import org.hamcrest.Matchers.not
 import org.junit.jupiter.api.BeforeEach
 import org.mockito.BDDMockito.given
 import org.mockito.Mockito.verify
@@ -25,6 +27,8 @@ import org.mockito.Mockito.verifyNoInteractions
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.restdocs.test.autoconfigure.AutoConfigureRestDocs
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest
+import org.springframework.dao.ConcurrencyFailureException
+import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.http.MediaType
 import org.springframework.restdocs.headers.HeaderDocumentation.headerWithName
 import org.springframework.restdocs.headers.HeaderDocumentation.responseHeaders
@@ -212,6 +216,36 @@ class OrderControllerTest(
                     AUTHORIZATION_HEADER,
                     requestFields(HEADER_FIELDS + LINE_FIELDS),
                     responseFields(failFields("도메인 오류 코드")),
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun `Facade가 경합 예외를 던지면 409 CONCURRENT_REQUEST이고 예외 메시지를 담지 않는다`() {
+        given(facade.create(command()))
+            .willThrow(
+                ConcurrencyFailureException(
+                    "같은 키의 주문이 동시에 저장됐다 terminalId=$TERMINAL_ID clientOrderId=$CLIENT_ORDER_ID",
+                    DataIntegrityViolationException("duplicate key value violates unique constraint \"t_order_terminal_id_client_order_id_key\""),
+                ),
+            )
+
+        postOrder(requestJson()).andExpect {
+            status { isEqualTo(409) }
+            jsonPath("$.result") { value("FAIL") }
+            jsonPath("$.data") { value(null) }
+            jsonPath("$.error.errorCode") { value("CONCURRENT_REQUEST") }
+            jsonPath("$.error.message") { value("동시 처리 충돌로 요청을 완료하지 못했습니다.") }
+            content { string(not(containsString(CLIENT_ORDER_ID))) }
+            content { string(not(containsString("t_order_terminal_id_client_order_id_key"))) }
+        }.andDo {
+            handle(
+                document(
+                    "orders-create-concurrent-request",
+                    AUTHORIZATION_HEADER,
+                    requestFields(HEADER_FIELDS + LINE_FIELDS),
+                    responseFields(failFields("CONCURRENT_REQUEST 고정 코드. 같은 clientOrderId의 생성이 겹쳤다. 이 endpoint는 clientOrderId로 멱등이므로 다시 보내면 먼저 저장된 주문과 내용이 같을 때 그 주문을 받고, 다르면 409 IDEMPOTENCY_CONFLICT를 받는다")),
                 ),
             )
         }
