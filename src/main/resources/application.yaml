@@ -155,6 +155,16 @@ resilientpos:
     # 조회 결과가 불명인 채로 이 횟수에 닿으면 시도를 reconciliation case로 넘기고 더 조회하지 않는다. 기본 간격에서 약 1시간이다.
     # 실제 PG를 근거로 삼지 못해 "결과 불명이 1시간 넘게 이어지면 사람이 본다"에 맞춘 값이다. 간격을 바꾸면 이 값이 뜻하는 시간도 바뀐다.
     unknown-query-limit: 60
+  rate-limit:
+    # 인증된 /v1 요청의 단말·매장 token bucket(RedisTerminalRateLimiter). capacity는 쉬었다 온 단말이 바로 보낼 수 있는 요청 수,
+    # refill-per-second는 그 뒤로 이어 보낼 수 있는 초당 요청 수다. 매장 값은 그 매장 단말 전부의 합에 걸린다.
+    # 자리값이다. #77 k6 실측 값으로 바꾸기 전에는 PR을 ready로 바꾸지 않는다(inbound-rate-limit spec 결정 8).
+    terminal:
+      capacity: 100
+      refill-per-second: 5
+    store:
+      capacity: 500
+      refill-per-second: 25
   kafka:
     # 이름은 저장 형식이다. 이벤트 클래스의 TOPIC 상수와 같아야 한다(KafkaConfiguration).
     topics: order.payment-requested,payment.attempt-created,payment.approved,order.paid,payment.reconciliation-requested
