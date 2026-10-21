@@ -74,10 +74,21 @@
 | Hikari `maximum-pool-size` | 10 | 목표 부하에서 `hikaricp_connections_pending`이 0보다 큰 상태가 1분 넘게 이어지고 PostgreSQL CPU에 여유(70% 미만)가 있으면 pending이 사라지는 가장 작은 값으로 올린다 |
 | sync `MAX_OPERATIONS` | 500 | S3에서 500 op 배치 p95가 2초를 넘으면 2초 안에 드는 가장 큰 100 단위 값으로 줄이고 단말 계약(배치 크기 상한)을 wiki에 고친다 |
 | sync 동시 실행 상한 | 없음 | S3에서 단말 100대 동시 재연결이 커넥션 대기 초과(Hikari `connection-timeout` 3초)로 배치를 실패시키거나 60초 안에 수렴하지 못하면, pending이 생기기 시작하는 동시 배치 수를 인스턴스별 상한으로 이 PR에서 구현한다. 거절 응답은 그때 범위 조정으로 정하고 #87의 429 규약과 맞춘다. 둘 다 아니면 상한을 두지 않고, 둘 조건과 측정값을 [용량 기준](../wiki/capacity.md)에 남긴다. #87은 같은 단말의 동시 sync 상한을 제외했다(행 잠금이 직렬화하고 rate가 간접 제한한다) |
-| 실행기 큐 | 무제한 | S5의 큐 증가율과 작업당 힙으로 힙 여유(최대 힙의 25%) 안의 가장 큰 값을 상한으로 둔다 |
+| 외부화 실행기 크기 | 플랫폼 스레드 코어 8 | 아래 범위 조정(S1 뒤)의 비교 실험으로 고른다. 목표 부하(200·300 RPS)에서 미완료 발행 기록 수가 부하 동안 늘지 않는(마지막 1분 기울기가 0 이하) 가장 작은 조합이 후보다. 플랫폼 스레드 후보와 가상 스레드 후보 중 300 RPS에서 sync p95, 미완료 증가, 힙 최대, PostgreSQL CPU가 더 나은 쪽을 고른다. 둘이 비슷하면(p95 차이 20% 안, 둘 다 미완료가 늘지 않음) 영향 범위가 작은 플랫폼 스레드를 고른다 |
+| 실행기 큐 | 무제한 | 외부화 실행기 크기를 정한 뒤 S5의 큐 증가율과 작업당 힙으로 힙 여유(최대 힙의 25%) 안의 가장 큰 값을 상한으로 둔다. 가상 스레드를 고르면 큐가 없으므로 동시 실행 상한(`spring.task.execution.simple.concurrency-limit`)과 거절(`reject-tasks-when-limit-reached`)로 같은 판단을 한다 |
 | `max-poll-records` | 50 | 레코드 최대 처리 시간(provider deadline 3초 + provider 밖 처리 p99) × 이 값이 `max.poll.interval.ms`(300초)의 절반을 넘으면 줄인다 |
 | provider 호출 구조 | consumer 스레드에서 동기 | 필요 동시 호출 수 = 승인 TPS(450) × 설계 p99(1초)다. S4로 Little의 법칙(처리량 = 동시성 ÷ 지연)과 메시지당 provider 밖 처리 시간을 확인한 뒤, 필요 동시 호출 수가 24 이하면 파티션·concurrency를 그 수로 늘리고 provider timeout(deadline 3초, 넘으면 `UNKNOWN`)을 더한다. 24를 넘으면 `PaymentAttemptCreatedListener`를 비동기 반환(Spring Kafka 4.1.1의 `CompletableFuture` 또는 `suspend`) listener로 바꾸고 in-flight 상한(bulkhead)을 둔다. 지금 가정으로는 450이라 비동기 반환이 될 가능성이 높다 |
 | provider timeout | 없음 | deadline 3초(외부 연동 전략 §4.2). 넘으면 결과 불명(`UNKNOWN`)이고 결과 불명 확정 작업이 조회한다 |
+
+### 범위 조정(S1 뒤): 외부화 실행기 크기
+S1에서 HTTP 지연은 300 RPS까지 NFR 안이었지만, 이벤트 외부화가 100 RPS부터 입력을 따라가지 못했다(수치는 결과 절).
+- 원인: Modulith `EventExternalizerModuleListener.externalize`는 `@ApplicationModuleListener`(`@Async`)라 Boot `applicationTaskExecutor`(코어 8, 큐 무제한)에서 돈다. `CompletableFuture`를 돌려주는 `@Async` 메서드도 실행기 스레드가 그 결과를 기다리므로, 작업 하나가 Kafka ack(producer record queue time 평균 약 8ms, `acks=-1`, `linger.ms=5`)와 발행 기록 완료 표시까지 약 24ms 스레드를 쥔다. 스레드 8개로 초당 약 330~470건이고, 판매 1건이 외부화 이벤트 넷(결제 요청, 시도 생성, 승인, 결제 완료)을 내므로 판매 초당 약 100건이 상한이다.
+- 그래서 실행기 큐 상한을 지금 처리량에 두면 평소 부하에서도 이벤트가 버려지고 재전송 주기(5분)만큼 결제가 늦어진다. 큐 상한보다 실행기 크기를 먼저 정한다(판정 규칙 표의 "외부화 실행기 크기").
+- 비교 실험(사용자 결정: 둘 다 재고 더 나은 쪽으로 간다). 모두 S1 부하 2분, 앱만 설정을 바꿔 다시 띄운다.
+  - 플랫폼 스레드: `spring.task.execution.pool.core-size` 32·64, `spring.datasource.hikari.maximum-pool-size` 10·20. 스레드가 늘면 발행 기록 완료 표시의 커넥션도 늘어 풀과 함께 잰다.
+  - 가상 스레드: `spring.threads.virtual.enabled=true`, Hikari 10·20. 이 설정은 `applicationTaskExecutor`뿐 아니라 Tomcat 요청 스레드, 스케줄러, Kafka listener container의 실행기도 가상 스레드로 바꾼다(Boot 4.1.1). 그래서 요청 동시성이 Tomcat 스레드 200개로 묶이지 않고 커넥션 풀에서만 줄 선다.
+  - 공통 지표: 미완료 발행 기록 수(`select count(*) from event_publication where completion_date is null`, 15초 간격), 실행기 큐(플랫폼 스레드일 때), uri p95, Hikari pending·timeout, 힙 최대, 앱·PostgreSQL CPU.
+- 한계: 운영에서는 pod 수로도 나눌 수 있다. 이 실험은 인스턴스 하나가 감당하는 양을 정한다.
 
 ### Redisson 재검토
 측정 전에 정한 기각 기준은 셋이다. 셋을 모두 만족하면 Redisson을 들이지 않고 스핀을 유지한다. 하나라도 어기면 그 항목에 맞는 변경(pub/sub 대기 또는 TTL 갱신)을 이 PR에서 한다.
