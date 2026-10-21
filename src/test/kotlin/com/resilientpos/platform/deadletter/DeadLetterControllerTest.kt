@@ -283,6 +283,30 @@ class DeadLetterControllerTest(
             .andDo(document("dead-letters-redrive-not-found", responseFields(failFields("DEAD_LETTER_NOT_FOUND. 그 DLT partition의 offset에 레코드가 없다(log 끝 이상이거나 시작보다 앞). 보내지도 기록하지도 않는다"))))
     }
 
+    @Test
+    fun `원 토픽의 이벤트 타입으로 읽지 못하는 메시지면 422 DEAD_LETTER_NOT_READABLE이다`() {
+        val message = "지금 코드가 읽지 못하는 메시지입니다: UNSUPPORTED_EVENT_SCHEMA_VERSION"
+        given(redriver.redrive(TOPIC, 0, 12, REASON, OPERATOR))
+            .willThrow(DomainException(DeadLetterRedriver.DEAD_LETTER_NOT_READABLE, message, DomainErrorKind.UNPROCESSABLE))
+
+        mockMvc.perform(redriveRequest())
+            .andExpect(status().isUnprocessableContent)
+            .andExpect(jsonPath("$.error.errorCode").value("DEAD_LETTER_NOT_READABLE"))
+            .andExpect(jsonPath("$.error.message").value(message))
+            .andDo(
+                document(
+                    "dead-letters-redrive-not-readable",
+                    responseFields(
+                        failFields(
+                            "DEAD_LETTER_NOT_READABLE. 값을 원 토픽의 이벤트 타입으로 consumer와 같은 변환으로 읽지 못했다(아는 것보다 높은 schemaVersion, 모르는 enum 값, JSON이 아님, 값 없음). " +
+                                "메시지 끝에 도메인 코드(예: UNSUPPORTED_EVENT_SCHEMA_VERSION)나 Jackson 예외 클래스 이름(예: InvalidFormatException)이 붙고 값 내용은 싣지 않는다. " +
+                                "보내지도 기록하지도 않는다. 요청을 받은 서버의 코드로 확인하므로, 그 버전·값을 아는 코드가 모든 서버에 배포된 뒤 다시 요청한다",
+                        ),
+                    ),
+                ),
+            )
+    }
+
     companion object {
         private const val TOPIC = "order.paid.DLT"
         private const val ORDER_ID = "018f6b1a-0000-7000-8000-0000000000e1"

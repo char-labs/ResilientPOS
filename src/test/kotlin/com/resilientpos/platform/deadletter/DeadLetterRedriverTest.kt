@@ -1,5 +1,7 @@
 package com.resilientpos.platform.deadletter
 
+import com.resilientpos.contract.EventContracts
+import com.resilientpos.contract.OrderPaid
 import com.resilientpos.foundation.DomainErrorKind
 import com.resilientpos.foundation.DomainException
 import com.resilientpos.foundation.IdentifierGenerator
@@ -23,6 +25,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertSame
+import kotlin.test.assertTrue
 import org.apache.kafka.clients.consumer.ConsumerRecord
 import org.apache.kafka.clients.producer.ProducerRecord
 import org.apache.kafka.clients.producer.RecordMetadata
@@ -45,6 +48,9 @@ import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.kafka.core.KafkaOperations
 import org.springframework.kafka.core.KafkaProducerException
 import org.springframework.kafka.support.SendResult
+import tools.jackson.databind.json.JsonMapper
+import tools.jackson.databind.node.ObjectNode
+import tools.jackson.module.kotlin.KotlinModule
 import org.apache.kafka.common.errors.TimeoutException as KafkaTimeoutException
 
 /**
@@ -64,7 +70,9 @@ class DeadLetterRedriverTest {
     private val ids = object : IdentifierGenerator {
         override fun next() = ID
     }
-    private val redriver = DeadLetterRedriver(reader, kafka, redrives, entityManager, ids, meterRegistry, listOf(TOPIC, "payment.approved"))
+    private val redriver = DeadLetterRedriver(
+        reader, DeadLetterEventTypes(listOf(TOPIC, "payment.approved")), JSON_MAPPER, kafka, redrives, entityManager, ids, meterRegistry, listOf(TOPIC, "payment.approved"),
+    )
 
     private val record = ConsumerRecord(DLT, 0, DLT_OFFSET, KEY, VALUE)
 
@@ -116,6 +124,27 @@ class DeadLetterRedriverTest {
         }
 
         verifyNoInteractions(reader, kafka, redrives, entityManager)
+    }
+
+    @Test
+    fun `원 토픽의 이벤트 타입으로 읽지 못하면 DEAD_LETTER_NOT_READABLE이고 값 내용 없이 보내지도 기록하지도 않는다`() {
+        given(kafka.send(any<ProducerRecord<Any, Any>>())).willReturn(acked(0, 41))
+        val newer = (JSON_MAPPER.readTree(VALUE) as ObjectNode).put("schemaVersion", OrderPaid.SCHEMA_VERSION + 1).toString().toByteArray()
+        val unreadable = listOf(newer, "garbage-4521".toByteArray(), null)
+
+        val messages = unreadable.map { value ->
+            given(reader.readRecord(DLT, 0, DLT_OFFSET)).willReturn(ConsumerRecord<String, ByteArray>(DLT, 0, DLT_OFFSET, KEY, value))
+            val e = assertFailsWith<DomainException>(value?.decodeToString()) { redrive() }
+            assertEquals(DeadLetterRedriver.DEAD_LETTER_NOT_READABLE, e.code)
+            assertEquals(DomainErrorKind.UNPROCESSABLE, e.kind)
+            e.message
+        }
+
+        assertEquals("지금 코드가 읽지 못하는 메시지입니다: UNSUPPORTED_EVENT_SCHEMA_VERSION", messages[0])
+        assertTrue(messages[1].startsWith("지금 코드가 읽지 못하는 메시지입니다: ") && "garbage" !in messages[1], messages[1])
+        assertEquals("지금 코드가 읽지 못하는 메시지입니다: 값이 없습니다", messages[2])
+        verifyNoInteractions(kafka, entityManager)
+        assertEquals(0.0, redriven())
     }
 
     @Test
@@ -203,7 +232,10 @@ class DeadLetterRedriverTest {
         const val OPERATOR = "operator-subject-1"
         const val REASON = "원인 수정 후 재투입"
         val ID: UUID = UUID.fromString("018f6b1a-0000-7000-8000-0000000000f1")
-        val VALUE = """{"schemaVersion":1,"orderId":"$KEY"}""".toByteArray()
+        val JSON_MAPPER: JsonMapper = JsonMapper.builder().addModule(KotlinModule.Builder().build()).build()
+
+        /** 지금 코드가 읽는 `OrderPaid` 값. 읽기 검사를 지나야 전송·기록까지 간다. */
+        val VALUE: ByteArray = JSON_MAPPER.writeValueAsBytes(EventContracts.all.single { it.type == OrderPaid::class.java }.sample)
         val REDRIVEN_AT: Instant = Instant.parse("2026-10-21T02:00:00.123456Z")
 
         /** Hibernate가 넣거나 읽어 올 때 채우는 생성 시각을 채운다. 컨텍스트 없는 단위 테스트라 Hibernate가 없다. */

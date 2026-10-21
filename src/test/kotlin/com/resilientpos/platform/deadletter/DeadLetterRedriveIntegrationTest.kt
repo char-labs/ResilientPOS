@@ -4,7 +4,9 @@ import com.jayway.jsonpath.JsonPath
 import com.resilientpos.KafkaTestSupport
 import com.resilientpos.PostgresIntegrationTest
 import com.resilientpos.awaitUntil
+import com.resilientpos.contract.EventContracts
 import com.resilientpos.contract.OrderPaid
+import com.resilientpos.contract.PaymentApproved
 import com.resilientpos.foundation.DomainException
 import com.resilientpos.foundation.Money
 import com.resilientpos.platform.OperatorTokens
@@ -40,6 +42,7 @@ import org.springframework.test.web.servlet.ResultActionsDsl
 import org.springframework.test.web.servlet.get
 import org.springframework.test.web.servlet.post
 import tools.jackson.databind.json.JsonMapper
+import tools.jackson.databind.node.ObjectNode
 
 private const val TOPIC = "order.paid"
 private const val DLT = "order.paid.DLT"
@@ -47,7 +50,7 @@ private const val DLT = "order.paid.DLT"
 /**
  * DLT 재투입을 실제 브로커·DB·운영자 토큰(운영과 같은 issuer decoder)으로 HTTP부터 fulfillment까지 잇는다. Docker가 필요하다.
  * `DeadLetterListIntegrationTest`와 같은 구성이라 컨텍스트를 함께 쓴다.
- * DLT 레코드는 consumer 실패처럼 `DeadLetterPublishingRecoverer`로 넣고(헤더 포함), 값은 지금 코드가 읽는 `OrderPaid` JSON이다.
+ * DLT 레코드는 consumer 실패처럼 `DeadLetterPublishingRecoverer`로 넣고(헤더 포함), 값은 지금 코드가 읽는 `OrderPaid` JSON이고, 읽기 검사는 그 JSON을 고친 값으로 본다.
  * 브로커와 DB를 다른 테스트와 함께 쓰므로 이 테스트가 만든 주문 key·DLT offset만 본다.
  */
 @AutoConfigureMockMvc
@@ -73,16 +76,16 @@ class DeadLetterRedriveIntegrationTest(
         ),
     )
 
-    /** fulfillment consumer가 실패한 것처럼 DLT에 넣고 그 offset을 돌려준다. */
-    private fun deadLetter(orderId: UUID, value: String = orderPaid(orderId)): Long {
-        val failed = ConsumerRecord<Any, Any>(TOPIC, 0, 42L, orderId.toString(), value.toByteArray())
-        DeadLetterPublishingRecoverer(kafkaTemplate) { _, _ -> TopicPartition(DLT, 0) }
+    /** [topic]의 consumer가 실패한 것처럼 그 DLT에 넣고 그 offset을 돌려준다. */
+    private fun deadLetter(orderId: UUID, value: String = orderPaid(orderId), topic: String = TOPIC): Long {
+        val failed = ConsumerRecord<Any, Any>(topic, 0, 42L, orderId.toString(), value.toByteArray())
+        DeadLetterPublishingRecoverer(kafkaTemplate) { _, _ -> TopicPartition("$topic.DLT", 0) }
             .accept(failed, ListenerExecutionFailedException("Listener failed", DomainException("FULFILLMENT_TEST", "재고 없음")))
-        return KafkaTestSupport.records(DLT).single { it.key() == orderId.toString() }.offset()
+        return KafkaTestSupport.records("$topic.DLT").single { it.key() == orderId.toString() }.offset()
     }
 
-    private fun redrive(dltOffset: Long, reason: String): ResultActionsDsl =
-        mockMvc.post("/admin/v1/dead-letters/$DLT/0/$dltOffset/redrive") {
+    private fun redrive(dltOffset: Long, reason: String, dlt: String = DLT): ResultActionsDsl =
+        mockMvc.post("/admin/v1/dead-letters/$dlt/0/$dltOffset/redrive") {
             header(HttpHeaders.AUTHORIZATION, OperatorTokens.bearer())
             contentType = MediaType.APPLICATION_JSON
             content = jsonMapper.writeValueAsString(mapOf("reason" to reason))
@@ -92,8 +95,8 @@ class DeadLetterRedriveIntegrationTest(
 
     private fun redriven(): Double = meterRegistry.find(DeadLetterRedriver.REDRIVEN_METRIC).tag("topic", TOPIC).counter()?.count() ?: 0.0
 
-    private fun rows(dltOffset: Long): List<Map<String, Any?>> =
-        jdbcTemplate.queryForList("select * from t_dead_letter_redrive where dlt_topic = ? and dlt_partition = 0 and dlt_offset = ?", DLT, dltOffset)
+    private fun rows(dltOffset: Long, dlt: String = DLT): List<Map<String, Any?>> =
+        jdbcTemplate.queryForList("select * from t_dead_letter_redrive where dlt_topic = ? and dlt_partition = 0 and dlt_offset = ?", dlt, dltOffset)
 
     private fun auditLines(output: CapturedOutput, dltOffset: Long) =
         output.all.lines().filter { "action=DEAD_LETTER_REDRIVEN" in it && "dltOffset=$dltOffset " in it }
@@ -177,6 +180,32 @@ class DeadLetterRedriveIntegrationTest(
         )
         assertTrue(items.getValue(otherOffset).containsKey("redrive"))
         assertNull(items.getValue(otherOffset)["redrive"])
+    }
+
+    @Test
+    fun `schemaVersion이 아는 것보다 큰 메시지와 모르는 enum 값이 든 메시지의 재투입은 422 DEAD_LETTER_NOT_READABLE이고 원 토픽에 메시지가 늘지 않으며 기록도 남지 않는다`(output: CapturedOutput) {
+        val newerOrder = UUID.randomUUID()
+        val newer = (jsonMapper.readTree(orderPaid(newerOrder)) as ObjectNode).put("schemaVersion", OrderPaid.SCHEMA_VERSION + 1).toString()
+        val refundOrder = UUID.randomUUID()
+        val approved = (EventContracts.all.single { it.type == PaymentApproved::class.java }.sample as PaymentApproved).copy(orderId = refundOrder)
+        val unknownKind = (jsonMapper.readTree(jsonMapper.writeValueAsString(approved)) as ObjectNode).put("kind", "REFUND").toString()
+
+        fun assertNotReadable(topic: String, orderId: UUID, value: String, cause: String) {
+            val dltOffset = deadLetter(orderId, value, topic)
+
+            redrive(dltOffset, "새 버전 배포 뒤 재투입", "$topic.DLT").andExpect {
+                status { isUnprocessableContent() }
+                jsonPath("$.error.errorCode") { value("DEAD_LETTER_NOT_READABLE") }
+                jsonPath("$.error.message") { value("지금 코드가 읽지 못하는 메시지입니다: $cause") }
+            }
+
+            assertEquals(emptyList(), KafkaTestSupport.records(topic, orderId), "$topic 에 보냈다")
+            assertEquals(emptyList(), rows(dltOffset, "$topic.DLT"))
+        }
+        assertNotReadable(TOPIC, newerOrder, newer, "UNSUPPORTED_EVENT_SCHEMA_VERSION")
+        assertNotReadable(PaymentApproved.TOPIC, refundOrder, unknownKind, "InvalidFormatException")
+
+        assertFalse("REFUND" in output.all, "값 내용(Jackson 메시지의 입력 조각)이 로그에 남았다")
     }
 
     @Test
