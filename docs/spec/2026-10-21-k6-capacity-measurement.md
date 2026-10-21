@@ -90,6 +90,23 @@ S1에서 HTTP 지연은 300 RPS까지 NFR 안이었지만, 이벤트 외부화�
   - 공통 지표: 미완료 발행 기록 수(`select count(*) from event_publication where completion_date is null`, 15초 간격), 실행기 큐(플랫폼 스레드일 때), uri p95, Hikari pending·timeout, 힙 최대, 앱·PostgreSQL CPU.
 - 한계: 운영에서는 pod 수로도 나눌 수 있다. 이 실험은 인스턴스 하나가 감당하는 양을 정한다.
 
+### 범위 조정(S1 뒤): provider 호출 구조
+판정 규칙의 계산: 필요 동시 호출 수 = 승인 TPS × 설계 p99(1초). 원문 피크(승인 초당 약 450건)면 450이다. S1에서 본 인스턴스 하나의 외부화 상한(판매 초당 약 100건)으로 낮춰 잡아도 100이라 24를 넘는다. 그래서 `PaymentAttemptCreatedListener`를 비동기 반환 listener로 바꾼다. S4로 바꾸기 전과 뒤를 잰다.
+- 모양: `on`이 `CompletableFuture`를 돌려주고 `PaymentManagement.authorize`는 그대로 전용 실행기에서 돈다. provider 호출은 지금처럼 트랜잭션 밖이고 결과 적용만 짧은 트랜잭션이라, provider를 기다리는 동안 커넥션을 쥐지 않는다.
+- in-flight 상한: 컨테이너가 이미 정한다. 비동기 반환이면 한 poll 묶음의 ack가 다 끝날 때까지 consumer를 멈춘다(spring-kafka 4.1.1 `KafkaMessageListenerContainer`의 `doPauseConsumerIfNecessary`, 로그 "Pausing for incomplete async acks"). 그래서 consumer 하나당 `max-poll-records`(50)가 상한이고, 인스턴스 하나는 파티션 3 × 50 = 150이다. 전용 실행기(`ThreadPoolTaskExecutor`)를 그 크기로 두어 큐에서 기다리지 않게 한다. 외부 연동 전략 §4.2의 bulkhead 출발값 20은 필요 동시 호출 수보다 작아 쓰지 않는다.
+- deadline: provider 호출 3초. 넘으면 결과 불명(`UNKNOWN`)이고 결과 불명 확정 작업이 조회한다. 가짜 provider에 넣었고(`resilientpos.payment.fake-gateway.deadline`), 실제 PG adapter에서는 HTTP client timeout이 그 자리다. 묶음의 가장 느린 레코드가 다음 poll을 막는 시간도 이 deadline에 묶인다.
+- Kafka 공식 문서와 소스 대조:
+  - [Asynchronous `@KafkaListener` Return Types](https://docs.spring.io/spring-kafka/reference/kafka/receiving-messages/async-returns.html)(3.2부터, `CompletableFuture`·`Mono`·Kotlin `suspend`): AckMode가 자동으로 `MANUAL`이 되고 순서와 무관하게 커밋한다. 실패한 결과를 복구할지는 container error handler가 정한다. 늘 실패하는 레코드 N개와 `maxAttempts = n`이면 호출이 `N * (n + 2) - 1`번으로 blocking listener의 `N * (n + 1)`보다 많다. 같은 파티션의 부작용이 순서 없이 일어난다.
+  - spring-kafka 4.1.1 소스: 비동기 실패는 `handleAsyncFailure`가 `invokeErrorHandlerBySingleRecord`로 기존 `DefaultErrorHandler`(허용 목록 재시도, DB에 닿지 못할 때의 무한 대기, `DeadLetterPublishingRecoverer`)에 넘긴다. 이 경로는 GH-4465(무한 재전달)·GH-4504(seek 덮어쓰기) 수정이 들어간 코드다.
+  - ConsumerConfig 실제 값(측정 빌드 기동 로그): `max.poll.records=50`, `max.poll.interval.ms=300000`, `session.timeout.ms=45000`, `heartbeat.interval.ms=3000`, `enable.auto.commit=false`, `group.protocol=classic`. 멈춘 동안에도 컨테이너가 poll을 계속 불러 `max.poll.interval.ms`에 걸리지 않는다.
+- 치르는 것:
+  - 실패를 다시 시도할 때 provider 호출이 더 많다. provider가 `PaymentId`를 멱등 키로 받는다는 전제는 이미 있다(kafka-event-redelivery spec).
+  - 같은 파티션 안의 처리 순서가 깨진다. 이 consumer는 시도마다 독립이고 재배달에 멱등이라 순서에 기대지 않는다.
+  - DB에 닿지 못할 때의 무한 대기 백오프는 여전히 consumer 스레드에서 돈다. 그동안 그 consumer의 파티션은 멈춘다.
+  - 종료할 때 진행 중인 호출은 커밋되지 않은 offset으로 남아 다음 기동에서 다시 온다. 멱등이라 결과는 같다.
+- `max-poll-records`는 50을 유지한다. 비동기 반환에서는 in-flight 상한이 되고, 판정 규칙의 계산(레코드 최대 처리 시간 × 이 값이 `max.poll.interval.ms`의 절반 아래)은 멈춘 동안에도 poll이 이어지므로 해당하지 않는다.
+- 가상 스레드 실험에서 이 consumer가 커넥션 획득 실패(`CannotCreateTransactionException`)로 재시도에 들어간 기록이 있다. 전용 실행기는 플랫폼 스레드다.
+
 ### Redisson 재검토
 측정 전에 정한 기각 기준은 셋이다. 셋을 모두 만족하면 Redisson을 들이지 않고 스핀을 유지한다. 하나라도 어기면 그 항목에 맞는 변경(pub/sub 대기 또는 TTL 갱신)을 이 PR에서 한다.
 1. S1에서 대기가 획득의 1% 미만이다.
@@ -136,7 +153,7 @@ S1에서 HTTP 지연은 300 RPS까지 NFR 안이었지만, 이벤트 외부화�
 - .gitignore
 - docker/docker-compose.yaml
 - src/main/kotlin/com/resilientpos/platform/**
-- src/main/kotlin/com/resilientpos/payment/internal/application/PaymentAttemptCreatedListener.kt
+- src/main/kotlin/com/resilientpos/payment/internal/application/**
 - src/main/kotlin/com/resilientpos/payment/internal/adapter/gateway/FakePaymentGateway.kt
 - src/main/kotlin/com/resilientpos/sync/internal/application/SyncCommandFacade.kt
 - src/main/resources/application.yaml
@@ -147,6 +164,7 @@ S1에서 HTTP 지연은 300 RPS까지 NFR 안이었지만, 이벤트 외부화�
 - docs/wiki/README.md
 - docs/wiki/observability.md
 - docs/wiki/domain-model.md
+- docs/wiki/architecture.md
 - docs/spec/2026-10-21-k6-capacity-measurement.md
 
 ## 인수 조건
@@ -194,7 +212,8 @@ S1에서 HTTP 지연은 300 RPS까지 NFR 안이었지만, 이벤트 외부화�
 | 인수 4, `FakePaymentGatewayTest`의 `지연을 주면 승인과 조회가 그만큼 늦게 답한다` | `./gradlew test --tests 'com.resilientpos.payment.internal.adapter.gateway.FakePaymentGatewayTest'`. 생성자에 `latency`만 선언하고 쓰지 않은 채 실행. `AssertionFailedError`(승인이 176.875us만에 답했다) | 같은 명령. `authorize`·`query`가 `Thread.sleep(latency)` 뒤 답하게 하고, `query`의 기본 갈래가 `authorize`를 다시 불러 두 번 잠들지 않게 답 고르기를 `answer`로 뺀 뒤 14개 통과. 기본값(`PT0S`)의 기존 13개도 그대로 통과 | `PaymentAuthorizationIntegrationTest`와 함께 실행해 23개 통과(인자 없는 생성자를 쓰는 통합 테스트 픽스처 포함) |
 | 인수 5, `RejectedTaskDiscardTest`의 `큐가 차면 넘친 작업을 던지지 않고 버리고 센다` | `./gradlew test --tests 'com.resilientpos.platform.RejectedTaskDiscardTest'`. 아무것도 하지 않는 customizer만 빈으로 선언하고 실행. 셋째 `execute`가 `TaskRejectedException`(ExecutorService in active state did not accept task) | 같은 명령. customizer가 거절 처리기(counter 증가와 WARN)를 걸게 한 뒤 통과 | - |
 | 인수 5, `ObservabilityConfigurationTest`의 `prometheus 엔드포인트가 공용 실행기의 거절 수를 거절이 없어도 돌려준다` | characterization. Boot가 `applicationTaskExecutor`에 customizer를 거는지 고정한다. 처음부터 통과했고, `discardRejectedTasks`의 `@Bean`을 뗀 변이로 `AssertionFailedError`(task_execution_rejected_total이 없다)를 확인하고 되돌렸다 | `./gradlew test --tests 'com.resilientpos.platform.ObservabilityConfigurationTest'` 4개 통과 | - |
-| 인수 7, provider 호출 구조(측정 뒤 범위 조정에서 동작을 적는다) | 미실행 | 미실행 | 미실행 |
+| 인수 7, provider deadline: `FakePaymentGatewayTest`의 `지연이 deadline 이상이면 deadline에서 결과를 모른다고 답한다` | `./gradlew test --tests 'com.resilientpos.payment.internal.adapter.gateway.FakePaymentGatewayTest'`. 생성자에 `deadline`만 선언하고 쓰지 않은 채 실행. 800ms 뒤 승인으로 답해 `AssertionFailedError`(Unknown이 아님) | 같은 명령. 지연이 deadline 이상이면 deadline만큼 기다린 뒤 `Unknown`으로 답하게 한 뒤 15개 통과 | - |
+| 인수 7, 비동기 반환 listener: 같은 파티션에서 느린 승인이 뒤 승인을 막지 않는다 | 미실행 | 미실행 | 미실행 |
 
 ## 결과
 개발 전 작성. 측정과 개발 뒤 환경, 시나리오별 원시 수치, 판정 규칙별 결론, Redisson 판정, #87 권장 상한, 실행 결과를 추가한다.
