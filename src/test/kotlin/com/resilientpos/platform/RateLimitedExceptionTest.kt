@@ -1,5 +1,8 @@
 package com.resilientpos.platform
 
+import com.tngtech.archunit.core.importer.ClassFileImporter
+import com.tngtech.archunit.core.importer.ImportOption
+import com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses
 import kotlin.test.Test
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
@@ -14,5 +17,16 @@ class RateLimitedExceptionTest {
     @Test
     fun `Retry-After가 1 미만이면 만들지 못한다`() {
         assertFailsWith<IllegalArgumentException> { RateLimitedException(0, "scope=terminal") }
+    }
+
+    /**
+     * 단말은 `RATE_LIMITED`를 받으면 같은 요청을 그대로 다시 보낸다. 그래서 이 예외는 상태를 바꾸기 전(handler 전)의 거절에만 써야 한다.
+     * handler 안에서 상태가 바뀐 뒤의 거절이 이 예외를 쓰면 단말이 이미 처리된 요청을 다시 보낸다.
+     */
+    @Test
+    fun `RateLimitedException은 handler 전에 판정하는 빈도 상한 limiter만 만든다`() {
+        noClasses().that().resideOutsideOfPackage("..terminal.internal.adapter.redis..")
+            .should().callConstructor(RateLimitedException::class.java, java.lang.Long.TYPE, String::class.java)
+            .check(ClassFileImporter().withImportOption(ImportOption.Predefined.DO_NOT_INCLUDE_TESTS).importPackages("com.resilientpos"))
     }
 }
