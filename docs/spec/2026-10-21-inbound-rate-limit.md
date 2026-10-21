@@ -192,5 +192,20 @@ limiter의 token bucket 동작은 Lua 스크립트 하나가 함께 구현한다
 
 전체 회귀: `./gradlew test` 통과(724개, 실패 0).
 
+multi-review 반영분이다. 대상 명령은 limiter 명령에 `--tests 'com.resilientpos.terminal.internal.adapter.web.TerminalAuthenticationInterceptorTest' --tests 'com.resilientpos.platform.RateLimitedExceptionTest' --tests 'com.resilientpos.platform.ResourceLimitConfigurationTest'`를 더한 것("반영 명령")이다.
+
+| 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
+|---|---|---|---|
+| `Redis 오류면 제한 없이 통과시키고 스택 없는 WARN 한 줄을 남긴다` | 반영 명령. WARN에 스택 프레임이 붙어 FAILED. 첫 판은 캡처 구간 전체가 한 줄이길 요구해 kotlin-logging의 초기화 안내 줄에도 걸렸다. 스택 프레임과 예외 줄이 없는지를 보도록 고친 뒤, 스택을 다시 붙인 구현에서 FAILED를 다시 확인했다 | 같은 명령. 예외를 넘기지 않고 클래스·메시지만 붙인 한 줄로 바꾼 뒤 통과 | 전체 통과 |
+| `capacity가 1 미만이거나 refill이 0 이하·무한대·NaN이면 만들지 못한다` | 반영 명령. 무한대 refill로도 만들어져 FAILED | 같은 명령. 유한값 조건을 더한 뒤 통과 | 전체 통과 |
+| `RateLimitedExceptionTest`의 `Retry-After가 1 미만이면 만들지 못한다` | 반영 명령. 0으로도 만들어져 FAILED | 같은 명령. 생성 때 1 이상 조건을 더한 뒤 통과 | 전체 통과 |
+| 인터셉터 테스트의 거절 로그에 예외 줄이 없다는 확인 | 반영 명령. advice가 예외를 cause로 넘겨 `RateLimitedException` 줄이 따로 찍혀 FAILED | 같은 명령. cause 없이 메시지를 로그 줄에 붙인 뒤 통과 | 전체 통과 |
+| `ResourceLimitConfigurationTest`의 `Redis 연결이 끊긴 동안 명령을 버퍼에 쌓지 않고 바로 거절하며 connect timeout은 그대로다` | 반영 명령. 기본값 `DEFAULT`라 FAILED | 같은 명령. `LettuceClientOptionsBuilderCustomizer`로 `REJECT_COMMANDS`를 건 뒤 통과. connect timeout 1초가 남는 것도 확인 | 전체 통과 |
+| `두 bucket이 모두 거절하면 더 오래 기다려야 하는 쪽의 시간과 scope다` | 처음부터 통과. 판별력: 먼저 거절한 bucket을 고르는 결함으로 FAILED | limiter 명령 통과 | 전체 통과 |
+| `두 키는 같은 Cluster slot에 있고 빈 bucket이 가득 차는 시간 이하의 TTL이 걸린다` | 처음부터 통과. 판별력: 키에서 hash tag를 뺀 결함, TTL을 걸지 않는 결함 각각으로 FAILED | limiter 명령 통과 | 전체 통과 |
+| `쉬면 refill 속도만큼 다시 차고 1초 미만 대기의 Retry-After는 1이다`(타이밍 여유 보강) | 판별력: capacity 1로 바꾸자 토큰 1개가 차는 시간이 키 TTL과 같아져, refill을 지운 결함을 잡지 못했다. capacity 2·초당 2개(토큰 0.5초, TTL 1초)로 0.6초를 쉬게 고친 뒤 같은 결함으로 FAILED | limiter 명령 통과 | 전체 통과 |
+
+리뷰 반영 뒤 고친 스크립트에 결함 7종(먼저 거절한 쪽 선택, TTL 없음, hash tag 없음, refill 없음, 원자성 깨짐, 거절도 차감, 상한 없음)을 다시 넣어 각각 해당 테스트가 FAILED임을 확인했다. 전체 회귀: `./gradlew test` 통과(729개, 실패 0).
+
 ## 결과
 개발 전 작성.
