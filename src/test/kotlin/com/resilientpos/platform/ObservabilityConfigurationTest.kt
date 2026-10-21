@@ -59,6 +59,11 @@ class ObservabilityConfigurationTest(
             val deadLetter = body.lines().firstOrNull { it.startsWith("event_kafka_dead_letter_total{") && it.contains("""topic="$topic"""") }
             assertNotNull(deadLetter, "$topic 의 event_kafka_dead_letter_total이 없다")
             assertContains(deadLetter, """application="ResilientPOS"""")
+            // DLT 전송 실패도 기동할 때 0으로 나가 알림 규칙과 이름 대조가 이 이름을 확인할 수 있다.
+            assertNotNull(
+                body.lines().firstOrNull { it.startsWith("event_kafka_dead_letter_failed_total{") && it.contains("""topic="$topic"""") },
+                "$topic 의 event_kafka_dead_letter_failed_total이 없다",
+            )
         }
     }
 
