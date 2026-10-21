@@ -4,7 +4,7 @@
 같은 `(terminalId, clientOrderId)`의 주문 생성이 겹치면 늦은 요청이 `t_order`의 unique 위반(`DataIntegrityViolationException`)으로 실패하고 HTTP에서 `500 INTERNAL_ERROR`가 된다. 같은 요청이면 다시 보낼 때 앞 요청이 만든 주문을 받는 경합인데, 단말은 서버 오류와 구분할 수 없다. 이 위반을 기존 경합 응답 `409 CONCURRENT_REQUEST`로 바꾼다(#79). 그러면서 unique 위반을 번역하는 자리를 정한다. 저장 메서드는 저장만 하고, 커밋을 소유한 Facade가 번역한다.
 
 ## 범위
-- 소유 모듈: `order`(주문 생성 Facade가 위반을 번역한다), `owner`·`terminal`(같은 규칙으로 번역 자리를 Facade로 옮긴다), `platform`(제약 이름 판별 함수를 한 곳에 둔다). Command·Query·Event는 바뀌지 않는다. 스키마는 V018 하나(credential 제약의 검사 시점)만 바뀐다. 새 오류 code와 `ErrorType` 항목은 없다.
+- 소유 모듈: `order`(주문 생성 Facade가 위반을 번역한다), `owner`·`terminal`(같은 규칙으로 번역 자리를 Facade로 옮긴다), `platform`(제약 이름 판별 함수를 한 곳에 둔다), `contract`(main에서 빠진 `PaymentReconciliationRequested`의 계약 항목, 범위 조정 9). Command·Query·Event는 바뀌지 않는다. 스키마는 V018 하나(credential 제약의 검사 시점)만 바뀐다. 새 오류 code와 `ErrorType` 항목은 없다.
 - 2026-10-20 main(9c34aaf)에서 경합으로 500이 나는 지점을 다시 찾았다.
   - 커밋 시점 버전 충돌(`JpaSystemException`)은 이미 고쳐져 있다. #34가 `BaseEntity`의 두 시각을 `SourceType.VM`으로 바꿔 `ObjectOptimisticLockingFailureException`으로 나오고, #33의 handler가 `409 CONCURRENT_REQUEST`로 바꾼다([commit-version-conflict-optimistic-lock](2026-09-21-commit-version-conflict-optimistic-lock.md) "범위 조정 2", `OrderVersionConflictIntegrationTest`). 이슈의 근거인 [checkout API spec](2026-09-21-order-request-checkout-api.md)의 제외 절은 #34 전에 쓰였다. main에 `SourceType.DB`·`@Generated`는 없고 `@Version`은 `OrderEntity`에만 있으며 주문을 바꾸는 경로는 모두 행을 잠근다. 이 항목은 코드를 바꾸지 않는다.
   - unique 제약은 하나만 HTTP 500에 닿는다. `t_order (terminal_id, client_order_id)`(이름 없이 선언해 PostgreSQL 이름은 `t_order_terminal_id_client_order_id_key`)다. 닿는 길은 둘이다. (1) `POST /v1/orders` 두 건이 겹치고 `Lock`이 fail-open일 때(Redis 장애, 대기 3초 초과). (2) `POST /v1/orders`와 sync `CREATE_ORDER`가 같은 `clientOrderId`로 겹칠 때. 둘은 줄 세우는 수단(Redis `Lock`, watermark 행 잠금)이 달라서 Redis가 정상이어도 생긴다. (2)에서 sync가 지면 배치 전체가 500이다.
@@ -102,6 +102,13 @@
 - spec 범위 줄의 flush 대상에 `TransactionStatus`를 더하고, TDD 표의 `OwnerManagementTest` 옛 이름에 안내를 단다(Codex Low).
 - 반영하지 않은 것: auto-flush를 실제로 일으켜 `DataIntegrityViolationException`을 단언하는 통합 테스트는 Codex가 선택 항목으로 들었고, 구조 테스트가 쿼리 자리와 `@Repository`를 함께 고정한다. Claude 6차 지적 가운데 Codex와 겹치지 않는 문구 정리와 `TransactionSynchronization`을 거치는 flush는 사용자 결정으로 반영하지 않았다.
 
+### 범위 조정 9 (2026-10-21, #100 머지 뒤 main의 이벤트 계약 테스트 실패)
+#100(f54da16)이 먼저 머지되어 origin/main으로 rebase했다(마이그레이션 번호는 범위 조정 5대로 V018). rebase 뒤 전체 테스트에서 `EventContractCompatibilityTest`의 `Externalized 이벤트마다 계약과 fixture가 있고 마지막 fixture가 지금 버전이다`가 실패했고, 깨끗한 origin/main worktree에서도 같게 실패한다. #100은 #98(이벤트 계약 테스트)이 머지되기 전 main(9c34aaf)에서 갈라져서, 새 외부 이벤트 `PaymentReconciliationRequested`에 [이벤트 계약](../wiki/event-contract.md) 7절의 항목(`SCHEMA_VERSION`, `schemaVersion` 필드, 버전 가드, `EventContracts` 줄, fixture)이 없다. 사용자가 이 PR에서 함께 고치기로 정했다(품질 게이트: 검증이 실패하면 내가 바꾼 파일이 아니어도 고친 뒤 push한다). 대가: 경합 오류와 무관한 이벤트 계약 변경이 이 PR에 섞인다.
+- `PaymentReconciliationRequested`에 `SCHEMA_VERSION = 1`, 마지막 인자 `schemaVersion: Int = SCHEMA_VERSION`, `init`의 `requireKnownSchemaVersion`을 더한다. 기본값이 있는 필드 추가라 이미 저장된 메시지(필드 없음)는 1로 읽힌다(계약 4절 표의 첫 줄). 형식에는 `schemaVersion`이 더해진다.
+- `EventContracts`에 고정 인스턴스를 더하고 `event-contract/payment.reconciliation-requested/1.json`을 쓰기 검사의 실패 메시지에 나온 JSON으로 만든다. 고정 인스턴스는 nullable 필드에 값이 있는 `AMOUNT_MISMATCH` 경우로 둬서 형식에 모든 필드가 드러나게 한다.
+- [이벤트 계약](../wiki/event-contract.md) 1절의 대상 표에 한 줄을 더하고, Modulith·Kafka 키워드(볼트)의 "이벤트 넷"을 다섯으로 고친다. Kafka·Modulith 설정과 토픽·consumer는 바꾸지 않는다(#100이 더했다). 그래서 공식 문서 대조는 새로 하지 않고 #98이 정한 7절 절차를 따른다.
+- 하지 않은 것: 새 이벤트의 enum(`reason`·`unknownReason`)을 머지된 이름 목록으로 고정하는 검사와 nullable 필드(`reportedAmount`·`reportedProviderReference`)의 `null` 읽기 검사. 계약 테스트 6번은 `kind`와 `providerReference`만 본다. 그 테스트를 넓히는 일이라 #100의 후속으로 둔다.
+
 ## 제외
 - 커밋 시점 버전 충돌. #34로 해결됐다. 버전 충돌을 HTTP까지 잇는 테스트는 #34가 정한 대로 잠금 없이 `@Version`에 기대는 endpoint를 처음 더하는 PR이 넣는다.
 - sync 항목이 늦은 쪽인 주문 생성 경합. 커밋이 sync 항목 트랜잭션이라 `order`가 번역하지 않고 배치가 500이다. 그 항목은 기록되지 않고 재전송하면 다시 처리된다. 409로 바꾸려면 sync가 `order`의 제약 이름을 알아야 해서 모듈 경계 문제가 된다. 필요해지면 따로 다룬다.
@@ -121,6 +128,7 @@
 - src/main/kotlin/com/resilientpos/platform/ApiControllerAdvice.kt
 - src/main/kotlin/com/resilientpos/platform/UniqueViolation.kt
 - src/main/kotlin/com/resilientpos/platform/JdslQueryExecutor.kt
+- src/main/kotlin/com/resilientpos/contract/PaymentReconciliationRequested.kt
 - src/main/kotlin/com/resilientpos/owner/internal/adapter/persistence/command/OwnerPersistenceAdapter.kt
 - src/main/kotlin/com/resilientpos/terminal/internal/adapter/persistence/command/TerminalPersistenceAdapter.kt
 - src/main/kotlin/com/resilientpos/terminal/internal/adapter/persistence/command/TerminalCredentialEntity.kt
@@ -133,8 +141,11 @@
 - src/test/kotlin/com/resilientpos/platform/**
 - src/test/kotlin/com/resilientpos/ConstraintTranslationTest.kt
 - src/test/kotlin/com/resilientpos/SchemaMigrationTest.kt
+- src/test/kotlin/com/resilientpos/contract/EventContracts.kt
+- src/test/resources/event-contract/payment.reconciliation-requested/*
 - docs/wiki/entity-map.md
 - docs/wiki/domain-model.md
+- docs/wiki/event-contract.md
 - docs/spec/2026-10-20-contention-error-mapping.md
 
 ## 인수 조건
