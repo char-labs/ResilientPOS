@@ -122,6 +122,6 @@
 
 ## OwnerSessionStoreUnavailable
 
-- **뜻.** 점주 요청이 5분 넘게 `503 SERVICE_UNAVAILABLE`로 실패한다. `/actuator` 밖에서 503을 내는 곳은 지금 점주 세션 저장소(Redis) 장애 처리뿐이다. `/actuator/health`의 503(DB health DOWN, 기동·종료 중)은 이 규칙이 세지 않는다. 단말 경로(`/v1/**`)는 Redis 장애에 막히지 않는다.
-- **먼저 볼 것.** ERROR `errorCode=SERVICE_UNAVAILABLE` 로그, Redis 상태. [LockFailOpen](#lockfailopen)(`reason="error"`)도 함께 울릴 것이다. 점주 요청이 드물면 2분 창이 끊겨 이 알림은 늦거나 울리지 않는다. Redis 장애의 주 신호는 주기 작업이 매분 만드는 `LockFailOpen`이다.
+- **뜻.** 점주 요청이 5분 넘게 `503 SERVICE_UNAVAILABLE`로 실패한다. `/actuator` 밖에서 503을 내는 곳은 점주 세션 저장소(Redis) 장애 처리와 플랫폼 운영자 경로(`/admin/**`)의 IdP·Kafka 브로커 장애 처리다. 운영자 경로의 503도 이 규칙에 잡힌다. `/actuator/health`의 503(DB health DOWN, 기동·종료 중)은 이 규칙이 세지 않는다. 단말 경로(`/v1/**`)는 Redis 장애에 막히지 않는다.
+- **먼저 볼 것.** ERROR `errorCode=SERVICE_UNAVAILABLE` 로그의 `uri`. `/admin/`으로 시작하면 Redis가 아니라 IdP나 브로커 장애다(줄 끝의 `operator IdP unavailable`·`kafka broker unavailable`, [관측성](observability.md) 플랫폼 운영자 항목). 그 밖이면 Redis 상태를 본다. [LockFailOpen](#lockfailopen)(`reason="error"`)도 함께 울릴 것이다. 점주 요청이 드물면 2분 창이 끊겨 이 알림은 늦거나 울리지 않는다. Redis 장애의 주 신호는 주기 작업이 매분 만드는 `LockFailOpen`이다.
 - **조치.** Redis를 되살린다. 503은 변경이 커밋되지 않았다는 뜻이 아니다. 단말 등록·자격 회전 뒤 503을 받았으면 목록으로 결과를 확인한다([관측성](observability.md) 점주 세션 저장소 항목).

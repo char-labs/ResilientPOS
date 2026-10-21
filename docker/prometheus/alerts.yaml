@@ -158,7 +158,8 @@ groups:
           runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#syncgappersistent
 
       - alert: OwnerSessionStoreUnavailable
-        # actuator 밖에서 503을 내는 곳은 지금 점주 세션 저장소(Redis) 장애 처리뿐이다. health는 DB가 DOWN이거나 기동·종료 중이면 503이라 뺀다.
+        # actuator 밖에서 503을 내는 곳은 점주 세션 저장소(Redis) 장애 처리와 운영자 경로(/admin)의 IdP·Kafka 브로커 장애 처리다. health는 DB가 DOWN이거나 기동·종료 중이면 503이라 뺀다.
+        # 운영자 경로의 503도 이 규칙에 잡힌다. 어느 쪽인지는 ERROR 줄의 uri로 가른다(runbook).
         # 필터 단계의 503은 uri가 UNKNOWN이라 그대로 잡힌다. 점주 요청이 드물면 놓칠 수 있어 Redis 장애의 주 신호는 LockFailOpen(reason=error)이다.
         expr: sum(increase(http_server_requests_seconds_count{application="ResilientPOS", status="503", uri!~"/actuator/.*"}[2m])) > 0
         for: 5m

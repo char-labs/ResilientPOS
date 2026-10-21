@@ -3,9 +3,20 @@ spring:
     name: ResilientPOS
   autoconfigure:
     exclude:
-      # 점주 체인이 자격을 직접 확인하고 다른 체인은 Security를 쓰지 않아 UserDetailsService를 아무도 쓰지 않는다.
+      # 점주 체인은 자격을 직접 확인하고 운영자 체인은 JWT를 검증하며 단말 경로는 Security를 쓰지 않아 UserDetailsService를 아무도 쓰지 않는다.
       # 두면 기동 때마다 임시 비밀번호 "Using generated security password"를 WARN으로 로그에 남긴다.
       - org.springframework.boot.security.autoconfigure.UserDetailsServiceAutoConfiguration
+  security:
+    oauth2:
+      resourceserver:
+        # 플랫폼 운영자(/admin)의 사내 IdP 토큰 검증(AdminSecurityFilterChain). issuer와 audience는 기본값을 두지 않는다.
+        # 둘 중 하나라도 비면 체인이 거부해 기동이 멈춘다. 다른 IdP의 토큰이나 같은 IdP가 다른 앱에 준 토큰을 받지 않기 위해서다.
+        jwt:
+          issuer-uri: ${OPERATOR_ISSUER_URI:}
+          audiences: ${OPERATOR_AUDIENCE:}
+          # 권한을 담는 claim은 IdP마다 달라 배포가 정한다. 값을 접두어 없이 그대로 권한 이름으로 쓴다.
+          authorities-claim-name: ${OPERATOR_AUTHORITIES_CLAIM:roles}
+          authority-prefix: ""
   datasource:
     url: ${POSTGRES_URL:jdbc:postgresql://localhost:5432/resilientpos}
     username: ${POSTGRES_USER:resilientpos}

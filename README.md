@@ -46,7 +46,7 @@ flowchart LR
     RES["EventPublicationResubmitter<br/>1분 주기"] -.->|"브로커로 못 보낸 기록 재전송"| EPR
 ```
 
-1. 단말이 `/v1/**`를 Bearer 토큰으로 부르면 `terminal` 모듈의 interceptor가 토큰을 단말 credential과 대조합니다. 점주 경로 `/owner/**`는 세션 쿠키로 인증합니다.
+1. 단말이 `/v1/**`를 Bearer 토큰으로 부르면 `terminal` 모듈의 interceptor가 토큰을 단말 credential과 대조합니다. 점주 경로 `/owner/**`는 세션 쿠키로, 플랫폼 운영자 경로 `/admin/**`(DLT 재투입)는 사내 IdP가 발급한 Bearer 토큰으로 인증합니다.
 2. Controller는 요청을 Command로 바꾸기만 합니다. Command Facade가 트랜잭션을 열고, 행을 잠가 읽고, aggregate 전이를 부르고, 저장하고, 이벤트를 발행합니다.
 3. 업무 행과 이벤트 발행 기록(Spring Modulith Event Publication Registry)이 한 커밋에 들어갑니다. 그래서 "상태는 바뀌었는데 이벤트가 사라짐"이 생기지 않습니다.
 4. 커밋 뒤 Modulith가 이벤트를 Kafka로 보냅니다. 보내지 못한 기록은 주기 작업이 1분마다 다시 보냅니다.
@@ -142,6 +142,7 @@ Docker 관련 파일은 모두 `docker/` 아래에 있고 로컬 개발 전용�
 
 DB 비밀번호는 로컬 전용 기본값 `resilientpos` 입니다. 바꾸려면 `cp docker/.env.example docker/.env` 후 값을 고칩니다(`.env` 는 커밋하지 않습니다).
 `make up` 뒤 IDE나 `./gradlew bootRun` 으로 앱을 띄울 때는 `POSTGRES_PASSWORD=resilientpos` 를 직접 줍니다. 애플리케이션 설정은 이 값에 기본값을 두지 않습니다.
+플랫폼 운영자 IdP 설정도 기본값이 없어 비어 있으면 앱이 뜨지 않습니다. 로컬에는 IdP가 없으므로 자리값 `OPERATOR_ISSUER_URI=http://operator-idp.invalid`, `OPERATOR_AUDIENCE=resilientpos-admin` 을 함께 줍니다(compose의 앱과 같은 값, `/admin` 은 쓸 수 없습니다).
 수집 경로는 [관측성](docs/wiki/observability.md)에 있습니다.
 
 ### 자동완성 (선택)
