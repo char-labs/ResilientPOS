@@ -58,3 +58,7 @@ docs/wiki/modulith-kafka-keywords.md
 
 ### 로컬 compose 환경 변수 (docker/.env.example 참고)
 .env
+
+### load-test ###
+# k6 summary JSON. 원시 수치는 해당 PR spec의 결과 표에 옮긴다.
+load-test/results/
