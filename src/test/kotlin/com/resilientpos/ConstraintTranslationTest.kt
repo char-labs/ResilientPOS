@@ -10,6 +10,7 @@ import com.tngtech.archunit.core.importer.ImportOption
 import com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses
 import jakarta.persistence.EntityManager
 import kotlin.test.Test
+import org.springframework.data.repository.Repository
 
 class ConstraintTranslationTest {
 
@@ -34,14 +35,15 @@ class ConstraintTranslationTest {
 
     /**
      * 저장 메서드는 저장만 한다. flush로 위반을 앞당겨 가리거나 순서를 맞추지 않는다. 순서가 제약에 걸리면 그 제약을 커밋 때 검사하게 한다
-     * (credential 회전의 `ux_terminal_credential_active`는 DEFERRABLE INITIALLY DEFERRED다).
+     * (credential 회전의 `ux_terminal_credential_active`는 DEFERRABLE INITIALLY DEFERRED다). Hibernate `Session`은 `EntityManager`의 하위 타입이다.
+     * 테스트 코드는 경합을 만들려고 flush하므로 대상이 아니다.
      */
     @Test
-    fun `persistence 어댑터는 EntityManager flush를 부르지 않는다`() {
+    fun `운영 코드는 flush를 부르지 않는다`() {
         noClasses()
-            .that().resideInAPackage("..adapter.persistence..")
             .should().callMethodWhere(
-                target(name("flush")).and(target(owner(assignableTo(EntityManager::class.java)))),
+                target(name("flush").or(name("saveAndFlush")).or(name("saveAllAndFlush")))
+                    .and(target(owner(assignableTo(EntityManager::class.java).or(assignableTo(Repository::class.java))))),
             )
             .check(productionClasses)
     }
