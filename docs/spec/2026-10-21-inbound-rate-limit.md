@@ -228,6 +228,21 @@ multi-review 반영분이다. 대상 명령은 limiter 명령에 `--tests 'com.r
 
 리뷰 반영 뒤 고친 스크립트에 결함 7종(먼저 거절한 쪽 선택, TTL 없음, hash tag 없음, refill 없음, 원자성 깨짐, 거절도 차감, 상한 없음)을 다시 넣어 각각 해당 테스트가 FAILED임을 확인했다. 전체 회귀: `./gradlew test` 통과(729개, 실패 0).
 
+남은 지적 보강분이다.
+
+| 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
+|---|---|---|---|
+| `Redis가 명령에 오류로 답하면 통과시키되 ERROR 한 줄로 보호가 꺼졌음을 남긴다` | limiter 명령. WARN으로 남아 FAILED | 같은 명령. 원인이 `RedisCommandExecutionException`인 `RedisSystemException`만 ERROR로 가른 뒤 통과. 끊긴 동안의 거절(`RedisException`이 원인)은 기존 WARN 테스트에 더해 WARN임을 확인 | 아래 회귀 |
+| `빈 bucket이 가득 차는 데 하루를 넘거나 capacity가 2의 53제곱을 넘으면 만들지 못하고 딱 하루는 된다` | limiter 명령. 하루가 넘는 값으로도 만들어져 FAILED | 같은 명령. 생성 때 상한을 넣은 뒤 통과. 통합 테스트의 기본 refill(초당 0.001개, 가득 차는 데 100만 초)이 새 검증에 걸려 초당 0.02개로 바꿨다(테스트 몇 초 동안 1개도 차지 않는다는 뜻은 같다) | 아래 회귀 |
+| `저장된 시각이 Redis의 지금보다 미래여도 refill이 멈추지 않는다` | limiter 명령. 미래 시각이 그대로라 0.6초 뒤에도 RateLimitedException | 같은 명령. 스크립트가 미래 시각을 지금으로 고쳐 쓴 뒤 통과. 판별력: 그 분기를 지운 결함으로 FAILED | 아래 회귀 |
+| `거절은 토큰을 쓰지 않고 Retry-After는 토큰 1개를 다시 얻는 시간을 초로 올림한다`(TTL 보강) | 판별력 점검에서 찾았다. 2.1초를 쉬어 키 TTL(2초)이 지나 마지막 확인이 결함과 관계없이 통과했다(잡은 것은 Retry-After 값뿐이었다). capacity 2·초당 2/3개(TTL 3초)로 1.6초만 쉬게 고친 뒤 거절도 차감하는 결함·refill 없음 결함으로 FAILED | limiter 명령 통과 | 아래 회귀 |
+| `capacity를 넘어 차지 않는다`(여유 보강) | 초당 2개·1.2초로 바꿔 쉬는 시간의 여유를 200ms·300ms로 넓혔다. 상한 없음 결함으로 FAILED | limiter 명령 통과 | 아래 회귀 |
+| `RedisTerminalRateLimiterOutageIntegrationTest`의 `Redis가 내려가면 timeout을 기다리지 않고 바로 통과한다` | 처음부터 통과(REJECT_COMMANDS가 이미 있다). 판별력: 설정을 기본값(`DEFAULT`)으로 되돌린 결함에서 500ms를 넘겨 FAILED. 리뷰어들이 추론으로 짚은 "끊긴 동안 요청마다 timeout을 기다린다"를 실측으로 확인했다 | limiter 명령 통과(0.58초) | 아래 회귀 |
+| `RateLimitedException은 handler 전에 판정하는 빈도 상한 limiter만 만든다`(ArchUnit) | 처음부터 통과. 판별력: advice에 이 예외를 만드는 함수를 넣은 결함으로 FAILED | `./gradlew test --tests 'com.resilientpos.platform.RateLimitedExceptionTest'` 통과 | 아래 회귀 |
+| 다른 모듈 웹 슬라이스 테스트 10개가 `@MockTerminalRateLimiter`로 limiter를 받는다 | 해당 없음(테스트 구조 변경). 타입 수준 `@MockitoBean(types = ...)`을 메타 애너테이션으로 쓴다. sync의 429 문서 테스트는 `rejectByRateLimit`로 거절을 흉내 낸다 | 웹 슬라이스 묶음 통과 | 아래 회귀 |
+
+회귀: 웹 슬라이스·구조 테스트 묶음(`./gradlew test --tests '*ControllerTest' --tests '*AuthenticationInterceptorTest' --tests 'com.resilientpos.platform.*'` 일부) 109개 통과. 전체 `./gradlew test`는 #77 k6 측정과 CPU를 함께 쓰지 않도록 측정이 끝난 뒤 돌린다.
+
 ## 결과
 - 인증된 `/v1/**` 요청은 `TerminalAuthenticationInterceptor`가 `authenticate` 직후 부르는 `RedisTerminalRateLimiter`를 통과해야 Controller에 닿는다. 단말 bucket과 매장 bucket을 Lua 스크립트 한 번으로 확인하고 둘 다 남을 때만 둘 다 차감한다. 넘으면 429 `RATE_LIMITED`와 `Retry-After`(정수 초)이고, 거절은 `inbound_rate_limited_total{scope}`와 INFO 한 줄로 남는다.
 - Redis 오류면 통과시키고 스택 없는 WARN 한 줄을 남긴다. Lettuce는 연결이 끊긴 동안 명령을 바로 거절해(`REJECT_COMMANDS`) 재시작 중에도 요청마다 1초를 기다리지 않는다.
