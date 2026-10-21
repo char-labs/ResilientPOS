@@ -15,6 +15,9 @@ import com.resilientpos.sync.internal.domain.SyncRepository
 import com.resilientpos.sync.internal.domain.Watermark
 import com.resilientpos.terminal.TerminalId
 import io.micrometer.core.instrument.MeterRegistry
+import io.micrometer.core.instrument.Timer
+import java.time.Clock
+import java.time.Duration
 import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.stereotype.Service
 
@@ -37,12 +40,18 @@ class SyncCommandFacade(
     private val orders: OrderCommandFacade,
     private val identifierGenerator: IdentifierGenerator,
     private val meterRegistry: MeterRegistry,
+    private val clock: Clock,
 ) {
 
     init {
         // 한 번도 일어나지 않은 status도 0으로 나가야 알림의 increase()가 첫 증가를 잡는다.
         SyncItemStatus.entries.forEach { meterRegistry.counter(OPERATION_METRIC, "status", it.name) }
     }
+
+    // Micrometer 기본 bucket의 상한(30초)으로는 오프라인 수렴(분~시간)을 담지 못해 SLO bucket만 낸다.
+    private val convergence: Timer = Timer.builder(CONVERGENCE_METRIC)
+        .serviceLevelObjectives(*CONVERGENCE_SLOS)
+        .register(meterRegistry)
 
     fun receiveBatch(command: SyncCommand.ReceiveBatch): SyncCommand.ReceiveBatch.Result {
         // 가장 싼 거절을 가장 먼저 한다. 상한을 넘는 배치는 Redis도 커넥션도 건드리지 않는다.
@@ -58,7 +67,10 @@ class SyncCommandFacade(
             if (gapped) {
                 SyncCommand.ReceiveBatch.Item(operation.operationId, SyncItemStatus.GAP, null, null)
             } else {
-                applyOperation(command.terminalId, command.storeId, operation).also { gapped = it.status == SyncItemStatus.GAP }
+                applyOperation(command.terminalId, command.storeId, operation).also {
+                    gapped = it.status == SyncItemStatus.GAP
+                    recordConvergence(operation, it)
+                }
             }
         }
         val lastAckedSequence = Tx.readOnlyTx { repository.findWatermark(command.terminalId) }?.lastAckedSequence ?: 0
@@ -69,6 +81,14 @@ class SyncCommandFacade(
             "sync 배치 처리 terminalId=${command.terminalId.value} operations=${items.size} lastAckedSequence=$lastAckedSequence counts=$counts"
         }
         return SyncCommand.ReceiveBatch.Result(lastAckedSequence, items)
+    }
+
+    /** 이번 배치에서 처음 확정된 항목(APPLIED·REJECTED)만 단말이 만든 시각부터 지금까지를 잰다. 앞선 항목이 커밋된 뒤 배치가 실패해도 남는다(재전송은 DUPLICATE라 중복 기록은 없다). */
+    private fun recordConvergence(operation: SyncCommand.ReceiveBatch.Operation, item: SyncCommand.ReceiveBatch.Item) {
+        val createdAt = operation.createdAt ?: return
+        if (item.status != SyncItemStatus.APPLIED && item.status != SyncItemStatus.REJECTED) return
+        val elapsed = Duration.between(createdAt, clock.instant())
+        if (!elapsed.isNegative) convergence.record(elapsed)
     }
 
     /**
@@ -164,6 +184,11 @@ class SyncCommandFacade(
         private val log by logger()
 
         private const val OPERATION_METRIC = "sync.operation"
+        private const val CONVERGENCE_METRIC = "sync.convergence"
+        private val CONVERGENCE_SLOS = arrayOf(
+            Duration.ofSeconds(1), Duration.ofSeconds(10), Duration.ofMinutes(1), Duration.ofMinutes(5),
+            Duration.ofMinutes(15), Duration.ofHours(1), Duration.ofHours(6), Duration.ofHours(24),
+        )
 
         /** 한 배치에 담을 수 있는 operation 수. 기획 원문의 "500개 batch"를 상한으로 둔다. */
         const val MAX_OPERATIONS = 500

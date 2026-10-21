@@ -16,6 +16,7 @@ import com.resilientpos.sync.internal.domain.OrderPayload
 import com.resilientpos.terminal.TerminalId
 import io.micrometer.core.instrument.MeterRegistry
 import java.math.BigDecimal
+import java.time.Instant
 import java.util.UUID
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -24,6 +25,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.jdbc.core.JdbcTemplate
@@ -49,8 +51,8 @@ class SyncCommandFacadeIntegrationTest(
         lines = command.lines.map { OrderPayload.Line(it.productCode, it.productName, it.unitPrice.amount, it.quantity.toBigDecimal()) },
     )
 
-    private fun operation(sequence: Long, payload: OperationPayload = payload(), operationId: UUID = UUID.randomUUID()) =
-        SyncCommand.ReceiveBatch.Operation(operationId, sequence, payload)
+    private fun operation(sequence: Long, payload: OperationPayload = payload(), operationId: UUID = UUID.randomUUID(), createdAt: Instant? = null) =
+        SyncCommand.ReceiveBatch.Operation(operationId, sequence, payload, createdAt)
 
     // OrderFixtures 기본 line의 합계(1001 x 2 + 500 x 3)다. 단말이 본 합계로 싣는다.
     private fun checkout(
@@ -605,5 +607,89 @@ class SyncCommandFacadeIntegrationTest(
         }
 
         assertEquals(SyncItemStatus.entries.associateWith { 0.0 }, delta)
+    }
+
+    private fun convergence() = checkNotNull(meterRegistry.find("sync.convergence").timer()) { "sync.convergence timer가 없다" }
+
+    /** (건수 증가, 총 시간 증가 초)를 돌려준다. */
+    private fun convergenceDelta(block: () -> Unit): Pair<Long, Double> {
+        val before = convergence().let { it.count() to it.totalTime(TimeUnit.SECONDS) }
+        block()
+        val after = convergence().let { it.count() to it.totalTime(TimeUnit.SECONDS) }
+        return (after.first - before.first) to (after.second - before.second)
+    }
+
+    private fun secondsAgo(seconds: Long): Instant = Instant.now().minusSeconds(seconds)
+
+    @Test
+    fun `sync convergence timer는 기동 때 등록돼 있다`() {
+        assertNotNull(meterRegistry.find("sync.convergence").timer())
+    }
+
+    @Test
+    fun `createdAt이 있는 APPLIED 항목은 단말이 만든 뒤 확정까지의 시간을 한 번 기록한다`() {
+        val (count, seconds) = convergenceDelta { receive(operation(1, createdAt = secondsAgo(90))) }
+
+        assertEquals(1L, count)
+        assertTrue(seconds in 90.0..120.0, "totalTime=$seconds")
+    }
+
+    @Test
+    fun `createdAt이 있는 REJECTED 항목도 기록한다`() {
+        val badScale = payload().let { it.copy(lines = listOf(it.lines.first().copy(unitPrice = BigDecimal("4500.5")))) }
+
+        val (count, seconds) = convergenceDelta {
+            val result = receive(operation(1, badScale, createdAt = secondsAgo(90)))
+            assertEquals(SyncItemStatus.REJECTED, result.items.single().status)
+        }
+
+        assertEquals(1L, count)
+        assertTrue(seconds in 90.0..120.0, "totalTime=$seconds")
+    }
+
+    @Test
+    fun `createdAt이 없으면 기록하지 않는다`() {
+        val (count, _) = convergenceDelta { receive(operation(1)) }
+
+        assertEquals(0L, count)
+    }
+
+    @Test
+    fun `미래 createdAt은 기록하지 않고 항목은 정상 APPLIED다`() {
+        val (count, _) = convergenceDelta {
+            val result = receive(operation(1, createdAt = Instant.now().plusSeconds(3600)))
+            assertEquals(SyncItemStatus.APPLIED, result.items.single().status)
+        }
+
+        assertEquals(0L, count)
+    }
+
+    @Test
+    fun `createdAt만 다른 재전송은 DUPLICATE이고 기록하지 않는다`() {
+        val applied = operation(1, createdAt = secondsAgo(90))
+        receive(applied)
+
+        val (count, _) = convergenceDelta {
+            val resent = receive(applied.copy(createdAt = secondsAgo(10)))
+            assertEquals(SyncItemStatus.DUPLICATE, resent.items.single().status)
+        }
+
+        assertEquals(0L, count)
+    }
+
+    @Test
+    fun `GAP과 CONFLICT 항목은 createdAt이 있어도 기록하지 않는다`() {
+        val applied = operation(1)
+        receive(applied)
+
+        val (count, _) = convergenceDelta {
+            val result = receive(
+                operation(2, operationId = applied.operationId, createdAt = secondsAgo(90)),
+                operation(5, createdAt = secondsAgo(90)),
+            )
+            assertEquals(listOf(SyncItemStatus.CONFLICT, SyncItemStatus.GAP), result.items.map { it.status })
+        }
+
+        assertEquals(0L, count)
     }
 }
