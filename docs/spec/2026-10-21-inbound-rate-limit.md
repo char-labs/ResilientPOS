@@ -29,8 +29,9 @@
 
 **결정 3: Redis Lua token bucket이다.**
 - bucket마다 남은 토큰과 마지막 갱신 시각을 Redis hash에 둔다. 요청이 오면 지난 시간 × 초당 refill만큼 채우되 capacity를 넘지 않는다. 시간은 스크립트 안에서 Redis `TIME`(초와 마이크로초)으로 읽어 pod 사이의 시계 차이와 무관하다.
-- 알고리즘은 Spring Cloud Gateway `RedisRateLimiter`의 `request_rate_limiter.lua`(Apache-2.0)를 따르고, 두 키를 원자적으로 다루도록, 시각을 마이크로초 단위로 쓰도록 고쳤다.
+- 알고리즘은 Spring Cloud Gateway `RedisRateLimiter`의 `request_rate_limiter.lua`(Apache-2.0)를 따랐다. 코드는 가져오지 않고 두 키를 원자적으로 다루고 시각을 마이크로초로 쓰도록 새로 썼다.
 - 키 TTL은 빈 bucket이 가득 차는 시간(capacity ÷ refill)이다. 그 뒤에 키가 없으면 가득 찬 bucket과 같다.
+- 저장된 시각이 Redis의 지금보다 미래면(failover로 새 primary의 시계가 뒤처진 경우) 그 시각을 지금으로 고쳐 쓴다. 거절이어도 쓴다. 그러지 않으면 시계가 따라잡을 때까지 refill이 멈추고, 거절은 아무것도 쓰지 않으므로 그동안 짧은 `Retry-After`로 거절이 되풀이된다.
 - `StringRedisTemplate`으로 부른다. 기존 잠금·로그인 실패 카운터와 같은 커넥션, 같은 timeout 1초, 같은 예외 변환(`DataAccessException`)을 쓴다. 새 의존성은 없다.
 - 버린 것:
   - Bucket4j 8.21.0(`bucket4j_jdk17-lettuce`): 요청마다 왕복이 2회(GET 뒤 CAS)이고, 두 bucket을 원자적으로 함께 차감하지 못해 매장에서 거절되면 단말 토큰을 돌려주는 보정이 필요하다. Spring이 아닌 native Lettuce 클라이언트를 따로 연결해야 해서 예외 타입과 timeout을 별도로 다뤄야 하고, 의존성이 하나 는다.
@@ -41,18 +42,19 @@
 
 **결정 4: Redis 장애는 fail-open이다.**
 - `DataAccessException`과 `IllegalStateException`(종료 중이라 닫힌 커넥션 팩토리)이면 제한 없이 통과시키고 WARN 한 줄(예외 클래스와 메시지, 스택 없음)을 남긴다. 장애 중에는 `/v1` 요청마다 이 줄이 남으므로 스택을 붙이면 로그가 장애를 키운다. 그 밖의 예외는 프로그래밍 오류라 삼키지 않는다. 잡는 범위는 `RedisDistributedLock`과 같다.
-- 잡는 범위를 연결 실패·timeout으로 좁히지 않는다. Redis의 OOM·READONLY·NOPERM도 `RedisSystemException`(`DataAccessException`)으로 오므로, 좁히면 이런 인프라 장애에서 모든 `/v1`이 500이 되어 이 결정과 어긋난다. 대가로 스크립트 결함과 CROSSSLOT도 통과로 삼켜진다. 스크립트는 실제 Redis 통합 테스트가, CROSSSLOT은 두 키가 같은 slot인지 고정하는 테스트가 막는다(multi-review의 Codex 지적을 받지 않은 이유).
+- Redis가 명령에 오류로 답한 경우(원인이 Lettuce `RedisCommandExecutionException`인 `RedisSystemException`: 스크립트 오류, OOM, NOPERM, CROSSSLOT, READONLY)는 WARN이 아니라 ERROR 한 줄이다. 연결 실패·timeout·끊긴 동안의 거절은 기다리면 풀리지만, 이 경우는 사람이 설정이나 스크립트를 고치기 전까지 모든 요청에서 보호가 꺼져 있기 때문이다. 통과(fail-open)는 같다.
+- 잡는 범위를 연결 실패·timeout으로 좁히지 않는다. Redis의 OOM·READONLY·NOPERM도 `RedisSystemException`(`DataAccessException`)으로 오므로, 좁히면 이런 인프라 장애에서 모든 `/v1`이 500이 되어 이 결정과 어긋난다. 대가로 스크립트 결함과 CROSSSLOT도 통과로 삼켜진다. 스크립트는 실제 Redis 통합 테스트가, CROSSSLOT은 두 키가 같은 slot인지 고정하는 테스트가 막고, 그래도 운영에서 나면 위의 ERROR가 드러낸다(multi-review의 Codex 지적을 좁히기 대신 ERROR로 받은 이유). `IllegalStateException`도 메시지로 가르지 않는다. 이 호출 경로에서는 닫힌 커넥션 팩토리만 던지고, 잠금·로그인 카운터와 같은 기준이다.
 - Lettuce는 기본값(`DisconnectedBehavior.DEFAULT`, `requestQueueSize` 무제한)에서 연결이 끊긴 동안 명령을 버퍼에 받아 둔다. 그러면 Redis가 재시작하는 동안 `/v1` 요청마다 timeout 1초를 다 기다리고, 끝난 명령도 재연결 전까지 버퍼에 남아 장애가 길면 힙이 불어난다(lettuce-core 7.5.2 `DefaultEndpoint` 소스로 확인). `platform`에 `LettuceClientOptionsBuilderCustomizer`를 두어 `REJECT_COMMANDS`로 바꾼다. Boot가 넣은 connect timeout과 `TimeoutOptions` 뒤에 적용되므로 그 설정은 남는다. 끊긴 것을 아는 동안 명령이 바로 실패해 빈도 상한과 잠금은 즉시 fail-open, 점주 세션과 로그인은 즉시 503이 된다. 지금 정책과 방향이 같다.
 - 근거: `/v1`은 Redis 장애에 막히지 않는다는 현재 설계를 지킨다. Redis health를 끈 것, `publish-request-handled-events: false`, 잠금의 fail-open이 모두 이 원칙에서 나왔다. 로그인 실패 카운터가 fail-closed인 것은 비밀번호 대입을 막는 장치이고 점주 경로라서다.
 - 치르는 것: 장애 중에는 보호가 없다. Redis가 느리거나, 패킷이 사라져 Lettuce가 끊김을 모르는 단절(RST 없음)이면 `/v1` 요청마다 최대 1초가 더해진다(circuit breaker는 제외). 장애 중에는 WARN이 `/v1` 요청마다 한 줄씩 쌓인다.
-- 설정 값이 capacity 1 미만이거나 refill이 0 이하·무한대·NaN이면 기동하지 못한다. 그런 값이면 스크립트가 계산에서 오류를 내고 fail-open이 그 오류를 삼켜 보호가 조용히 꺼지기 때문이다.
+- 설정 값이 capacity 1 미만이거나 refill이 0 이하·무한대·NaN이면 기동하지 못한다. 그런 값이면 스크립트가 계산에서 오류를 내고 fail-open이 그 오류를 삼켜 보호가 조용히 꺼지기 때문이다. 빈 bucket이 가득 차는 시간(capacity ÷ refill, 곧 키 TTL)이 하루를 넘거나 capacity가 2^53(Lua의 double이 정수를 정확히 다루는 상한)을 넘어도 기동하지 못한다. 앞은 단위 실수(초당을 하루당으로 적음)이고 뒤는 토큰 차감이 정밀도에 묻혀 제한이 사라지는 값이다.
 
 **결정 5: 거절 응답은 429, `Retry-After`, `RATE_LIMITED` 하나다.**
 - 상태는 429다. `Retry-After`는 거절한 bucket이 토큰 1개를 다시 얻기까지의 시간을 초 단위로 올림한 정수이고 최소 1이다(RFC 9110 §10.2.3의 delta-seconds). 두 bucket이 모두 거절하면 긴 쪽을 쓴다.
 - 본문은 기존 envelope이고 `error.errorCode`는 `RATE_LIMITED`, 문구는 고정이다. 단말 bucket이 거절했는지 매장 bucket이 거절했는지는 응답에서 구분하지 않는다. 받은 단말이 할 일(기다렸다가 다시 보내기)이 같기 때문이다. 어느 쪽인지는 로그와 metric에만 남긴다.
 - `ErrorType.RATE_LIMITED`로 둔다. 업무 규칙 위반이 아니라 HTTP 공통 오류라서 `DomainException`이 아니다(`UNAUTHENTICATED` 선례).
 - 예외는 `platform.RateLimitedException`이고 대기 초(1 이상만 받는다)와 로그용 메시지(scope·terminalId·storeId)를 싣는다. 고장 단말이 반복해도 요청마다 스택 한 덩어리가 쌓이지 않게 스택 트레이스를 만들지 않는다. 토큰과 `Authorization` 값은 싣지 않는다.
-- 429·`RATE_LIMITED`는 handler 전의 거절에만 쓴다. 단말의 재전송 규약(결정 6)은 HTTP 상태가 아니라 `error.errorCode == RATE_LIMITED`와 `Retry-After`에 묶는다. 나중에 handler 안에서 상태가 바뀐 뒤의 거절(outbound limiter, provider 429)이 429로 나가더라도, 단말이 그것을 같은 요청의 재전송으로 다루지 않게 하려는 것이다. 본문이 없는 edge(ingress)의 429도 앱 전에 나므로 같은 요청을 다시 보내도 안전하다.
+- 429·`RATE_LIMITED`는 handler 전의 거절에만 쓴다. 단말의 재전송 규약(결정 6)은 HTTP 상태가 아니라 `error.errorCode == RATE_LIMITED`와 `Retry-After`에 묶는다. 나중에 handler 안에서 상태가 바뀐 뒤의 거절(outbound limiter, provider 429)이 429로 나가더라도, 단말이 그것을 같은 요청의 재전송으로 다루지 않게 하려는 것이다. `RateLimitedException`은 limiter(`terminal.internal.adapter.redis`)만 만든다는 것을 구조 테스트로 고정한다. 본문이 없는 edge(ingress)의 429도 앱 전에 나므로 같은 요청을 다시 보내도 안전하다.
 - 버린 것: code를 `TERMINAL_RATE_LIMITED`·`STORE_RATE_LIMITED` 둘로 나누는 안(새 code가 둘이고 단말이 할 일은 같다), `TOO_MANY_REQUESTS`라는 이름(참고 문서가 쓰는 rate-limited와 달라 outbound의 429와 나란히 둘 때 덜 분명하다).
 
 **결정 6: 단말 재시도 규약과 backlog 보장은 token bucket 자체로 한다.**
@@ -96,19 +98,31 @@
 - 하나: 상한·격리 조건과 k6 시나리오(결정 6), 원인 단말과 피해 단말의 구분(결정 7), 재전송 규약을 `RATE_LIMITED`에 묶기(결정 5), `RateLimitedException`의 1 이상 강제, 두 bucket이 모두 거절할 때·1초 미만 대기·키 TTL 테스트, 스크립트가 capacity와 refill을 한 번만 읽기.
 - 받지 않은 것: fail-open 범위를 연결 실패·timeout으로 좁히자는 Codex 지적(결정 4에 이유). 비동기 dispatch에서 두 번 차감되는 문제(async handler가 없다). 다른 모듈 테스트가 terminal 내부 타입을 import하는 문제(인터셉터 의존이 더 늘 때 메타 애너테이션으로 모은다).
 
+**범위 조정(2026-10-21, 남은 지적 보강).** 첫 리뷰의 점수(Claude 80, Codex 68)가 반영 전 코드 기준이라, 남은 지적을 고친 뒤 같은 리뷰어로 다시 받는다.
+- Codex 1(High): fail-open 범위를 좁히는 대신 Redis가 오류로 답한 경우를 ERROR로 남긴다(결정 4).
+- Codex 4: 설정에 상한(가득 차는 시간 하루, capacity 2^53)을 더한다(결정 4).
+- Codex 2: edge 요청 상한을 외부 노출 전제조건으로 적는다(제외).
+- Claude L6·specialist P4: failover 뒤 시계 차이를 한계로 두지 않고 스크립트에서 고친다(결정 3).
+- Claude L3: 남은 타이밍 테스트를 고친다. 재전송 테스트는 2.1초를 쉬어 키 TTL(2초)이 지나므로 "거절이 토큰을 쓰지 않는다"를 판별하지 못하고 있었다. 상한 테스트는 쉬는 시간의 여유를 넓힌다.
+- Claude L8: 다른 모듈의 웹 슬라이스 테스트가 terminal 내부 타입을 import하지 않게 terminal 테스트 패키지에 메타 애너테이션 하나를 둔다. 앞에서 미뤘던 것을 받는다.
+- Claude L5: 비동기 dispatch에서 두 번 차감된다는 것을 인터셉터 KDoc에 적는다.
+- Claude L9·specialist P1: 실제 Redis 컨테이너를 멈춘 뒤 요청이 timeout을 기다리지 않고 바로 통과하는지 재는 통합 테스트를 더한다. 설정 값 확인만으로는 끊김 동작을 증명하지 못한다.
+- specialist P3: `RateLimitedException`을 만드는 곳을 구조 테스트로 limiter 하나에 고정한다(결정 5).
+- 받지 않은 것: 아키텍처 wiki 머리말의 "기준은 main 808aed9"(그 페이지를 만든 시점의 표기이고 #100도 고치지 않았다).
+
 ## 제외
 - 인증 전 요청의 제한. 잘못된 토큰을 반복하는 요청은 단말을 모르므로 세지 않고, 요청마다 인증 조회 한 번을 그대로 치른다. 이런 요청은 edge(API gateway·ingress)가 IP 단위로 막는다(§5.1).
 - 점주 경로(`/owner/**`)와 가입·로그인의 IP별 rate limit. 현재 상태가 외부 노출 조건으로 따로 적은 항목이다.
 - 단말별 동시 요청 상한(§5.1의 concurrent sync). #101로 뺐다. 그 전까지 고장 단말의 동시 요청은 결정 6의 상한 조건(capacity 값)으로만 묶인다.
 - 점주 단위와 전역 총량. 점주가 매장을 N개 만들면 상한도 N배다. edge가 맡는다.
-- `Retry-After`를 무시하는 폭주의 사전 차단. 거절된 요청도 인증 조회 1회와 Redis 왕복 1회를 치르며, edge가 `Authorization` 해시나 IP 단위로 막는다.
+- `Retry-After`를 무시하는 폭주의 사전 차단. 거절된 요청도 인증 조회 1회와 Redis 왕복 1회를 치르며, edge가 `Authorization` 해시나 IP 단위로 막는다. 이 edge 요청 상한은 단말 API를 외부에 노출하기 전의 전제조건이다. 머지할 때 현재 상태(볼트)의 외부 노출 조건에 더한다.
 - endpoint별 bucket과 sync 항목 수 가중. 결정 2.
 - Redis 지연에 대한 circuit breaker. 결정 4.
 - Redis 장애(fail-open) 횟수 metric. 결정 7.
 - outbound(provider) rate limit과 bulkhead.
 - 시연 화면(`static/terminal`)의 `Retry-After` 처리. 지금도 전송에 실패하면 5초 뒤 다시 보낸다.
 - 한계: 패킷이 사라지는 단절(RST 없음)에서는 Lettuce가 끊김을 몰라 `REJECT_COMMANDS`가 듣지 않고, `/v1` 요청마다 timeout 1초를 기다린 뒤 통과한다.
-- 한계: Redis failover 뒤 새 primary의 시계가 뒤처지면 그 차이만큼 refill이 멈추고 `Retry-After`가 실제보다 짧게 나간다. 다음 차감에서 새 시계로 바뀌어 스스로 회복하고 영구 차단은 없다.
+- 배포 확인: health probe가 요청 스레드 풀과 함께 굶지 않게 `management.server.port`를 분리하는 것을 배포에서 검토한다(Redis가 느린 동안 `/v1` 요청이 스레드를 1초씩 쥔다).
 - 배포 확인: 운영 Redis의 `maxmemory-policy`와 앱 계정 ACL(EVAL·EVALSHA 허용). `noeviction`의 OOM이나 NOPERM이면 fail-open이 이어지고 WARN만 남는다. eviction 정책이면 bucket 키가 밀려 가득 찬 상태로 돌아간다.
 
 ## 관련 문서
@@ -144,12 +158,16 @@
 7. Redis 오류면 요청은 통과하고 스택 없는 WARN 한 줄이 남는다.
 8. 인증에 실패한 요청은 limiter를 부르지 않고 401이다.
 9. 거절마다 `inbound_rate_limited_total{scope}`가 1 오르고, INFO 로그 한 줄(예외 줄이 따로 붙지 않는다)에 scope·terminalId·storeId가 남는다. 토큰과 `Authorization` 값은 남지 않는다.
-10. capacity가 1 미만이거나 refill이 0 이하·무한대·NaN이면 기동하지 못한다.
+10. capacity가 1 미만이거나 refill이 0 이하·무한대·NaN이면, 또는 빈 bucket이 가득 차는 시간이 하루를 넘거나 capacity가 2^53을 넘으면 기동하지 못한다.
 11. 429 응답을 REST Docs 스니펫으로 문서화한다.
 12. 상한 값이 #77의 권장 값이고 그 근거가 이 spec에 있다. ready로 바꾸기 전 조건이다.
 13. 기존 테스트가 하나도 깨지지 않는다.
 14. 앱의 Lettuce 클라이언트는 끊긴 연결에서 명령을 버퍼에 받지 않고 바로 거절한다(`REJECT_COMMANDS`). Boot가 넣는 connect timeout은 그대로다.
 15. 단말 키와 매장 키는 같은 Redis Cluster slot에 있고, 키에는 빈 bucket이 가득 차는 시간 이하의 TTL이 걸린다.
+16. Redis가 오류로 답하면(스크립트 오류 등) 통과하되 ERROR 한 줄이 남는다.
+17. 저장된 시각이 Redis의 지금보다 미래여도 refill이 멈추지 않는다.
+18. 실제 Redis가 내려가면 요청은 timeout을 기다리지 않고 바로 통과한다.
+19. `RateLimitedException`은 limiter만 만든다.
 
 ## 검증
 - `./gradlew test --tests 'com.resilientpos.terminal.*'` — 인터셉터와 Lua 스크립트. 스크립트는 Testcontainers Redis로 실제 실행한다.
