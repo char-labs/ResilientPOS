@@ -6,6 +6,7 @@ import java.util.concurrent.TimeUnit
 import kotlin.test.fail
 import org.apache.kafka.clients.admin.Admin
 import org.apache.kafka.clients.admin.AdminClientConfig
+import org.apache.kafka.clients.admin.ListGroupsOptions
 import org.apache.kafka.clients.admin.OffsetSpec
 import org.apache.kafka.clients.consumer.ConsumerConfig
 import org.apache.kafka.clients.consumer.ConsumerRecord
@@ -56,6 +57,13 @@ object KafkaTestSupport {
             if (partitions.all { (committed[it]?.offset() ?: 0) >= end.getValue(it) }) break
             if (System.nanoTime() >= deadline) fail("20초 안에 $groupId 가 $topic 을 끝까지 처리하지 못했다: $committed / $end")
             Thread.sleep(50)
+        }
+    }
+
+    /** consumer group마다 커밋된 offset. */
+    fun committedOffsets(): Map<String, Map<TopicPartition, Long>> = admin { admin ->
+        admin.listGroups(ListGroupsOptions.forConsumerGroups()).all().get().associate { group ->
+            group.groupId() to admin.listConsumerGroupOffsets(group.groupId()).partitionsToOffsetAndMetadata().get().mapValues { it.value.offset() }
         }
     }
 
