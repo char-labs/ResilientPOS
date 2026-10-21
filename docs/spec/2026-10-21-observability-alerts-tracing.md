@@ -80,6 +80,12 @@ metric과 ECS 로그는 나가지만 그것을 읽어 사람을 부르는 규칙
 - [Spring Boot 4.1.1, Observability의 Context Propagation](https://docs.spring.io/spring-boot/reference/actuator/observability.html): 자동 구성된 `AsyncTaskExecutor`는 `spring.task.execution.propagate-context`로 opt-in한다.
 - [Spring Modulith 2.1.1, Production-ready Features](https://docs.spring.io/spring-modulith/reference/production-ready.html): `spring-modulith-observability-core`가 모듈 API 빈 호출에 span을 만든다.
 - 기본값은 문서가 말하지 않는 것을 sources jar나 기동 로그로 확인한다. 대상은 OTLP exporter의 batch span processor(대기열 크기·보내는 주기·export 시간 상한), consumer span이 producer span의 자식인지 link인지, ECS의 MDC 필드 모양이다. 결과는 이 절에 추가한다.
+- 확인 결과(2026-10-21)
+  - OTLP span exporter는 `management.opentelemetry.tracing.export.otlp.endpoint`가 있을 때만 만들어진다(spring-boot-micrometer-tracing-opentelemetry 4.1.1 `OtlpTracingConfigurations`의 `@ConditionalOnProperty`). 그래서 IDE와 테스트에서는 exporter가 없고 연결 오류도 남지 않는다. Boot는 `SpanExporter` 빈을 모두 batch span processor 하나에 모은다(`OpenTelemetryTracingAutoConfiguration`). 테스트의 in-memory exporter가 이 경로로 붙는다.
+  - batch span processor 기본값: 대기열 2048, 한 번에 512, 5초마다 보내고 export 상한 30초다. OTLP 호출 상한과 연결 상한은 10초, transport는 `http`, 압축은 없다(Spring Boot 4.1.1 application properties 부록). 대기열이 차면 span을 버리고 요청 스레드는 막히지 않는다.
+  - 소비 span은 전송 span의 자식이다(link가 아니다). 로컬 Tempo에서 네 토픽 모두 소비 span의 부모가 같은 토픽의 전송 span이었다. 전송 span의 부모는 커밋을 감싼 `TxRunner` 호출의 Modulith span(`runTx`, 락 경로는 `runNewTx`)이었다.
+  - span 속성: 전송 span은 `messaging.destination.name`, 소비 span은 `messaging.source.name`에 토픽을 둔다(spring-kafka 4.1.1 `KafkaTemplateObservation`·`KafkaListenerObservation`).
+  - ECS 로그는 MDC의 `traceId`·`spanId`를 최상위 필드로 싣는다(예: `"message":"audit action=OWNER_SIGNED_UP …","traceId":"f5e94bba…","spanId":"43fed43d…"`). Alloy는 이 `traceId`를 structured metadata `trace_id`로 올린다.
 
 계약: 단말 sync 요청에 선택 필드 `createdAt`이 생긴다. 응답은 바뀌지 않는다. Kafka 레코드에 trace header(`traceparent`)가 붙는다. consumer는 header를 payload로 읽지 않으므로 이벤트 계약(payload JSON)은 바뀌지 않는다.
 
@@ -181,6 +187,9 @@ metric과 ECS 로그는 나가지만 그것을 읽어 사람을 부르는 규칙
 겹침 확인(2026-10-21, origin/main c7810af):
 - 열린 PR #94(refactor/modulith-2-1-2-resubmit, draft): `build.gradle.kts`, `EventPublicationResubmitter.kt`, `EventPublicationResubmitterIntegrationTest.kt`, `docs/wiki/domain-model.md`를 고친다. `build.gradle.kts`는 33행만 고치므로 새 의존성 줄을 그 근처에 두지 않는다. `EventPublicationResubmitter.kt`는 #94가 KDoc(16~31행)과 `markStalePublicationsFailed`(70~84행)를 고친다. 이 PR은 생성자와 65행(`failed.resubmit`)만 고친다. 선택 건수 테스트는 다른 파일에 두고, 재전송 통합 테스트 파일은 생성자를 직접 부르는 193행과 import 한 줄만 고친다(범위 조정 4). `domain-model.md`는 #94가 §4.3을, 이 PR이 §4.7을 고친다.
 - 진행 중인 #91(feature/platform-operator-dlt-redrive, 아직 커밋 없음): `docs/wiki/observability.md`가 겹칠 수 있다. push·PR 생성·머지 직전에 다시 확인하고, 먼저 머지된 쪽에 맞춰 rebase한다.
+  - (2026-10-21) #91 세션 확인: "지금 있는 것"의 "점주 세션 저장소(Redis)" 항목 바로 앞에 항목 하나만 더하고 기존 줄은 고치지 않는다. DLT 재투입 절차는 domain-model §4.3의 같은 자리에서 API 절차로 바뀌므로 runbook 링크는 그대로 둔다. 그 항목의 알림 후보(재투입 counter, `/admin` 503)는 #91이 정한다.
+- 열린 draft PR #102(feature/inbound-rate-limit, 2026-10-21 확인): `docs/wiki/observability.md`, `src/main/resources/application.yaml`, `SyncControllerTest.kt`가 겹친다. `git merge-tree`로 시험하면 application.yaml과 테스트는 자동으로 합쳐지고 wiki는 충돌한다. #102가 "단말 빈도 상한" 항목을 더하는 자리가 이 PR이 고친 "로그" 항목 바로 옆이라서다. 나중에 머지되는 쪽이 두 항목을 모두 살린다. #102의 새 응답은 429이고 빈도 상한은 fail-open이라 `OwnerSessionStoreUnavailable`의 전제(지금 503은 세션 저장소 장애뿐)는 그대로다. #102의 `inbound_rate_limited_total`에 알림을 걸려면 `docker/prometheus/alerts.yaml`에 규칙을 더한다.
+- perf/k6-capacity-measurement(#77, PR 없음): 이 PR 머지 뒤 rebase해서 `RedisDistributedLock.lockName`을 그대로 쓴다(그 세션 확인). 이 함수의 이름과 위치를 바꾸면 그쪽에 알린다.
 
 ## 범위 조정
 1. **작업 생존의 기준을 `up`에서 `process_uptime_seconds`로 바꿨다.** `up`은 Prometheus가 만드는 series라 `application` label이 없어서, 여러 서비스가 한 Prometheus를 쓰면 이 앱만 거를 수 없다. `process_uptime_seconds{application="ResilientPOS"}`는 인스턴스가 살아 있을 때만 나오고, 기동 직후 유예(5분)를 값으로 줄 수 있다. 그래서 이름 대조 테스트의 `up` 예외도 필요 없어졌다.
@@ -208,4 +217,15 @@ metric과 ECS 로그는 나가지만 그것을 읽어 사람을 부르는 규칙
 | 인수 3, `ObservabilityConfigurationTest`의 `알림 규칙이 쓰는 metric 이름이 모두 나간다` | 처음부터 통과(characterization). 규칙의 `sync_operation_total`을 `sync_operations_total`로 잠시 바꾸면 `없는 이름: [sync_operations_total]`로 실패했다(범위 조정 5의 입력 선언 뒤) | `./gradlew test --tests 'com.resilientpos.platform.ObservabilityConfigurationTest'`. 4개 통과 | 같은 명령. 통과 |
 
 ## 결과
-개발 전 작성. 개발 후 실행 결과와 변경 이유를 추가한다.
+- 인수 1~3: `AlertRulesTest`가 `prom/prometheus:v3.15.0`의 promtool로 `SUCCESS: 13 rules found`와 단위 테스트 15개 시나리오를 통과했다. 이름 대조 테스트가 통과했고, 규칙의 이름을 틀리게 바꾸면 실패했다(TDD 기록).
+- 인수 4~7: TDD 기록의 테스트가 모두 통과했다.
+- 인수 8~9: `TracePropagationIntegrationTest`가 통과했다. 전체 실행 순서처럼 다른 컨텍스트가 먼저 떠도 통과한다.
+- 인수 10: `docker compose -f docker/docker-compose.yaml --profile app --profile obs up -d --build --wait`로 띄워 확인했다(2026-10-21, UTC). 호스트 3000 포트를 다른 프로세스가 잡고 있어 Prometheus(9090)·Tempo(3200)·Loki(3100)는 lgtm 컨테이너 안에서 HTTP API로 조회했다.
+  - 규칙: Prometheus `/api/v1/rules`가 group `resilientpos`의 규칙 13개를 모두 `health=ok`로 실었다.
+  - metric: 점주 가입 → 매장 → 단말 등록 → 주문·checkout → `createdAt`이 3분 전인 sync 한 건을 보낸 뒤 `sync_operation_total`(APPLIED 1, 나머지 넷 0), `sync_convergence_seconds_bucket`(`le="300.0"`부터 1), `tasks_scheduled_execution_seconds_count`(`resubmitAndPurge`·`resolveUnknown`의 `SUCCESS`), `event_kafka_dead_letter_failed_total`(5개 토픽 0), `event_publication_resubmit_selected_total`(0), `module_events_published_total`이 조회됐다.
+  - 바로 울리는 규칙: 06:44:00에 확정된 순번에 다른 operation을 보내 `CONFLICT`를 받고, `order.paid`에 형식이 틀린 메시지를 넣어 `DLT로 보냄 … reason=error`를 남겼다. 다음 평가(06:44:53)에 `SyncConflict`(warning)와 `KafkaDeadLetter`(critical, `topic=order.paid`, `reason=error`)가 firing이 됐고, 10분 감지 창이 지난 06:55에는 둘 다 풀려 있었다.
+  - `for:`가 있는 규칙: 06:44:23에 Redis를 멈추고 15초마다 점주 로그인(503)과 주문 생성(락 fail-open, 주문은 201)을 보냈다. `OwnerSessionStoreUnavailable`(critical)은 06:44:53 pending, 06:50:55 이전에 firing이 됐다. `LockFailOpen`(`lock="order:create-lock"`, `reason="error"`)은 06:44:53 pending, 06:55:07 firing이 됐다. 같은 시간 `payment:unknown-resolve`·`platform:event-publication` 락도 따로 pending이었다(06:46:53부터). 06:55:08에 Redis를 다시 올렸다. 공유 compose 스택이라 다른 worktree 세션(#77, #91)에 미리 알렸고 둘 다 스택을 쓰지 않고 있었다.
+  - trace: Tempo에서 `{ name = "http post /v1/orders/{orderId}/checkout" }`로 찾은 trace(`6bd4e9a4…`) 하나에 span 32개(SERVER 1, PRODUCER 4, CONSUMER 4, CLIENT 2, INTERNAL 21)가 있었다. 네 토픽의 전송·소비가 모두 이 trace 안에 있고, Modulith 모듈 span은 Fulfillment·Order·Payment·Platform·Terminal에서 나왔다.
+  - 로그↔trace: Loki에서 `{service_name="ResilientPOS"} | trace_id="6bd4e9a4…"`가 이 trace의 로그 10줄(결제 승인 결과 적용, 주문 결제 반영, fulfillment 기록 등)을 돌려줬다. 앱 로그에 OTLP export 오류는 없었다.
+- 인수 11: `./gradlew test` 732개 중 실패 0.
+- `python3 scripts/check_pr.py --base origin/main --worktree`: PASS.
