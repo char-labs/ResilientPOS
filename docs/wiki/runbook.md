@@ -10,14 +10,24 @@
 - **로그에서 trace로.** Loki에서 `{service_name="ResilientPOS", level="ERROR"} |= "검색어"`로 줄을 찾는다. 줄마다 structured metadata `trace_id`가 붙어 있고, Grafana 로그 상세의 `trace_id` 링크가 Tempo의 그 trace를 연다. `orderId`·`paymentId`·`terminalId`는 label이 아니라 로그 본문에 있으므로 `|= "주문ID"`로 거른다.
 - **trace에서 로그로.** Tempo에서 연 span의 "Logs for this span"이 같은 `trace_id`의 로그를 연다. 한 trace에 HTTP 요청, Kafka 전송(producer), 소비(consumer), 그 consumer가 낸 다음 이벤트가 이어진다. 재전송 작업이 다시 보낸 메시지는 원래 요청의 trace가 아니라 그 주기 작업(`resubmitAndPurge`)의 trace에 있다.
 - **인스턴스.** pod마다 도는 작업과 신선도 알림에는 `instance` label이 붙는다. 같은 DB를 세는 gauge의 알림은 모든 인스턴스를 `max`로 모아 label이 없다.
+- **silence.** DLT 두 알림은 마지막 DLT 뒤 24시간 firing을 유지한다(`keep_firing_for`). 재투입과 업무 상태를 확인했으면 Alertmanager에서 그 알림을 silence로 끈다.
 
-## EventPublicationFailed
+## ResilientPosMetricsAbsent
 
-- **뜻.** 브로커로 보내지 못한 발행 기록(`event_publication_incomplete{status="failed"}`)이 한 시간 동안 0이 된 적이 없다. 재전송 작업이 1분마다 다시 보내므로 브로커가 살아 있으면 저절로 준다. 브로커 장애가 이어지거나, 영영 나가지 못하는 기록이 있다는 뜻이다.
+- **뜻.** ResilientPOS 인스턴스의 metric(`process_uptime_seconds{application="ResilientPOS"}`)이 5분 넘게 하나도 보이지 않는다. 앱이 모두 내려갔거나, 기동하지 못하거나, scrape 경로(Alloy·Prometheus·Mimir)가 끊겼다. 이때 다른 규칙은 모두 빈 결과라 울리지 않는다.
 - **먼저 볼 것.**
-  1. `max(event_publication_incomplete{status="failed"})`가 줄고 있으면 재전송이 따라잡는 중이다.
+  1. 배포 플랫폼의 pod 상태와 재시작 횟수, 컨테이너 로그의 마지막 줄.
+  2. 기동 실패면 원인부터 본다. 브로커에 닿지 못하면 앱이 뜨지 않는다(`spring.kafka.admin.fail-fast`). DB 인증 실패(`password authentication failed`)와 Flyway 마이그레이션 실패도 기동을 막는다.
+  3. 앱은 떠 있는데 metric만 없으면 수집 경로를 본다. 로컬은 Alloy 컨테이너와 그 로그, 운영은 scrape 대상과 Mimir 수집 상태다.
+- **조치.** 기동을 막는 원인을 고치거나 수집 경로를 되살린다. 앱이 다시 보이면 이 알림은 풀리고 다른 규칙이 그동안의 상태를 다시 평가한다.
+
+## EventPublicationOverdue
+
+- **뜻.** 완료되지 않은 발행 기록 가운데 가장 오래된 것(`event_publication_incomplete_oldest_seconds`)이 1시간을 넘었다. 재전송 작업이 1분마다 다시 보내므로 브로커가 살아 있으면 저절로 나간다. 브로커 장애가 이어지거나, 영영 나가지 못하는 기록이 있다는 뜻이다. 나이는 행이 `FAILED`와 `RESUBMITTED`를 오가도 계속 늘어서, `failed` 개수가 잠깐 0이 되어도 이 알림은 끊기지 않는다.
+- **먼저 볼 것.**
+  1. `max(event_publication_incomplete_oldest_seconds)`가 줄었다가 다시 오르면 새 기록은 나가고 있다. 계속 오르면 같은 기록이 막혀 있다. `max(event_publication_incomplete{status="failed"})`로 막힌 양을 본다.
   2. [EventPublicationResubmitterNotSucceeding](#eventpublicationresubmitternotsucceeding)이 함께 울렸으면 그 절부터 본다.
-  3. `sum(increase(event_publication_resubmit_selected_total[10m]))`가 주기당 500건(10분에 5000건) 가까이에서 줄지 않으면 오래된 행이 읽기 자리를 차지하고 있다.
+  3. `max by (instance) (increase(event_publication_resubmit_selected_total[1m]))`가 500 가까이에서 줄지 않으면 오래된 행이 한 주기의 읽기 자리(500건)를 모두 차지하고 있다. 락이 정상이면 그 주기를 처음 잡은 인스턴스만 읽으므로 인스턴스별로 본다.
   4. ERROR 로그 `Listener … not found!`(리스너가 사라진 기록), `Unexpected error occurred in scheduled task`와 역직렬화 예외(역직렬화할 수 없는 기록).
   5. [도메인 모델 §4.3](domain-model.md#43-이벤트-전달과-저장-형식)의 "영영 나가지 못하는 기록" SQL로 `listener_id`·`event_type`별 개수와 `completion_attempts`를 본다.
 - **조치.** 브로커 장애면 브로커를 되살리고 기다린다. 영영 나가지 못하는 기록이면 §4.3의 조치(원인인 리스너·타입을 되살리거나, 버리기로 결정한 기록만 완료 처리)를 따른다.
@@ -25,7 +35,7 @@
 
 ## EventPublicationMetricStale
 
-- **뜻.** 그 인스턴스가 5분 넘게 발행 기록을 세지 못했다(갱신 주기 1분). 세지 못한 인스턴스는 개수를 내리므로 [EventPublicationFailed](#eventpublicationfailed)가 그 인스턴스의 값을 보지 못한다. 모든 인스턴스가 막히면 실패 알림이 해소된 것처럼 풀린다.
+- **뜻.** 그 인스턴스가 5분 넘게 발행 기록을 세지 못했다(갱신 주기 1분). 세지 못한 인스턴스는 개수를 내리고 나이를 `NaN`으로 내므로 [EventPublicationOverdue](#eventpublicationoverdue)가 그 인스턴스의 값을 보지 못한다. 모든 인스턴스가 막히면 발행 지연 알림이 해소된 것처럼 풀린다.
 - **먼저 볼 것.** 그 인스턴스의 WARN `발행 기록을 세지 못해 개수를 내리고 이번 갱신을 건너뛴다`와 예외, Hikari 대기(`hikaricp_connections_pending`), DB 상태.
 - **조치.** DB나 커넥션 문제를 고친다. 다음 갱신에 `event_publication_incomplete_refreshed_seconds`가 다시 움직이면 풀린다.
 
@@ -35,7 +45,7 @@
   - 도메인 오류 코드(예: `PAYMENT_APPROVAL_MISMATCH`): 업무 불일치다.
   - `UNSUPPORTED_EVENT_SCHEMA_VERSION`: 롤링 배포 중 옛 pod가 새 버전 메시지를 받았다. 배포가 끝난 뒤 그대로 재투입한다([이벤트 계약](event-contract.md) 5절).
   - `error`: 재시도를 모두 썼거나 재시도 목록 밖의 예외(버그, 변환 실패)다.
-- 알림은 DLT로 간 뒤 10분 동안 울리고 저절로 풀린다. 풀렸다고 해소된 것이 아니다. DLT 메시지는 보존 기간이 없어 지워지지 않는다.
+- 알림은 마지막 DLT 뒤 24시간 동안 firing을 유지한다(`keep_firing_for: 24h`). DLT 메시지는 보존 기간이 없어 지워지지 않으므로, 24시간이 지나 풀렸다고 해소된 것도 아니다. 재투입과 업무 상태를 확인했으면 silence로 끈다.
 - **먼저 볼 것.** ERROR `DLT로 보냄 topic=… partition=… offset=… key=… reason=… exception=…`. `key`가 `orderId`다. 그 줄의 `trace_id`로 trace를 열어 실패한 consumer span과 예외를 본다.
 - **조치.** 원인을 고친 뒤 재투입한다. 재투입 전에 [이벤트 계약 8절](event-contract.md#8-dlt-재투입-전에-볼-것)을 확인하고, 절차는 [도메인 모델 §4.3](domain-model.md#43-이벤트-전달과-저장-형식)의 "DLT 재투입"을 따른다. 플랫폼 운영자의 재투입 API는 #91이 만든다.
 - **하지 말 것.** 원인을 고치기 전에 재투입하지 않는다. 같은 이유로 다시 DLT로 간다. DLT 토픽을 지우거나 보존 기간을 걸지 않는다.
@@ -44,7 +54,7 @@
 
 - **뜻.** 메시지를 DLT로 보내는 것 자체가 실패했다. 메시지를 버리지 않으려고 재시도 상태가 처음으로 돌아가 같은 메시지를 다시 처리하므로, 그 파티션의 뒤 메시지가 모두 멈춘다.
 - **먼저 볼 것.** ERROR `DLT 전송 실패, 처음부터 다시 시도한다 topic=… original=…`의 예외. 브로커 상태, DLT 토픽(`원토픽.DLT`)이 있는지, 쓰기 권한, 메시지 크기.
-- **조치.** DLT 쪽 원인을 고친다. 고치면 다음 시도에 DLT로 가고 [KafkaDeadLetter](#kafkadeadletter)가 울린다.
+- **조치.** DLT 쪽 원인을 고친다. 고치면 다음 시도에 DLT로 가고 [KafkaDeadLetter](#kafkadeadletter)가 울린다. 이 알림도 24시간 유지되므로 DLT 전송이 다시 되는 것을 로그로 확인한 뒤 silence로 끈다.
 
 ## KafkaConsumerLag
 
@@ -73,6 +83,7 @@
 - **먼저 볼 것.** [UnknownPaymentResolverNotSucceeding](#unknownpaymentresolvernotsucceeding)이 함께 울렸는지. ERROR `결과 불명 결제 확정에 실패했다 paymentId=…`(건마다 실패), WARN `조회로도 결과를 확인하지 못했다 … queryCount=…`의 `queryCount`가 오르는지(조회는 돌고 있다).
 - **조치.** 작업이나 건별 실패의 원인을 고친다. 결제 상태는 작업이 확정한다.
 - **하지 말 것.** `t_payment_attempt`의 상태를 DB에서 직접 고치지 않는다. 승인 이벤트가 나가지 않아 주문이 `PAID`가 되지 않는다.
+- **한계.** gauge는 기동 직후 첫 주기(1분)까지 0이다. replica가 하나이거나 전부 재기동하면 `for: 2h`가 처음부터 다시 센다. 재기동이 잦은 환경에서는 `t_payment_attempt`의 `UNKNOWN` 행을 직접 세어 확인한다.
 
 ## ReconciliationPendingUnresolved
 
@@ -86,6 +97,7 @@
   pending 수보다 case 수가 적으면 case 열기가 실패한 것이다. `payment.reconciliation-requested.DLT`를 보고 [KafkaDeadLetter](#kafkadeadletter) 절차를 따른다.
 - **조치.** 플랫폼이 그 매장 점주에게 연락해, PG 가맹점 화면에서 승인 여부를 확인하고 해소하도록 안내한다. 점주는 `POST /owner/v1/stores/{storeId}/reconciliation-cases/{caseId}/resolve`로 근거와 함께 해소한다([payment-reconciliation-case](../spec/2026-10-20-payment-reconciliation-case.md)).
 - **하지 말 것.** 결제나 case 상태를 DB에서 직접 고치지 않는다. case는 근거·규칙·감사 없이 해결하지 않는다.
+- **한계.** gauge는 기동 직후 첫 주기(1분)까지 0이다. replica가 하나이거나 전부 재기동하면 `for: 24h`가 처음부터 다시 센다. 매일 배포하면 이 알림은 사실상 울리지 않으므로 위 SQL을 날마다 확인한다.
 
 ## LockFailOpen
 
@@ -104,12 +116,12 @@
 
 ## SyncGapPersistent
 
-- **뜻.** 앞 순번이 확정되지 않은 항목(`GAP`)이 30분 넘게 계속 온다. 단말이 `lastAckedSequence` 다음부터 다시 보내지 않고 있어 그 단말의 큐가 비지 않는다. 30분은 시작값이다.
+- **뜻.** 앞 순번이 확정되지 않은 항목(`GAP`)이 30분 넘게 5분 간격 안으로 계속 온다. 단말이 `lastAckedSequence` 다음부터 다시 보내지 않고 있어 그 단말의 큐가 비지 않는다. 식이 모든 단말의 합이라, 단말이 많으면 서로 다른 단말의 잠깐 생긴 gap이 이어 붙어 울릴 수도 있다. 5분과 30분은 시작값이다.
 - **먼저 볼 것.** INFO `sync 배치 처리 terminalId=… lastAckedSequence=… counts={GAP=…}`로 단말을 찾는다.
 - **조치.** 그 단말의 재전송 로직(응답의 `lastAckedSequence` 다음부터 보내는지)을 확인한다.
 
 ## OwnerSessionStoreUnavailable
 
-- **뜻.** 점주 요청이 5분 넘게 `503 SERVICE_UNAVAILABLE`로 실패한다. 지금 503을 내는 곳은 점주 세션 저장소(Redis) 장애 처리뿐이다. 단말 경로(`/v1/**`)는 Redis를 쓰지 않아 영향이 없다.
-- **먼저 볼 것.** ERROR `errorCode=SERVICE_UNAVAILABLE` 로그, Redis 상태. [LockFailOpen](#lockfailopen)(`reason="error"`)도 함께 울릴 것이다.
+- **뜻.** 점주 요청이 5분 넘게 `503 SERVICE_UNAVAILABLE`로 실패한다. `/actuator` 밖에서 503을 내는 곳은 지금 점주 세션 저장소(Redis) 장애 처리뿐이다. `/actuator/health`의 503(DB health DOWN, 기동·종료 중)은 이 규칙이 세지 않는다. 단말 경로(`/v1/**`)는 Redis 장애에 막히지 않는다.
+- **먼저 볼 것.** ERROR `errorCode=SERVICE_UNAVAILABLE` 로그, Redis 상태. [LockFailOpen](#lockfailopen)(`reason="error"`)도 함께 울릴 것이다. 점주 요청이 드물면 2분 창이 끊겨 이 알림은 늦거나 울리지 않는다. Redis 장애의 주 신호는 주기 작업이 매분 만드는 `LockFailOpen`이다.
 - **조치.** Redis를 되살린다. 503은 변경이 커밋되지 않았다는 뜻이 아니다. 단말 등록·자격 회전 뒤 503을 받았으면 목록으로 결과를 확인한다([관측성](observability.md) 점주 세션 저장소 항목).
