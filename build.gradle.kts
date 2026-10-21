@@ -89,4 +89,6 @@ allOpen {
 
 tasks.withType<Test> {
     useJUnitPlatform()
+    // AlertRulesTest·ObservabilityConfigurationTest가 알림 규칙을 읽는다. 입력으로 두지 않으면 규칙만 고쳤을 때 테스트가 up-to-date로 건너뛰어진다.
+    inputs.dir("docker/prometheus").withPropertyName("alertRules").withPathSensitivity(PathSensitivity.RELATIVE)
 }

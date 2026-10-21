@@ -1,9 +1,13 @@
 package com.resilientpos.platform
 
 import com.resilientpos.PostgresIntegrationTest
+import com.resilientpos.awaitUntil
+import java.nio.file.Path
+import kotlin.io.path.readText
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.micrometer.metrics.test.autoconfigure.AutoConfigureMetrics
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc
@@ -70,5 +74,38 @@ class ObservabilityConfigurationTest(
     @Test
     fun `health와 prometheus 외의 Actuator 엔드포인트는 열지 않는다`() {
         mockMvc.get("/actuator/env").andExpect { status { isNotFound() } }
+    }
+
+    /**
+     * 코드가 metric 이름을 바꾸고 규칙을 고치지 않으면 규칙이 조용히 아무것도 보지 못한다. promtool 테스트(`AlertRulesTest`)는 가짜 series로 돌아 이것을 잡지 못한다.
+     * 규칙의 selector(`이름{`)를 모두 뽑아 앱 출력과 대조한다. 요청 metric처럼 첫 요청 뒤 생기는 이름이 있어 잠깐 기다린다.
+     */
+    @Test
+    fun `알림 규칙이 쓰는 metric 이름이 모두 나간다`() {
+        mockMvc.get("/actuator/health").andExpect { status { isOk() } }
+        val ruleMetrics = RULE_METRIC.findAll(Path.of("docker/prometheus/alerts.yaml").readText()).map { it.groupValues[1] }.toSet()
+        assertTrue(ruleMetrics.containsAll(CREATED_ON_FIRST_EVENT.keys), "규칙이 더 쓰지 않는 예외가 있다: ${CREATED_ON_FIRST_EVENT.keys - ruleMetrics}")
+
+        var missing = emptySet<String>()
+        awaitUntil("알림 규칙의 metric이 모두 나간다", { " 없는 이름: $missing" }) {
+            val exposed = mockMvc.get("/actuator/prometheus").andReturn().response.contentAsString.lines()
+                .filterNot { it.startsWith("#") || it.isBlank() }
+                .map { it.substringBefore('{').substringBefore(' ') }
+                .toSet()
+            missing = ruleMetrics - CREATED_ON_FIRST_EVENT.keys - exposed
+            missing.isEmpty()
+        }
+    }
+
+    companion object {
+        private val RULE_METRIC = Regex("""([a-z_][a-z0-9_]*)\{""")
+
+        /** 처음 일어날 때 생겨 기동 직후에는 없는 이름과 그 이유. 규칙에서 빠지면 위 테스트가 이 목록도 고치라고 실패한다. */
+        private val CREATED_ON_FIRST_EVENT = mapOf(
+            "event_publication_incomplete" to "끝나지 않은 발행 기록이 없으면 시계열이 없다",
+            "lock_fail_open_total" to "처음 fail-open될 때 생긴다. platform이 업무 모듈의 키를 모른다",
+            "tasks_scheduled_execution_seconds_count" to "테스트는 주기 작업을 하루 뒤로 미뤄 첫 실행 전이다",
+            "kafka_consumer_fetch_manager_records_lag" to "Kafka 클라이언트가 파티션의 첫 fetch 뒤 만들고 Micrometer KafkaMetrics가 60초마다 새 metric을 묶는다",
+        )
     }
 }

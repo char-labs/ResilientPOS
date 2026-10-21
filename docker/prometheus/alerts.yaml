@@ -1,0 +1,151 @@
+# ResilientPOS 알림 규칙의 정본이다. 로컬은 lgtm의 Prometheus가 싣고, 운영은 같은 파일을 Mimir ruler에 올린다.
+# 조건과 조치는 docs/wiki/runbook.md, metric의 뜻은 docs/wiki/observability.md에 있다.
+# 검증: docker/prometheus/alerts.test.yaml(promtool), AlertRulesTest가 ./gradlew test에서 돌린다.
+# 여러 pod가 같은 DB를 세는 gauge는 max로 모으고, pod마다 도는 작업은 instance별로 본다.
+groups:
+  - name: resilientpos
+    rules:
+      - alert: EventPublicationFailed
+        expr: max(event_publication_incomplete{application="ResilientPOS", status="failed"}) > 0
+        # 재전송 작업이 1분마다 다시 보내므로 잠깐의 실패는 스스로 준다. 0이 되면 시계열이 사라져 for가 처음부터 다시 센다.
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: 브로커로 보내지 못한 발행 기록이 한 시간 넘게 남아 있다
+          runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#eventpublicationfailed
+
+      - alert: EventPublicationMetricStale
+        # 갱신이 실패한 인스턴스는 시각을 멈춘다. 갱신 주기는 1분이다.
+        expr: time() - event_publication_incomplete_refreshed_seconds{application="ResilientPOS"} > 300
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} 인스턴스가 발행 기록을 5분 넘게 세지 못했다"
+          runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#eventpublicationmetricstale
+
+      - alert: KafkaDeadLetter
+        # 둘째 줄은 10분 전에 없던 series다. 도메인 reason은 처음 DLT로 보낼 때 생겨 첫 값을 increase()가 0으로 본다.
+        expr: |
+          sum by (topic, reason) (increase(event_kafka_dead_letter_total{application="ResilientPOS"}[10m])) > 0
+          or
+          sum by (topic, reason) (
+            event_kafka_dead_letter_total{application="ResilientPOS"}
+            unless event_kafka_dead_letter_total{application="ResilientPOS"} offset 10m
+          ) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.topic }} 메시지가 DLT로 갔다(reason={{ $labels.reason }})"
+          runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#kafkadeadletter
+
+      - alert: KafkaDeadLetterPublishFailed
+        # 기동 때 0으로 등록하지만 첫 scrape 전에 오른 값을 놓치지 않게 KafkaDeadLetter와 같은 모양으로 둔다.
+        expr: |
+          sum by (topic) (increase(event_kafka_dead_letter_failed_total{application="ResilientPOS"}[10m])) > 0
+          or
+          sum by (topic) (
+            event_kafka_dead_letter_failed_total{application="ResilientPOS"}
+            unless event_kafka_dead_letter_failed_total{application="ResilientPOS"} offset 10m
+          ) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.topic }} 메시지를 DLT로 보내지 못해 같은 메시지를 다시 처리하고 있다"
+          runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#kafkadeadletterpublishfailed
+
+      - alert: KafkaConsumerLag
+        # Kafka 클라이언트가 같은 토픽을 점이 밑줄로 바뀐 이름으로 한 번 더 내므로 점이 있는 이름만 본다.
+        # shortcut: 1000은 근거 없는 시작값이다. 부하테스트 뒤 조정한다.
+        expr: max by (topic, partition) (kafka_consumer_fetch_manager_records_lag{application="ResilientPOS", topic=~".+[.].+"}) > 1000
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.topic }} 파티션 {{ $labels.partition }}의 consumer lag가 10분 넘게 1000을 넘는다"
+          runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#kafkaconsumerlag
+
+      - alert: EventPublicationResubmitterNotSucceeding
+        # 기동한 뒤 한 번도 성공하지 못한 작업은 SUCCESS series가 없으므로 살아 있는 인스턴스를 기준으로 뺀다.
+        # 기동 뒤 5분(작업 첫 실행은 1분 뒤)은 보지 않는다.
+        expr: |
+          process_uptime_seconds{application="ResilientPOS"} > 300
+          unless on (instance)
+          increase(tasks_scheduled_execution_seconds_count{application="ResilientPOS", code_function="resubmitAndPurge", outcome="SUCCESS"}[10m]) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }}의 발행 기록 재전송 작업이 20분 넘게 성공하지 못했다"
+          runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#eventpublicationresubmitternotsucceeding
+
+      - alert: UnknownPaymentResolverNotSucceeding
+        expr: |
+          process_uptime_seconds{application="ResilientPOS"} > 300
+          unless on (instance)
+          increase(tasks_scheduled_execution_seconds_count{application="ResilientPOS", code_function="resolveUnknown", outcome="SUCCESS"}[10m]) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }}의 결과 불명 결제 확정 작업이 20분 넘게 성공하지 못했다"
+          runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#unknownpaymentresolvernotsucceeding
+
+      - alert: UnknownPaymentResolutionStuck
+        # 정상이면 한 건은 조회 상한(약 1시간) 안에 확정되거나 reconciliation으로 넘어간다.
+        expr: max(payment_attempt_unknown{application="ResilientPOS"}) - max(payment_attempt_reconciliation_pending{application="ResilientPOS"}) > 0
+        for: 2h
+        labels:
+          severity: warning
+        annotations:
+          summary: 넘기지 않은 결과 불명 결제가 2시간 넘게 남아 있다
+          runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#unknownpaymentresolutionstuck
+
+      - alert: ReconciliationPendingUnresolved
+        expr: max(payment_attempt_reconciliation_pending{application="ResilientPOS"}) > 0
+        for: 24h
+        labels:
+          severity: warning
+        annotations:
+          summary: 점주가 해소하지 않은 대조 case가 24시간 넘게 남아 있다
+          runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#reconciliationpendingunresolved
+
+      - alert: LockFailOpen
+        # 배포·재기동 중 한두 번은 넘기고 이어질 때만 본다. 이 counter는 처음 fail-open될 때 생겨 첫 증가는 세지 않는다.
+        # shortcut: 감지 창 10분은 근거 없는 시작값이다. 부하테스트 뒤 락 시간과 함께 조정한다.
+        expr: sum by (lock, reason) (increase(lock_fail_open_total{application="ResilientPOS"}[10m])) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.lock }} 락이 10분 넘게 잠그지 못하고 진행한다(reason={{ $labels.reason }})"
+          runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#lockfailopen
+
+      - alert: SyncConflict
+        expr: sum(increase(sync_operation_total{application="ResilientPOS", status="CONFLICT"}[10m])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: 단말과 서버의 sync 상태가 갈라진 항목이 있다
+          runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#syncconflict
+
+      - alert: SyncGapPersistent
+        # shortcut: 감지 창 30분은 근거 없는 시작값이다. 단말 재전송 주기가 정해지면 조정한다.
+        expr: sum(increase(sync_operation_total{application="ResilientPOS", status="GAP"}[30m])) > 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: 앞 순번을 채우지 못한 sync 항목이 30분 넘게 계속 온다
+          runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#syncgappersistent
+
+      - alert: OwnerSessionStoreUnavailable
+        # 지금 503을 내는 곳은 점주 세션 저장소(Redis) 장애 처리뿐이다. uri로 거르지 않는다(필터 단계의 503은 uri가 UNKNOWN).
+        expr: sum(increase(http_server_requests_seconds_count{application="ResilientPOS", status="503"}[5m])) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: 점주 요청이 5분 넘게 503으로 실패한다
+          runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#ownersessionstoreunavailable
