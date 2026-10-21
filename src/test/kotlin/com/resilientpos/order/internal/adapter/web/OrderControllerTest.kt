@@ -223,7 +223,7 @@ class OrderControllerTest(
     @Test
     fun `Facade가 경합 예외를 던지면 409 CONCURRENT_REQUEST이고 예외 메시지를 담지 않는다`() {
         given(facade.create(command()))
-            .willThrow(ConcurrencyFailureException("같은 terminal_id와 client_order_id의 주문이 동시에 저장됐다"))
+            .willThrow(ConcurrencyFailureException("같은 키의 주문이 동시에 저장됐다 terminalId=$TERMINAL_ID clientOrderId=$CLIENT_ORDER_ID"))
 
         postOrder(requestJson()).andExpect {
             status { isEqualTo(409) }
@@ -231,14 +231,14 @@ class OrderControllerTest(
             jsonPath("$.data") { value(null) }
             jsonPath("$.error.errorCode") { value("CONCURRENT_REQUEST") }
             jsonPath("$.error.message") { value("동시 처리 충돌로 요청을 완료하지 못했습니다.") }
-            content { string(not(containsString("terminal_id"))) }
+            content { string(not(containsString("clientOrderId="))) }
         }.andDo {
             handle(
                 document(
                     "orders-create-concurrent-request",
                     AUTHORIZATION_HEADER,
                     requestFields(HEADER_FIELDS + LINE_FIELDS),
-                    responseFields(failFields("CONCURRENT_REQUEST 고정 코드. 같은 clientOrderId의 생성이 겹쳤다. 이 endpoint는 clientOrderId로 멱등이므로 같은 요청을 다시 보내면 앞 요청이 만든 주문을 받는다")),
+                    responseFields(failFields("CONCURRENT_REQUEST 고정 코드. 같은 clientOrderId의 생성이 겹쳤다. 이 endpoint는 clientOrderId로 멱등이므로 다시 보내면 먼저 저장된 주문과 내용이 같을 때 그 주문을 받고, 다르면 409 IDEMPOTENCY_CONFLICT를 받는다")),
                 ),
             )
         }
