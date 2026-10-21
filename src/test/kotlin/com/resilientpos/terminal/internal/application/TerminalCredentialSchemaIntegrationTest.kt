@@ -16,7 +16,7 @@ import org.springframework.jdbc.core.queryForObject
 import org.springframework.transaction.support.TransactionTemplate
 
 /**
- * V012의 unique(해시)와 V016의 exclusion 제약(단말당 유효 credential 하나, 커밋 때 검사)을 서비스를 거치지 않고 직접 SQL로 확인한다. Docker가 필요하다.
+ * V012의 unique(해시)와 V018의 exclusion 제약(단말당 유효 credential 하나, 커밋 때 검사)을 서비스를 거치지 않고 직접 SQL로 확인한다. Docker가 필요하다.
  */
 class TerminalCredentialSchemaIntegrationTest(
     @Autowired private val jdbcTemplate: JdbcTemplate,
