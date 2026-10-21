@@ -80,6 +80,8 @@
 
 **복구.** 거절은 상태를 바꾸지 않으므로 복구할 것이 없다. 단말은 `Retry-After` 뒤에 같은 요청을 다시 보낸다.
 
+**범위 조정(2026-10-21, 구현 중).** `@WebMvcTest`는 경로와 관계없이 모든 `HandlerInterceptor` 빈을 싣는다. 그래서 웹 슬라이스 테스트 12개가 모두 `TerminalAuthenticationInterceptor`를 만들고, 지금 `TerminalManagement`를 mock으로 받는다. 인터셉터가 limiter에 의존하면 12개 모두 limiter도 같은 방식으로 mock으로 받아야 한다. 점주 경로의 슬라이스 테스트(owner·store·reconciliation)를 변경 경로에 더한다. 동작은 바뀌지 않는다.
+
 ## 제외
 - 인증 전 요청의 제한. 잘못된 토큰을 반복하는 요청은 단말을 모르므로 세지 않고, 요청마다 인증 조회 한 번을 그대로 치른다. 이런 요청은 edge(API gateway·ingress)가 IP 단위로 막는다(§5.1).
 - 점주 경로(`/owner/**`)와 가입·로그인의 IP별 rate limit. 현재 상태가 외부 노출 조건으로 따로 적은 항목이다.
@@ -105,6 +107,9 @@
 - src/test/kotlin/com/resilientpos/order/internal/adapter/web/**
 - src/test/kotlin/com/resilientpos/payment/internal/adapter/web/**
 - src/test/kotlin/com/resilientpos/sync/internal/adapter/web/**
+- src/test/kotlin/com/resilientpos/owner/internal/adapter/web/**
+- src/test/kotlin/com/resilientpos/store/internal/adapter/web/**
+- src/test/kotlin/com/resilientpos/reconciliation/internal/adapter/web/**
 - docs/wiki/architecture.md
 - docs/wiki/observability.md
 
