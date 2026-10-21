@@ -72,6 +72,16 @@ class ObservabilityConfigurationTest(
     }
 
     @Test
+    fun `prometheus 엔드포인트가 공용 실행기의 거절 수를 거절이 없어도 돌려준다`() {
+        val body = mockMvc.get("/actuator/prometheus").andReturn().response.contentAsString
+
+        // Boot가 applicationTaskExecutor를 만들며 customizer를 불러야 counter가 생긴다. 0으로 나가야 increase()가 첫 거절을 잡는다.
+        val rejected = body.lines().firstOrNull { it.startsWith("task_execution_rejected_total{") }
+        assertNotNull(rejected, "task_execution_rejected_total이 없다. 실행기 customizer가 걸렸는지 확인한다")
+        assertContains(rejected, """application="ResilientPOS"""")
+    }
+
+    @Test
     fun `health와 prometheus 외의 Actuator 엔드포인트는 열지 않는다`() {
         mockMvc.get("/actuator/env").andExpect { status { isNotFound() } }
     }
