@@ -1,5 +1,7 @@
 package com.resilientpos.platform
 
+import io.micrometer.core.instrument.Counter
+import io.micrometer.core.instrument.MeterRegistry
 import java.sql.Timestamp
 import java.time.Clock
 import java.time.Duration
@@ -45,10 +47,16 @@ class EventPublicationResubmitter(
     private val clock: Clock,
     @Value("\${resilientpos.event-publication.stale-after}") private val staleAfter: Duration,
     @Value("\${resilientpos.event-publication.retention}") private val retention: Duration,
+    meterRegistry: MeterRegistry,
 ) {
     // 공유 JdbcTemplate을 건드리지 않고 이 문장에만 상한을 둔다. 트랜잭션 밖이라 트랜잭션 상한이 걸리지 않아,
     // 없으면 잠금에 걸린 UPDATE가 소켓 상한(30초)까지 공용 스케줄러 스레드를 붙잡는다. JPA 쿼리 상한(10초)과 같은 값이다.
     private val jdbcTemplate = JdbcTemplate(dataSource).apply { queryTimeout = 10 }
+
+    // Modulith가 읽은 행마다 술어를 부른 뒤 재전송 표시를 하므로 보낸 수가 아니라 고른 수다. 락이 빠져 두 pod가 같은 행을 읽으면 두 번 센다.
+    private val selected = Counter.builder("event.publication.resubmit.selected")
+        .description("재전송 주기가 다시 보내려고 읽은 FAILED 발행 기록 수")
+        .register(meterRegistry)
 
     init {
         // 0이면 완료 행이 곧바로 지워진다. 설정 오류라 기동에서 막는다. stale-after는 EventPublicationMetrics가 검사한다.
@@ -62,7 +70,7 @@ class EventPublicationResubmitter(
     fun resubmitAndPurge() {
         markStalePublicationsFailed()
         Lock.executeWithLockNoTx(LOCK_KEY) {
-            failed.resubmit(ResubmissionOptions.defaults().withBatchSize(BATCH_SIZE).withMaxInFlight(BATCH_SIZE))
+            failed.resubmit(ResubmissionOptions.defaults().withBatchSize(BATCH_SIZE).withMaxInFlight(BATCH_SIZE).withFilter { selected.increment(); true })
         }
         completed.deletePublicationsOlderThan(retention)
     }

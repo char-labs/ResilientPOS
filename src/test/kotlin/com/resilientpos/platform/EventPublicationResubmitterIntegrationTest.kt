@@ -7,6 +7,7 @@ import com.resilientpos.foundation.Money
 import com.resilientpos.order.OrderCommand
 import com.resilientpos.order.OrderCommandFacade
 import com.resilientpos.order.OrderFixtures
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry
 import java.sql.Timestamp
 import java.time.Clock
 import java.time.Duration
@@ -190,7 +191,7 @@ class EventPublicationResubmitterIntegrationTest(
     @Test
     fun `보존 기간이 0 이하면 만들지 않는다`() {
         assertFailsWith<IllegalArgumentException> {
-            EventPublicationResubmitter(failed, completed, dataSource, Clock.systemUTC(), Duration.ofMinutes(5), Duration.ZERO)
+            EventPublicationResubmitter(failed, completed, dataSource, Clock.systemUTC(), Duration.ofMinutes(5), Duration.ZERO, SimpleMeterRegistry())
         }
     }
 
