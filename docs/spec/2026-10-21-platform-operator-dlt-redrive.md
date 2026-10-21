@@ -142,6 +142,8 @@ Claude 85점, Codex 판정 "주의 병합"(HIGH 1·MEDIUM 1·LOW 2), spring-back
 - docs/wiki/domain-model.md
 - docs/wiki/event-contract.md
 - docs/wiki/observability.md
+- docs/wiki/runbook.md
+- docker/prometheus/alerts.yaml
 - docs/wiki/architecture.md
 - docs/wiki/entity-map.md
 - docs/wiki/README.md
@@ -225,6 +227,7 @@ create table t_dead_letter_redrive (
 - [도메인 모델](../wiki/domain-model.md): 용어집 `operator` 행(주체가 생겼다, 사내 IdP 토큰, `/admin`, 권한 하나). §4.3 "DLT 재투입" 항목을 API 절차로 바꾸고 CLI는 앱을 쓸 수 없을 때의 대안으로 남긴다(기록이 남지 않는다). §4.7 사례에 `t_dead_letter_redrive`.
 - [이벤트 계약](../wiki/event-contract.md) 8절: API가 읽기 검사로 막는 것(높은 `schemaVersion`, 모르는 enum)과 운영자가 여전히 확인할 것(모든 pod 배포)을 적는다.
 - [관측성](../wiki/observability.md): 운영자 감사(`DEAD_LETTER_REDRIVEN`)와 재투입 counter, 노출 범위에 `/admin`(Bearer, 네트워크 제한은 배포), IdP 장애 503. #76(관측 마무리)과 겹치는 문서라 항목 추가만 하고, #76의 runbook이 이 절차를 링크한다.
+- [runbook](../wiki/runbook.md) `OwnerSessionStoreUnavailable`와 그 규칙 주석(`docker/prometheus/alerts.yaml`): #106이 "`/actuator` 밖의 503은 점주 세션 저장소 장애뿐"을 전제로 썼다. 이 PR의 운영자 경로 503(IdP·브로커 장애)도 같은 규칙에 잡히므로 그 문장을 고치고 ERROR 줄의 `uri`로 가르는 법을 더한다. 규칙 식과 summary는 바꾸지 않는다.
 - [아키텍처](../wiki/architecture.md): 인증 수단이 셋(단말 인터셉터, 점주 세션 체인, 운영자 토큰 체인)이 된 것과 `platform`의 책임에 `/admin` 체인·DLT 재투입을 더한다.
 - [엔티티 맵](../wiki/entity-map.md): `t_dead_letter_redrive`. [wiki 인덱스](../wiki/README.md)의 엔티티 수.
 - [README](../../README.md) 아키텍처 절: 인증 문장에 `/admin/**`(사내 IdP Bearer 토큰).
@@ -240,6 +243,7 @@ create table t_dead_letter_redrive (
 - 구현 중(2026-10-21) 열린 PR #102(inbound rate limit, draft)와 `ApiControllerAdvice.kt`·`PlatformConfiguration.kt`·`application.yaml`·`docs/wiki/architecture.md`·`docs/wiki/observability.md`가 겹친다. 둘 다 항목 추가라 충돌은 줄 단위다. #102는 Controller 슬라이스 테스트들도 고치므로, 먼저 머지되면 이 PR의 `DeadLetterControllerTest`·`DeadLetterRedrive` 슬라이스도 같은 준비가 필요한지 rebase 때 본다.
 - 공용 헬퍼: `/admin`의 503 필터는 `OwnerSessionStoreFilter`와 모양이 같지만 잡는 예외와 경로가 달라 합치지 않는다. main과 열린 PR에 운영자 인증·DLT 읽기 코드는 없다.
 - PR 생성 직전 재확인(2026-10-21, origin/main `c7810af` 그대로): #76이 PR #106(ready)으로 열렸다. 겹치는 경로는 `build.gradle.kts`·`docker/docker-compose.yaml`·`README.md`·`application.yaml`·`docs/wiki/README.md`·`domain-model.md`·`event-contract.md`·`observability.md`이고, `git merge-tree`로 합쳐 보면 실제 충돌은 `observability.md` 하나다. #102와는 `observability.md`·`ApiControllerAdvice.kt`·`PlatformConfiguration.kt`가 줄 단위로 충돌하고, #94와는 충돌 없이 합쳐진다. 모두 서로 항목을 더한 변경이라 먼저 머지된 쪽에 맞춰 rebase하고 전체 테스트를 다시 돌린다.
+- #106 머지 뒤 rebase(2026-10-21, origin/main `4ff68c2`): 줄 단위 충돌은 `observability.md` 하나였고 main 본문에 이 PR의 운영자 항목만 더했다. 의미 충돌이 하나 있었다. #106의 `OwnerSessionStoreUnavailable` 규칙·runbook·관측성 문서가 "`/actuator` 밖의 503은 점주 세션 저장소 장애뿐"이라고 적었는데, 이 PR의 `/admin` 503(IdP·브로커 장애)도 그 규칙에 잡힌다. 규칙 식은 그대로 두고 문장과 runbook의 "먼저 볼 것"만 고쳤다(Wiki 영향). 필터 단계의 503은 `uri` 태그가 `UNKNOWN`일 수 있어 식으로 `/admin`을 빼지 않았다. 운영자 요청은 사람이 드물게 부르므로 이 규칙을 오래 울리는 일은 드물다.
 
 ## TDD 검증 기록
 `/admin` 체인과 Controller·재투입 동작은 TDD로 한다. 개발 전 테스트 의도이고 실행 뒤 채운다.
