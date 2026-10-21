@@ -4,11 +4,14 @@ import com.resilientpos.foundation.Money
 import com.resilientpos.payment.PaymentId
 import com.resilientpos.payment.internal.domain.AuthorizationOutcome
 import com.resilientpos.payment.internal.domain.AuthorizationRequest
+import java.time.Duration
 import java.util.Currency
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertTrue
+import kotlin.time.measureTime
 
 /**
  * 통합 테스트가 이 규칙으로 경로를 고르므로, 규칙이 바뀌면 그 테스트들이 조용히 다른 경로를 밟는다.
@@ -108,5 +111,17 @@ class FakePaymentGatewayTest {
     fun `1단위 많음은 그 통화의 최소 단위 하나다`() {
         assertEquals(Money.of("45.07", usd), assertIs<AuthorizationOutcome.Approved>(authorize("45.06", usd)).amount)
         assertEquals(Money.of("45.06", usd), assertIs<AuthorizationOutcome.Approved>(query("45.05", usd)).amount)
+    }
+
+    @Test
+    fun `지연을 주면 승인과 조회가 그만큼 늦게 답한다`() {
+        val slow = FakePaymentGateway(Duration.ofMillis(200))
+        val request = AuthorizationRequest(paymentId, Money.of("4500", krw))
+
+        val authorizing = measureTime { slow.authorize(request) }
+        val querying = measureTime { slow.query(request) }
+
+        assertTrue(authorizing.inWholeMilliseconds >= 200, "승인이 ${authorizing}만에 답했다")
+        assertTrue(querying.inWholeMilliseconds >= 200, "조회가 ${querying}만에 답했다")
     }
 }
