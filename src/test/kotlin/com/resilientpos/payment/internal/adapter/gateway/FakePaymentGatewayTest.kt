@@ -124,4 +124,20 @@ class FakePaymentGatewayTest {
         assertTrue(authorizing.inWholeMilliseconds >= 200, "승인이 ${authorizing}만에 답했다")
         assertTrue(querying.inWholeMilliseconds >= 200, "조회가 ${querying}만에 답했다")
     }
+
+    @Test
+    fun `지연이 deadline 이상이면 deadline에서 결과를 모른다고 답한다`() {
+        val timingOut = FakePaymentGateway(latency = Duration.ofMillis(800), deadline = Duration.ofMillis(200))
+        val request = AuthorizationRequest(paymentId, Money.of("4500", krw))
+
+        lateinit var authorized: AuthorizationOutcome
+        lateinit var queried: AuthorizationOutcome
+        val authorizing = measureTime { authorized = timingOut.authorize(request) }
+        val querying = measureTime { queried = timingOut.query(request) }
+
+        assertIs<AuthorizationOutcome.Unknown>(authorized)
+        assertIs<AuthorizationOutcome.Unknown>(queried)
+        assertTrue(authorizing.inWholeMilliseconds in 200..<800, "승인이 ${authorizing}만에 답했다")
+        assertTrue(querying.inWholeMilliseconds in 200..<800, "조회가 ${querying}만에 답했다")
+    }
 }

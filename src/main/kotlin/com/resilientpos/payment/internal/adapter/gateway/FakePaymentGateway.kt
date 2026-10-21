@@ -16,7 +16,8 @@ import org.springframework.stereotype.Component
  * 금액으로 결말을 가르는 이유는 통합 테스트가 설정도 스텁 교체도 없이 일곱 경로(승인·거절·조회로 승인·조회로 거절·계속 불명·조회로 다른 금액 승인·승인 요청부터 다른 금액 승인)를 다 밟게 하려는 것이다.
  * 같은 입력이 항상 같은 결과라 재현된다.
  *
- * `latency`는 부하 측정(`load-test/`)에서 느린 provider를 흉내 내는 지연이고 기본값은 0이다. 지연은 실제 provider처럼 호출 스레드에서 일어난다.
+ * `latency`는 부하 측정(`load-test/`)에서 느린 provider를 흉내 내는 지연이고 기본값은 0이다. 지연이 `deadline` 이상이면 deadline에서
+ * 결과를 모른다고 답한다. 실제 PG adapter에서는 HTTP client의 timeout이 deadline 자리다.
  *
  * 보는 값은 **최소 단위의 끝자리**다. `BigDecimal.unscaledValue()`가 그것을 바로 준다 —
  * `Money`가 통화의 canonical scale로 정규화하므로 KRW `4500`과 USD `45.00`이 둘 다 `4500`이 된다.
@@ -24,23 +25,30 @@ import org.springframework.stereotype.Component
 @Component
 class FakePaymentGateway(
     @Value("\${resilientpos.payment.fake-gateway.latency}") private val latency: Duration = Duration.ZERO,
+    @Value("\${resilientpos.payment.fake-gateway.deadline}") private val deadline: Duration = Duration.ofSeconds(3),
 ) : PaymentGateway {
 
-    override fun authorize(request: AuthorizationRequest): AuthorizationOutcome {
-        Thread.sleep(latency)
-        return answer(request)
-    }
+    override fun authorize(request: AuthorizationRequest): AuthorizationOutcome = respond { answer(request) }
 
     /** 승인 요청이 결과를 모른 채 끝난 뒤 provider에 다시 묻는 경로다. 끝자리가 갈래를 정하고 나머지는 승인 요청과 같은 답이다. */
-    override fun query(request: AuthorizationRequest): AuthorizationOutcome {
-        Thread.sleep(latency)
-        return when (lastMinorDigit(request)) {
+    override fun query(request: AuthorizationRequest): AuthorizationOutcome = respond {
+        when (lastMinorDigit(request)) {
             UNKNOWN_THEN_APPROVED_DIGIT -> AuthorizationOutcome.Approved(reference(request), request.amount)
             UNKNOWN_THEN_DECLINED_DIGIT -> AuthorizationOutcome.Declined(reference(request))
             STAYS_UNKNOWN_DIGIT -> AuthorizationOutcome.Unknown
             UNKNOWN_THEN_OVERSTATED_DIGIT -> AuthorizationOutcome.Approved(reference(request), oneMinorUnitMore(request))
             else -> answer(request)
         }
+    }
+
+    /** 실제 provider처럼 호출 스레드에서 기다린다. deadline까지 답이 없으면 승인됐는지 모른다(timeout은 실패 확정이 아니다). */
+    private fun respond(answer: () -> AuthorizationOutcome): AuthorizationOutcome {
+        if (latency >= deadline) {
+            Thread.sleep(deadline)
+            return AuthorizationOutcome.Unknown
+        }
+        Thread.sleep(latency)
+        return answer()
     }
 
     private fun answer(request: AuthorizationRequest): AuthorizationOutcome =

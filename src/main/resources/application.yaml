@@ -160,6 +160,9 @@ resilientpos:
       # 가짜 provider가 승인·조회마다 기다리는 시간. 부하 측정(load-test/)이 느린 provider를 흉내 낼 때만 늘린다.
       # 환경 변수는 RESILIENTPOS_PAYMENT_FAKEGATEWAY_LATENCY다. 실제 PG adapter가 생기면 함께 지운다.
       latency: PT0S
+      # provider 호출 deadline(외부 연동 전략 §4.2 Toss 출발값 3초). 넘으면 결과 불명이고 결과 불명 확정 작업이 조회한다.
+      # 실제 PG adapter에서는 HTTP client의 timeout이 이 자리다.
+      deadline: PT3S
   rate-limit:
     # 인증된 /v1 요청의 단말·매장 token bucket(RedisTerminalRateLimiter). capacity는 쉬었다 온 단말이 바로 보낼 수 있는 요청 수,
     # refill-per-second는 그 뒤로 이어 보낼 수 있는 초당 요청 수다. 매장 값은 그 매장 단말 전부의 합에 걸린다.
