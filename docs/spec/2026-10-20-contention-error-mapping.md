@@ -15,8 +15,8 @@
 - 번역 자리 규칙: persistence adapter의 저장 메서드는 변경을 영속성 컨텍스트에 넘기는 데서 끝난다. 제약 위반을 가리려고 flush하거나 번역하지 않는다. 위반은 커밋에서 드러나고, 그 커밋을 소유한 Facade(`Tx`·`Lock` 블록을 연 쪽)가 블록 밖에서 제약 이름으로 가려 바꾼다. 업무 규칙이 막은 중복(같은 이메일, 같은 매장의 단말 코드)은 도메인 예외, 같은 멱등 키의 요청이 겹친 경합은 경합 예외다.
   - 점주 이메일(`OwnerManagement.signUp`)과 단말 코드(`TerminalManagement.register`)도 이 규칙으로 옮긴다. 응답(`409 OWNER_EMAIL_DUPLICATED`, `409 TERMINAL_CODE_DUPLICATED`)은 그대로다. 두 어댑터의 `save`에서 flush와 번역이 빠진다.
   - credential 회전이 SQL 순서를 맞추려고 쓰던 flush도 없앤다. 제약을 커밋 때 검사하게 바꾼다(범위 조정 5, V016).
-  - 블록 밖에서 잡는 이유: `Tx.masterTx`와 `Lock` 블록의 커밋은 블록이 끝날 때 일어난다. 세 Facade 메서드는 바깥 트랜잭션 없이 불린다(`Tx.masterTx`는 `REQUIRED`라 바깥이 있으면 커밋이 바깥으로 간다). 호출자 트랜잭션에 합류하는 `createInCallerTransaction`은 번역하지 않는다. 이 계약은 각 KDoc에 적는다.
-  - 구조 테스트(ArchUnit)가 `..adapter.persistence..` 패키지에서 판별 함수(`isUniqueViolationOf`)와 `EntityManager.flush` 호출을 막는다. 결정은 [도메인 모델](../wiki/domain-model.md) §4.2에, 코드 형태는 볼트 rules `domain-modeling-kotlin.md`(§5·§7)에 적고, `effective-java-for-kotlin.md`의 Item 73 줄에 DB 제약 위반은 Facade가 번역한다는 예외를 단다.
+  - 블록 밖에서 잡는 이유: `Tx.masterTx`와 `Lock` 블록의 커밋은 블록이 끝날 때 일어난다. 세 Facade 메서드는 바깥 트랜잭션 없이 불린다(`signUp`·`register`의 `Tx.masterTx`는 `REQUIRED`라 바깥이 있으면 커밋이 바깥으로 간다. `create`는 `Lock`이 새 트랜잭션을 열어 블록에서 커밋한다). 호출자 트랜잭션에 합류하는 `createInCallerTransaction`은 번역하지 않는다. 이 계약은 각 KDoc에 적는다.
+  - 구조 테스트(ArchUnit)가 `..adapter.persistence..` 패키지의 판별 함수(`isUniqueViolationOf`) 호출과 운영 코드 전체의 flush(`EntityManager`와 Spring Data repository의 `flush`·`saveAndFlush`·`saveAllAndFlush`) 호출을 막는다(범위 조정 6). 결정은 [도메인 모델](../wiki/domain-model.md) §4.2에, 코드 형태는 볼트 rules `domain-modeling-kotlin.md`(§5·§7)에 적고, `effective-java-for-kotlin.md`의 Item 73 줄에 DB 제약 위반은 Facade가 번역한다는 예외를 단다.
 - 제약 이름 판별 함수 `isUniqueViolationOf`를 `platform`의 최상위 확장 함수 하나로 옮긴다. main에는 `OwnerPersistenceAdapter`와 `TerminalPersistenceAdapter`에 같은 private 사본이 있었다. 사용처는 세 Facade다. 판별 방식은 아래 범위 조정에서 바꿨다.
 - 실패·재시도·복구: 늦은 요청의 트랜잭션은 롤백되고 아무것도 남지 않는다. `POST /v1/orders`는 `clientOrderId`로 멱등이라 단말이 다시 보내면 먼저 저장된 주문과 내용이 같을 때 그 주문을 받고, 다르면 `409 IDEMPOTENCY_CONFLICT`를 받는다. sync 항목이 늦은 쪽이면 배치가 500이고 그 항목은 기록되지 않는다. 재전송하면 다시 처리되어 먼저 저장된 주문과 내용이 같을 때 `APPLIED`, 다르면 `REJECTED`(`IDEMPOTENCY_CONFLICT`)다.
 - 관측성: HTTP 경로는 ERROR 로그의 `INTERNAL_ERROR`에서 WARN 로그의 `errorCode=CONCURRENT_REQUEST`로 옮겨 가고 5xx 지표에서 빠진다. 경합 예외 메시지의 주문 키로 대상을 찾는다. sync 경로는 그대로다. 더하는 로그와 metric은 없다.
@@ -73,7 +73,18 @@
 - `TerminalPersistenceAdapter.update(credential)`에서 flush를 지운다. 회전은 폐기와 새 발급을 한 커밋에 넣고, 제약은 커밋에서 한 번 검사한다.
 - 운영 코드에 flush가 없어지므로 규칙을 "저장 메서드는 flush하지 않는다"로 줄이고 구조 테스트가 `..adapter.persistence..`의 `EntityManager.flush` 호출도 막는다. 한 커밋 안의 변경 순서가 제약에 걸리면 flush로 순서를 맞추지 않고 그 제약을 커밋 때 검사하게 한다(볼트 rules, 도메인 모델 wiki).
 - 버리는 대안: 회전을 두 트랜잭션으로 나누기(유효 credential이 없는 틈이 생기고 원자성이 깨진다), JDSL bulk update로 폐기를 바로 실행하기(rules가 쓰기 경로에서 금지한다), 중간 조회로 auto-flush를 일으키기(flush가 숨을 뿐이다), port에 flush 메서드 두기(도메인 port에 영속 개념이 들어간다).
-- 마이그레이션 번호: 기준 브랜치(origin/main b9449c4)의 마지막이 V015라 V016을 쓴다. 열린 #100도 V016·V017을 쓴다. 먼저 머지된 쪽이 번호를 갖고 나중 쪽이 다음 번호로 바꾼다. 나중 번호(V018)를 미리 잡으면 이 PR이 먼저 머지된 뒤 #100의 V016·V017이 이미 적용된 V018보다 앞서 Flyway가 기동을 막는다.
+- 마이그레이션 번호: 기준 브랜치(origin/main b9449c4)의 마지막이 V015라 V016을 쓴다. 열린 #100도 V016·V017을 쓴다. 먼저 머지된 쪽이 번호를 갖고 나중 쪽이 다음 번호로 바꾼다. 번호를 바꾸면 마이그레이션 파일 이름, `SchemaMigrationTest`의 적용 목록(`"016" to true`), `TerminalCredentialSchemaIntegrationTest` KDoc의 V016, 이 spec과 PR 본문의 V016을 함께 고친다. 나중 번호(V018)를 미리 잡으면 이 PR이 먼저 머지된 뒤 #100의 V016·V017이 이미 적용된 V018보다 앞서 Flyway가 기동을 막는다.
+
+### 범위 조정 6 (2026-10-21, PR 전체 4차 multi-review 반영)
+범위 조정 4·5 뒤의 PR 전체(`origin/main...c72f9d4`)를 다시 multi-review했다. Claude 93점, Codex 84점(CLI 직접 실행), Gemini는 CLI가 없어 미실행이다. 막는 결함은 없었다. 반영한 것은 다음과 같다.
+- flush 구조 테스트를 운영 코드 전체로 넓히고 Spring Data repository의 `flush`·`saveAndFlush`·`saveAllAndFlush`도 막는다(두 리뷰어 모두 지적). `..adapter.persistence..`의 `EntityManager.flush`만 막아서 결과 절의 "운영 코드에 flush가 없다"를 고정하지 못했다. Hibernate `Session`은 `EntityManager`의 하위 타입이라 함께 걸린다. 테스트 코드는 경합을 만들려고 flush하므로 대상이 아니다.
+- 블록 안 auto-flush(Codex High): 블록 안의 조회가 auto-flush를 일으켜 위반이 커밋 전에 드러나면 Hibernate 예외가 그대로 나와 Facade의 `catch`를 빗나간다는 지적이다. 운영 코드의 조회는 `@Repository`인 `JdslQueryExecutor`와 Spring Data repository만 거친다(`EntityManager.createQuery`를 부르는 곳은 `JdslQueryExecutor` 하나다). `@Repository`의 예외 번역이 그 위반을 같은 `DataIntegrityViolationException`으로 바꾸고, `EntityManager.find`는 auto-flush하지 않는다. 그래서 `catch`를 넓히지 않고 이 전제를 wiki와 rules에 적는다.
+- 커밋 때 검사하는 제약(Claude M1): 리뷰어는 그 위반이 JDBC 커밋에서 나서 `JpaSystemException` 계열로 온다고 추정했다. 실행해 보니 `JpaTransactionManager`의 커밋에서 `DataIntegrityViolationException`으로 온다. 커밋 실패 테스트가 `Exception` 대신 이 타입을 고정한다. 다만 exclusion 위반은 SQLState `23P01`이라 판별 함수(`23505`만 본다)가 거짓을 낸다. 그래서 업무 오류로 번역할 제약은 exclusion 제약으로 두지 않는다는 줄을 wiki와 rules에 더한다.
+- 주문 생성 409의 REST Docs 설명이 재전송 결과를 조건 없이 적었다(두 리뷰어 모두 지적, 범위 조정 3에서 REST Docs만 빠졌다). "먼저 저장된 주문과 내용이 같으면 그 주문, 다르면 409 `IDEMPOTENCY_CONFLICT`"로 고친다. 같은 테스트의 가짜 예외 메시지를 실제 형식(`terminalId=… clientOrderId=…`)으로 바꾸고, 응답에 `clientOrderId=`가 없는지 단언한다.
+- `application.yaml`의 `logServerErrorDetail` 주석이 판정 자리를 "adapter"로 적었다(두 리뷰어 모두 지적). Facade로 고친다.
+- `OwnerManagementTest`에 두 단위 테스트를 더한다(Claude 지적). 같은 이메일로 다시 가입하면 `OWNER_EMAIL_DUPLICATED`이고, 다른 제약의 위반은 그대로 던진다. 지금은 통합 테스트만 409 경로를 덮는다.
+- spec 서술을 지금 상태에 맞춘다. 변경 경로에서 되돌린 `OrderPersistenceAdapter.kt`와 `src/test/kotlin/com/resilientpos/sync/**`를 빼고 `application.yaml`을 더한다. 블록 밖에서 잡는 이유의 괄호를 `signUp`·`register`로 한정한다. Wiki 영향과 분할 계획의 절 범위, 열린 PR 겹침을 고친다. 스키마 검토 질문 7에 잠금 대기 동안의 최악 정지를 적는다. V016 번호를 바꿀 때 함께 고칠 곳을 적는다.
+- 반영하지 않은 것: Hibernate가 409마다 ERROR 로그(`HHH000346`)를 하나 더 남긴다는 추정(Claude)은 실행해 보니 아니었다. 점주 중복과 주문 경합 모두 ERROR 로그 없이 Hibernate의 WARN 두 줄(SQLState `23505`, 서버 메시지)만 남는다. Facade의 `catch`를 `RuntimeException`으로 넓히자는 제안(Codex)은 위 전제로 대신한다. 도메인 port KDoc(`TerminalRepository`)에 남은 제약 이름과 `SchemaMigrationTest`의 제약 형태 단언은 선택 항목이라 두었다.
 
 ## 제외
 - 커밋 시점 버전 충돌. #34로 해결됐다. 버전 충돌을 HTTP까지 잇는 테스트는 #34가 정한 대로 잠금 없이 `@Version`에 기대는 endpoint를 처음 더하는 PR이 넣는다.
@@ -93,16 +104,15 @@
 - src/main/kotlin/com/resilientpos/terminal/TerminalManagement.kt
 - src/main/kotlin/com/resilientpos/platform/ApiControllerAdvice.kt
 - src/main/kotlin/com/resilientpos/platform/UniqueViolation.kt
-- src/main/kotlin/com/resilientpos/order/internal/adapter/persistence/command/OrderPersistenceAdapter.kt
 - src/main/kotlin/com/resilientpos/owner/internal/adapter/persistence/command/OwnerPersistenceAdapter.kt
 - src/main/kotlin/com/resilientpos/terminal/internal/adapter/persistence/command/TerminalPersistenceAdapter.kt
 - src/main/kotlin/com/resilientpos/terminal/internal/adapter/persistence/command/TerminalCredentialEntity.kt
 - src/main/kotlin/com/resilientpos/terminal/internal/domain/TerminalRepository.kt
 - src/main/resources/db/migration/*__terminal_credential_active_deferrable.sql
+- src/main/resources/application.yaml
 - src/test/kotlin/com/resilientpos/order/**
 - src/test/kotlin/com/resilientpos/owner/**
 - src/test/kotlin/com/resilientpos/terminal/**
-- src/test/kotlin/com/resilientpos/sync/**
 - src/test/kotlin/com/resilientpos/platform/**
 - src/test/kotlin/com/resilientpos/ConstraintTranslationTest.kt
 - src/test/kotlin/com/resilientpos/SchemaMigrationTest.kt
@@ -112,11 +122,11 @@
 
 ## 인수 조건
 1. 같은 키의 주문이 커밋 전일 때 `OrderCommandFacade.create`가 같은 키·같은 내용으로 겹치면 `ConcurrencyFailureException`으로 끝난다. 원인 사슬의 가장 안쪽은 SQLState `23505`이고 메시지에 `t_order_terminal_id_client_order_id_key`가 있으며, 예외 메시지에 `terminalId`와 `clientOrderId`가 있다. 주문 행은 하나다. 앞 주문이 커밋된 뒤 같은 요청으로 다시 `create`하면 앞 주문의 `orderId`를 받는다.
-2. 같은 이메일의 점주 가입과 같은 매장·코드의 단말 등록은 지금처럼 `409 OWNER_EMAIL_DUPLICATED`·`409 TERMINAL_CODE_DUPLICATED`이고, 번역은 `OwnerManagement.signUp`·`TerminalManagement.register`가 한다. persistence adapter는 flush하거나 번역하지 않는다.
+2. 같은 이메일의 점주 가입과 같은 매장·코드의 단말 등록은 지금처럼 `409 OWNER_EMAIL_DUPLICATED`·`409 TERMINAL_CODE_DUPLICATED`이고, 번역은 `OwnerManagement.signUp`·`TerminalManagement.register`가 한다. 점주 가입에서 다른 제약의 위반은 번역하지 않고 그대로 던진다. persistence adapter는 flush하거나 번역하지 않는다.
 3. `POST /v1/orders`에서 Facade가 `ConcurrencyFailureException`을 던지면 `409`, `errorCode=CONCURRENT_REQUEST`, 고정 문구다. REST Docs 스니펫 `orders-create-concurrent-request`가 생긴다.
 4. `platform`의 판별 함수는 SQLState `23505`이고 메시지에 그 제약 이름이 식별자 경계(앞뒤가 따옴표 없는 PostgreSQL 식별자 문자인 유니코드 글자·숫자·`_`·`$`가 아님)로 있을 때만 참이다. 이름을 감싼 따옴표의 형식(큰따옴표, `»…«`, `« … »`)과는 관계없다. 다른 제약 이름, 앞이나 뒤만 같은 다른 제약 이름(`ux_a`로 물을 때 `ux_ab`, `pk_ux_a`, `ux_a$1`, `ux_a한`), 다른 SQLState, 원인 사슬에 `SQLException`이 없는 경우는 거짓이다.
-5. 구조 테스트 `ConstraintTranslationTest`가 `..adapter.persistence..` 패키지의 클래스는 판별 함수와 `EntityManager.flush`를 부르지 않는다는 것을 고정한다. 어댑터가 다시 부르면 실패한다.
-6. 단말 credential 회전은 flush 없이 한 커밋에서 옛 행 폐기와 새 행 발급을 하고 지금처럼 성공한다. `ux_terminal_credential_active`는 커밋 때 검사한다. 한 트랜잭션에서 새 유효 행을 넣은 뒤 옛 행을 폐기하면 커밋되고, 커밋 때 같은 단말의 유효 행이 둘이면 커밋이 실패한다.
+5. 구조 테스트 `ConstraintTranslationTest`가 `..adapter.persistence..` 패키지의 클래스는 판별 함수를 부르지 않고, 운영 코드는 `EntityManager`와 Spring Data repository의 `flush`·`saveAndFlush`·`saveAllAndFlush`를 부르지 않는다는 것을 고정한다. 다시 부르면 실패한다.
+6. 단말 credential 회전은 flush 없이 한 커밋에서 옛 행 폐기와 새 행 발급을 하고 지금처럼 성공한다. `ux_terminal_credential_active`는 커밋 때 검사한다. 한 트랜잭션에서 새 유효 행을 넣은 뒤 옛 행을 폐기하면 커밋되고, 커밋 때 같은 단말의 유효 행이 둘이면 커밋이 `DataIntegrityViolationException`으로 실패하고 원인 사슬에 SQLState `23P01`이 있다.
 7. `./gradlew test` 전체와 `python3 scripts/check_pr.py --base origin/main`이 통과한다.
 
 ## 스키마 변경 검토
@@ -127,7 +137,7 @@ V016은 `t_terminal_credential`의 partial unique 인덱스 `ux_terminal_credent
 4. 불변식의 마지막 방어선인가: 그대로 "유효 credential은 단말당 하나"의 마지막 방어선이고 PostgreSQL 제약으로 남는다. 커밋 때 검사하므로 한 트랜잭션 안에서 잠시 유효 행이 둘이어도 커밋 전에 하나가 되면 통과하고, 커밋 때 둘이면 실패한다. 술어는 이전처럼 `revoked_at IS NULL`뿐이라 soft delete된 행에도 걸린다. 지우는 명령이 없고 이력 삭제 금지가 불변식이라는 V012의 판단을 따른다.
 5. 정본은 하나인가: 바뀌지 않는다. 정본은 `revoked_at is null`인 행이다.
 6. 읽고 판단한 뒤 쓰는 경로가 있는가: 회전은 단말 행 잠금(`PESSIMISTIC_WRITE`, 대기 3초)이 직렬화하고 이 제약은 그 뒤의 방어선이다. 잠금 밖에서 두 트랜잭션이 같은 단말의 유효 행을 넣으면 INSERT는 기다리지 않고, 커밋 때 검사가 상대의 미확정 행을 기다린다. 둘 다 커밋하려 하면 교착(40P01)으로 한쪽이 실패하고, 한쪽이 먼저 커밋됐으면 늦은 쪽이 23P01로 실패한다. 어느 쪽이든 유효 행은 하나다. 앱 경로(회전은 행 잠금, 등록은 새 단말)는 이 상황에 닿지 않는다.
-7. 락과 크기: `DROP INDEX`와 `ADD CONSTRAINT ... EXCLUDE`는 `t_terminal_credential`에 ACCESS EXCLUSIVE를 잡고 인덱스를 다시 만든다. 행 수는 단말 수에 회전 횟수를 곱한 정도라 작다. V008과 같이 `set local lock_timeout = '5s'`로 대기를 제한한다. DDL이 잠금을 쥐는 동안에는 `/v1` 요청마다 하는 인증 조회(`findActiveByTokenHash`)도 이 표를 읽으므로 그만큼 멈춘다(표가 작아 짧다, V014와 같은 판단). 한 마이그레이션 트랜잭션 안에서 바꾸므로 제약이 없는 순간이 밖에서 보이지 않는다.
+7. 락과 크기: `DROP INDEX`와 `ADD CONSTRAINT ... EXCLUDE`는 `t_terminal_credential`에 ACCESS EXCLUSIVE를 잡고 인덱스를 다시 만든다. 행 수는 단말 수에 회전 횟수를 곱한 정도라 작다. V008과 같이 `set local lock_timeout = '5s'`로 대기를 제한한다. DDL이 잠금을 쥐는 동안에는 `/v1` 요청마다 하는 인증 조회(`findActiveByTokenHash`)도 이 표를 읽으므로 그만큼 멈춘다(표가 작아 짧다, V014와 같은 판단). DDL이 잠금을 기다리는 동안에도 뒤에 온 인증 조회가 그 잠금 요청 뒤에 줄을 서므로 최악의 정지는 `lock_timeout` 5초다. 그동안 요청이 커넥션을 쥔 채 기다려서, 풀이 비면 Hikari `connection-timeout`(3초)을 넘긴 요청이 오류를 받을 수 있다. 배포 때 한 번이고, 5초를 넘기면 마이그레이션이 실패해 새 버전이 기동하지 않을 뿐 데이터는 그대로라 감수한다. 한 마이그레이션 트랜잭션 안에서 바꾸므로 제약이 없는 순간이 밖에서 보이지 않는다.
 8. 이전 버전 호환: 이전 버전 코드(폐기를 먼저 flush)는 새 스키마에서도 그대로 동작한다. 순서가 맞으면 커밋 때 검사도 통과한다. 새 코드(flush 없음)는 이전 스키마에서 회전이 실패하므로 스키마가 먼저 바뀌어야 하는데, Flyway가 새 버전이 기동할 때 먼저 적용한다. 애플리케이션을 되돌려도 이전 코드가 새 스키마에서 동작한다. 엔티티 매핑은 바뀌지 않고 `ddl-auto: validate`는 제약을 보지 않는다. 위반은 문장이 아니라 커밋에서 드러나고 SQLState가 `23505`(unique)에서 `23P01`(exclusion)으로 바뀐다. 이 제약을 번역하는 코드는 없어 오류 응답으로 끝난다(23P01은 500).
 9. 이벤트·캐시에 실리는가: 실리지 않는다. 인증 결과는 캐시하지 않는다.
 - 대조 기록: code-reviewer 에이전트(읽기 전용, 구현자 아님), 2026-10-20 두 차례(94efbdc, 2c67315). 질문 1~9와 V016 SQL(조건·이름이 V012와 같음, drop 뒤 같은 이름의 EXCLUDE DEFERRABLE INITIALLY DEFERRED)을 대조했다. 1차 불일치 6건을 모두 반영했다: TerminalRepository.update(credential) KDoc의 flush 서술, TerminalCredentialEntity KDoc의 partial unique 서술, 질문 6의 잠금 밖 동시 삽입 서술과 V016 주석, 커밋 실패 테스트의 23P01 단언과 질문 8의 예외 서술, TDD 표 credential 줄의 RED 기록, 질문 3 확인 쿼리와 질문 7 인증 조회 정지 서술. 2차에서 근거 없는 409 서술과 "엔티티" 표현을 지적받아 고쳤다. 확인 불가로 남은 것은 회전 테스트 5개 RED(tdd-driver 관측, 리뷰어는 재실행 안 함)다.
@@ -143,13 +153,13 @@ V016은 `t_terminal_credential`의 partial unique 인덱스 `ux_terminal_credent
 ## Wiki 영향
 - [엔티티 지도](../wiki/entity-map.md): `t_order` 방어선 줄에 주문 생성 API에서 겹친 위반은 Facade가 409 `CONCURRENT_REQUEST`로 바꾸고 sync 항목이 지면 배치 500이라는 것을 적는다. 4.1 흐름 표의 주문 생성 줄과 4.5 멱등 표의 주문 생성 줄에 늦은 HTTP 요청은 409이고 재요청 결과는 먼저 저장된 주문과 내용이 같을 때 그 주문이라는 것을 적는다. 4.2의 "배치 전체가 409·500이면" 줄은 main 그대로다. 단말·점주 방어선 줄의 "persistence adapter가 제약 이름으로 가려"를 Facade로 고친다. credential 방어선·만드는 곳 줄을 커밋 때 검사하는 exclusion 제약과 flush 없는 회전으로 고친다.
 - 현재 상태(`docs/wiki/current-state.md`, 볼트)는 볼트에서 갱신한다. 주문 생성의 락이 통하지 않을 때 "오류를 받는다", 주문 API의 "같은 키의 동시 요청이 unique 제약 위반으로 끝나는 것은 알려진 빈틈이다", `CONCURRENT_REQUEST` 설명의 "unique 제약 위반은 계속 500이다"를 고친다. sync 배치 오류의 409/500 서술은 main 그대로다.
-- 볼트 rules: `domain-modeling-kotlin.md` §5에 저장 메서드는 저장만 하고 제약 위반은 커밋을 소유한 Facade가 번역한다는 규칙을, §7에 하지 말 것 한 줄을 더한다. `effective-java-for-kotlin.md` Item 73 줄에 DB 제약 위반의 예외를 단다. 고친 뒤 `make bootstrap`으로 다시 복사한다. 저장소에 추적되지 않는 경로라 커밋은 없다.
-- [도메인 모델](../wiki/domain-model.md) §4.2에 저장 메서드는 저장만 하고 제약 위반은 커밋을 소유한 Facade가 번역하며 flush로 순서를 맞추지 않는다는 결정을 한 줄 더한다. §4.7(스키마 변경 검토)의 단말 credential 항목에서 회전이 폐기를 먼저 flush한다는 서술을 커밋 때 검사하는 제약으로 고친다(#100은 §4.7을 고치지 않는다). 열린 PR #94·#98은 같은 파일의 §4.3·§4.7을 고쳐서 절이 겹치지 않는다. Kafka·Modulith 작업이 아니라 Modulith·Kafka 키워드(볼트)도 바꾸지 않는다.
+- 볼트 rules: `domain-modeling-kotlin.md` §5에 저장 메서드는 저장만 하고 제약 위반은 커밋을 소유한 Facade가 번역한다는 규칙을, §7에 하지 말 것 한 줄을 더한다. `effective-java-for-kotlin.md` Item 73 줄에 DB 제약 위반의 예외를 단다. 범위 조정 6에서 §5에 아래 §4.2와 같은 두 문장을 더하고 §5·§7의 flush 금지 범위를 운영 코드 전체로 넓힌다. 고친 뒤 `make bootstrap`으로 다시 복사한다. 저장소에 추적되지 않는 경로라 커밋은 없다.
+- [도메인 모델](../wiki/domain-model.md) §4.2에 저장 메서드는 저장만 하고 제약 위반은 커밋을 소유한 Facade가 번역하며 flush로 순서를 맞추지 않는다는 결정을 한 줄 더한다. 같은 줄에 블록 안 조회는 `@Repository`를 거쳐 같은 예외로 번역된다는 전제와, 업무 오류로 번역할 제약은 exclusion 제약으로 두지 않는다는 것을 적는다(범위 조정 6). §4.7(스키마 변경 검토)의 단말 credential 항목에서 회전이 폐기를 먼저 flush한다는 서술을 커밋 때 검사하는 제약으로 고친다. 열린 PR #94·#100도 이 파일을 고치지만 서로 다른 줄이다(분할 계획). Kafka·Modulith 작업이 아니라 Modulith·Kafka 키워드(볼트)도 바꾸지 않는다.
 - 요구사항 변화: 없다. 같은 키의 겹친 생성은 여전히 늦은 쪽이 실패하고 정합성은 unique가 지킨다. 실패의 HTTP 표현만 재시도할 수 있는 409가 된다.
 
 ## 분할 계획
 개발 컨텍스트는 하나다. 같은 키 주문 생성 경합의 HTTP 표현과 unique 위반을 번역하는 자리다. 번역 자리 규칙을 이 PR에서 정하므로 같은 판별 함수를 쓰는 점주·단말을 함께 맞춘다. 버전 충돌은 #34로 끝났고 리스너 경로는 HTTP 500이 아니라서 뺐다.
-겹침 확인(2026-10-20, push 직전 origin/main b9449c4로 rebase): #98(이벤트 계약)과 #99(outbox 비교 spec)가 먼저 머지됐고 충돌 없이 rebase했다. 열린 PR은 #94(`build.gradle.kts`·`EventPublicationResubmitter`·`docs/wiki/domain-model.md` §4.3)와 #100(결제 대조)이다. `domain-model.md`는 이 PR이 §4.2만 고쳐서 #94·#100(§4.3 등)과 절이 겹치지 않는다. `entity-map.md`는 4.5 멱등 표에서 #100과 겹친다. 이 PR은 주문 생성 줄을 고치고 #100은 그 아래에 대조 case 줄을 더한다. 먼저 머지된 쪽에 맞춰 다른 쪽이 rebase한다. 판별 방식을 고칠 때 `build.gradle.kts`를 바꾸는 안은 #94와 겹쳐서 버렸다(범위 조정). 이 PR은 `payment`·이벤트 코드를 건드리지 않는다. 마이그레이션은 V016 하나이고 #100의 V016·V017과 번호를 조율한다(범위 조정 5). 판별 함수는 main에 owner·terminal adapter의 private 사본 둘만 있었고 열린 PR에는 없다.
+겹침 확인(2026-10-21, 범위 조정 6 착수 때. origin/main은 b9449c4 그대로다): #98(이벤트 계약)과 #99(outbox 비교 spec)는 이 PR의 rebase 전에 머지됐다. 열린 PR은 #94(`build.gradle.kts`·`EventPublicationResubmitter`·`docs/wiki/domain-model.md`)와 #100(결제 대조)이다. `domain-model.md`는 이 PR이 §4.2 한 줄과 §4.7의 credential 항목을 고치고 #94·#100은 다른 줄을 고친다. `entity-map.md`는 4.5 멱등 표에서 #100과 겹친다. 이 PR은 주문 생성 줄을 고치고 #100은 그 아래에 대조 case 줄을 더한다. `application.yaml`은 이 PR이 `logServerErrorDetail` 주석을, #100이 `resilientpos.payment`와 `kafka.topics`를 고쳐 줄이 다르다. 마이그레이션은 V016 하나이고 #100의 V016·V017, `SchemaMigrationTest`의 적용 목록과 번호를 조율한다(범위 조정 5). 먼저 머지된 쪽에 맞춰 다른 쪽이 rebase한다. 판별 방식을 고칠 때 `build.gradle.kts`를 바꾸는 안은 #94와 겹쳐서 버렸다(범위 조정). 이 PR은 `payment`·이벤트 코드를 건드리지 않는다. 판별 함수는 main에 owner·terminal adapter의 private 사본 둘만 있었고 열린 PR에는 없다.
 
 ## TDD 검증 기록
 | 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
