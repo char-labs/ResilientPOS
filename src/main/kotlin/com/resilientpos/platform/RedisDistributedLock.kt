@@ -1,6 +1,7 @@
 package com.resilientpos.platform
 
 import com.resilientpos.foundation.IdentifierGenerator
+import io.micrometer.core.instrument.MeterRegistry
 import java.time.Duration
 import org.springframework.dao.DataAccessException
 import org.springframework.data.redis.core.StringRedisTemplate
@@ -15,11 +16,14 @@ import org.springframework.stereotype.Component
  *
  * Redis 오류로 보는 예외는 `DataAccessException`과 `IllegalStateException`(종료 중이라 닫힌 커넥션 팩토리)뿐이다.
  * 그 밖의 예외는 프로그래밍 오류라 삼키지 않는다.
+ * 잠그지 못하고 진행할 때마다 counter `lock.fail.open{lock, reason}`이 오른다. 처음 일어날 때 생기므로 미리 등록하지 않는다
+ * (업무 모듈의 키를 `platform`이 모른다).
  */
 @Component
 class RedisDistributedLock(
     private val redis: StringRedisTemplate,
     private val identifierGenerator: IdentifierGenerator,
+    private val meterRegistry: MeterRegistry,
 ) : DistributedLock {
 
     override fun tryAcquire(key: String): String? {
@@ -33,6 +37,7 @@ class RedisDistributedLock(
         }
         if (!acquired) {
             log.warn { "잠금 없이 진행한다(대기 ${WAIT.toMillis()}ms 초과) key=$key" }
+            countFailOpen(key, "timeout")
             return null
         }
         return token
@@ -51,8 +56,12 @@ class RedisDistributedLock(
 
     private fun proceedWithoutLock(key: String, e: RuntimeException): String? {
         log.warn(e) { "잠금 없이 진행한다(Redis 오류) key=$key" }
+        countFailOpen(key, "error")
         return null
     }
+
+    private fun countFailOpen(key: String, reason: String) =
+        meterRegistry.counter(FAIL_OPEN_METRIC, "lock", lockName(key), "reason", reason).increment()
 
     private fun releaseFailed(key: String, e: RuntimeException) =
         log.warn(e) { "잠금을 풀지 못했다. TTL ${TTL.toSeconds()}초 뒤 사라진다 key=$key" }
@@ -69,6 +78,12 @@ class RedisDistributedLock(
 
     companion object {
         private val log by logger()
+
+        /** 잠그지 못하고 진행한 횟수. `lock`은 [lockName], `reason`은 `timeout`(대기 초과)이나 `error`(Redis 오류)다. */
+        private const val FAIL_OPEN_METRIC = "lock.fail.open"
+
+        /** 키의 앞 두 마디(`모듈:이름`). 뒤 마디는 식별자라 metric label로 쓰지 않는다([Lock]의 키 규칙). */
+        fun lockName(key: String): String = key.split(':').take(2).joinToString(":")
 
         /** 행 잠금 대기(`findByIdForUpdate`)와 같은 3초다. */
         private val WAIT: Duration = Duration.ofSeconds(3)

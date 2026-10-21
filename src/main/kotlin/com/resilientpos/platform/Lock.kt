@@ -9,6 +9,9 @@ package com.resilientpos.platform
  * 한 경로에서 기다리는 수단은 하나만 쓴다. 블록 안에서 행 잠금(`findByIdForUpdate`)을 기다리지 않는다 —
  * 락을 쥔 쪽이 행을, 행을 쥔 쪽이 락을 기다리면 둘 다 대기 한도까지 멈춘다. 잠글 행이 이미 있으면 행 잠금을 쓴다.
  *
+ * 키는 `모듈:이름:식별자…` 모양이다(`order:create-lock:{terminalId}:{clientOrderId}`). 앞 두 마디는 fail-open metric의 `lock` label이
+ * 되므로([RedisDistributedLock.lockName]) 식별자를 앞 두 마디에 두지 않는다. 두면 식별자마다 시계열이 생긴다.
+ *
  * ponytail: 전역 락이라 한 JVM에 컨텍스트가 여럿 뜨면 [Tx]와 같은 한계가 있다. 테스트는 `TxRebindingTestExecutionListener`가 다시 묶는다.
  */
 object Lock {
