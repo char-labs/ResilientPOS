@@ -95,6 +95,8 @@ class TracePropagationIntegrationTest(
         val topics = setOf("order.payment-requested", "payment.attempt-created", "payment.approved", "order.paid")
         assertEquals(topics, trace.filter { it.kind == SpanKind.PRODUCER }.mapNotNull { it.topic() }.toSet())
         assertEquals(topics, trace.filter { it.kind == SpanKind.CONSUMER }.mapNotNull { it.topic() }.toSet())
-        assertContains(output.out, traceId)
+        // consumer 스레드의 줄에도 같은 traceId가 실린다. 마지막 consumer(fulfillment)가 남기는 줄로 본다.
+        val consumerLine = output.out.lines().firstOrNull { it.contains("fulfillment 기록") && it.contains(orderId) }
+        assertContains(checkNotNull(consumerLine) { "fulfillment consumer의 로그 줄이 없다" }, traceId)
     }
 }
