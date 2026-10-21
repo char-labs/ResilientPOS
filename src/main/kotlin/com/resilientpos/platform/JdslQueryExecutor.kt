@@ -18,6 +18,8 @@ import org.springframework.stereotype.Repository
  * Kotlin JDSL로 만든 JPQL을 `EntityManager`에 올려 실행한다. 조회는 모두 여기를 거친다(도메인 모델 §4.3).
  *
  * `@Repository`라 JPA 예외가 Spring 예외(`PessimisticLockingFailureException` 등)로 번역된다. Kafka 재시도 허용 목록이 이 타입으로 판정한다.
+ * Facade의 제약 위반 번역도 블록 안 조회의 auto-flush가 드러낸 위반이 여기서 `DataIntegrityViolationException`으로 바뀐다는 데 기댄다
+ * (`ConstraintTranslationTest`가 `EntityManager`의 쿼리 생성을 이 클래스로 묶는다).
  * 트랜잭션을 선언하지 않는다. 호출자의 트랜잭션을 따른다. Spring Data 지원 모듈의 `KotlinJdslJpqlExecutor`를 쓰지 않는 이유는
  * 구현이 클래스 레벨 `@Transactional(readOnly = true)`(`REQUIRED`)라 읽기 전용 = `SUPPORTS` 규칙과 어긋나고,
  * repository에 붙이면 `update`·`delete` 대량 변경이 함께 열리며, 잠금을 걸 자리가 없어서다.
