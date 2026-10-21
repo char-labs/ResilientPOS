@@ -215,6 +215,8 @@ management:
       percentiles-histogram:
         # 기본값은 _count·_sum·_max뿐이라 p95를 계산할 수 없다. bucket을 내보내 histogram_quantile로 구한다.
         http.server.requests: true
+        # Redis 명령 지연(Lettuce observation, db_operation별). spring.data.redis.timeout(1초)을 p99.9와 대조한다(용량 기준 wiki).
+        lettuce: true
 
 logging:
   level:
