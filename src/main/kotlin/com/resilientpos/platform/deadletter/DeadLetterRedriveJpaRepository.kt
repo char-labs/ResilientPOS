@@ -1,5 +1,6 @@
 package com.resilientpos.platform.deadletter
 
+import java.time.Instant
 import java.util.UUID
 import org.springframework.data.repository.Repository
 
@@ -12,8 +13,9 @@ import org.springframework.data.repository.Repository
  */
 interface DeadLetterRedriveJpaRepository : Repository<DeadLetterRedriveEntity, UUID> {
 
-    fun findByDltTopicAndDltPartitionAndDltOffset(dltTopic: String, dltPartition: Int, dltOffset: Long): DeadLetterRedriveEntity?
+    /** 한 DLT 레코드(좌표와 레코드 시각)의 기록. */
+    fun findByDltTopicAndDltPartitionAndDltOffsetAndDltTimestamp(dltTopic: String, dltPartition: Int, dltOffset: Long, dltTimestamp: Instant): DeadLetterRedriveEntity?
 
-    /** 목록 한 쪽의 기록. [from]·[to]는 양끝을 포함한다. */
+    /** 목록 한 쪽의 기록. [from]·[to]는 양끝을 포함한다. 같은 offset에 레코드 시각이 다른 옛 기록(DLT 토픽 재생성)도 오므로 호출자가 시각을 맞춘다. */
     fun findByDltTopicAndDltPartitionAndDltOffsetBetween(dltTopic: String, dltPartition: Int, from: Long, to: Long): List<DeadLetterRedriveEntity>
 }

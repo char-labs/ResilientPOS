@@ -6,13 +6,19 @@ import com.resilientpos.platform.AdminSecurityFilterChain
 import com.resilientpos.platform.DependencyUnavailableException
 import com.resilientpos.terminal.TerminalManagement
 import java.time.Instant
+import java.util.function.Consumer
 import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 import org.apache.kafka.common.errors.TimeoutException
+import org.junit.jupiter.api.extension.ExtendWith
 import org.mockito.BDDMockito.given
 import org.mockito.Mockito.verify
 import org.mockito.Mockito.verifyNoInteractions
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.restdocs.test.autoconfigure.AutoConfigureRestDocs
+import org.springframework.boot.test.system.CapturedOutput
+import org.springframework.boot.test.system.OutputCaptureExtension
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest
 import org.springframework.restdocs.mockmvc.MockMvcRestDocumentation.document
 import org.springframework.restdocs.mockmvc.RestDocumentationRequestBuilders.get
@@ -26,12 +32,15 @@ import org.springframework.restdocs.request.RequestDocumentation.parameterWithNa
 import org.springframework.restdocs.request.RequestDocumentation.pathParameters
 import org.springframework.restdocs.request.RequestDocumentation.queryParameters
 import org.springframework.security.core.authority.SimpleGrantedAuthority
+import org.springframework.security.oauth2.jwt.Jwt
+import org.springframework.security.oauth2.jwt.JwtClaimNames
 import org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt
 import org.springframework.http.MediaType
 import org.springframework.test.context.bean.override.mockito.MockitoBean
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.ResultActions
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder
+import org.springframework.test.web.servlet.request.RequestPostProcessor
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers.header
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
@@ -42,6 +51,7 @@ import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
  */
 @WebMvcTest(DeadLetterController::class)
 @AutoConfigureRestDocs
+@ExtendWith(OutputCaptureExtension::class)
 class DeadLetterControllerTest(
     @Autowired private val mockMvc: MockMvc,
 ) {
@@ -207,11 +217,50 @@ class DeadLetterControllerTest(
         verifyNoInteractions(reader)
     }
 
-    private fun redriveRequest(body: String = """{"reason":"$REASON"}"""): MockHttpServletRequestBuilder =
+    @Test
+    fun `목록을 읽으면 운영자와 위치 건수를 감사 INFO 한 줄로 남긴다`(output: CapturedOutput) {
+        given(reader.read(TOPIC, 0, 12, 2)).willReturn(listOf(bareItem(12), bareItem(13)))
+
+        list(listRequest().with(operator)).andExpect(status().isOk)
+
+        val audit = output.all.lines().single { "action=DEAD_LETTERS_LISTED" in it }
+        assertTrue(audit.endsWith("audit action=DEAD_LETTERS_LISTED operator=$OPERATOR topic=$TOPIC partition=0 fromOffset=12 count=2"), audit)
+        assertTrue(" INFO " in audit, audit)
+    }
+
+    /** resource server는 `sub`를 검사하지 않는다. 틀린 `sub`가 감사 줄에 들어가거나 255자 컬럼에 막혀 보낸 뒤 커밋에서 실패하지 않게 협력자를 부르기 전에 막는다. */
+    @Test
+    fun `토큰의 sub가 없거나 비었거나 256자이거나 제어 문자를 담으면 목록과 재투입 모두 500이고 reader와 redriver를 부르지 않는다`() {
+        val subjects = mapOf<String, Consumer<Jwt.Builder>>(
+            "sub 없음" to Consumer { token -> token.claims { it.remove(JwtClaimNames.SUB) } },
+            "빈 sub" to Consumer { it.subject("") },
+            "256자" to Consumer { it.subject("s".repeat(256)) },
+            "개행" to Consumer { it.subject("$OPERATOR\naudit action=DEAD_LETTER_REDRIVEN operator=forged") },
+        )
+
+        subjects.forEach { (case, claims) ->
+            val principal = jwt().jwt(claims).authorities(SimpleGrantedAuthority(AdminSecurityFilterChain.OPERATOR_AUTHORITY))
+            assertEquals(500, list(listRequest().with(principal)).andReturn().response.status, "목록 $case")
+            assertEquals(500, mockMvc.perform(redriveRequest(principal = principal)).andReturn().response.status, "재투입 $case")
+        }
+
+        verifyNoInteractions(reader, redriver)
+    }
+
+    @Test
+    fun `토큰의 sub가 255자면 운영자로 받는다`() {
+        val subject = "s".repeat(255)
+        given(reader.read(TOPIC, 0, 12, 2)).willReturn(emptyList())
+
+        list(listRequest().with(jwt().jwt { it.subject(subject) }.authorities(SimpleGrantedAuthority(AdminSecurityFilterChain.OPERATOR_AUTHORITY))))
+            .andExpect(status().isOk)
+    }
+
+    private fun redriveRequest(body: String = """{"reason":"$REASON"}""", principal: RequestPostProcessor = operator): MockHttpServletRequestBuilder =
         post("/admin/v1/dead-letters/{topic}/{partition}/{offset}/redrive", TOPIC, 0, 12)
             .contentType(MediaType.APPLICATION_JSON)
             .content(body)
-            .with(operator)
+            .with(principal)
 
     @Test
     fun `재투입은 200과 넣은 자리 운영자 시각을 돌려주고 토큰의 sub를 운영자로 넘긴다`() {
@@ -314,6 +363,12 @@ class DeadLetterControllerTest(
         private const val OPERATOR = "operator-subject-1"
         private const val REASON = "원인 수정 후 재투입"
         private val REDRIVEN_AT: Instant = Instant.parse("2026-10-21T02:00:00.123456Z")
+
+        /** 판단에 쓰이지 않는 목록 항목. 헤더 없이 CLI로 넣은 레코드 모양이다. */
+        private fun bareItem(offset: Long) = DeadLetterResponse(
+            partition = 0, offset = offset, timestamp = Instant.parse("2026-10-21T01:00:00Z"), key = null, value = "{}",
+            originalTopic = null, originalPartition = null, originalOffset = null, exception = null, exceptionMessage = null, schemaVersion = null, redrive = null,
+        )
 
         private fun failFields(errorCodeDescription: String): List<FieldDescriptor> = listOf(
             fieldWithPath("result").type(JsonFieldType.STRING).description("SUCCESS 또는 FAIL"),

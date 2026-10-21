@@ -24,7 +24,7 @@ import tools.jackson.databind.json.JsonMapper
  * Boot의 `ConsumerFactory`로 consumer를 만들어 assign·seek로 읽는다. group을 정하지 않고 자동 커밋을 끄므로 어떤 consumer group의 위치도 바뀌지 않는다.
  * 끝 offset을 먼저 읽어 그 범위만 poll한다. `KafkaTemplate.receive`는 레코드마다 poll해서 없는 offset마다 시간 초과까지 기다리므로 쓰지 않는다.
  * 브로커 호출은 각각 [KAFKA_TIMEOUT] 안에 끝나야 하고, 넘으면 [DependencyUnavailableException](503)이다.
- * 목록 항목의 재투입 기록은 그 쪽의 offset 범위로 `t_dead_letter_redrive`를 한 번 조회해 붙인다. 재투입([readRecord])도 같은 위치 검증과 시간 상한으로 읽는다.
+ * 목록 항목의 재투입 기록은 그 쪽의 offset 범위로 `t_dead_letter_redrive`를 한 번 조회해 레코드 시각까지 맞는 것만 붙인다. 재투입([readRecord])도 같은 위치 검증과 시간 상한으로 읽는다.
  */
 @Component
 class DeadLetterReader(
@@ -43,9 +43,9 @@ class DeadLetterReader(
             emptyMap()
         } else {
             redrives.findByDltTopicAndDltPartitionAndDltOffsetBetween(topic, partition, records.first().offset(), records.last().offset())
-                .associateBy { it.dltOffset }
+                .associateBy { it.dltOffset to it.dltTimestamp }
         }
-        return records.map { toResponse(it, redriven[it.offset()]) }
+        return records.map { toResponse(it, redriven[it.offset() to Instant.ofEpochMilli(it.timestamp())]) }
     }
 
     /** 재투입할 레코드 하나. 위치 검증과 시간 상한은 목록과 같고, 그 offset에 레코드가 없으면(끝 이상, log 시작 앞) null이다. */

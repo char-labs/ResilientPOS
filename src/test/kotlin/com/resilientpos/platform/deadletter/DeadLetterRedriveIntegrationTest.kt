@@ -14,9 +14,12 @@ import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.TerminalId
 import io.micrometer.core.instrument.MeterRegistry
 import java.sql.Timestamp
+import java.time.Duration
 import java.time.Instant
 import java.util.Currency
 import java.util.UUID
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -37,15 +40,19 @@ import org.springframework.jdbc.core.queryForObject
 import org.springframework.kafka.core.KafkaTemplate
 import org.springframework.kafka.listener.DeadLetterPublishingRecoverer
 import org.springframework.kafka.listener.ListenerExecutionFailedException
+import org.springframework.mock.web.MockHttpServletResponse
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.ResultActionsDsl
 import org.springframework.test.web.servlet.get
 import org.springframework.test.web.servlet.post
+import org.springframework.transaction.support.TransactionTemplate
 import tools.jackson.databind.json.JsonMapper
 import tools.jackson.databind.node.ObjectNode
 
 private const val TOPIC = "order.paid"
 private const val DLT = "order.paid.DLT"
+private const val OLD_OPERATOR = "operator-before-recreate"
+private const val WINNER_OPERATOR = "operator-winner"
 
 /**
  * DLT 재투입을 실제 브로커·DB·운영자 토큰(운영과 같은 issuer decoder)으로 HTTP부터 fulfillment까지 잇는다. Docker가 필요하다.
@@ -62,6 +69,7 @@ class DeadLetterRedriveIntegrationTest(
     @Autowired private val jsonMapper: JsonMapper,
     @Autowired private val jdbcTemplate: JdbcTemplate,
     @Autowired private val meterRegistry: MeterRegistry,
+    @Autowired private val transaction: TransactionTemplate,
 ) : PostgresIntegrationTest() {
 
     private fun orderPaid(orderId: UUID): String = jsonMapper.writeValueAsString(
@@ -180,6 +188,106 @@ class DeadLetterRedriveIntegrationTest(
         )
         assertTrue(items.getValue(otherOffset).containsKey("redrive"))
         assertNull(items.getValue(otherOffset)["redrive"])
+    }
+
+    private fun dltTimestamp(dltOffset: Long): Instant = Instant.ofEpochMilli(KafkaTestSupport.records(DLT).single { it.offset() == dltOffset }.timestamp())
+
+    /** API를 거치지 않은 재투입 기록. 넣은 자리는 원 토픽에 실제로 없는 값이다. */
+    private fun insertRecord(dltOffset: Long, dltTimestamp: Instant, operator: String, targetOffset: Long) {
+        jdbcTemplate.update(
+            "insert into t_dead_letter_redrive (id, dlt_topic, dlt_partition, dlt_offset, dlt_timestamp, target_partition, target_offset, operator_subject, reason, created_at, updated_at) " +
+                "values (?, ?, 0, ?, ?, 0, ?, ?, '다른 요청의 사유', now(), now())",
+            UUID.randomUUID(), DLT, dltOffset, Timestamp.from(dltTimestamp), targetOffset, operator,
+        )
+    }
+
+    /** DLT 토픽을 다시 만들어 offset이 0부터 재사용된 것처럼, 그 좌표에 레코드 시각만 다른 옛 기록을 넣는다. */
+    private fun recordBeforeRecreate(dltOffset: Long) = insertRecord(dltOffset, dltTimestamp(dltOffset).minus(Duration.ofDays(30)), OLD_OPERATOR, 1)
+
+    /**
+     * [holder] backend에 막혀 아직 얻지 못한 잠금 수. 다른 테스트나 리스너의 잠금 대기는 세지 않는다(`OrderCreateRaceIntegrationTest`와 같다).
+     * `pg_stat_activity`는 트랜잭션 안에서 처음 읽은 시점의 세션 목록에 고정되므로 매번 새로 읽는 `pg_locks`를 본다.
+     */
+    private fun locksBlockedBy(holder: Int): Long =
+        jdbcTemplate.queryForObject<Long>("select count(*) from pg_locks where not granted and ? = any(pg_blocking_pids(pid))", holder) ?: 0L
+
+    private fun listed(dltOffset: Long): Map<String, Any?> {
+        val body = mockMvc.get("/admin/v1/dead-letters") {
+            header(HttpHeaders.AUTHORIZATION, OperatorTokens.bearer())
+            param("topic", DLT)
+            param("partition", "0")
+            param("fromOffset", "$dltOffset")
+            param("limit", "1")
+        }.andExpect { status { isOk() } }.andReturn().response.contentAsString
+        return JsonPath.read<List<Map<String, Any?>>>(body, "$.data").single { (it["offset"] as Number).toLong() == dltOffset }
+    }
+
+    @Test
+    fun `같은 좌표라도 레코드 시각이 다른 옛 기록은 목록의 redrive에 붙지 않는다`() {
+        val dltOffset = deadLetter(UUID.randomUUID())
+        recordBeforeRecreate(dltOffset)
+
+        val item = listed(dltOffset)
+
+        assertTrue(item.containsKey("redrive"))
+        assertNull(item["redrive"], "옛 토픽의 기록이 붙었다: ${item["redrive"]}")
+    }
+
+    @Test
+    fun `같은 좌표라도 레코드 시각이 다른 옛 기록이 있으면 새로 보내고 새 행을 남긴다`() {
+        val orderId = UUID.randomUUID()
+        val dltOffset = deadLetter(orderId)
+        recordBeforeRecreate(dltOffset)
+
+        val data = redrive(dltOffset, "토픽 재생성 뒤 재투입").andExpect {
+            status { isOk() }
+            jsonPath("$.data.operator") { value(OperatorTokens.SUBJECT) }
+        }.data()
+
+        assertEquals(1, KafkaTestSupport.records(TOPIC, orderId).size, "원 토픽에 보내지 않았다")
+        assertEquals(setOf(OLD_OPERATOR, OperatorTokens.SUBJECT), rows(dltOffset).map { it["operator_subject"] }.toSet())
+        assertEquals(data["offset"], listed(dltOffset).getValue("redrive").let { (it as Map<*, *>)["offset"] })
+    }
+
+    /**
+     * 같은 레코드를 동시에 요청한 경합을 실제 DB로 만든다. 이긴 쪽 기록을 커밋 전에 붙들어 두면 진 쪽의 기록 확인(READ COMMITTED)은 그 행을 보지 못하고 보낸다.
+     * 진 쪽 INSERT는 커밋 때 이긴 쪽 커밋을 기다리다 unique에 걸리고, 그 위반을 `Tx.masterTx` 밖에서 번역해 이긴 기록을 돌려준다.
+     */
+    @Test
+    fun `기록 확인이 커밋 전인 같은 레코드의 기록을 못 보고 보냈으면 커밋의 unique 위반을 번역해 이긴 기록을 200으로 돌려주고 DUPLICATE WARN 줄을 남긴다`(output: CapturedOutput) {
+        val orderId = UUID.randomUUID()
+        val dltOffset = deadLetter(orderId)
+        val timestamp = dltTimestamp(dltOffset)
+        val executor = Executors.newSingleThreadExecutor()
+        val response = try {
+            checkNotNull(
+                transaction.execute {
+                    insertRecord(dltOffset, timestamp, WINNER_OPERATOR, 99)
+                    // JpaTransactionManager가 DataSource에 이 트랜잭션의 연결을 묶어 두므로 JdbcTemplate도 같은 backend를 쓴다.
+                    val holder = checkNotNull(jdbcTemplate.queryForObject<Int>("select pg_backend_pid()"))
+                    val losing = executor.submit<MockHttpServletResponse> { redrive(dltOffset, "늦게 온 사유 7731").andReturn().response }
+                    awaitUntil("재투입의 기록 INSERT가 이긴 기록의 커밋을 기다린다") { locksBlockedBy(holder) != 0L }
+                    losing
+                },
+            ).get(10, TimeUnit.SECONDS)
+        } finally {
+            executor.shutdown()
+            executor.awaitTermination(10, TimeUnit.SECONDS)
+        }
+
+        assertEquals(200, response.status, response.contentAsString)
+        val data: Map<String, Any?> = JsonPath.read(response.contentAsString, "$.data")
+        assertEquals(WINNER_OPERATOR, data["operator"])
+        assertEquals(99L, (data["offset"] as Number).toLong())
+        val sent = KafkaTestSupport.records(TOPIC, orderId).single()
+        assertEquals(listOf(WINNER_OPERATOR), rows(dltOffset).map { it["operator_subject"] })
+        val warn = output.all.lines().single { "action=DEAD_LETTER_REDRIVE_UNRECORDED" in it && "dltOffset=$dltOffset " in it }
+        val expected = "audit action=DEAD_LETTER_REDRIVE_UNRECORDED operator=${OperatorTokens.SUBJECT} dltTopic=$DLT dltPartition=0 dltOffset=$dltOffset " +
+            "topic=$TOPIC partition=0 offset=${sent.offset()} cause=DUPLICATE"
+        assertTrue(warn.endsWith(expected), "감사 줄: $warn")
+        assertTrue(" WARN " in warn, warn)
+        assertEquals(emptyList(), auditLines(output, dltOffset))
+        assertFalse("늦게 온 사유 7731" in output.all, "사유 원문이 로그에 남았다")
     }
 
     @Test

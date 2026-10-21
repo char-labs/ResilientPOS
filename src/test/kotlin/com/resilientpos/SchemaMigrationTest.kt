@@ -69,7 +69,7 @@ class SchemaMigrationTest(
     }
 
     @Test
-    fun `V019 뒤 DLT 재투입 기록은 DLT 좌표 하나에 한 행만 들어간다`() {
+    fun `V019 뒤 DLT 재투입 기록은 DLT 레코드의 좌표와 레코드 시각 하나에 한 행만 들어간다`() {
         // 표가 없으면 빈 목록이라 단언으로 실패한다(regclass 캐스트는 표가 없으면 SQL 오류로 끝난다).
         val unique = query(
             "select tc.constraint_name, string_agg(k.column_name, ',' order by k.ordinal_position) as columns " +
@@ -79,7 +79,7 @@ class SchemaMigrationTest(
                 "group by tc.constraint_name",
         ) { it.getString("constraint_name") to it.getString("columns") }
 
-        assertEquals(listOf("ux_dead_letter_redrive_source" to "dlt_topic,dlt_partition,dlt_offset"), unique)
+        assertEquals(listOf("ux_dead_letter_redrive_source" to "dlt_topic,dlt_partition,dlt_offset,dlt_timestamp"), unique)
     }
 
     @Test
