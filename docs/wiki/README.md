@@ -12,6 +12,7 @@
 - 비즈니스·도메인·Controller 개발: [TDD 테스트 전략](testing-strategy.md)과 공통 스킬(`.claude/skills/resilientpos-tdd/SKILL.md`).
 - metric·로그·trace 노출, 알림 규칙과 LGTM 연결 전제: [관측성](observability.md).
 - 알림이 울렸을 때 따라가는 절차: [runbook](runbook.md).
+- 락 시간·Redis 타임아웃·커넥션 풀·sync 배치 상한·consumer 설정 같은 용량 값의 근거, 트래픽 가정, Redisson이 필요해지는 시점, 부하 측정 다시 하기: [용량 기준](capacity.md).
 - Kafka·Spring Kafka·Modulith 이벤트 작업: Modulith·Kafka 키워드(`docs/wiki/modulith-kafka-keywords.md`, 볼트). 맨 앞 "갱신 규칙"대로 작업을 끝낼 때마다 갱신한다.
 - 요청 처리 단계·대표 흐름 시퀀스·재시도와 DLT·이벤트 스토밍 결과·모듈 의존 그래프: [아키텍처](architecture.md). 모듈 의존을 바꾸면 이 페이지와 README의 그래프를 함께 고친다.
 - 도메인 용어·bounded context·유비쿼터스 언어 용어집: [도메인 모델](domain-model.md). 업무 spec을 쓰거나 새 타입·테이블·이벤트 이름을 만들 때 먼저 읽는다.
