@@ -88,6 +88,9 @@ services:
       KAFKA_BOOTSTRAP_SERVERS: kafka:19092
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-resilientpos}
       REDIS_HOST: redis
+      # 앱이 뜨기 위한 자리값이다. compose에는 로컬 IdP가 없어 /admin은 쓸 수 없다.
+      OPERATOR_ISSUER_URI: http://operator-idp.invalid
+      OPERATOR_AUDIENCE: resilientpos-admin
       # stdout을 ECS JSON으로 내보내 Alloy가 필드로 읽게 한다.
       LOGGING_STRUCTURED_FORMAT_CONSOLE: ecs
       # span을 Alloy(OTLP HTTP)로 보낸다. obs profile 없이 띄우면 보낼 곳이 없다.
