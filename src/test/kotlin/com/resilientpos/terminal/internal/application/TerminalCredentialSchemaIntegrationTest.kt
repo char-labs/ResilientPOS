@@ -74,7 +74,7 @@ class TerminalCredentialSchemaIntegrationTest(
         val terminalId = UUID.randomUUID()
         var secondInsertSucceeded = false
 
-        val failure = assertFailsWith<Exception> {
+        val failure = assertFailsWith<DataIntegrityViolationException> {
             transactionTemplate.executeWithoutResult {
                 insert(terminalId, hash(), revoked = false)
                 insert(terminalId, hash(), revoked = false)
