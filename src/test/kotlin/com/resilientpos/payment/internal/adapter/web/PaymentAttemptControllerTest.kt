@@ -13,12 +13,12 @@ import com.resilientpos.payment.PaymentQuery
 import com.resilientpos.payment.PaymentQueryFacade
 import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.AuthenticatedTerminal
+import com.resilientpos.terminal.MockTerminalRateLimiter
 import com.resilientpos.terminal.TerminalFixtures.AUTHORIZATION_HEADER
 import com.resilientpos.terminal.TerminalFixtures.BEARER
 import com.resilientpos.terminal.TerminalFixtures.TOKEN
 import com.resilientpos.terminal.TerminalId
 import com.resilientpos.terminal.TerminalManagement
-import com.resilientpos.terminal.internal.adapter.redis.RedisTerminalRateLimiter
 import java.util.Currency
 import java.util.UUID
 import kotlin.test.Test
@@ -50,6 +50,7 @@ import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
  * 결제 시도 조회·재결제 웹 슬라이스. Facade는 [MockitoBean]으로 대체하고 HTTP 매핑·직렬화·인증·오류 변환만 검사한다.
  * 경로 변수를 문서화하려면 URL 템플릿이 필요해서 Kotlin DSL 대신 REST Docs의 request builder를 쓴다.
  */
+@MockTerminalRateLimiter
 @WebMvcTest(PaymentAttemptController::class)
 @AutoConfigureRestDocs
 class PaymentAttemptControllerTest(
@@ -64,9 +65,6 @@ class PaymentAttemptControllerTest(
 
     @MockitoBean
     private lateinit var terminals: TerminalManagement
-
-    @MockitoBean
-    private lateinit var rateLimiter: RedisTerminalRateLimiter
 
     @BeforeEach
     fun authenticate() {

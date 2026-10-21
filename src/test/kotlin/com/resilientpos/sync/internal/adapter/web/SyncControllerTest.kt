@@ -3,7 +3,6 @@ package com.resilientpos.sync.internal.adapter.web
 import com.resilientpos.foundation.DomainException
 import com.resilientpos.order.ClientOrderId
 import com.resilientpos.order.OrderId
-import com.resilientpos.platform.RateLimitedException
 import com.resilientpos.store.StoreId
 import com.resilientpos.sync.internal.application.SyncCommand
 import com.resilientpos.sync.internal.application.SyncCommandFacade
@@ -12,12 +11,13 @@ import com.resilientpos.sync.internal.domain.CheckoutPayload
 import com.resilientpos.sync.internal.domain.OperationPayload
 import com.resilientpos.sync.internal.domain.OrderPayload
 import com.resilientpos.terminal.AuthenticatedTerminal
+import com.resilientpos.terminal.MockTerminalRateLimiter
+import com.resilientpos.terminal.rejectByRateLimit
 import com.resilientpos.terminal.TerminalFixtures.AUTHORIZATION_HEADER
 import com.resilientpos.terminal.TerminalFixtures.BEARER
 import com.resilientpos.terminal.TerminalFixtures.TOKEN
 import com.resilientpos.terminal.TerminalId
 import com.resilientpos.terminal.TerminalManagement
-import com.resilientpos.terminal.internal.adapter.redis.RedisTerminalRateLimiter
 import java.math.BigDecimal
 import java.util.UUID
 import kotlin.test.Test
@@ -29,6 +29,7 @@ import org.mockito.Mockito.verifyNoInteractions
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.restdocs.test.autoconfigure.AutoConfigureRestDocs
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest
+import org.springframework.context.ApplicationContext
 import org.springframework.http.MediaType
 import org.springframework.restdocs.mockmvc.MockMvcRestDocumentation.document
 import org.springframework.restdocs.mockmvc.RestDocumentationRequestBuilders.post
@@ -53,10 +54,12 @@ import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
  * `POST /v1/terminals/{terminalId}/sync` 웹 슬라이스. Facade는 [MockitoBean]으로 대체하고 HTTP 매핑·직렬화·오류 변환만 검사한다.
  * 경로 변수를 문서화하려면 URL 템플릿이 필요해서 Kotlin DSL 대신 REST Docs의 request builder를 쓴다.
  */
+@MockTerminalRateLimiter
 @WebMvcTest(SyncController::class)
 @AutoConfigureRestDocs
 class SyncControllerTest(
     @Autowired private val mockMvc: MockMvc,
+    @Autowired private val context: ApplicationContext,
 ) {
 
     @MockitoBean
@@ -64,9 +67,6 @@ class SyncControllerTest(
 
     @MockitoBean
     private lateinit var terminals: TerminalManagement
-
-    @MockitoBean
-    private lateinit var rateLimiter: RedisTerminalRateLimiter
 
     @BeforeEach
     fun authenticate() {
@@ -181,8 +181,7 @@ class SyncControllerTest(
 
     @Test
     fun `limiter가 거절하면 429 RATE_LIMITED와 Retry-After이고 Facade를 부르지 않는다`() {
-        willThrow(RateLimitedException(2, "scope=terminal terminalId=$TERMINAL_ID storeId=$STORE_ID"))
-            .given(rateLimiter).acquire(AuthenticatedTerminal(TerminalId(UUID.fromString(TERMINAL_ID)), StoreId(UUID.fromString(STORE_ID))))
+        context.rejectByRateLimit(AuthenticatedTerminal(TerminalId(UUID.fromString(TERMINAL_ID)), StoreId(UUID.fromString(STORE_ID))), retryAfterSeconds = 2)
 
         postBatch(requestJson(operationJson(OPERATION_ID_1, 1)))
             .andExpect(status().isTooManyRequests)

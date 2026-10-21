@@ -9,8 +9,8 @@ import com.resilientpos.store.StoreId
 import com.resilientpos.store.StoreManagement
 import com.resilientpos.store.StoreView
 import com.resilientpos.store.internal.domain.Store
+import com.resilientpos.terminal.MockTerminalRateLimiter
 import com.resilientpos.terminal.TerminalManagement
-import com.resilientpos.terminal.internal.adapter.redis.RedisTerminalRateLimiter
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertTrue
@@ -45,6 +45,7 @@ import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
  * 매장 API 웹 슬라이스. Facade는 [MockitoBean]으로 대체하고 HTTP 매핑·직렬화·오류 변환·문서 계약만 검사한다.
  * 점주 인증은 UUID principal의 `authentication()`으로 주고 상태 변경에는 운영과 같은 CSRF 쿠키·헤더를 싣는다(`withCsrf`).
  */
+@MockTerminalRateLimiter
 @WebMvcTest(StoreController::class)
 @AutoConfigureRestDocs
 @ExtendWith(OutputCaptureExtension::class)
@@ -58,9 +59,6 @@ class StoreControllerTest(
     // 슬라이스에 단말 인증 인터셉터 설정이 실린다. 이 테스트의 경로는 v1이 아니라 인증을 타지 않지만 의존성은 채워야 한다.
     @MockitoBean
     private lateinit var terminals: TerminalManagement
-
-    @MockitoBean
-    private lateinit var rateLimiter: RedisTerminalRateLimiter
 
     private val owner: RequestPostProcessor = authentication(UsernamePasswordAuthenticationToken.authenticated(OWNER_ID.toString(), null, emptyList()))
 
