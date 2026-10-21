@@ -65,7 +65,7 @@ class OwnerManagementTest {
     }
 
     @Test
-    fun `같은 이메일로 다시 가입하면 커밋의 unique 위반을 OWNER_EMAIL_DUPLICATED로 바꾼다`() {
+    fun `같은 이메일로 다시 가입하면 저장소의 이메일 unique 위반을 OWNER_EMAIL_DUPLICATED로 바꾼다`() {
         signUp()
 
         assertEquals(Owner.OWNER_EMAIL_DUPLICATED, assertFailsWith<DomainException> { signUp() }.code)
