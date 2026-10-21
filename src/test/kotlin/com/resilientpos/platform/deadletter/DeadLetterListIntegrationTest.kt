@@ -169,7 +169,7 @@ class DeadLetterListIntegrationTest(
         val TIMESTAMP: Instant = Instant.parse("2026-10-21T01:00:00Z")
         val ITEM_FIELDS = setOf(
             "partition", "offset", "timestamp", "key", "value", "originalTopic", "originalPartition", "originalOffset",
-            "exception", "exceptionMessage", "schemaVersion",
+            "exception", "exceptionMessage", "schemaVersion", "redrive",
         )
     }
 }

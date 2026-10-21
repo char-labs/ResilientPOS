@@ -16,14 +16,18 @@ import org.springframework.boot.restdocs.test.autoconfigure.AutoConfigureRestDoc
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest
 import org.springframework.restdocs.mockmvc.MockMvcRestDocumentation.document
 import org.springframework.restdocs.mockmvc.RestDocumentationRequestBuilders.get
+import org.springframework.restdocs.mockmvc.RestDocumentationRequestBuilders.post
 import org.springframework.restdocs.payload.FieldDescriptor
 import org.springframework.restdocs.payload.JsonFieldType
 import org.springframework.restdocs.payload.PayloadDocumentation.fieldWithPath
+import org.springframework.restdocs.payload.PayloadDocumentation.requestFields
 import org.springframework.restdocs.payload.PayloadDocumentation.responseFields
 import org.springframework.restdocs.request.RequestDocumentation.parameterWithName
+import org.springframework.restdocs.request.RequestDocumentation.pathParameters
 import org.springframework.restdocs.request.RequestDocumentation.queryParameters
 import org.springframework.security.core.authority.SimpleGrantedAuthority
 import org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt
+import org.springframework.http.MediaType
 import org.springframework.test.context.bean.override.mockito.MockitoBean
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.ResultActions
@@ -33,7 +37,7 @@ import org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPat
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
 
 /**
- * DLT 목록 API 웹 슬라이스. reader는 [MockitoBean]으로 대체하고 HTTP 매핑·직렬화·인증·오류 변환·문서 계약만 검사한다.
+ * DLT 목록·재투입 API 웹 슬라이스. reader와 redriver는 [MockitoBean]으로 대체하고 HTTP 매핑·직렬화·인증·오류 변환·문서 계약만 검사한다.
  * 운영자 인증은 `jwt()`로 넣는다. 토큰 검증 자체(issuer·audience·서명·만료)는 `AdminSecurityIntegrationTest`가 실제 decoder로 본다.
  */
 @WebMvcTest(DeadLetterController::class)
@@ -45,11 +49,14 @@ class DeadLetterControllerTest(
     @MockitoBean
     private lateinit var reader: DeadLetterReader
 
+    @MockitoBean
+    private lateinit var redriver: DeadLetterRedriver
+
     /** 슬라이스가 싣는 단말 인증 인터셉터의 의존성이다. 이 API는 단말을 쓰지 않는다. */
     @MockitoBean
     private lateinit var terminals: TerminalManagement
 
-    private val operator = jwt().authorities(SimpleGrantedAuthority(AdminSecurityFilterChain.OPERATOR_AUTHORITY))
+    private val operator = jwt().jwt { it.subject(OPERATOR) }.authorities(SimpleGrantedAuthority(AdminSecurityFilterChain.OPERATOR_AUTHORITY))
 
     private fun list(request: MockHttpServletRequestBuilder = listRequest()): ResultActions = mockMvc.perform(request)
 
@@ -64,12 +71,12 @@ class DeadLetterControllerTest(
                     partition = 0, offset = 12, timestamp = Instant.parse("2026-10-21T01:00:00Z"), key = ORDER_ID,
                     value = """{"schemaVersion":1,"orderId":"$ORDER_ID"}""", originalTopic = "order.paid", originalPartition = 0, originalOffset = 42,
                     exception = "com.resilientpos.foundation.DomainException", exceptionMessage = "Listener failed; 이미 처리된 주문입니다",
-                    schemaVersion = 1,
+                    schemaVersion = 1, redrive = DeadLetterRedriveSummary(partition = 0, offset = 87, operator = OPERATOR, redrivenAt = REDRIVEN_AT),
                 ),
                 DeadLetterResponse(
                     partition = 0, offset = 13, timestamp = Instant.parse("2026-10-21T01:00:05Z"), key = null,
                     value = "not-json", originalTopic = null, originalPartition = null, originalOffset = null,
-                    exception = null, exceptionMessage = null, schemaVersion = null,
+                    exception = null, exceptionMessage = null, schemaVersion = null, redrive = null,
                 ),
             ),
         )
@@ -89,6 +96,10 @@ class DeadLetterControllerTest(
             .andExpect(jsonPath("$.data[0].exception").value("com.resilientpos.foundation.DomainException"))
             .andExpect(jsonPath("$.data[0].exceptionMessage").value("Listener failed; 이미 처리된 주문입니다"))
             .andExpect(jsonPath("$.data[0].schemaVersion").value(1))
+            .andExpect(jsonPath("$.data[0].redrive.partition").value(0))
+            .andExpect(jsonPath("$.data[0].redrive.offset").value(87))
+            .andExpect(jsonPath("$.data[0].redrive.operator").value(OPERATOR))
+            .andExpect(jsonPath("$.data[0].redrive.redrivenAt").value("2026-10-21T02:00:00.123456Z"))
             .andExpect(jsonPath("$.data[1].key").value(null))
             .andExpect(jsonPath("$.data[1].originalTopic").value(null))
             .andExpect(jsonPath("$.data[1].originalPartition").value(null))
@@ -96,6 +107,7 @@ class DeadLetterControllerTest(
             .andExpect(jsonPath("$.data[1].exception").value(null))
             .andExpect(jsonPath("$.data[1].exceptionMessage").value(null))
             .andExpect(jsonPath("$.data[1].schemaVersion").value(null))
+            .andExpect(jsonPath("$.data[1].redrive").value(null))
             .andExpect(jsonPath("$.error").value(null))
             .andDo(
                 document(
@@ -120,6 +132,11 @@ class DeadLetterControllerTest(
                         fieldWithPath("data[].exception").type(JsonFieldType.STRING).optional().description("원인 예외 클래스(헤더 `kafka_dlt-exception-cause-fqcn`, 없으면 `kafka_dlt-exception-fqcn`). 둘 다 없으면 null. 스택 트레이스는 싣지 않는다"),
                         fieldWithPath("data[].exceptionMessage").type(JsonFieldType.STRING).optional().description("예외 메시지(헤더 `kafka_dlt-exception-message`). 없으면 null"),
                         fieldWithPath("data[].schemaVersion").type(JsonFieldType.NUMBER).optional().description("값 JSON의 schemaVersion 정수. 필드가 없거나 값이 JSON이 아니면 null"),
+                        fieldWithPath("data[].redrive").type(JsonFieldType.OBJECT).optional().description("이 레코드의 재투입 기록. 재투입하지 않았으면 null"),
+                        fieldWithPath("data[].redrive.partition").type(JsonFieldType.NUMBER).description("원 토픽에 넣은 partition"),
+                        fieldWithPath("data[].redrive.offset").type(JsonFieldType.NUMBER).description("원 토픽에 넣은 offset. 넣은 메시지가 다시 DLT로 오면 새 DLT 레코드의 originalOffset과 같다"),
+                        fieldWithPath("data[].redrive.operator").type(JsonFieldType.STRING).description("재투입한 운영자(토큰의 sub)"),
+                        fieldWithPath("data[].redrive.redrivenAt").type(JsonFieldType.STRING).description("재투입 시각(ISO-8601 UTC)"),
                         fieldWithPath("error").type(JsonFieldType.NULL).description("성공 응답에서는 null"),
                     ),
                 ),
@@ -190,10 +207,89 @@ class DeadLetterControllerTest(
         verifyNoInteractions(reader)
     }
 
+    private fun redriveRequest(body: String = """{"reason":"$REASON"}"""): MockHttpServletRequestBuilder =
+        post("/admin/v1/dead-letters/{topic}/{partition}/{offset}/redrive", TOPIC, 0, 12)
+            .contentType(MediaType.APPLICATION_JSON)
+            .content(body)
+            .with(operator)
+
+    @Test
+    fun `재투입은 200과 넣은 자리 운영자 시각을 돌려주고 토큰의 sub를 운영자로 넘긴다`() {
+        given(redriver.redrive(TOPIC, 0, 12, REASON, OPERATOR))
+            .willReturn(DeadLetterRedriveResponse(TOPIC, 0, 12, "order.paid", 0, 87, OPERATOR, REDRIVEN_AT))
+
+        mockMvc.perform(redriveRequest())
+            .andExpect(status().isOk)
+            .andExpect(jsonPath("$.result").value("SUCCESS"))
+            .andExpect(jsonPath("$.data.dltTopic").value(TOPIC))
+            .andExpect(jsonPath("$.data.dltPartition").value(0))
+            .andExpect(jsonPath("$.data.dltOffset").value(12))
+            .andExpect(jsonPath("$.data.topic").value("order.paid"))
+            .andExpect(jsonPath("$.data.partition").value(0))
+            .andExpect(jsonPath("$.data.offset").value(87))
+            .andExpect(jsonPath("$.data.operator").value(OPERATOR))
+            .andExpect(jsonPath("$.data.redrivenAt").value("2026-10-21T02:00:00.123456Z"))
+            .andExpect(jsonPath("$.error").value(null))
+            .andDo(
+                document(
+                    "dead-letters-redrive",
+                    pathParameters(
+                        parameterWithName("topic").description("재투입할 DLT 토픽. 설정된 토픽 이름 + `.DLT`만 받는다(예: `order.paid.DLT`). 아니면 400 INVALID_DEAD_LETTER_POSITION"),
+                        parameterWithName("partition").description("DLT의 partition. 그 토픽에 없으면 400 INVALID_DEAD_LETTER_POSITION"),
+                        parameterWithName("offset").description("DLT의 offset. 음수면 400 INVALID_DEAD_LETTER_POSITION, 그 자리에 레코드가 없으면 404 DEAD_LETTER_NOT_FOUND"),
+                    ),
+                    requestFields(
+                        fieldWithPath("reason").type(JsonFieldType.STRING).description("재투입 사유. 앞뒤 공백을 지운 뒤 1~500자, NUL 문자 금지. DB 기록에만 남고 로그에는 남지 않는다. 같은 좌표를 다시 요청하면 처음 사유가 유지된다"),
+                    ),
+                    responseFields(
+                        fieldWithPath("result").type(JsonFieldType.STRING).description("SUCCESS 또는 FAIL"),
+                        fieldWithPath("data.dltTopic").type(JsonFieldType.STRING).description("재투입한 DLT 토픽"),
+                        fieldWithPath("data.dltPartition").type(JsonFieldType.NUMBER).description("재투입한 DLT partition"),
+                        fieldWithPath("data.dltOffset").type(JsonFieldType.NUMBER).description("재투입한 DLT offset"),
+                        fieldWithPath("data.topic").type(JsonFieldType.STRING).description("넣은 원 토픽(DLT 이름에서 `.DLT`를 뺀 것). 같은 key와 같은 값 바이트를 헤더 없이 넣는다"),
+                        fieldWithPath("data.partition").type(JsonFieldType.NUMBER).description("원 토픽에 넣은 partition(producer가 key로 고른다)"),
+                        fieldWithPath("data.offset").type(JsonFieldType.NUMBER).description("원 토픽에 넣은 offset. 넣은 메시지가 다시 DLT로 오면 새 DLT 레코드의 originalOffset과 같다"),
+                        fieldWithPath("data.operator").type(JsonFieldType.STRING).description("재투입한 운영자(토큰의 sub)"),
+                        fieldWithPath("data.redrivenAt").type(JsonFieldType.STRING).description("재투입 시각(ISO-8601 UTC). 같은 좌표를 다시 요청하면 다시 보내지 않고 처음 기록을 그대로 돌려준다"),
+                        fieldWithPath("error").type(JsonFieldType.NULL).description("성공 응답에서는 null"),
+                    ),
+                ),
+            )
+    }
+
+    @Test
+    fun `사유가 규칙에 어긋나면 400 INVALID_REDRIVE_REASON이고 본문에 사유가 없으면 빈 사유로 넘긴다`() {
+        val invalid = DomainException(DeadLetterRedriver.INVALID_REDRIVE_REASON, "사유는 앞뒤 공백을 지운 뒤 1~500자여야 합니다.", DomainErrorKind.INVALID)
+        given(redriver.redrive(TOPIC, 0, 12, "   ", OPERATOR)).willThrow(invalid)
+        given(redriver.redrive(TOPIC, 0, 12, "", OPERATOR)).willThrow(invalid)
+
+        mockMvc.perform(redriveRequest("""{"reason":"   "}"""))
+            .andExpect(status().isBadRequest)
+            .andExpect(jsonPath("$.error.errorCode").value("INVALID_REDRIVE_REASON"))
+            .andDo(document("dead-letters-redrive-invalid-reason", responseFields(failFields("INVALID_REDRIVE_REASON. 사유가 없거나, 앞뒤 공백을 지운 뒤 비었거나 500자를 넘거나, NUL 문자가 있다. 보내지도 기록하지도 않는다"))))
+        mockMvc.perform(redriveRequest("{}"))
+            .andExpect(status().isBadRequest)
+            .andExpect(jsonPath("$.error.errorCode").value("INVALID_REDRIVE_REASON"))
+    }
+
+    @Test
+    fun `그 offset에 레코드가 없으면 404 DEAD_LETTER_NOT_FOUND다`() {
+        given(redriver.redrive(TOPIC, 0, 12, REASON, OPERATOR))
+            .willThrow(DomainException(DeadLetterRedriver.DEAD_LETTER_NOT_FOUND, "그 offset에 DLT 레코드가 없습니다.", DomainErrorKind.NOT_FOUND))
+
+        mockMvc.perform(redriveRequest())
+            .andExpect(status().isNotFound)
+            .andExpect(jsonPath("$.error.errorCode").value("DEAD_LETTER_NOT_FOUND"))
+            .andDo(document("dead-letters-redrive-not-found", responseFields(failFields("DEAD_LETTER_NOT_FOUND. 그 DLT partition의 offset에 레코드가 없다(log 끝 이상이거나 시작보다 앞). 보내지도 기록하지도 않는다"))))
+    }
+
     companion object {
         private const val TOPIC = "order.paid.DLT"
         private const val ORDER_ID = "018f6b1a-0000-7000-8000-0000000000e1"
         private const val INVALID_POSITION = "INVALID_DEAD_LETTER_POSITION"
+        private const val OPERATOR = "operator-subject-1"
+        private const val REASON = "원인 수정 후 재투입"
+        private val REDRIVEN_AT: Instant = Instant.parse("2026-10-21T02:00:00.123456Z")
 
         private fun failFields(errorCodeDescription: String): List<FieldDescriptor> = listOf(
             fieldWithPath("result").type(JsonFieldType.STRING).description("SUCCESS 또는 FAIL"),

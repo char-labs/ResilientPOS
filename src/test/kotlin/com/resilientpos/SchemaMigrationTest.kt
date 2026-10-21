@@ -18,7 +18,7 @@ class SchemaMigrationTest(
             "select version, success from flyway_schema_history order by installed_rank",
         ) { it.getString("version") to it.getBoolean("success") }
 
-        assertEquals(listOf("001" to true, "002" to true, "003" to true, "004" to true, "005" to true, "006" to true, "007" to true, "008" to true, "009" to true, "010" to true, "011" to true, "012" to true, "013" to true, "014" to true, "015" to true, "016" to true, "017" to true, "018" to true), applied)
+        assertEquals(listOf("001" to true, "002" to true, "003" to true, "004" to true, "005" to true, "006" to true, "007" to true, "008" to true, "009" to true, "010" to true, "011" to true, "012" to true, "013" to true, "014" to true, "015" to true, "016" to true, "017" to true, "018" to true, "019" to true), applied)
     }
 
     @Test
@@ -50,6 +50,7 @@ class SchemaMigrationTest(
             listOf(
                 "event_publication",
                 "flyway_schema_history",
+                "t_dead_letter_redrive",
                 "t_fulfillment",
                 "t_order",
                 "t_order_checkout",
@@ -65,6 +66,20 @@ class SchemaMigrationTest(
             ),
             tables.sorted(),
         )
+    }
+
+    @Test
+    fun `V019 뒤 DLT 재투입 기록은 DLT 좌표 하나에 한 행만 들어간다`() {
+        // 표가 없으면 빈 목록이라 단언으로 실패한다(regclass 캐스트는 표가 없으면 SQL 오류로 끝난다).
+        val unique = query(
+            "select tc.constraint_name, string_agg(k.column_name, ',' order by k.ordinal_position) as columns " +
+                "from information_schema.table_constraints tc join information_schema.key_column_usage k " +
+                "on k.constraint_schema = tc.constraint_schema and k.constraint_name = tc.constraint_name " +
+                "where tc.table_schema = 'public' and tc.table_name = 't_dead_letter_redrive' and tc.constraint_type = 'UNIQUE' " +
+                "group by tc.constraint_name",
+        ) { it.getString("constraint_name") to it.getString("columns") }
+
+        assertEquals(listOf("ux_dead_letter_redrive_source" to "dlt_topic,dlt_partition,dlt_offset"), unique)
     }
 
     @Test

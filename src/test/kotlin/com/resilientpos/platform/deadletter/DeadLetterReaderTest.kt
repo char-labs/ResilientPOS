@@ -27,7 +27,7 @@ class DeadLetterReaderTest {
         override fun isAutoCommit() = false
     }
 
-    private val reader = DeadLetterReader(consumers, JsonMapper.builder().build(), listOf("order.paid"))
+    private val reader = DeadLetterReader(consumers, JsonMapper.builder().build(), mock(DeadLetterRedriveJpaRepository::class.java), listOf("order.paid"))
 
     @Test
     fun `브로커에 닿지 못해 Kafka 시간 초과가 나면 DependencyUnavailableException이고 consumer를 닫는다`() {
