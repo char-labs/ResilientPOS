@@ -26,6 +26,8 @@ import org.springframework.stereotype.Component
  * 모든 인스턴스가 같은 DB를 세므로 알림은 `max`로 모은다.
  * 조회가 실패한 인스턴스는 개수를 내리고 `event.publication.incomplete.refreshed`(마지막 성공 시각, epoch 초)를 멈춘다.
  * 낡은 개수가 `max`에 섞여 조치된 알림을 붙잡지 않게 하려는 것이다. 신선도는 인스턴스별로(또는 `min`으로) 본다.
+ * 같은 갱신에서 완료되지 않은 기록 가운데 가장 오래된 것의 나이(발행 시각부터, 초)를 `event.publication.incomplete.oldest`로 낸다.
+ * 재전송 중인 행은 위 개수에 잡히지 않아 브로커 장애 중에도 개수가 0일 수 있으므로 알림은 나이로 건다. 없으면 0, 첫 갱신 전과 조회가 실패하면 `NaN`이다.
  *
  * 갱신은 Spring의 공용 스케줄러가 아니라 전용 스레드 하나에서 돈다. 공용 스케줄러는 스레드가 하나라 느린 조회가
  * Modulith Moments의 시간 이벤트 발행까지 붙잡는다. `@EnableScheduling`이나 Moments 설정과도 무관하게 돈다.
@@ -82,6 +84,10 @@ class EventPublicationMetrics(
 
     private val lastRefreshed = AtomicLong(0)
 
+    /** 가장 오래된 미완료 기록의 나이(초). `NaN`은 `max`에서 빠져 낡은 값이 알림을 붙잡지 않는다. */
+    @Volatile
+    private var oldestSeconds = Double.NaN
+
     init {
         // 0이나 음수면 막 발행된 기록까지 모두 stale이 되어 알림이 쏟아진다. 설정 오류라 기동에서 막는다.
         require(staleAfter > Duration.ZERO) { "resilientpos.event-publication.stale-after는 양수여야 한다: $staleAfter" }
@@ -89,6 +95,10 @@ class EventPublicationMetrics(
             .description("event.publication.incomplete를 마지막으로 갱신한 시각(epoch 초)")
             .baseUnit("seconds")
             .strongReference(true)
+            .register(registry)
+        Gauge.builder("event.publication.incomplete.oldest", this) { it.oldestSeconds }
+            .description("완료되지 않은 가장 오래된 이벤트 발행 기록의 나이")
+            .baseUnit("seconds")
             .register(registry)
     }
 
@@ -135,7 +145,12 @@ class EventPublicationMetrics(
 
     /** [owner]가 이 갱신을 돌린 executor다. 적용할 때 그것이 현재 executor가 아니면(멈췄거나 다시 시작했으면) 버린다. */
     private fun refresh(owner: ScheduledExecutorService?) {
+        val oldestPublished: Timestamp?
         val counts = try {
+            oldestPublished = jdbcTemplate.queryForObject(
+                "select min(publication_date) from event_publication where completion_date is null",
+                Timestamp::class.java,
+            )
             // completion_date is null 조건이 미완료 인덱스를 타서 완료 행이 쌓여도 비용이 늘지 않는다.
             jdbcTemplate.query(
                 """
@@ -163,6 +178,7 @@ class EventPublicationMetrics(
                 if (scheduler !== owner) return
                 snapshot = emptyMap()
                 gauge.register(emptyList(), false)
+                oldestSeconds = Double.NaN
             }
             // DataAccessException만 잡으면 행 매핑에서 난 예외가 새어 낡은 개수가 남는다. 로그는 락 밖에서 쓴다.
             log.warn(e) { "발행 기록을 세지 못해 개수를 내리고 이번 갱신을 건너뛴다" }
@@ -171,6 +187,7 @@ class EventPublicationMetrics(
         synchronized(state) {
             if (scheduler !== owner) return
             publish(counts)
+            oldestSeconds = oldestPublished?.let { Duration.between(it.toInstant(), clock.instant()).toMillis() / 1000.0 } ?: 0.0
         }
     }
 

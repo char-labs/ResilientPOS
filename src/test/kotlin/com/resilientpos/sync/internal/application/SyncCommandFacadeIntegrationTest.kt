@@ -14,7 +14,9 @@ import com.resilientpos.sync.internal.domain.CheckoutPayload
 import com.resilientpos.sync.internal.domain.OperationPayload
 import com.resilientpos.sync.internal.domain.OrderPayload
 import com.resilientpos.terminal.TerminalId
+import io.micrometer.core.instrument.MeterRegistry
 import java.math.BigDecimal
+import java.time.Instant
 import java.util.UUID
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -23,6 +25,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.jdbc.core.JdbcTemplate
@@ -36,6 +39,7 @@ class SyncCommandFacadeIntegrationTest(
     @Autowired private val facade: SyncCommandFacade,
     @Autowired private val orders: OrderCommandFacade,
     @Autowired private val jdbcTemplate: JdbcTemplate,
+    @Autowired private val meterRegistry: MeterRegistry,
 ) : PostgresIntegrationTest() {
 
     private val terminalId = TerminalId(UUID.randomUUID())
@@ -47,8 +51,8 @@ class SyncCommandFacadeIntegrationTest(
         lines = command.lines.map { OrderPayload.Line(it.productCode, it.productName, it.unitPrice.amount, it.quantity.toBigDecimal()) },
     )
 
-    private fun operation(sequence: Long, payload: OperationPayload = payload(), operationId: UUID = UUID.randomUUID()) =
-        SyncCommand.ReceiveBatch.Operation(operationId, sequence, payload)
+    private fun operation(sequence: Long, payload: OperationPayload = payload(), operationId: UUID = UUID.randomUUID(), createdAt: String? = null) =
+        SyncCommand.ReceiveBatch.Operation(operationId, sequence, payload, createdAt)
 
     // OrderFixtures 기본 line의 합계(1001 x 2 + 500 x 3)다. 단말이 본 합계로 싣는다.
     private fun checkout(
@@ -557,5 +561,214 @@ class SyncCommandFacadeIntegrationTest(
         assertEquals(SyncCommandFacade.SYNC_BATCH_TOO_LARGE, failure.code)
         assertNull(storedWatermark())
         assertEquals(0, orderRows())
+    }
+
+    private fun operationCounts(): Map<SyncItemStatus, Double?> =
+        SyncItemStatus.entries.associateWith { meterRegistry.find("sync.operation").tag("status", it.name).counter()?.count() }
+
+    private fun countedDelta(block: () -> Unit): Map<SyncItemStatus, Double> {
+        val before = operationCounts()
+        block()
+        val after = operationCounts()
+        return SyncItemStatus.entries.associateWith { checkNotNull(after[it]) - checkNotNull(before[it]) }
+    }
+
+    @Test
+    fun `sync operation counter는 다섯 status 모두 기동 때 0 이상으로 등록돼 있다`() {
+        SyncItemStatus.entries.forEach { assertNotNull(meterRegistry.find("sync.operation").tag("status", it.name).counter(), it.name) }
+    }
+
+    @Test
+    fun `배치 항목 결과마다 status별 counter가 1씩 오른다 적용 중복 gap`() {
+        val applied = operation(1)
+        val applyDelta = countedDelta { receive(applied, operation(3)) }
+        val resendDelta = countedDelta { receive(applied) }
+
+        assertEquals(mapOf(SyncItemStatus.APPLIED to 1.0, SyncItemStatus.GAP to 1.0), applyDelta.filterValues { it != 0.0 })
+        assertEquals(mapOf(SyncItemStatus.DUPLICATE to 1.0), resendDelta.filterValues { it != 0.0 })
+    }
+
+    @Test
+    fun `배치 항목 결과마다 status별 counter가 1씩 오른다 거절 충돌`() {
+        val badScale = payload().let { it.copy(lines = listOf(it.lines.first().copy(unitPrice = BigDecimal("4500.5")))) }
+        val applied = operation(2)
+        val delta = countedDelta {
+            receive(operation(1, badScale), applied)
+            receive(operation(2, payload(), operationId = applied.operationId), operation(2))
+        }
+
+        assertEquals(mapOf(SyncItemStatus.REJECTED to 1.0, SyncItemStatus.APPLIED to 1.0, SyncItemStatus.CONFLICT to 2.0), delta.filterValues { it != 0.0 })
+    }
+
+    @Test
+    fun `상한을 넘어 거절된 배치는 counter를 올리지 않는다`() {
+        val delta = countedDelta {
+            assertFailsWith<DomainException> { receive(*Array(SyncCommandFacade.MAX_OPERATIONS + 1) { operation(it + 1L) }) }
+        }
+
+        assertEquals(SyncItemStatus.entries.associateWith { 0.0 }, delta)
+    }
+
+    @Test
+    fun `둘째 항목 저장이 인프라 예외로 실패해도 이미 커밋된 첫 항목은 APPLIED로 세고 실패한 항목은 세지 않는다`() {
+        jdbcTemplate.update(
+            "insert into t_sync_operation (id, terminal_id, operation_id, sequence, payload_hash, status, created_at, updated_at) " +
+                "values (?, ?, ?, 2, 'stray', 'APPLIED', now(), now())",
+            UUID.randomUUID(), terminalId.value, UUID.randomUUID(),
+        )
+
+        val delta = countedDelta {
+            assertFailsWith<DataIntegrityViolationException> { receive(operation(1), operation(2)) }
+        }
+
+        assertEquals(mapOf(SyncItemStatus.APPLIED to 1.0), delta.filterValues { it != 0.0 })
+    }
+
+    private fun convergence() = checkNotNull(meterRegistry.find("sync.convergence").timer()) { "sync.convergence timer가 없다" }
+
+    /** (건수 증가, 총 시간 증가 초)를 돌려준다. */
+    private fun convergenceDelta(block: () -> Unit): Pair<Long, Double> {
+        val before = convergence().let { it.count() to it.totalTime(TimeUnit.SECONDS) }
+        block()
+        val after = convergence().let { it.count() to it.totalTime(TimeUnit.SECONDS) }
+        return (after.first - before.first) to (after.second - before.second)
+    }
+
+    private fun secondsAgo(seconds: Long): String = Instant.now().minusSeconds(seconds).toString()
+
+    @Test
+    fun `sync convergence timer는 기동 때 등록돼 있다`() {
+        assertNotNull(meterRegistry.find("sync.convergence").timer())
+    }
+
+    @Test
+    fun `createdAt이 있는 APPLIED 항목은 단말이 만든 뒤 확정까지의 시간을 한 번 기록한다`() {
+        val (count, seconds) = convergenceDelta { receive(operation(1, createdAt = secondsAgo(90))) }
+
+        assertEquals(1L, count)
+        assertTrue(seconds in 90.0..120.0, "totalTime=$seconds")
+    }
+
+    @Test
+    fun `createdAt이 있는 REJECTED 항목도 기록한다`() {
+        val badScale = payload().let { it.copy(lines = listOf(it.lines.first().copy(unitPrice = BigDecimal("4500.5")))) }
+
+        val (count, seconds) = convergenceDelta {
+            val result = receive(operation(1, badScale, createdAt = secondsAgo(90)))
+            assertEquals(SyncItemStatus.REJECTED, result.items.single().status)
+        }
+
+        assertEquals(1L, count)
+        assertTrue(seconds in 90.0..120.0, "totalTime=$seconds")
+    }
+
+    @Test
+    fun `createdAt이 없으면 기록하지 않는다`() {
+        val (count, _) = convergenceDelta { receive(operation(1)) }
+
+        assertEquals(0L, count)
+    }
+
+    @Test
+    fun `미래 createdAt은 기록하지 않고 항목은 정상 APPLIED다`() {
+        val (count, _) = convergenceDelta {
+            val result = receive(operation(1, createdAt = Instant.now().plusSeconds(3600).toString()))
+            assertEquals(SyncItemStatus.APPLIED, result.items.single().status)
+        }
+
+        assertEquals(0L, count)
+    }
+
+    @Test
+    fun `createdAt만 다른 재전송은 DUPLICATE이고 기록하지 않는다`() {
+        val applied = operation(1, createdAt = secondsAgo(90))
+        receive(applied)
+
+        val (count, _) = convergenceDelta {
+            val resent = receive(applied.copy(createdAt = secondsAgo(10)))
+            assertEquals(SyncItemStatus.DUPLICATE, resent.items.single().status)
+        }
+
+        assertEquals(0L, count)
+    }
+
+    @Test
+    fun `GAP과 CONFLICT 항목은 createdAt이 있어도 기록하지 않는다`() {
+        val applied = operation(1)
+        receive(applied)
+
+        val (count, _) = convergenceDelta {
+            val result = receive(
+                operation(2, operationId = applied.operationId, createdAt = secondsAgo(90)),
+                operation(5, createdAt = secondsAgo(90)),
+            )
+            assertEquals(listOf(SyncItemStatus.CONFLICT, SyncItemStatus.GAP), result.items.map { it.status })
+        }
+
+        assertEquals(0L, count)
+    }
+
+    private fun invalidCount() = checkNotNull(meterRegistry.find("sync.created-at.invalid").counter()) { "sync.created-at.invalid counter가 없다" }.count()
+
+    @Test
+    fun `sync created-at invalid counter는 기동 때 0으로 등록돼 있다`() {
+        assertNotNull(meterRegistry.find("sync.created-at.invalid").counter())
+    }
+
+    @Test
+    fun `형식이 틀린 createdAt은 항목을 정상 처리하고 수렴 시간 대신 invalid를 센다`() {
+        val raws = listOf("어제", "2026-10-21T09:00:00", "2026-13-01", "1729500000000")
+        val beforeInvalid = invalidCount()
+
+        val (count, _) = convergenceDelta {
+            val result = receive(*raws.mapIndexed { i, raw -> operation(i + 1L, createdAt = raw) }.toTypedArray())
+            assertEquals(raws.map { SyncItemStatus.APPLIED }, result.items.map { it.status })
+        }
+
+        assertEquals(0L, count)
+        assertEquals(raws.size.toDouble(), invalidCount() - beforeInvalid)
+    }
+
+    @Test
+    fun `형식이 틀린 createdAt의 REJECTED 항목도 invalid를 센다`() {
+        val badScale = payload().let { it.copy(lines = listOf(it.lines.first().copy(unitPrice = BigDecimal("4500.5")))) }
+        val beforeInvalid = invalidCount()
+
+        val result = receive(operation(1, badScale, createdAt = "어제"))
+
+        assertEquals(SyncItemStatus.REJECTED, result.items.single().status)
+        assertEquals(1.0, invalidCount() - beforeInvalid)
+    }
+
+    @Test
+    fun `형식이 틀린 createdAt의 재전송 DUPLICATE과 GAP과 CONFLICT는 invalid를 다시 세지 않는다`() {
+        val applied = operation(1, createdAt = "어제")
+        receive(applied)
+        val beforeInvalid = invalidCount()
+
+        val result = receive(
+            applied,
+            operation(2, operationId = applied.operationId, createdAt = "어제"),
+            operation(5, createdAt = "어제"),
+        )
+
+        assertEquals(listOf(SyncItemStatus.DUPLICATE, SyncItemStatus.CONFLICT, SyncItemStatus.GAP), result.items.map { it.status })
+        assertEquals(0.0, invalidCount() - beforeInvalid)
+    }
+
+    @Test
+    fun `Z와 offset이 있는 createdAt은 둘 다 수렴 시간으로 기록하고 invalid를 세지 않는다`() {
+        val beforeInvalid = invalidCount()
+        val now = Instant.now()
+
+        val (count, _) = convergenceDelta {
+            receive(
+                operation(1, createdAt = now.minusSeconds(60).toString()),
+                operation(2, createdAt = now.minusSeconds(60).atOffset(java.time.ZoneOffset.ofHours(9)).toString()),
+            )
+        }
+
+        assertEquals(2L, count)
+        assertEquals(0.0, invalidCount() - beforeInvalid)
     }
 }

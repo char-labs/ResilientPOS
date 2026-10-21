@@ -1,35 +1,67 @@
 package com.resilientpos.platform
 
 import com.resilientpos.foundation.UuidV7IdentifierGenerator
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry
+import java.time.Duration
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
+import org.mockito.ArgumentMatchers.any
+import org.mockito.ArgumentMatchers.anyString
 import org.mockito.BDDMockito.given
 import org.mockito.Mockito.mock
 import org.springframework.data.redis.RedisConnectionFailureException
 import org.springframework.data.redis.core.StringRedisTemplate
+import org.springframework.data.redis.core.ValueOperations
 
 /**
  * 잠금 저장소가 응답하지 않아도 일을 멈추지 않는지 본다. 방어선은 DB 제약이라서 잠금은 fail-open이다.
  */
 class LockTest {
 
+    private val registry = SimpleMeterRegistry()
+
+    private fun lock(redis: StringRedisTemplate) = RedisDistributedLock(redis, UuidV7IdentifierGenerator(), registry)
+
+    private fun failOpenCount(lock: String, reason: String): Double =
+        registry.find("lock.fail.open").tags("lock", lock, "reason", reason).counter()?.count() ?: 0.0
+
     @Test
-    fun `Redis 오류면 던지지 않고 토큰 없이 돌아온다`() {
+    fun `Redis 오류면 던지지 않고 토큰 없이 돌아오며 키 앞 두 마디와 error로 센다`() {
         val redis = mock(StringRedisTemplate::class.java)
         given(redis.opsForValue()).willThrow(RedisConnectionFailureException("Redis down"))
 
-        assertNull(RedisDistributedLock(redis, UuidV7IdentifierGenerator()).tryAcquire("test:lock"))
+        assertNull(lock(redis).tryAcquire("order:create-lock:terminal:client-order"))
+        assertEquals(1.0, failOpenCount("order:create-lock", "error"))
+    }
+
+    @Test
+    fun `대기 한도를 넘겨 잠금 없이 진행하면 timeout으로 센다`() {
+        @Suppress("UNCHECKED_CAST") // mock(ValueOperations::class.java)는 타입 인자를 모른다. 이 테스트는 String 키·값만 쓴다.
+        val values = mock(ValueOperations::class.java) as ValueOperations<String, String>
+        given(values.setIfAbsent(anyString(), anyString(), any(Duration::class.java))).willReturn(false)
+        val redis = mock(StringRedisTemplate::class.java)
+        given(redis.opsForValue()).willReturn(values)
+
+        assertNull(lock(redis).tryAcquire("platform:event-publication:resubmit"))
+        assertEquals(1.0, failOpenCount("platform:event-publication", "timeout"))
     }
 
     @Test
     fun `커넥션 팩토리가 닫혀도 던지지 않고 토큰 없이 돌아온다`() {
-        assertNull(RedisDistributedLock(closedRedis(), UuidV7IdentifierGenerator()).tryAcquire("test:lock"))
+        assertNull(lock(closedRedis()).tryAcquire("test:lock"))
+        assertEquals(1.0, failOpenCount("test:lock", "error"))
     }
 
     @Test
     fun `커넥션 팩토리가 닫혀도 해제는 던지지 않는다`() {
-        RedisDistributedLock(closedRedis(), UuidV7IdentifierGenerator()).release("test:lock", "token")
+        lock(closedRedis()).release("test:lock", "token")
+    }
+
+    @Test
+    fun `metric의 lock은 키의 앞 두 마디다`() {
+        assertEquals("payment:unknown-resolve", RedisDistributedLock.lockName("payment:unknown-resolve"))
+        assertEquals("payment:checkout-lock", RedisDistributedLock.lockName("payment:checkout-lock:order:2"))
     }
 
     /** 종료 중인 인스턴스처럼 모든 호출이 `LettuceConnectionFactory`의 닫힘 예외를 던진다. */

@@ -1,0 +1,10 @@
+# grafana/otel-lgtm 이미지의 /otel-lgtm/prometheus.yaml을 대신한다. 이미지 파일에는 rule_files가 없다.
+# 앱 metric은 Alloy가 remote_write로 넣으므로 이 Prometheus는 scrape하지 않고 규칙만 평가한다.
+# 이미지 파일의 OTLP 속성 승격 설정은 OTLP metric을 받지 않아 옮기지 않았다.
+rule_files:
+  - alerts.yaml
+
+storage:
+  tsdb:
+    # 이미지 기본값과 같다. remote_write 재시도로 늦게 온 샘플을 받는다.
+    out_of_order_time_window: 10m

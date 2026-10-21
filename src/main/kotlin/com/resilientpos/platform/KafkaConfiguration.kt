@@ -85,7 +85,10 @@ class KafkaConfiguration {
         @Value("\${resilientpos.kafka.retry.max-retries}") maxRetries: Int,
     ): CommonErrorHandler {
         // DLT로 간 적이 없어도 0으로 나가야 알림의 increase()가 첫 증가를 잡는다. 도메인 코드는 미리 알 수 없어 error만 등록한다.
-        topics.forEach { meterRegistry.counter(DEAD_LETTER_METRIC, "topic", it, "reason", "error") }
+        topics.forEach {
+            meterRegistry.counter(DEAD_LETTER_METRIC, "topic", it, "reason", "error")
+            meterRegistry.counter(DEAD_LETTER_FAILED_METRIC, "topic", it)
+        }
         // 목적지를 명시한다. Spring Kafka 4의 기본 이름은 `원토픽-dlt`라 만들어 둔 토픽과 어긋난다.
         // 파티션을 비워 두면(-1) key로 나눈다. 같은 주문은 DLT에서도 한 파티션에 모이고 DLT 파티션 수에 묶이지 않는다.
         val deadLetter = DeadLetterPublishingRecoverer(template) { record, _ -> TopicPartition(record.topic() + DLT_SUFFIX, -1) }

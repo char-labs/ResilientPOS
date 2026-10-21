@@ -24,6 +24,7 @@ object SyncCommand {
             val operationId: UUID,
             val sequence: Long,
             val payload: OperationPayload,
+            val createdAt: String? = null,
         )
 
         /** 항목별 결과와 배치가 끝난 시점의 watermark. */

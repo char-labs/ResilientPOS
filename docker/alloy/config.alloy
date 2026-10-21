@@ -30,11 +30,13 @@ loki.source.docker "app" {
 }
 
 // ECS 필드 service.name·log.level만 label로 올린다. 값이 많은 필드는 쿼리에서 | json으로 거른다.
+// traceId는 줄마다 달라 label이 아니라 structured metadata trace_id로 둔다. Grafana의 trace↔로그 링크가 이 이름을 쓴다.
 loki.process "ecs" {
   stage.json {
     expressions = {
       service_name = "service.name",
       level        = "log.level",
+      trace_id     = "traceId",
     }
   }
   stage.labels {
@@ -43,11 +45,41 @@ loki.process "ecs" {
       level        = "",
     }
   }
+  stage.structured_metadata {
+    values = {
+      trace_id = "",
+    }
+  }
   forward_to = [loki.write.lgtm.receiver]
 }
 
 loki.write "lgtm" {
   endpoint {
     url = "http://lgtm:3100/loki/api/v1/push"
+  }
+}
+
+// trace: 앱이 OTLP HTTP로 보낸 span을 묶어 lgtm의 Tempo(OTLP gRPC)로 넘긴다.
+otelcol.receiver.otlp "app" {
+  http {
+    endpoint = "0.0.0.0:4318"
+  }
+  output {
+    traces = [otelcol.processor.batch.default.input]
+  }
+}
+
+otelcol.processor.batch "default" {
+  output {
+    traces = [otelcol.exporter.otlp.lgtm.input]
+  }
+}
+
+otelcol.exporter.otlp "lgtm" {
+  client {
+    endpoint = "lgtm:4317"
+    tls {
+      insecure = true
+    }
   }
 }

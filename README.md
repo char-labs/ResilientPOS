@@ -14,14 +14,14 @@ ResilientPOS는 네트워크 단절과 부분 실패 속에서도 주문·결제
 | 웹 / 보안 | Spring MVC, Spring Security, Spring Session Data Redis |
 | 데이터 접근 | Spring Data JPA, Kotlin JDSL, Flyway, Jackson Kotlin |
 | 저장소 / 메시징 | PostgreSQL, Redis (Spring Data Redis), Apache Kafka (Spring Kafka) |
-| 운영 상태 확인 | Spring Boot Actuator, Micrometer Prometheus registry, kotlin-logging |
+| 운영 상태 확인 | Spring Boot Actuator, Micrometer Prometheus registry, Micrometer Tracing(OpenTelemetry), kotlin-logging |
 | 테스트 | Kotlin Test, JUnit 5, Spring Boot Test, Testcontainers, Fixture Monkey, Spring REST Docs, ArchUnit |
 | 빌드 | Gradle Wrapper 9.7.1, Kotlin DSL |
 | 개발 하네스 | Python 3 표준 라이브러리 기반 로컬 PR 검사 |
 
 단일 Gradle 프로젝트이고, 모듈 경계는 Spring Modulith 검증 테스트가 지킵니다. 주문·결제 정합성의 정본은 PostgreSQL 제약이고 스키마는 Flyway 마이그레이션이 소유합니다.
 Redis는 두 가지에만 씁니다. 하나는 중복 요청과 주기 작업의 pod 간 겹침을 줄이는 분산 락(`platform.Lock`)이고, Redis 장애 때는 잠그지 않고 진행하며 DB 제약이 막습니다. 다른 하나는 점주 세션과 로그인 실패 카운터입니다.
-OpenTelemetry trace는 아직 없습니다. 지금 내보내는 metric과 로그는 [관측성](docs/wiki/observability.md)에 있습니다.
+metric·로그·trace(OpenTelemetry, 요청에서 Kafka consumer까지 하나로 이어짐)를 내보내고, 알림 규칙은 `docker/prometheus/alerts.yaml`, 알림이 울렸을 때의 절차는 [runbook](docs/wiki/runbook.md)에 있습니다. 자세한 것은 [관측성](docs/wiki/observability.md)에 있습니다.
 
 ## 아키텍처
 
