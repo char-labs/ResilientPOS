@@ -4,7 +4,20 @@ import com.resilientpos.platform.RateLimitedException
 import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.AuthenticatedTerminal
 import com.resilientpos.terminal.TerminalId
+import com.resilientpos.terminal.internal.adapter.web.TerminalAuthenticationInterceptor
+import com.tngtech.archunit.core.importer.ClassFileImporter
+import com.tngtech.archunit.core.importer.ImportOption
+import com.tngtech.archunit.lang.syntax.ArchRuleDefinition.classes
+import com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses
+import io.lettuce.core.RedisCommandExecutionException
+import io.lettuce.core.RedisConnectionException
+import io.lettuce.core.RedisException
+import io.lettuce.core.RedisLoadingException
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry
+import java.time.Clock
+import java.time.Instant
+import java.time.ZoneId
+import java.time.ZoneOffset
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertContains
@@ -15,18 +28,17 @@ import org.junit.jupiter.api.extension.ExtendWith
 import org.mockito.Mockito.mock
 import org.springframework.boot.test.system.CapturedOutput
 import org.springframework.boot.test.system.OutputCaptureExtension
-import io.lettuce.core.RedisCommandExecutionException
-import io.lettuce.core.RedisException
 import org.springframework.data.redis.RedisConnectionFailureException
 import org.springframework.data.redis.RedisSystemException
 import org.springframework.data.redis.core.StringRedisTemplate
 
-/** Redis 응답을 흉내 내 스크립트 밖의 판단(장애 처리, 설정 검증, metric)을 본다. 스크립트 자체는 `RedisTerminalRateLimiterIntegrationTest`가 본다. */
+/** Redis 응답을 흉내 내 스크립트 밖의 판단(장애 처리, 로그, 기동 검사, 설정 검증, metric)을 본다. 스크립트 자체는 `RedisTerminalRateLimiterIntegrationTest`가 본다. */
 @ExtendWith(OutputCaptureExtension::class)
 class RedisTerminalRateLimiterTest {
 
     private val terminal = AuthenticatedTerminal(TerminalId(UUID.randomUUID()), StoreId(UUID.randomUUID()))
     private val meterRegistry = SimpleMeterRegistry()
+    private val clock = MutableClock()
 
     private fun limiter(
         redis: StringRedisTemplate,
@@ -34,51 +46,134 @@ class RedisTerminalRateLimiterTest {
         terminalRefillPerSecond: Double = 1.0,
         storeCapacity: Long = 10,
         storeRefillPerSecond: Double = 1.0,
-    ) = RedisTerminalRateLimiter(redis, meterRegistry, terminalCapacity, terminalRefillPerSecond, storeCapacity, storeRefillPerSecond)
+    ) = RedisTerminalRateLimiter(redis, meterRegistry, clock, terminalCapacity, terminalRefillPerSecond, storeCapacity, storeRefillPerSecond)
 
     /** 스크립트가 [scriptResult]를 돌려주는 Redis. */
     private fun redisReturning(scriptResult: List<Long>) = mock(StringRedisTemplate::class.java) { scriptResult }
 
+    private fun redisThrowing(error: RuntimeException) = mock(StringRedisTemplate::class.java) { throw error }
+
+    /** [mark] 뒤에 limiter가 남긴 줄. 장애 중에는 요청마다 부르므로 스택 프레임이 찍히면 로그가 장애를 키운다. */
+    private fun CapturedOutput.limiterLines(mark: Int): List<String> {
+        val logged = all.substring(mark)
+        assertFalse(logged.contains("\tat "), "스택 프레임이 찍혔다")
+        return logged.lines().filter { it.contains("제한 없이 통과시킨다") || it.contains("기동 검사") }
+    }
+
     @Test
-    fun `Redis 오류면 제한 없이 통과시키고 스택 없는 WARN 한 줄을 남긴다`(output: CapturedOutput) {
+    fun `기다리면 풀리는 Redis 오류면 통과시키고 근본 원인을 담은 WARN 한 줄을 남긴다`(output: CapturedOutput) {
         listOf(
-            RedisConnectionFailureException("Unable to connect to Redis"),
-            IllegalStateException("LettuceConnectionFactory was destroyed"),
-            // REJECT_COMMANDS로 끊긴 동안 거절된 명령. 기다리면 풀리는 장애라 WARN이다.
-            RedisSystemException("Redis exception", RedisException("Currently not connected. Commands are rejected.")),
-        ).forEach { error ->
+            RedisConnectionFailureException("Unable to connect to Redis") to "RedisConnectionFailureException: Unable to connect to Redis",
+            IllegalStateException("LettuceConnectionFactory was destroyed") to "IllegalStateException: LettuceConnectionFactory was destroyed",
+            // REJECT_COMMANDS로 끊긴 동안 거절된 명령. Spring 예외의 메시지("Redis exception")에는 이유가 없다.
+            RedisSystemException("Redis exception", RedisException("Currently not connected. Commands are rejected."))
+                to "RedisException: Currently not connected. Commands are rejected.",
+            // Redis가 오류로 답했지만 재시작 중이라 기다리면 풀린다.
+            RedisSystemException("Error in execution", RedisLoadingException("LOADING Redis is loading the dataset in memory"))
+                to "RedisLoadingException: LOADING Redis is loading the dataset in memory",
+            RedisSystemException("Error in execution", RedisCommandExecutionException("TRYAGAIN Multiple keys request during rehashing of slot"))
+                to "RedisCommandExecutionException: TRYAGAIN Multiple keys request during rehashing of slot",
+        ).forEach { (error, cause) ->
             val mark = output.all.length
-            val failing = mock(StringRedisTemplate::class.java) { throw error }
 
-            limiter(failing).acquire(terminal)
+            limiter(redisThrowing(error)).acquire(terminal)
 
-            // 장애 중에는 /v1 요청마다 남으므로 스택이 붙으면 로그가 장애를 키운다.
-            val logged = output.all.substring(mark)
-            assertFalse(logged.contains("\tat "), "스택 프레임이 찍혔다")
-            assertFalse(logged.contains(error.javaClass.name), "예외 줄이 따로 찍혔다")
-            val line = logged.lines().single { it.contains("제한 없이 통과시킨다") }
+            val line = output.limiterLines(mark).single()
             assertContains(line, "WARN")
             assertContains(line, "제한 없이 통과시킨다(Redis 오류)")
             assertContains(line, "terminalId=${terminal.terminalId.value}")
-            assertContains(line, "${error.javaClass.simpleName}: ${error.message}")
+            assertContains(line, "cause=$cause")
         }
     }
 
     @Test
-    fun `Redis가 명령에 오류로 답하면 통과시키되 ERROR 한 줄로 보호가 꺼졌음을 남긴다`(output: CapturedOutput) {
+    fun `기다려도 풀리지 않는 Redis 오류면 통과시키되 근본 원인을 담은 ERROR 한 줄로 보호가 꺼졌음을 남긴다`(output: CapturedOutput) {
+        listOf(
+            RedisSystemException("Error in execution", RedisCommandExecutionException("ERR user_script:1: Script attempted to access nonexistent global variable"))
+                to "RedisCommandExecutionException: ERR user_script:1",
+            RedisSystemException("Error in execution", RedisCommandExecutionException("NOPERM User app has no permissions to run the 'time' command"))
+                to "RedisCommandExecutionException: NOPERM",
+            // 연결 단계의 인증 실패는 연결 실패로 감싸여 오지만 근본 원인은 Redis의 오류 응답이고 기다려도 풀리지 않는다.
+            RedisConnectionFailureException(
+                "Redis connection failed",
+                RedisConnectionException("Unable to connect to localhost:6379", RedisCommandExecutionException("WRONGPASS invalid username-password pair")),
+            ) to "RedisCommandExecutionException: WRONGPASS",
+        ).forEach { (error, cause) ->
+            val mark = output.all.length
+
+            limiter(redisThrowing(error)).acquire(terminal)
+
+            val line = output.limiterLines(mark).single()
+            assertContains(line, "ERROR")
+            assertContains(line, "Redis가 명령을 거절")
+            assertContains(line, "cause=$cause")
+        }
+    }
+
+    @Test
+    fun `같은 수준의 장애 로그는 10초에 한 줄이고 그 사이 통과 건수를 다음 줄에 적는다`(output: CapturedOutput) {
         val mark = output.all.length
-        // 스크립트 오류·OOM·NOPERM·CROSSSLOT은 Lettuce RedisCommandExecutionException을 원인으로 담아 온다(LettuceExceptionConverter).
-        val error = RedisSystemException("Error in execution", RedisCommandExecutionException("ERR user_script:1: Script attempted to access nonexistent global variable"))
-        val failing = mock(StringRedisTemplate::class.java) { throw error }
+        val limiter = limiter(redisThrowing(RedisConnectionFailureException("Unable to connect to Redis")))
+        repeat(3) { limiter.acquire(terminal) }
+        clock.advanceSeconds(9)
+        limiter.acquire(terminal)
+        assertEquals(1, output.limiterLines(mark).size)
 
-        limiter(failing).acquire(terminal)
+        clock.advanceSeconds(1)
+        limiter.acquire(terminal)
 
-        val logged = output.all.substring(mark)
-        assertFalse(logged.contains("\tat "), "스택 프레임이 찍혔다")
-        val line = logged.lines().single { it.contains("제한 없이 통과시킨다") }
-        assertContains(line, "ERROR")
-        assertContains(line, "Redis가 명령을 거절")
-        assertContains(line, "ERR user_script:1")
+        val lines = output.limiterLines(mark)
+        assertEquals(2, lines.size)
+        assertContains(lines[0], "suppressedSinceLast=0")
+        assertContains(lines[1], "suppressedSinceLast=3")
+    }
+
+    @Test
+    fun `WARN과 ERROR는 따로 줄인다`(output: CapturedOutput) {
+        val mark = output.all.length
+        // 부를 때마다 다음 예외를 던진다. 같은 시각이라 같은 수준이면 두 번째가 줄어든다.
+        val errors = ArrayDeque(
+            listOf(
+                RedisConnectionFailureException("Unable to connect to Redis"),
+                RedisSystemException("Error in execution", RedisCommandExecutionException("NOPERM no permissions")),
+            ),
+        )
+        val limiter = limiter(mock(StringRedisTemplate::class.java) { throw errors.removeFirst() })
+
+        repeat(2) { limiter.acquire(terminal) }
+
+        assertEquals(listOf("WARN", "ERROR"), output.limiterLines(mark).map { if (it.contains("ERROR")) "ERROR" else "WARN" })
+    }
+
+    @Test
+    fun `기동 검사에서 Redis가 기다려도 풀리지 않는 오류로 답하면 기동을 멈춘다`() {
+        val limiter = limiter(redisThrowing(RedisSystemException("Error in execution", RedisCommandExecutionException("NOPERM no permissions to run 'evalsha'"))))
+
+        val e = assertFailsWith<IllegalStateException> { limiter.checkScriptAtStartup() }
+
+        assertContains(e.message.orEmpty(), "NOPERM")
+    }
+
+    @Test
+    fun `기동 검사에서 Redis에 닿지 못하거나 일시 오류면 WARN을 남기고 뜬다`(output: CapturedOutput) {
+        listOf(
+            RedisConnectionFailureException("Unable to connect to Redis"),
+            RedisSystemException("Error in execution", RedisLoadingException("LOADING Redis is loading the dataset in memory")),
+        ).forEach { error ->
+            val mark = output.all.length
+
+            limiter(redisThrowing(error)).checkScriptAtStartup()
+
+            val line = output.limiterLines(mark).single()
+            assertContains(line, "WARN")
+            assertContains(line, "기동 검사를 건너뛴다")
+        }
+    }
+
+    @Test
+    fun `기동 검사는 스크립트가 돌면 통과와 거절에 관계없이 지나간다`() {
+        limiter(redisReturning(listOf(0L, 0L))).checkScriptAtStartup()
+        limiter(redisReturning(listOf(1L, 1_000_000L))).checkScriptAtStartup()
     }
 
     @Test
@@ -109,6 +204,14 @@ class RedisTerminalRateLimiterTest {
     }
 
     @Test
+    fun `설정 오류 메시지는 어느 bucket의 어떤 값인지 적는다`() {
+        val e = assertFailsWith<IllegalArgumentException> { limiter(redisReturning(listOf(0L, 0L)), storeCapacity = 0) }
+
+        assertContains(e.message.orEmpty(), "rate-limit.store")
+        assertContains(e.message.orEmpty(), "capacity=0")
+    }
+
+    @Test
     fun `거절은 거절한 bucket의 scope로 counter를 올리고 두 scope는 처음부터 0으로 있다`() {
         val limiter = limiter(redisReturning(listOf(2L, 1_500_000L)))
         assertEquals(setOf("terminal", "store"), meterRegistry.find(METRIC).counters().map { it.id.getTag("scope") }.toSet())
@@ -120,7 +223,35 @@ class RedisTerminalRateLimiterTest {
         assertEquals(0.0, meterRegistry.counter(METRIC, "scope", "terminal").count())
     }
 
+    /**
+     * 429·`RATE_LIMITED`는 상태를 바꾸기 전(handler 전)의 거절이어야 단말이 같은 요청을 그대로 다시 보낼 수 있다.
+     * 그래서 limiter는 인증 인터셉터만 부른다. 양성 대조가 있어 `acquire`의 시그니처가 바뀌면 규칙이 비지 않고 실패한다.
+     */
+    @Test
+    fun `acquire는 인증 인터셉터만 부른다`() {
+        val production = ClassFileImporter().withImportOption(ImportOption.Predefined.DO_NOT_INCLUDE_TESTS).importPackages("com.resilientpos")
+        val acquire = arrayOf<Class<*>>(AuthenticatedTerminal::class.java)
+
+        noClasses().that().doNotBelongToAnyOf(TerminalAuthenticationInterceptor::class.java)
+            .should().callMethod(RedisTerminalRateLimiter::class.java, "acquire", *acquire)
+            .check(production)
+        classes().that().belongToAnyOf(TerminalAuthenticationInterceptor::class.java)
+            .should().callMethod(RedisTerminalRateLimiter::class.java, "acquire", *acquire)
+            .check(production)
+    }
+
     private companion object {
         const val METRIC = "inbound.rate.limited"
+    }
+
+    /** 로그를 줄이는 간격을 시험하려고 시각을 앞으로 움직이는 시계. */
+    private class MutableClock(private var now: Instant = Instant.parse("2026-10-21T00:00:00Z")) : Clock() {
+        fun advanceSeconds(seconds: Long) {
+            now = now.plusSeconds(seconds)
+        }
+
+        override fun getZone(): ZoneId = ZoneOffset.UTC
+        override fun withZone(zone: ZoneId): Clock = this
+        override fun instant(): Instant = now
     }
 }
