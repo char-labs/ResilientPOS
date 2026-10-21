@@ -204,11 +204,11 @@ create table t_dead_letter_redrive (
 - 질문 4(마지막 방어선): unique `(dlt_topic, dlt_partition, dlt_offset, dlt_timestamp)`가 "한 DLT 레코드의 기록은 하나"와 멱등 응답의 유일한 방어선이다. Kafka offset은 정본이 될 수 없다는 규칙과 맞다. Kafka는 좌표와 시각만 주고 기록의 유일성은 PostgreSQL이 지킨다. 좌표만이면 DLT 토픽을 다시 만들 때 offset이 재사용돼 새 메시지가 옛 기록에 가려진다(결정 6). 기록을 지우는 명령이 없고 멱등 키라 soft delete된 행에도 걸리게 둔다(partial이 아니다). 두 조회(단건·범위)는 `@SoftDelete`로 삭제 행을 보지 못한다. 그래서 이 표의 행은 SQL로도 soft delete하지 않는다(결정 6). 삭제 명령이 생기면 조회가 삭제 행도 보게 한다(`t_order`와 같은 조건).
 - 질문 5(정본): 재투입 기록의 정본은 이 표 하나다. 감사 INFO 로그는 사유가 없는 관측용 사본이고 커밋 뒤 남긴다. 로그가 빠져도 표가 맞다.
 - 질문 6(check-then-act): 확인(기록 조회) 뒤 전송·기록이다. 경합은 unique가 막고, 진 쪽은 위반을 잡아 이긴 쪽 기록을 돌려준다. 전송은 트랜잭션 밖이라 경합한 두 요청이 둘 다 보낼 수 있고, consumer 멱등이 그 중복을 견딘다(결정 4). 기다리는 수단(row lock·`Lock`)은 두지 않는다. 낙관적 잠금도 필요 없다. 행을 고치는 경로가 없다.
-- 질문 7(락·크기): 새 표 생성이라 다른 표를 잠그지 않는다. 기존 행이 없어 위반 행 검사가 필요 없고, 잡을 락이 없어 `lock_timeout`을 두지 않는다.
-- 질문 8(이전 버전 호환): 이전 버전 애플리케이션은 이 표를 모르고 쓰지 않는다. `validate`는 매핑된 엔티티만 보므로 이전 버전이 새 스키마에서 뜬다.
+- 질문 7(락·크기): 새 표 생성이라 다른 표를 잠그지 않는다. 기존 행이 없어 위반 행 검사가 필요 없다. `CREATE TABLE`도 새 relation에 `ACCESS EXCLUSIVE`를 잡지만 기다릴 세션이 없어 `lock_timeout`을 두지 않는다.
+- 질문 8(이전 버전 호환): 이전 버전 애플리케이션은 이 표를 모르고 쓰지 않는다. `validate`는 매핑된 엔티티만 보고, Flyway는 기본값(`ignoreMigrationPatterns=*:future`)으로 모르는 미래 버전 V019를 무시하므로 이전 버전이 새 스키마에서 뜬다. multi-review 전의 V019(`dlt_timestamp` 없음)를 이미 적용한 로컬 DB는 checksum 검증에서 막히므로 초기화한다(배포 환경은 머지 전이라 해당 없음).
 - 질문 9(이벤트·캐시): 이벤트 payload나 캐시 DTO에 실리지 않는다. 재투입은 DLT의 값 바이트를 그대로 옮기므로 이벤트 형식을 바꾸지 않는다.
 - `dlt_topic varchar(249)`는 Kafka 토픽 이름의 최대 길이이고 `operator_subject varchar(255)`는 OIDC Core가 정한 `sub`의 최대 길이다. `sub`는 보내기 전에 길이와 제어 문자를 검사한다(결정 4). 사유 500자는 대조 case `note`와 같다. `dlt_timestamp`는 Kafka 레코드 timestamp(epoch 밀리초)라 `timestamptz`(마이크로초)에 그대로 들어간다.
-- 대조 기록: 미작성. PR 제출 전에 구현자가 아닌 리뷰어가 마이그레이션·엔티티·코드와 대조해 채운다.
+- 대조 기록: code-reviewer 에이전트(구현자 아님), 2026-10-21, multi-review 반영 뒤 V019·DeadLetterRedriveEntity·DeadLetterRedriver·DeadLetterRedriveJpaRepository·DeadLetterReader·DeadLetterController 재대조. 불일치: 없음
 
 ## 검증
 - 인수 1~14: `./gradlew test`. Docker가 필요하다(PostgreSQL·Redis·Kafka 컨테이너).
