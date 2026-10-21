@@ -208,4 +208,8 @@ multi-review 반영분이다. 대상 명령은 limiter 명령에 `--tests 'com.r
 리뷰 반영 뒤 고친 스크립트에 결함 7종(먼저 거절한 쪽 선택, TTL 없음, hash tag 없음, refill 없음, 원자성 깨짐, 거절도 차감, 상한 없음)을 다시 넣어 각각 해당 테스트가 FAILED임을 확인했다. 전체 회귀: `./gradlew test` 통과(729개, 실패 0).
 
 ## 결과
-개발 전 작성.
+- 인증된 `/v1/**` 요청은 `TerminalAuthenticationInterceptor`가 `authenticate` 직후 부르는 `RedisTerminalRateLimiter`를 통과해야 Controller에 닿는다. 단말 bucket과 매장 bucket을 Lua 스크립트 한 번으로 확인하고 둘 다 남을 때만 둘 다 차감한다. 넘으면 429 `RATE_LIMITED`와 `Retry-After`(정수 초)이고, 거절은 `inbound_rate_limited_total{scope}`와 INFO 한 줄로 남는다.
+- Redis 오류면 통과시키고 스택 없는 WARN 한 줄을 남긴다. Lettuce는 연결이 끊긴 동안 명령을 바로 거절해(`REJECT_COMMANDS`) 재시작 중에도 요청마다 1초를 기다리지 않는다.
+- 검증: `./gradlew test` 729개 통과(실패 0). `python3 scripts/check_pr.py --base origin/main --worktree` PASS. limiter 테스트는 스크립트에 결함 7종을 넣어 각각 잡히는지 확인했다.
+- multi-review: Claude 80점, Codex 68점, spring-backend-specialist P0 없음(Gemini 미실행). 반영과 받지 않은 것은 범위의 "범위 조정(multi-review 반영)"에 있다. 단말별 동시 요청 상한은 #101로 뺐다.
+- 남은 것: 상한 값은 아직 자리값이다(인수 조건 12). #77의 권장 값과 근거를 결정 8에 적고 검증을 다시 돌린 뒤 ready로 바꾼다. 현재 상태(볼트)는 머지할 때 고친다.
