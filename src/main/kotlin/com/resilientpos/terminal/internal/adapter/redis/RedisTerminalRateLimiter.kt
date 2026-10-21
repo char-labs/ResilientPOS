@@ -3,10 +3,12 @@ package com.resilientpos.terminal.internal.adapter.redis
 import com.resilientpos.platform.RateLimitedException
 import com.resilientpos.platform.logger
 import com.resilientpos.terminal.AuthenticatedTerminal
+import io.lettuce.core.RedisCommandExecutionException
 import io.micrometer.core.instrument.MeterRegistry
 import kotlin.math.ceil
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.dao.DataAccessException
+import org.springframework.data.redis.RedisSystemException
 import org.springframework.data.redis.core.StringRedisTemplate
 import org.springframework.data.redis.core.script.RedisScript
 import org.springframework.stereotype.Component
@@ -40,6 +42,10 @@ class RedisTerminalRateLimiter(
         require(listOf(terminalRefillPerSecond, storeRefillPerSecond).all { it > 0 && it.isFinite() }) {
             "rate-limit refill-per-second는 0보다 큰 유한값이어야 한다"
         }
+        // 하루가 넘게 걸려야 차는 bucket은 단위 실수(초당을 하루당으로)다. 2^53을 넘는 capacity는 Lua double에서 1 차감이 묻혀 제한이 사라진다.
+        require(listOf(terminalCapacity to terminalRefillPerSecond, storeCapacity to storeRefillPerSecond).all { (capacity, refill) ->
+            capacity <= MAX_EXACT_LUA_INTEGER && capacity / refill <= MAX_FILL_SECONDS
+        }) { "rate-limit은 빈 bucket이 하루 안에 가득 차야 하고 capacity는 2^53 이하여야 한다" }
         // 첫 거절 전에도 시계열이 있어야 increase()가 첫 증가를 잡는다.
         SCOPES.forEach { meterRegistry.counter(METRIC, SCOPE_TAG, it) }
     }
@@ -73,17 +79,24 @@ class RedisTerminalRateLimiter(
     /**
      * 장애 중에는 /v1 요청마다 남으므로 스택 없이 한 줄이다. 스택을 붙이면 로그가 장애를 키운다.
      * 연결이 끊긴 것을 Lettuce가 아는 동안에는 명령이 바로 거절된다(`PlatformConfiguration`의 `REJECT_COMMANDS`).
+     * Redis가 명령에 오류로 답한 경우(스크립트 오류, OOM, NOPERM, CROSSSLOT, READONLY)는 ERROR다. 연결 장애와 달리 기다려도 풀리지 않아,
+     * 사람이 고치기 전까지 모든 요청에서 보호가 꺼져 있기 때문이다.
      */
     // shortcut: Redis가 느리거나 패킷이 사라지는 단절(RST 없음)이면 /v1 요청마다 timeout(1초)을 기다린 뒤 통과한다. 지연이 관측되면 circuit breaker로 Redis 호출 자체를 건너뛴다.
-    private fun proceedUnlimited(terminal: AuthenticatedTerminal, e: RuntimeException) =
-        log.warn {
-            "제한 없이 통과시킨다(Redis 오류) terminalId=${terminal.terminalId.value} storeId=${terminal.storeId.value} " +
-                "cause=${e.javaClass.simpleName}: ${e.message}"
+    private fun proceedUnlimited(terminal: AuthenticatedTerminal, e: RuntimeException) {
+        val where = "terminalId=${terminal.terminalId.value} storeId=${terminal.storeId.value} cause=${e.javaClass.simpleName}: "
+        if (e is RedisSystemException && e.cause is RedisCommandExecutionException) {
+            log.error { "제한 없이 통과시킨다(Redis가 명령을 거절함, 설정·스크립트 확인 필요) $where${e.cause?.message}" }
+        } else {
+            log.warn { "제한 없이 통과시킨다(Redis 오류) $where${e.message}" }
         }
+    }
 
     private companion object {
         val log by logger()
         const val MICROS_PER_SECOND = 1_000_000.0
+        const val MAX_FILL_SECONDS = 86_400.0
+        const val MAX_EXACT_LUA_INTEGER = 1L shl 53
 
         /** Prometheus 이름 `inbound_rate_limited_total`. 단말·매장 ID는 label에 두지 않는다(관측성 wiki). */
         const val METRIC = "inbound.rate.limited"
@@ -108,6 +121,11 @@ class RedisTerminalRateLimiter(
               local state = redis.call('HMGET', key, 'tokens', 'at')
               local tokens = tonumber(state[1]) or capacity
               local at = tonumber(state[2]) or now
+              if at > now then
+                -- failover로 시계가 뒤처졌다. 거절이어도 고쳐 써야 시계가 따라잡을 때까지 refill이 멈추지 않는다.
+                redis.call('HSET', key, 'at', now)
+                at = now
+              end
               filled[i] = math.min(capacity, tokens + math.max(0, now - at) * rate)
               ttl[i] = math.ceil(capacity / rate / 1000)
               if filled[i] < 1 then

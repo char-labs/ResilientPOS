@@ -26,11 +26,12 @@ class RedisTerminalRateLimiterIntegrationTest(
 
     private fun terminal(store: StoreId = storeId) = AuthenticatedTerminal(TerminalId(UUID.randomUUID()), store)
 
+    /** 기본 refill(초당 0.02개)은 테스트가 도는 몇 초 동안 토큰 1개도 채우지 않으면서, 빈 bucket이 하루 안에 차야 한다는 설정 검증은 통과한다. */
     private fun limiter(
         terminalCapacity: Long = 1_000,
-        terminalRefillPerSecond: Double = 0.001,
+        terminalRefillPerSecond: Double = 0.02,
         storeCapacity: Long = 1_000,
-        storeRefillPerSecond: Double = 0.001,
+        storeRefillPerSecond: Double = 0.02,
     ) = RedisTerminalRateLimiter(redis, SimpleMeterRegistry(), terminalCapacity, terminalRefillPerSecond, storeCapacity, storeRefillPerSecond)
 
     @Test
@@ -60,13 +61,13 @@ class RedisTerminalRateLimiterIntegrationTest(
 
     @Test
     fun `capacity를 넘어 차지 않는다`() {
-        val limiter = limiter(terminalCapacity = 3, terminalRefillPerSecond = 10.0)
+        val limiter = limiter(terminalCapacity = 3, terminalRefillPerSecond = 2.0)
         val terminal = terminal()
         limiter.acquire(terminal)
 
-        // 남은 2개에 0.22초 동안 2.2개가 더 찰 시간이지만 3에서 멈춘다. 키 TTL(빈 bucket이 가득 차는 0.3초)보다 짧게 쉰다.
-        // 더 쉬면 키가 만료돼 가득 찬 bucket이 되므로 상한이 없어도 이 테스트가 통과한다.
-        Thread.sleep(220)
+        // 남은 2개에 1.2초 동안 2.4개가 더 찰 시간이지만 3에서 멈춘다. 상한이 없으면 4개를 넘기려면 1초 이상 쉬어야 하고,
+        // 키 TTL(빈 bucket이 가득 차는 1.5초)보다는 짧아야 한다. 더 쉬면 키가 만료돼 상한이 없어도 이 테스트가 통과한다.
+        Thread.sleep(1_200)
 
         repeat(3) { limiter.acquire(terminal) }
         assertFailsWith<RateLimitedException> { limiter.acquire(terminal) }
@@ -101,16 +102,33 @@ class RedisTerminalRateLimiterIntegrationTest(
 
     @Test
     fun `거절은 토큰을 쓰지 않고 Retry-After는 토큰 1개를 다시 얻는 시간을 초로 올림한다`() {
-        val limiter = limiter(terminalCapacity = 1, terminalRefillPerSecond = 0.5)
+        // 토큰 1개는 1.5초라 Retry-After는 올림한 2다. 키 TTL(빈 bucket이 가득 차는 시간)은 3초다.
+        val limiter = limiter(terminalCapacity = 2, terminalRefillPerSecond = 2.0 / 3)
         val terminal = terminal()
-        limiter.acquire(terminal)
+        repeat(2) { limiter.acquire(terminal) }
 
         repeat(5) {
             assertEquals(2, assertFailsWith<RateLimitedException> { limiter.acquire(terminal) }.retryAfterSeconds)
         }
 
-        // 거절이 토큰을 썼다면 2초 뒤에도 빚이 남아 거절된다.
-        Thread.sleep(2_100)
+        // 거절이 토큰을 썼다면 빚이 남아 1.6초 뒤에도 거절된다. TTL보다 짧게 쉰다. 길면 키가 만료돼 가득 찬 bucket이 되어 판별하지 못한다.
+        Thread.sleep(1_600)
+        limiter.acquire(terminal)
+    }
+
+    @Test
+    fun `저장된 시각이 Redis의 지금보다 미래여도 refill이 멈추지 않는다`() {
+        // failover로 새 primary의 시계가 뒤처진 상황이다. 빈 bucket의 마지막 차감 시각이 1분 뒤로 남아 있다.
+        val limiter = limiter(terminalCapacity = 2, terminalRefillPerSecond = 2.0)
+        val terminal = terminal()
+        val key = "rate-limit:{${terminal.storeId.value}}:terminal:${terminal.terminalId.value}"
+        val oneMinuteLaterMicros = (System.currentTimeMillis() + 60_000) * 1_000
+        redis.opsForHash<String, String>().putAll(key, mapOf("tokens" to "0", "at" to oneMinuteLaterMicros.toString()))
+        assertFailsWith<RateLimitedException> { limiter.acquire(terminal) }
+
+        // 토큰 1개는 0.5초다. 미래 시각이 그대로면 1분 동안 refill이 없어 거절된다.
+        Thread.sleep(600)
+
         limiter.acquire(terminal)
     }
 

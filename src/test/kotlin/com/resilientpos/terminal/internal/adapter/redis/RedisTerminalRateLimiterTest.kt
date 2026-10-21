@@ -15,7 +15,10 @@ import org.junit.jupiter.api.extension.ExtendWith
 import org.mockito.Mockito.mock
 import org.springframework.boot.test.system.CapturedOutput
 import org.springframework.boot.test.system.OutputCaptureExtension
+import io.lettuce.core.RedisCommandExecutionException
+import io.lettuce.core.RedisException
 import org.springframework.data.redis.RedisConnectionFailureException
+import org.springframework.data.redis.RedisSystemException
 import org.springframework.data.redis.core.StringRedisTemplate
 
 /** Redis 응답을 흉내 내 스크립트 밖의 판단(장애 처리, 설정 검증, metric)을 본다. 스크립트 자체는 `RedisTerminalRateLimiterIntegrationTest`가 본다. */
@@ -41,6 +44,8 @@ class RedisTerminalRateLimiterTest {
         listOf(
             RedisConnectionFailureException("Unable to connect to Redis"),
             IllegalStateException("LettuceConnectionFactory was destroyed"),
+            // REJECT_COMMANDS로 끊긴 동안 거절된 명령. 기다리면 풀리는 장애라 WARN이다.
+            RedisSystemException("Redis exception", RedisException("Currently not connected. Commands are rejected.")),
         ).forEach { error ->
             val mark = output.all.length
             val failing = mock(StringRedisTemplate::class.java) { throw error }
@@ -60,6 +65,23 @@ class RedisTerminalRateLimiterTest {
     }
 
     @Test
+    fun `Redis가 명령에 오류로 답하면 통과시키되 ERROR 한 줄로 보호가 꺼졌음을 남긴다`(output: CapturedOutput) {
+        val mark = output.all.length
+        // 스크립트 오류·OOM·NOPERM·CROSSSLOT은 Lettuce RedisCommandExecutionException을 원인으로 담아 온다(LettuceExceptionConverter).
+        val error = RedisSystemException("Error in execution", RedisCommandExecutionException("ERR user_script:1: Script attempted to access nonexistent global variable"))
+        val failing = mock(StringRedisTemplate::class.java) { throw error }
+
+        limiter(failing).acquire(terminal)
+
+        val logged = output.all.substring(mark)
+        assertFalse(logged.contains("\tat "), "스택 프레임이 찍혔다")
+        val line = logged.lines().single { it.contains("제한 없이 통과시킨다") }
+        assertContains(line, "ERROR")
+        assertContains(line, "Redis가 명령을 거절")
+        assertContains(line, "ERR user_script:1")
+    }
+
+    @Test
     fun `capacity가 1 미만이거나 refill이 0 이하·무한대·NaN이면 만들지 못한다`() {
         val redis = redisReturning(listOf(0L, 0L))
         listOf<() -> Unit>(
@@ -71,6 +93,19 @@ class RedisTerminalRateLimiterTest {
             { limiter(redis, storeRefillPerSecond = Double.POSITIVE_INFINITY) },
             { limiter(redis, storeRefillPerSecond = Double.NaN) },
         ).forEach { assertFailsWith<IllegalArgumentException>(block = it) }
+    }
+
+    @Test
+    fun `빈 bucket이 가득 차는 데 하루를 넘거나 capacity가 2의 53제곱을 넘으면 만들지 못하고 딱 하루는 된다`() {
+        val redis = redisReturning(listOf(0L, 0L))
+        listOf<() -> Unit>(
+            // 초당 0.001개면 capacity 100이 차는 데 10만 초다. 초당을 하루당으로 잘못 적은 값이다.
+            { limiter(redis, terminalCapacity = 100, terminalRefillPerSecond = 0.001) },
+            { limiter(redis, storeCapacity = 86_401, storeRefillPerSecond = 1.0) },
+            { limiter(redis, terminalCapacity = (1L shl 53) + 1, terminalRefillPerSecond = 1e12) },
+        ).forEach { assertFailsWith<IllegalArgumentException>(block = it) }
+
+        limiter(redis, terminalCapacity = 86_400, terminalRefillPerSecond = 1.0, storeCapacity = 86_400, storeRefillPerSecond = 1.0)
     }
 
     @Test
