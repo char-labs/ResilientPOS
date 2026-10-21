@@ -14,6 +14,7 @@ import com.resilientpos.sync.internal.domain.CheckoutPayload
 import com.resilientpos.sync.internal.domain.OperationPayload
 import com.resilientpos.sync.internal.domain.OrderPayload
 import com.resilientpos.terminal.TerminalId
+import io.micrometer.core.instrument.MeterRegistry
 import java.math.BigDecimal
 import java.util.UUID
 import java.util.concurrent.Executors
@@ -36,6 +37,7 @@ class SyncCommandFacadeIntegrationTest(
     @Autowired private val facade: SyncCommandFacade,
     @Autowired private val orders: OrderCommandFacade,
     @Autowired private val jdbcTemplate: JdbcTemplate,
+    @Autowired private val meterRegistry: MeterRegistry,
 ) : PostgresIntegrationTest() {
 
     private val terminalId = TerminalId(UUID.randomUUID())
@@ -557,5 +559,51 @@ class SyncCommandFacadeIntegrationTest(
         assertEquals(SyncCommandFacade.SYNC_BATCH_TOO_LARGE, failure.code)
         assertNull(storedWatermark())
         assertEquals(0, orderRows())
+    }
+
+    private fun operationCounts(): Map<SyncItemStatus, Double?> =
+        SyncItemStatus.entries.associateWith { meterRegistry.find("sync.operation").tag("status", it.name).counter()?.count() }
+
+    private fun countedDelta(block: () -> Unit): Map<SyncItemStatus, Double> {
+        val before = operationCounts()
+        block()
+        val after = operationCounts()
+        return SyncItemStatus.entries.associateWith { checkNotNull(after[it]) - checkNotNull(before[it]) }
+    }
+
+    @Test
+    fun `sync operation counter는 다섯 status 모두 기동 때 0 이상으로 등록돼 있다`() {
+        SyncItemStatus.entries.forEach { assertNotNull(meterRegistry.find("sync.operation").tag("status", it.name).counter(), it.name) }
+    }
+
+    @Test
+    fun `배치 항목 결과마다 status별 counter가 1씩 오른다 적용 중복 gap`() {
+        val applied = operation(1)
+        val applyDelta = countedDelta { receive(applied, operation(3)) }
+        val resendDelta = countedDelta { receive(applied) }
+
+        assertEquals(mapOf(SyncItemStatus.APPLIED to 1.0, SyncItemStatus.GAP to 1.0), applyDelta.filterValues { it != 0.0 })
+        assertEquals(mapOf(SyncItemStatus.DUPLICATE to 1.0), resendDelta.filterValues { it != 0.0 })
+    }
+
+    @Test
+    fun `배치 항목 결과마다 status별 counter가 1씩 오른다 거절 충돌`() {
+        val badScale = payload().let { it.copy(lines = listOf(it.lines.first().copy(unitPrice = BigDecimal("4500.5")))) }
+        val applied = operation(2)
+        val delta = countedDelta {
+            receive(operation(1, badScale), applied)
+            receive(operation(2, payload(), operationId = applied.operationId), operation(2))
+        }
+
+        assertEquals(mapOf(SyncItemStatus.REJECTED to 1.0, SyncItemStatus.APPLIED to 1.0, SyncItemStatus.CONFLICT to 2.0), delta.filterValues { it != 0.0 })
+    }
+
+    @Test
+    fun `상한을 넘어 거절된 배치는 counter를 올리지 않는다`() {
+        val delta = countedDelta {
+            assertFailsWith<DomainException> { receive(*Array(SyncCommandFacade.MAX_OPERATIONS + 1) { operation(it + 1L) }) }
+        }
+
+        assertEquals(SyncItemStatus.entries.associateWith { 0.0 }, delta)
     }
 }

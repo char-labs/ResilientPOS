@@ -14,6 +14,7 @@ import com.resilientpos.sync.internal.domain.SyncOperationStatus
 import com.resilientpos.sync.internal.domain.SyncRepository
 import com.resilientpos.sync.internal.domain.Watermark
 import com.resilientpos.terminal.TerminalId
+import io.micrometer.core.instrument.MeterRegistry
 import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.stereotype.Service
 
@@ -35,7 +36,13 @@ class SyncCommandFacade(
     private val repository: SyncRepository,
     private val orders: OrderCommandFacade,
     private val identifierGenerator: IdentifierGenerator,
+    private val meterRegistry: MeterRegistry,
 ) {
+
+    init {
+        // 한 번도 일어나지 않은 status도 0으로 나가야 알림의 increase()가 첫 증가를 잡는다.
+        SyncItemStatus.entries.forEach { meterRegistry.counter(OPERATION_METRIC, "status", it.name) }
+    }
 
     fun receiveBatch(command: SyncCommand.ReceiveBatch): SyncCommand.ReceiveBatch.Result {
         // 가장 싼 거절을 가장 먼저 한다. 상한을 넘는 배치는 Redis도 커넥션도 건드리지 않는다.
@@ -55,8 +62,10 @@ class SyncCommandFacade(
             }
         }
         val lastAckedSequence = Tx.readOnlyTx { repository.findWatermark(command.terminalId) }?.lastAckedSequence ?: 0
+        // 배치가 끝까지 간 뒤에만 센다. 상한 거절과 인프라 예외로 실패한 배치는 항목 결과가 확정되지 않았다.
+        val counts = items.groupingBy { it.status }.eachCount()
+        counts.forEach { (status, count) -> meterRegistry.counter(OPERATION_METRIC, "status", status.name).increment(count.toDouble()) }
         log.info {
-            val counts = items.groupingBy { it.status }.eachCount()
             "sync 배치 처리 terminalId=${command.terminalId.value} operations=${items.size} lastAckedSequence=$lastAckedSequence counts=$counts"
         }
         return SyncCommand.ReceiveBatch.Result(lastAckedSequence, items)
@@ -153,6 +162,8 @@ class SyncCommandFacade(
 
     companion object {
         private val log by logger()
+
+        private const val OPERATION_METRIC = "sync.operation"
 
         /** 한 배치에 담을 수 있는 operation 수. 기획 원문의 "500개 batch"를 상한으로 둔다. */
         const val MAX_OPERATIONS = 500
