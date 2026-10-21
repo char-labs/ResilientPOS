@@ -137,6 +137,8 @@ Jackson이나 Boot를 올려 이 동작이 바뀌면 계약 테스트(6절)의 `
 
 ## 8. DLT 재투입 전에 볼 것
 
+재투입 API(`POST /admin/v1/dead-letters/{topic}/{partition}/{offset}/redrive`)는 넣기 전에 값을 원 토픽의 이벤트 타입으로, consumer와 같은 `JsonMapper`로 읽어 본다. 아래 첫째·셋째 경우(높은 `schemaVersion`, 모르는 enum 값)는 `422 DEAD_LETTER_NOT_READABLE`로 거절되고 아무것도 보내지 않는다. 다만 요청을 받은 pod의 코드로만 확인하므로, 롤링 배포 중이면 "모든 pod에 배포됐는가"는 운영자가 본다. 목록(`GET /admin/v1/dead-letters`)의 `schemaVersion`과 `exception`·`exceptionMessage`로 미리 가를 수 있다([platform-operator-dlt-redrive](../spec/2026-10-21-platform-operator-dlt-redrive.md)).
+
 - 메시지의 `schemaVersion`이 지금 배포된 `SCHEMA_VERSION` 이하인가. 높으면 그 버전을 아는 코드가 모든 pod에 배포된 뒤 넣는다.
 - `reason="UNSUPPORTED_EVENT_SCHEMA_VERSION"`으로 간 메시지는 위 조건만 맞으면 그대로 넣는다.
 - enum 값을 더한 배포 중 옛 pod가 보낸 메시지는 `reason="error"`라 다른 실패와 섞인다. 로그 `DLT로 보냄`의 스택 트레이스에 `not one of the values accepted for Enum class`가 있으면 그 경우다. 새 값을 아는 코드가 배포된 뒤 넣는다.
@@ -147,7 +149,7 @@ Jackson이나 Boot를 올려 이 동작이 바뀌면 계약 테스트(6절)의 `
   order by publication_date;
   ```
   `> 1`은 지금 배포된 `SCHEMA_VERSION`으로 바꿔 쓴다.
-- 그 밖의 이유로 간 메시지와 재투입 명령은 [도메인 모델 §4.3](domain-model.md#43-이벤트-전달과-저장-형식)의 절차를 따른다.
+- 그 밖의 이유로 간 메시지와 재투입 절차는 [도메인 모델 §4.3](domain-model.md#43-이벤트-전달과-저장-형식)을 따른다.
 
 ## 9. 하지 않은 것
 

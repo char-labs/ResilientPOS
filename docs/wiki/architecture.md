@@ -6,7 +6,7 @@
 
 ## 1. 요청 처리 단계
 
-단말(POS)의 쓰기 요청 하나는 아래 순서로 처리된다. 점주 경로(`/owner/**`)는 1번만 다르다. Spring Security 체인(`platform.OwnerSecurityFilterChain`)이 Redis에 둔 세션 쿠키로 인증한다.
+단말(POS)의 쓰기 요청 하나는 아래 순서로 처리된다. 점주 경로(`/owner/**`)는 1번만 다르다. Spring Security 체인(`platform.OwnerSecurityFilterChain`)이 Redis에 둔 세션 쿠키로 인증한다. 플랫폼 운영자 경로(`/admin/**`)는 `platform.AdminSecurityFilterChain`이 사내 IdP가 발급한 Bearer JWT로 인증하고 세션을 쓰지 않는다([platform-operator-dlt-redrive](../spec/2026-10-21-platform-operator-dlt-redrive.md)).
 
 1. **인증.** 단말은 `/v1/**`를 `Authorization: Bearer 토큰`으로 부른다. `terminal` 모듈의 `TerminalAuthenticationInterceptor`가 토큰 형식을 거르고 `TerminalManagement.authenticate`로 토큰 해시를 활성 credential과 대조한다. 성공하면 `AuthenticatedTerminal`(단말 ID, 매장 ID)을 요청 속성에 두고, 실패하면 401 `UNAUTHENTICATED`다.
 2. **Controller.** 경로·본문의 단말과 매장을 `AuthenticatedTerminal`과 대조하고(다르면 403 `TERMINAL_MISMATCH`) Request DTO를 Command로 바꿔 Facade를 부른다. 판단은 하지 않는다.
@@ -260,7 +260,7 @@ flowchart TB
 | `reconciliation` | bounded context | 불일치 case(예정) | 없음. 아직 비어 있다 |
 | `contract` | 계약 | 모듈을 건너가는 이벤트. 업무 규칙과 상태가 없다 | `OrderPaymentRequested`, `PaymentApproved`, `OrderPaid`, `PaymentAttemptKind` |
 | `foundation` | 공유 커널 | 프레임워크 없는 값 타입과 모델링 원시 타입 | `Money`, `DomainEvent`, `Transition`, `DomainException`, `IdentifierGenerator` |
-| `platform` | 공용 인프라 | 트랜잭션(`Tx`), 분산 락(`Lock`), 엔티티 기반 클래스, 조회 실행기, 응답 envelope·오류 변환, 점주 Security 체인, Kafka 구성, 발행 기록 재전송·metric | `Tx`, `Lock`, `BaseEntity`, `JdslQueryExecutor` 등 |
+| `platform` | 공용 인프라 | 트랜잭션(`Tx`), 분산 락(`Lock`), 엔티티 기반 클래스, 조회 실행기, 응답 envelope·오류 변환, 점주·운영자 Security 체인, Kafka 구성, 발행 기록 재전송·metric, DLT 재투입 API와 기록 | `Tx`, `Lock`, `BaseEntity`, `JdslQueryExecutor` 등 |
 
 - **공개 API는 모듈 기본 패키지에 있는 타입이다.** Facade, 커맨드·조회 이름공간, `*View`, ID 값 타입, 이벤트만 둔다. 그 밖은 모두 `internal` 아래다(`internal/domain`, `internal/application`, `internal/adapter/web`, `internal/adapter/persistence/command`·`query`, `internal/adapter/gateway`·`redis`). Modulith는 기본 패키지만 공개로 보므로 `@NamedInterface` 없이 이 배치가 경계가 된다([도메인 모델 §4.4](domain-model.md#44-공개-타입은-모듈-루트에-둔다)).
 - `sync`와 `fulfillment`의 Facade는 `internal`에 있다. 밖에서 부르는 쪽이 없고, 특히 `FulfillmentCommandFacade`는 주문이 `PAID`인지 묻지 않아 공개하면 결제 안 된 주문의 fulfillment를 다른 모듈이 만들 수 있다.
