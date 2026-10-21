@@ -142,6 +142,7 @@ Docker 관련 파일은 모두 `docker/` 아래에 있고 로컬 개발 전용�
 
 DB 비밀번호는 로컬 전용 기본값 `resilientpos` 입니다. 바꾸려면 `cp docker/.env.example docker/.env` 후 값을 고칩니다(`.env` 는 커밋하지 않습니다).
 `make up` 뒤 IDE나 `./gradlew bootRun` 으로 앱을 띄울 때는 `POSTGRES_PASSWORD=resilientpos` 를 직접 줍니다. 애플리케이션 설정은 이 값에 기본값을 두지 않습니다.
+플랫폼 운영자 IdP 설정도 기본값이 없어 비어 있으면 앱이 뜨지 않습니다. 로컬에는 IdP가 없으므로 자리값 `OPERATOR_ISSUER_URI=http://operator-idp.invalid`, `OPERATOR_AUDIENCE=resilientpos-admin` 을 함께 줍니다(compose의 앱과 같은 값, `/admin` 은 쓸 수 없습니다).
 수집 경로는 [관측성](docs/wiki/observability.md)에 있습니다.
 
 ### 자동완성 (선택)

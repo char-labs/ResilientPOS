@@ -25,7 +25,7 @@ Kotlin으로 엔티티를 어떤 형태로 쓰는지(생성자 `private`, `var �
 | `OwnerEntity` | `t_owner` | owner | 루트 `Owner`(점주 계정) | — | 넣기만 한다 |
 | `StoreEntity` | `t_store` | store | 루트 `Store` | `owner_id` | 넣기만 한다 |
 | `ReconciliationCaseEntity` | `t_reconciliation_case` | reconciliation | 루트 `ReconciliationCase`(자식 없음) | `payment_id`(unique), `order_id`, `store_id`, `terminal_id`, `resolved_by_owner_id` | `status`(`MANUAL_REVIEW`→`RESOLVED`)와 해소 컬럼만 한 번 바뀐다. 행을 잠그고 바꾼다 |
-| `DeadLetterRedriveEntity` | `t_dead_letter_redrive` | platform | aggregate가 아닌 운영 기록(DLT 재투입 한 건). 업무 상태를 담지 않는다 | DLT 좌표 `(dlt_topic, dlt_partition, dlt_offset)`(unique, Kafka 쪽 좌표라 DB 행을 가리키지 않는다) | 넣기만 한다. 운영자(`operator_subject`, IdP의 `sub`)와 사유를 남긴다([platform-operator-dlt-redrive](../spec/2026-10-21-platform-operator-dlt-redrive.md)) |
+| `DeadLetterRedriveEntity` | `t_dead_letter_redrive` | platform | aggregate가 아닌 운영 기록(DLT 재투입 한 건). 업무 상태를 담지 않는다 | DLT 레코드 `(dlt_topic, dlt_partition, dlt_offset, dlt_timestamp)`(unique, Kafka 쪽 좌표와 레코드 시각이라 DB 행을 가리키지 않는다) | 넣기만 한다. 운영자(`operator_subject`, IdP의 `sub`)와 사유를 남긴다([platform-operator-dlt-redrive](../spec/2026-10-21-platform-operator-dlt-redrive.md)) |
 
 `event_publication`(Spring Modulith 발행 기록)은 우리 엔티티가 아니다. Modulith의 JPA 엔티티가 스키마를 정하고 `t_` 접두어 규칙의 예외다([도메인 모델 §4.3](domain-model.md)).
 
