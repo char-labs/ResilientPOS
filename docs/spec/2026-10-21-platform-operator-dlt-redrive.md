@@ -21,7 +21,7 @@ DLT 재투입은 지금 Kafka CLI 절차뿐이다([도메인 모델 §4.3](../wi
 **2. `/admin/**`는 전용 Security 체인 하나가 맡는다.** `platform.AdminSecurityFilterChain`은 점주 체인과 같은 컴포넌트 모양(`SecurityFilterChain` 위임)이다.
 - `securityMatcher("/admin/**")`, `oauth2ResourceServer { jwt { } }`, 세션 정책은 stateless다. 쿠키를 읽지도 쓰지도 않으므로 CSRF를 끈다. 점주 체인과 단말 인터셉터는 바꾸지 않는다. 점주 세션 쿠키로 `/admin`을 부르면 Bearer가 없어 401이고, 운영자 토큰으로 `/owner`나 `/v1`을 부르면 그쪽 인증이 토큰을 모르므로 401이다.
 - 권한은 `resilientpos-operator` 하나다. 모든 `/admin/**`에 이 권한이 필요하다. 권한을 어느 claim에서 읽을지는 IdP마다 달라서 Boot 속성(`authorities-claim-name`, `authority-prefix: ""`)으로 배포가 정한다. 코드에 IdP별 분기를 두지 않는다.
-- issuer(`issuer-uri`)와 audience(`audiences`)는 둘 다 필수이고 기본값이 없다. 없으면 앱이 뜨지 않는다. issuer가 없으면 Boot가 `JwtDecoder`를 만들지 않아 체인 생성이 실패하고, audience가 비면 체인이 거부한다. 기동 실패로 두는 이유는 둘이다. 체인이 없으면 `/admin/**`가 어떤 체인에도 맞지 않아 인증 없이 Controller에 닿는다. audience를 검사하지 않으면 같은 IdP가 다른 앱용으로 발급한 토큰도 받는다(Spring Security는 기본으로 `aud`를 검사하지 않는다).
+- issuer(`issuer-uri`)와 audience(`audiences`)는 둘 다 필수이고 기본값이 없다. 둘 중 하나라도 비면 체인이 생성을 거부해 앱이 뜨지 않는다. Boot에 맡기지 않는 이유는 Boot가 검사 없이 넘어가는 경로가 있어서다. issuer 없이 `jwk-set-uri`나 `public-key-location`만 주면 decoder가 만들어지지만 `iss`를 검사하지 않고, `audiences`가 비면 `aud`를 검사하지 않는다. 기동 실패로 두는 이유는 둘이다. 체인이 없으면 `/admin/**`가 어떤 체인에도 맞지 않아 인증 없이 Controller에 닿는다. audience를 검사하지 않으면 같은 IdP가 다른 앱용으로 발급한 토큰도 받는다(Spring Security는 기본으로 `aud`를 검사하지 않는다).
 - 행위자는 토큰의 `sub`다(OIDC Core가 255자 이하로 정한다). 이메일·이름은 남기지 않는다. IdP가 `sub`로 사람을 찾는다.
 - 오류는 점주 체인처럼 `handlerExceptionResolver`로 넘겨 `ApiControllerAdvice`가 envelope와 로그를 맡는다. 토큰이 없거나 틀리면(서명·만료·issuer·audience) `401 UNAUTHENTICATED`이고 `WWW-Authenticate: Bearer`를 붙인다(단말 401과 같다). 권한이 없으면 `403 ACCESS_DENIED`다. 토큰 값은 로그와 예외 메시지에 남기지 않는다.
 - IdP에 닿지 못하면(discovery·JWK 조회 실패) `503 SERVICE_UNAVAILABLE` envelope다. Boot의 issuer 기반 decoder는 첫 요청 때 discovery를 하는 `SupplierJwtDecoder`라 기동이 IdP 가용성에 묶이지 않는다. 대신 그 초기화 실패(`JwtDecoderInitializationException`)는 `AuthenticationException`이 아닌 `RuntimeException`이라, 그대로 두면 Security 필터 밖으로 나가 Tomcat HTML 500이 된다. 점주의 세션 저장소 장애(`OwnerSessionStoreFilter`)와 같은 자리에 `/admin/*` 서블릿 필터를 두고 503 envelope로 바꾼다. JWK 조회 실패처럼 `AuthenticationServiceException`으로 오는 경우도 같은 503이다.
@@ -87,8 +87,8 @@ DLT 재투입은 지금 Kafka CLI 절차뿐이다([도메인 모델 §4.3](../wi
 
 ### 공식 문서와 소스 대조
 - [Spring Security resource server JWT](https://docs.spring.io/spring-security/reference/servlet/oauth2/resource-server/jwt.html): 최소 설정은 `iss`·`exp`·`nbf`만 검사하고 `aud`는 Boot의 `audiences` 속성으로 켠다. issuer 기반 discovery는 첫 요청 때 하고 "startup is not coupled to the authorization server's availability"이며 `SupplierJwtDecoder`가 맡는다. 기본 권한은 `scope`·`scp`에 `SCOPE_` 접두어이고 claim 이름과 접두어를 바꿀 수 있다. clock skew 기본값은 60초다.
-- Boot 4.1.1 `spring-boot-security-oauth2-resource-server` jar: 설정 메타데이터에 `issuer-uri`·`audiences`·`authorities-claim-name`·`authority-prefix`·`public-key-location`이 있다. `JwtDecoderConfiguration`은 issuer만 있으면 `SupplierJwtDecoder`를 만들고, `audiences`가 비지 않았을 때만 `aud` 검사기를 더한다. `public-key-location` decoder도 같은 검사기(issuer·audience)를 붙인다. 테스트는 이 경로로 실제 검증 구성을 탄다.
-- spring-security-oauth2-jose 7.0.5: `SupplierJwtDecoder`는 초기화 실패를 `JwtDecoderInitializationException`(`RuntimeException` 하위, `JwtException` 아님)으로 감싼다. 그래서 결정 2의 503 필터가 필요하다.
+- Boot 4.1.1 `spring-boot-security-oauth2-resource-server` jar: 설정 메타데이터에 `issuer-uri`·`audiences`·`authorities-claim-name`·`authority-prefix`·`public-key-location`이 있다. `JwtDecoderConfiguration`은 issuer만 있으면 `SupplierJwtDecoder`를 만들고, `audiences`가 비지 않았을 때만 `aud` 검사기를 더한다. `public-key-location` decoder는 issuer·jwk-set-uri가 없을 때만 만들어진다(`KeyValueCondition`, 구현 중 관측). 그래서 테스트는 운영과 같은 issuer decoder를 쓰고, `JwkSetUriJwtDecoderBuilderCustomizer`로 decoder의 HTTP 호출(discovery·JWK Set)만 메모리 응답으로 바꾼다. 서명·만료·issuer·audience 검사가 네트워크 없이 운영 구성 그대로 돈다.
+- spring-security-oauth2-jose 7.1.1(Boot 4.1.1 BOM이 고른 버전): `SupplierJwtDecoder`는 초기화 실패를 `JwtDecoderInitializationException`(`RuntimeException` 하위, `JwtException` 아님)으로 감싼다. 그래서 결정 2의 503 필터가 필요하다.
 - [Spring Kafka 오류 처리](https://docs.spring.io/spring-kafka/reference/kafka/annotation-error-handling.html): `DeadLetterPublishingRecoverer`가 붙이는 헤더 목록(원 토픽·partition·offset·timestamp·consumer group, 예외 클래스·원인 클래스·메시지·스택). 문자열 값은 spring-kafka 4.1.1 `KafkaHeaders`(`kafka_dlt-original-topic`, `kafka_dlt-original-partition`, `kafka_dlt-original-offset`, `kafka_dlt-exception-cause-fqcn`, `kafka_dlt-exception-fqcn`, `kafka_dlt-exception-message`)로 확인했다. 이 문서는 DLT 재생을 다루지 않는다.
 - [Spring Kafka `KafkaTemplate` receive](https://docs.spring.io/spring-kafka/reference/kafka/receiving-messages/template-receive.html): 작업마다 consumer를 만들고 닫으며, 여러 offset은 하나씩 가져온다. 4.1.1 소스에서 없는 offset이면 poll 시간 초과까지 기다린다. 그래서 목록은 consumer로 끝 offset까지만 읽는다.
 - producer 내구성(`acks=all`, `enable.idempotence=true`)은 [kafka-event-redelivery](2026-09-26-kafka-event-redelivery.md) 공식 문서 점검의 기동 로그 값 그대로다. 재투입 전송도 같은 producer 설정을 쓴다. 구현에서 템플릿의 key·value 직렬화기를 기동 로그 `ProducerConfig values`로 확인하고 결과 절에 적는다.
@@ -180,7 +180,7 @@ create table t_dead_letter_redrive (
 
 ## 검증
 - 인수 1~14: `./gradlew test`. Docker가 필요하다(PostgreSQL·Redis·Kafka 컨테이너).
-- 인수 1·2: 테스트 전용 RSA 키로 서명한 JWT와 `public-key-location` 설정으로 Boot의 실제 검증 구성(issuer·audience 검사기)을 탄다. 권한 claim은 `roles`.
+- 인수 1·2: 테스트 JVM마다 만드는 RSA 키로 서명한 JWT를 보낸다. decoder는 운영과 같은 issuer decoder이고 discovery·JWK 응답만 테스트 설정(`OperatorTokens.IdpStub`)이 준다. 권한 claim은 `roles`. 키 파일을 커밋하지 않는다.
 - 인수 3: 설정을 빼고 컨텍스트를 띄워 실패를 단언한다.
 - 인수 4: issuer를 닿지 않는 주소로 둔 컨텍스트에서 형식이 맞는 토큰으로 부른다.
 - 인수 6~8: 기존 Kafka 통합 테스트처럼 DLT에 레코드를 직접 넣거나(헤더 포함) 실패를 주입해 보낸 뒤 API를 부른다.
@@ -211,8 +211,9 @@ create table t_dead_letter_redrive (
 
 | 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
 |---|---|---|---|
-| 인수 1·2: 운영자 토큰 검증과 체인 격리 | 미실행 | 미실행 | 미실행 |
-| 인수 3·4: IdP 설정 누락 기동 실패, IdP 장애 503 | 미실행 | 미실행 | 미실행 |
+| 인수 1·2: `AdminSecurityIntegrationTest` 5개(`issuer audience 서명 만료가 맞고 운영자 권한이 있는 토큰은 체인을 통과해 없는 경로의 404 envelope가 되고 Set-Cookie가 없다`, `토큰이 없거나 서명 만료 issuer audience 중 하나가 틀리면 401 UNAUTHENTICATED와 WWW-Authenticate Bearer이고 Set-Cookie가 없다`(토큰 없음·같은 kid 다른 키·만료·다른 issuer·다른 audience), `운영자 권한이 없는 토큰은 403 ACCESS_DENIED이고 Set-Cookie가 없다`, `점주 세션 쿠키나 단말 토큰으로 admin을 부르면 401이다`, `운영자 토큰으로 owner와 v1을 부르면 401이다`) | 의존성·설정·테스트만 두고 체인은 컴포넌트가 아닌 상수 선언으로 둔 상태에서 `./gradlew test --tests 'com.resilientpos.platform.Admin*'` — 8개 중 5개 실패(403 기대 404, 토큰 없음 401 기대 404, 점주 쿠키 401 기대 404, 아래 기동 실패 2개). 유효 토큰의 404와 owner·v1의 401은 체인 없이도 통과한 characterization이다 | 체인 구현 뒤 같은 명령 8개 통과. 테스트 `audiences`에 다른 값을 더하면 다른 audience 사례가 401 대신 404로 실패해 aud 검사기가 401을 만든다는 것을 확인하고 되돌렸다 | `./gradlew test --tests 'com.resilientpos.platform.*' --tests 'com.resilientpos.owner.*' --tests 'com.resilientpos.terminal.*'` 230개 통과, `./gradlew test` 721개 통과 |
+| 인수 3: `AdminSecurityConfigurationTest` 4개(`issuer와 audience가 있으면 운영자 체인이 만들어진다`(대조군), `issuer가 비면 체인이 거부해 컨텍스트가 뜨지 않는다`, `issuer 없이 jwk-set-uri만 있으면 issuer 검사가 빠지므로 컨텍스트가 뜨지 않는다`, `audience가 비면 체인이 거부해 컨텍스트가 뜨지 않는다`) | 위와 같은 명령. issuer·audience 누락 2개는 `issuer 없이 컨텍스트가 떴다`·`audience 없이 컨텍스트가 떴다`로 실패. jwk-set-uri 사례는 첫 GREEN 뒤 리뷰에서 더했고, Boot에 맡긴 issuer 필수(JwtDecoder 없음)로는 4개 중 이것만 `issuer 없이 컨텍스트가 떴다`로 실패했다 | 체인에 issuer `check`를 더한 뒤 `./gradlew test --tests 'com.resilientpos.platform.Admin*'` 9개 통과 | 아래 다음 동작의 회귀에 포함 |
+| 인수 4: IdP 장애 503 | 미실행 | 미실행 | 미실행 |
 | 인수 5·11: DLT 목록과 위치 검증, offset 미변경 | 미실행 | 미실행 | 미실행 |
 | 인수 6·7·10: 재투입·기록·멱등·counter·감사 | 미실행 | 미실행 | 미실행 |
 | 인수 8·9: 읽기 검사 422, 없는 offset 404, 사유 400 | 미실행 | 미실행 | 미실행 |
