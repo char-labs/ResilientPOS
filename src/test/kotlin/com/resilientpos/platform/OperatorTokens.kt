@@ -61,14 +61,15 @@ object OperatorTokens {
         return "Bearer " + encoder.encode(JwtEncoderParameters.from(header, claims)).tokenValue
     }
 
-    private val idpResponses = ClientHttpRequestFactory { uri, method ->
-        val body = when (uri.toString()) {
-            "$ISSUER/.well-known/openid-configuration" -> """{"issuer":"$ISSUER","jwks_uri":"$ISSUER/jwks"}"""
-            "$ISSUER/jwks" -> JWKSet(signingKey.toPublicJWK()).toString()
+    /** discovery·JWK Set 응답. [jwksAvailable]이 거짓을 돌려주면 JWK Set만 500이다(discovery 뒤의 IdP 장애). */
+    fun idpResponses(jwksAvailable: () -> Boolean = { true }) = ClientHttpRequestFactory { uri, method ->
+        val (status, body) = when (uri.toString()) {
+            "$ISSUER/.well-known/openid-configuration" -> HttpStatus.OK to """{"issuer":"$ISSUER","jwks_uri":"$ISSUER/jwks"}"""
+            "$ISSUER/jwks" -> if (jwksAvailable()) HttpStatus.OK to JWKSet(signingKey.toPublicJWK()).toString() else HttpStatus.INTERNAL_SERVER_ERROR to "{}"
             else -> error("IdP stub has no response for $method $uri")
         }
         MockClientHttpRequest(method, uri).apply {
-            setResponse(MockClientHttpResponse(body.toByteArray(), HttpStatus.OK).apply { headers.contentType = MediaType.APPLICATION_JSON })
+            setResponse(MockClientHttpResponse(body.toByteArray(), status).apply { headers.contentType = MediaType.APPLICATION_JSON })
         }
     }
 
@@ -76,6 +77,6 @@ object OperatorTokens {
     @TestConfiguration(proxyBeanMethods = false)
     class IdpStub {
         @Bean
-        fun operatorIdpStub() = JwkSetUriJwtDecoderBuilderCustomizer { builder -> builder.restOperations(RestTemplate(idpResponses)) }
+        fun operatorIdpStub() = JwkSetUriJwtDecoderBuilderCustomizer { builder -> builder.restOperations(RestTemplate(idpResponses())) }
     }
 }

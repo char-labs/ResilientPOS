@@ -92,6 +92,12 @@ class ApiControllerAdvice : ResponseEntityExceptionHandler() {
         ResponseEntity.status(ErrorType.SERVICE_UNAVAILABLE.status)
             .body(failBody(ErrorType.SERVICE_UNAVAILABLE, e, request.describe()))
 
+    /** 외부 의존(운영자 IdP 등) 장애. 원인 예외는 로그에만 남기고 응답은 고정 문구다. */
+    @ExceptionHandler(DependencyUnavailableException::class)
+    fun handleDependencyUnavailable(e: DependencyUnavailableException, request: HttpServletRequest): ResponseEntity<ApiResponse<Nothing>> =
+        ResponseEntity.status(ErrorType.SERVICE_UNAVAILABLE.status)
+            .body(failBody(ErrorType.SERVICE_UNAVAILABLE, e, request.describe()))
+
     @ExceptionHandler(Exception::class)
     fun handleUnexpected(e: Exception, request: HttpServletRequest): ResponseEntity<ApiResponse<Nothing>> =
         ResponseEntity.status(ErrorType.INTERNAL_ERROR.status)

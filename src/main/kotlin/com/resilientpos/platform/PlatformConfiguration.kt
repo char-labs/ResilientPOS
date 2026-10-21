@@ -8,6 +8,7 @@ import java.time.Clock
 import org.springframework.beans.factory.InitializingBean
 import org.springframework.beans.factory.ObjectProvider
 import org.springframework.beans.factory.annotation.Qualifier
+import org.springframework.boot.security.autoconfigure.web.servlet.SecurityFilterProperties
 import org.springframework.boot.web.servlet.FilterRegistrationBean
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
@@ -58,5 +59,13 @@ class PlatformConfiguration {
         FilterRegistrationBean(OwnerSessionStoreFilter(resolver::getObject)).apply {
             addUrlPatterns("/owner/*")
             order = SessionRepositoryFilter.DEFAULT_ORDER - 1
+        }
+
+    /** admin 아래 경로만 맡는다. Spring Security 필터보다 앞이어야 운영자 체인이 던지는 IdP 장애 예외를 잡는다. resolver를 늦게 꺼내는 이유는 위와 같다. */
+    @Bean
+    fun adminIdentityProviderFilter(@Qualifier("handlerExceptionResolver") resolver: ObjectProvider<HandlerExceptionResolver>) =
+        FilterRegistrationBean(AdminIdentityProviderFilter(resolver::getObject)).apply {
+            addUrlPatterns("/admin/*")
+            order = SecurityFilterProperties.DEFAULT_FILTER_ORDER - 1
         }
 }
