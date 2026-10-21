@@ -20,49 +20,53 @@ metric과 ECS 로그는 나가지만 그것을 읽어 사람을 부르는 규칙
 - 로컬에는 Alertmanager가 없어 알림이 발송되지 않는다. firing 상태는 Prometheus `/api/v1/alerts`와 Grafana의 알림 목록에서 본다. 운영 발송 경로(Alertmanager·Mimir alertmanager)는 배포가 정해질 때 붙인다.
 - 규칙마다 `severity`(`critical`·`warning`) label과 `summary`·`runbook_url` annotation을 둔다. `runbook_url`은 `https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#규칙이름소문자`다.
 
-**3. 규칙은 13개다.** 여러 pod가 같은 DB를 세는 gauge는 `max`로 모으고, pod마다 도는 작업은 `instance`별로 본다.
+**3. 규칙은 14개다.** 여러 pod가 같은 DB를 세는 gauge는 `max`로 모으고, pod마다 도는 작업은 `instance`별로 본다(범위 조정 9~12).
 
 | 규칙 | 조건 | for | severity |
 |---|---|---|---|
-| EventPublicationFailed | `max(event_publication_incomplete{status="failed"}) > 0` | 1h | warning |
+| ResilientPosMetricsAbsent | `absent(process_uptime_seconds{application="ResilientPOS"})`. 앱 인스턴스가 하나도 보이지 않음 | 5m | critical |
+| EventPublicationOverdue | `max(event_publication_incomplete_oldest_seconds) > 3600`. 완료되지 않은 가장 오래된 발행 기록이 1시간을 넘음 | 5m | warning |
 | EventPublicationMetricStale | 인스턴스별 `time() - event_publication_incomplete_refreshed_seconds > 300` | 5m | warning |
-| KafkaDeadLetter | 10분 안에 `event_kafka_dead_letter_total`이 늘었거나, 10분 전에는 없던 series가 0보다 큰 값으로 생김 | 없음 | critical |
-| KafkaDeadLetterPublishFailed | 위와 같은 조건을 `event_kafka_dead_letter_failed_total`에 | 없음 | critical |
+| KafkaDeadLetter | 10분 안에 `event_kafka_dead_letter_total`이 늘었거나, 10분 전까지 1시간 동안 없던 series가 0보다 큰 값으로 생김(`unless last_over_time(…[1h] offset 10m)`). `keep_firing_for: 24h` | 없음 | critical |
+| KafkaDeadLetterPublishFailed | 위와 같은 조건을 `event_kafka_dead_letter_failed_total`에. `keep_firing_for: 24h` | 없음 | critical |
 | KafkaConsumerLag | `max by (topic, partition) (kafka_consumer_fetch_manager_records_lag) > 1000` | 10m | warning |
 | EventPublicationResubmitterNotSucceeding | 기동한 지 5분이 지난 인스턴스(`process_uptime_seconds > 300`)에서 10분 동안 `tasks_scheduled_execution_seconds_count{code_function="resubmitAndPurge", outcome="SUCCESS"}`가 늘지 않음 | 10m | warning |
 | UnknownPaymentResolverNotSucceeding | 같은 조건을 `code_function="resolveUnknown"`에 | 10m | warning |
 | UnknownPaymentResolutionStuck | `max(payment_attempt_unknown) - max(payment_attempt_reconciliation_pending) > 0` | 2h | warning |
 | ReconciliationPendingUnresolved | `max(payment_attempt_reconciliation_pending) > 0` | 24h | warning |
-| LockFailOpen | `sum by (lock, reason) (increase(lock_fail_open_total[10m])) > 0` | 10m | warning |
+| LockFailOpen | `sum by (lock, reason) (increase(lock_fail_open_total[2m])) > 0` | 10m | warning |
 | SyncConflict | `sum(increase(sync_operation_total{status="CONFLICT"}[10m])) > 0` | 없음 | warning |
-| SyncGapPersistent | `sum(increase(sync_operation_total{status="GAP"}[30m])) > 0` | 30m | warning |
-| OwnerSessionStoreUnavailable | `sum(increase(http_server_requests_seconds_count{status="503"}[5m])) > 0` | 5m | critical |
+| SyncGapPersistent | `sum(increase(sync_operation_total{status="GAP"}[5m])) > 0` | 30m | warning |
+| OwnerSessionStoreUnavailable | `sum(increase(http_server_requests_seconds_count{status="503", uri!~"/actuator/.*"}[2m])) > 0` | 5m | critical |
 
-- 앞의 넷과 UnknownPaymentResolutionStuck·ReconciliationPendingUnresolved·OwnerSessionStoreUnavailable은 [관측성](../wiki/observability.md)이 이미 적어 둔 조건을 그대로 옮긴다.
-- **첫 DLT.** 도메인 reason counter는 `platform`이 `contract`를 참조하면 순환하므로 미리 등록하지 않는다([event-contract-compatibility](2026-10-20-event-contract-compatibility.md) 제외 절). 새 series의 첫 값은 `increase()`가 0으로 본다. 그래서 규칙이 "10분 전에 없던 series"를 `unless … offset 10m`로 따로 잡는다. 재기동으로 다시 생기는 `reason="error"` series는 0으로 등록되므로 울리지 않는다. 이 처리로 wiki의 "배포 뒤 DLT를 직접 확인한다"는 단서를 지운다.
+- EventPublicationMetricStale·KafkaDeadLetter·KafkaDeadLetterPublishFailed와 UnknownPaymentResolutionStuck·ReconciliationPendingUnresolved·OwnerSessionStoreUnavailable은 [관측성](../wiki/observability.md)이 이미 적어 둔 조건에서 출발했다. `EventPublicationOverdue`는 그 wiki의 `failed > 0 for: 1h` 조건이 브로커 장애를 놓쳐 나이로 바꾼 것이다(범위 조정 9).
+- **감지 창은 `for:`보다 짧게 둔다.** `increase(x[W]) > 0`은 마지막 증가 뒤에도 W 동안 참이라, W와 `for:`가 같으면 짧은 묶음이 끝난 뒤에 울린다. 창은 scrape 간격(15초)의 네 배 이상으로 둔다(범위 조정 12).
+- **첫 DLT.** 도메인 reason counter는 `platform`이 `contract`를 참조하면 순환하므로 미리 등록하지 않는다([event-contract-compatibility](2026-10-20-event-contract-compatibility.md) 제외 절). 새 series의 첫 값은 `increase()`가 0으로 본다. 그래서 규칙이 "10분 전까지 1시간 동안 없던 series"를 `unless last_over_time(… [1h] offset 10m)`로 따로 잡는다. range 조회라 scrape가 한 번 실패해 생긴 stale marker를 "없던 series"로 보지 않는다. 재기동으로 다시 생기는 `reason="error"` series는 0으로 등록되므로 울리지 않는다. 이 처리로 wiki의 "배포 뒤 DLT를 직접 확인한다"는 단서를 지운다.
+- **DLT 알림은 24시간 붙잡는다.** DLT 메시지는 지워지지 않는데 증가 조건은 10분 뒤 풀린다. `keep_firing_for: 24h`로 마지막 DLT 뒤 하루 동안 firing을 유지해, 새벽의 DLT를 아침에도 보게 한다. 재투입과 업무 상태를 확인한 뒤에는 사람이 silence로 끈다(범위 조정 11).
 - `event_kafka_dead_letter_failed_total{topic}`은 지금 처음 실패할 때 생긴다. 토픽마다 기동할 때 0으로 등록한다(`reason="error"`와 같다). 그래야 아래 이름 대조 테스트가 이름을 확인할 수 있다.
 - consumer lag는 `records_lag_max`가 아니라 `records_lag`를 쓴다. `records_lag_max`는 fetch가 없는 동안 `NaN`이다(로컬 compose에서 확인).
 - 작업 생존에는 새 metric을 만들지 않는다. Spring이 `@Scheduled`마다 observation `tasks.scheduled.execution`을 남겨 `tasks_scheduled_execution_seconds_count{code_namespace, code_function, outcome}`가 나간다(Boot 4.1.1 `ScheduledTasksObservationAutoConfiguration`, 로컬 compose에서 두 작업 모두 확인). 기동한 뒤 한 번도 성공하지 못한 작업은 `SUCCESS` series가 없으므로 살아 있는 인스턴스를 기준으로 잡는다. 기준은 `process_uptime_seconds{application="ResilientPOS"}`다(범위 조정 1).
-- 근거 없는 값(lag 1000, 감지 창 10분·30분, SyncGap의 for)은 한계 절에 적고 부하테스트 뒤 조정한다.
+- 근거 없는 값(lag 1000, 발행 지연 1시간, 감지 창, SyncGap의 for)은 한계 절에 적고 부하테스트 뒤 조정한다.
 
 **4. 더하는 metric.**
+- `event.publication.incomplete.oldest`(gauge, Prometheus `event_publication_incomplete_oldest_seconds`): 완료되지 않은(`completion_date is null`) 발행 기록 가운데 가장 오래된 것의 나이(발행 시각부터, 초)다. 없으면 0이다. `EventPublicationMetrics`가 같은 1분 갱신에서 함께 센다. 조회가 실패한 인스턴스는 `NaN`을 내 `max`에서 빠지고 신선도 시각이 멈춘다. 상태가 `FAILED`와 `RESUBMITTED`를 오가도 나이는 계속 늘어서, 브로커 장애가 이어지는 동안 알림이 끊기지 않는다. 시스템 설계 7절의 "publication oldest age"다(범위 조정 9).
 - `event.publication.resubmit.selected`(counter, Prometheus `event_publication_resubmit_selected_total`): 재전송 한 주기에 Modulith가 읽어 다시 보내려 한 `FAILED` 행 수다. `ResubmissionOptions.withFilter`의 술어에서 센다. Modulith 2.1.1의 `processPublications`는 읽은 행마다 이 술어를 부른 뒤 `markResubmitted`를 하므로, 이 값은 "보낸 수"가 아니라 "고른 수"다. 락이 빠져 두 pod가 같은 행을 읽으면 두 번 센다. 전송 건수는 세지 않는다. `resubmit`이 `void`이고 전송 완료는 externalizer가 나중에 따로 표시한다. 알림에는 쓰지 않고 runbook의 진단(매 주기 500건을 읽는지)에 쓴다. 고치는 곳은 `resubmitAndPurge`의 `failed.resubmit(...)` 한 줄과 생성자다. #94가 고치는 KDoc과 `markStalePublicationsFailed`는 건드리지 않는다.
-- `lock.fail.open`(counter, `lock_fail_open_total{lock, reason}`): `reason`은 `timeout`(대기 3초 초과)과 `error`(Redis 오류)다. `lock`은 키의 앞 두 마디(`order:create-lock`, `payment:checkout-lock`, `platform:event-publication`, `payment:unknown-resolve`)다. 키 규칙 "모듈:이름:식별자…"를 `Lock` KDoc에 적는다. 이 규칙을 어기는 키는 식별자가 label로 새어 시계열이 폭증한다. `platform`은 업무 모듈의 키를 모르므로 미리 등록하지 않는다. 그래서 한 번만 일어난 fail-open은 `increase()`가 놓칠 수 있다. 규칙이 `for: 10m`로 이어지는 fail-open만 보므로 감수한다.
-- `sync.operation`(counter, `sync_operation_total{status}`): 배치 항목 결과마다 1씩 오른다. `status`는 `APPLIED`·`DUPLICATE`·`REJECTED`·`GAP`·`CONFLICT`이고 기동할 때 다섯 값을 0으로 등록한다. 시스템 설계 7절의 `sync_gap_total`은 `status="GAP"`이다. 이름을 설계와 다르게 둔 이유는 CONFLICT(지금 WARN 로그로만 보인다)도 같은 counter로 알림을 걸기 위해서다.
+- `lock.fail.open`(counter, `lock_fail_open_total{lock, reason}`): `reason`은 `timeout`(대기 3초 초과)과 `error`(Redis 오류)다. `lock`은 키의 앞 두 마디(`order:create-lock`, `payment:checkout-lock`, `platform:event-publication`, `payment:unknown-resolve`)다. 키 규칙 "모듈:이름:식별자…"를 `Lock` KDoc에 적는다. 이 규칙을 어기는 키는 식별자가 label로 새어 시계열이 폭증한다. `platform`은 업무 모듈의 키를 모르므로 미리 등록하지 않는다. 그래서 처음 일어난 fail-open은 `increase()`가 놓칠 수 있다. 규칙은 2분 창이 10분 동안 이어질 때만 울리므로 감수한다. Redis 장애 때는 주기 작업 둘이 pod마다 1분에 한 번 락을 잡아 창이 끊기지 않는다.
+- `sync.operation`(counter, `sync_operation_total{status}`): 배치 항목 결과가 정해질 때마다 1씩 오른다. 뒤 항목이 인프라 예외로 실패해도 그 전에 커밋된 항목은 세어진다(범위 조정 13). `status`는 `APPLIED`·`DUPLICATE`·`REJECTED`·`GAP`·`CONFLICT`이고 기동할 때 다섯 값을 0으로 등록한다. 시스템 설계 7절의 `sync_gap_total`은 `status="GAP"`이다. 이름을 설계와 다르게 둔 이유는 CONFLICT(지금 WARN 로그로만 보인다)도 같은 counter로 알림을 걸기 위해서다.
 - `sync.convergence`(timer, `sync_convergence_seconds`): 단말이 operation을 만든 시각부터 서버가 처음 확정한 시각까지다. SLO bucket 1s·10s·1m·5m·15m·1h·6h·24h만 낸다. Micrometer 기본 bucket의 상한(30초)으로는 오프라인 수렴을 담지 못한다. 알림은 걸지 않는다. 긴 값은 매장 네트워크가 오래 끊겼다는 뜻이라 플랫폼이 조치할 것이 없다.
 
 **5. sync 요청에 operation 생성 시각(`createdAt`)을 더한다.**
-- `CREATE_ORDER`·`REQUEST_CHECKOUT` 항목의 선택 필드다. ISO-8601 offset 시각(예: `2026-10-21T09:00:00+09:00`)이고 `Instant`로 받는다. 없으면 수렴 시간을 기록하지 않는다. 시각이 없는 기존 단말과 시연 화면의 배치는 그대로 받는다.
+- `CREATE_ORDER`·`REQUEST_CHECKOUT` 항목의 선택 필드다. ISO-8601 offset 시각(예: `2026-10-21T09:00:00+09:00`) 문자열이다. 없으면 수렴 시간을 기록하지 않는다. 시각이 없는 기존 단말과 시연 화면의 배치는 그대로 받는다.
 - payload hash에 넣지 않는다. 같은 operation을 시각만 다르게 재전송해도 `CONFLICT`가 되지 않는다. 그래서 `OrderPayload`·`CheckoutPayload`가 아니라 `SyncCommand.ReceiveBatch.Operation`에 둔다.
 - 저장하지 않는다. 수렴 시간은 metric에만 남는다. 도메인 모델 "스키마 변경 검토"의 필요성 기준("나중에 채울 수 있으면 넣지 않는다")을 따른다.
 - 처음 확정할 때(`APPLIED`·`REJECTED`) 한 번만 기록한다. `DUPLICATE`·`GAP`·`CONFLICT`에서는 기록하지 않는다. 확정 시각은 주입한 `Clock`으로 잰다.
 - 단말 시계가 앞서 차이가 음수면 기록하지 않는다. 시각이 어긋나도 배치를 거절하지 않는다. 오프라인 POS가 sync에서 막히면 안 되기 때문이다. 단말 시계가 늦은 만큼 수렴 시간이 크게 잡히는 것은 알아낼 방법이 없다(한계).
-- 형식이 틀린 `createdAt`은 다른 필드처럼 Jackson 역직렬화가 거절해 배치 전체가 `400 BAD_REQUEST`다. REST Docs의 요청 필드에 더한다.
+- 형식이 틀린 `createdAt`(offset이 없는 시각, 숫자, 날짜가 아닌 문자열)은 거절하지 않고 없는 것으로 다룬다. 저장하지 않는 진단용 필드가 배치 전체를 400으로 막으면 그 단말은 같은 봉투를 계속 다시 보낸다. 금액·수량을 raw로 받는 이유와 같다. 처음 확정한 항목의 값이 형식에 맞지 않으면 counter `sync.created-at.invalid`(Prometheus `sync_created_at_invalid_total`, 기동 때 0)가 올라 단말의 형식 버그를 알 수 있다. 요청 DTO는 문자열로 받고 Facade가 파싱한다. REST Docs의 요청 필드에 형식과 이 처리를 적는다(범위 조정 14).
 
 **6. trace 구성.**
 - 의존성: `spring-boot-starter-opentelemetry`(Micrometer Tracing OTel bridge와 OTLP exporter)와 `spring-modulith-observability-core`(runtime, 모듈 API 호출 span과 `module_events_published` counter)를 더한다. 버전은 Boot·Modulith BOM이 관리한다.
 - 샘플링은 1.0이다(`management.tracing.sampling.probability`, Boot 기본 0.1). 로그에 찍힌 traceId가 모두 Tempo에 있어서 runbook이 trace에 기댈 수 있다. 환경 변수로 낮출 수 있다. 샘플러는 Boot 기본 `parent-based-trace-id-ratio`라 consumer는 producer의 결정을 따른다.
-- 수집 경로: 앱 → Alloy(OTLP HTTP 4318) → lgtm의 Tempo다. metric·로그와 같은 수집기를 쓴다. 앱의 OTLP endpoint는 compose 환경 변수로만 준다. endpoint가 없는 실행(IDE·테스트)에서 exporter가 어떻게 동작하는지(만들지 않는지, 연결 오류를 남기는지)는 Boot 4.1.1 소스로 확인해 결과 절에 적고, 오류를 반복해 남기면 endpoint가 있을 때만 export하도록 설정한다.
+- 수집 경로: 앱 → Alloy(OTLP HTTP 4318) → lgtm의 Tempo다. metric·로그와 같은 수집기를 쓴다. 앱의 OTLP endpoint는 compose 환경 변수로만 준다. endpoint가 없는 실행(IDE·테스트)에서는 exporter를 만들지 않는다(아래 "확인 결과").
 - Kafka 전파: `spring.kafka.template.observation-enabled`와 `spring.kafka.listener.observation-enabled`를 켠다. 둘 다 Boot 기본값은 `false`다(spring-boot-kafka 4.1.1 `KafkaProperties`). 켜면 template이 레코드 header에 trace context를 싣고, listener가 그것을 읽어 consumer span을 이어 붙인다. Spring Kafka 4.1.1 문서에 따르면 그 대가로 Spring Kafka의 Micrometer timer를 observation이 맡는다(이름과 태그가 바뀔 수 있다). 알림 규칙은 이 timer를 쓰지 않는다. DLT 전송(`DeadLetterPublishingRecoverer`)도 같은 template을 쓰므로 같은 trace에 남는다.
 - Modulith externalization: externalizer(`EventExternalizerModuleListener`)는 `@ApplicationModuleListener`라 커밋 뒤 Boot의 `applicationTaskExecutor` 스레드에서 `KafkaOperations.send(Message)`로 보낸다(Modulith 2.1.1 `KafkaEventExternalizerConfiguration` 소스). 요청 스레드의 trace를 그 스레드로 넘기도록 `spring.task.execution.propagate-context`를 켠다. Boot 기본값은 `false`다(Boot 4.1.1 `TaskExecutionProperties`). 켜지 않으면 producer span이 새 trace로 끊긴다.
 - 로그: Micrometer Tracing이 MDC에 `traceId`·`spanId`를 넣고, Boot의 ECS 형식은 MDC 쌍을 모두 JSON에 넣는다(Boot 4.1.1 logging 문서). 실제 필드 이름은 compose에서 확인해 결과 절에 적는다. Alloy가 그 traceId를 Loki의 label이 아니라 structured metadata `trace_id`로 올린다. otel-lgtm의 Tempo 데이터소스는 trace에서 로그로 갈 때 `| trace_id = "…"`로 거르고, Loki 데이터소스는 `trace_id`에서 Tempo로 링크한다(이미지의 `grafana-datasources.yaml`에서 확인).
@@ -72,14 +76,14 @@ metric과 ECS 로그는 나가지만 그것을 읽어 사람을 부르는 규칙
 
 **8. 규칙 검증은 `./gradlew test`에 넣는다.**
 - `docker/prometheus/alerts.test.yaml`(promtool 단위 테스트)을 JUnit 테스트가 Testcontainers로 `prom/prometheus:v3.15.0`을 띄워 `promtool test rules`로 돌린다. 로컬 lgtm의 Prometheus와 같은 버전이다. `for:`, 시계열이 사라지는 경우, 첫 DLT series, 기동 직후, 작업이 한 번도 성공하지 못한 경우를 시나리오로 둔다. `promtool check rules`도 함께 돈다.
-- 같은 테스트 클래스가 규칙 식에서 metric 이름을 뽑아 앱의 `/actuator/prometheus`에 있는지 대조한다. 코드가 metric 이름을 바꿨는데 규칙을 고치지 않으면 규칙이 조용히 아무것도 보지 못하는데, promtool 테스트는 가짜 series로 돌아서 이것을 잡지 못한다. Prometheus가 만드는 `up`과, 처음 일어날 때 생기는 series(`lock_fail_open_total`, 테스트에서 돌지 않는 주기 작업의 `tasks_scheduled_execution_seconds_count`)는 이유를 적은 예외 목록으로 둔다.
+- 같은 테스트 클래스가 규칙 식에서 metric 이름을 뽑아 앱의 `/actuator/prometheus`에 있는지 대조한다. 코드가 metric 이름을 바꿨는데 규칙을 고치지 않으면 규칙이 조용히 아무것도 보지 못하는데, promtool 테스트는 가짜 series로 돌아서 이것을 잡지 못한다. 기동 직후에는 없는 이름은 이유를 적은 예외 목록으로 둔다. 끝나지 않은 기록이 없으면 사라지는 `event_publication_incomplete`, 처음 fail-open될 때 생기는 `lock_fail_open_total`, 테스트에서 돌지 않는 주기 작업의 `tasks_scheduled_execution_seconds_count`, Micrometer가 60초마다 묶는 `kafka_consumer_fetch_manager_records_lag`다(범위 조정 1·6). 예외로 둔 이름이 규칙에서 빠지면 테스트가 목록도 고치라고 실패한다.
 
 ### Kafka·Modulith 전파 근거
 - [Spring for Apache Kafka 4.1.1, Micrometer Observation](https://docs.spring.io/spring-kafka/reference/kafka/micrometer.html): template과 container의 `observationEnabled`를 켜면 observation이 timer를 맡는다. 배치 listener는 기본적으로 observation을 만들지 않는다. 이 저장소의 listener는 레코드 단위라 해당하지 않는다.
 - [Spring Boot 4.1.1, Tracing](https://docs.spring.io/spring-boot/reference/actuator/tracing.html): `spring-boot-starter-opentelemetry`, 기본 샘플링 10%, MDC의 `traceId`·`spanId`.
 - [Spring Boot 4.1.1, Observability의 Context Propagation](https://docs.spring.io/spring-boot/reference/actuator/observability.html): 자동 구성된 `AsyncTaskExecutor`는 `spring.task.execution.propagate-context`로 opt-in한다.
 - [Spring Modulith 2.1.1, Production-ready Features](https://docs.spring.io/spring-modulith/reference/production-ready.html): `spring-modulith-observability-core`가 모듈 API 빈 호출에 span을 만든다.
-- 기본값은 문서가 말하지 않는 것을 sources jar나 기동 로그로 확인한다. 대상은 OTLP exporter의 batch span processor(대기열 크기·보내는 주기·export 시간 상한), consumer span이 producer span의 자식인지 link인지, ECS의 MDC 필드 모양이다. 결과는 이 절에 추가한다.
+- 기본값은 문서가 말하지 않는 것을 sources jar나 기동 로그로 확인한다. 대상은 OTLP exporter의 batch span processor(대기열 크기·보내는 주기·export 시간 상한), consumer span이 producer span의 자식인지 link인지, ECS의 MDC 필드 모양이다.
 - 확인 결과(2026-10-21)
   - OTLP span exporter는 `management.opentelemetry.tracing.export.otlp.endpoint`가 있을 때만 만들어진다(spring-boot-micrometer-tracing-opentelemetry 4.1.1 `OtlpTracingConfigurations`의 `@ConditionalOnProperty`). 그래서 IDE와 테스트에서는 exporter가 없고 연결 오류도 남지 않는다. Boot는 `SpanExporter` 빈을 모두 batch span processor 하나에 모은다(`OpenTelemetryTracingAutoConfiguration`). 테스트의 in-memory exporter가 이 경로로 붙는다.
   - batch span processor 기본값: 대기열 2048, 한 번에 512, 5초마다 보내고 export 상한 30초다. OTLP 호출 상한과 연결 상한은 10초, transport는 `http`, 압축은 없다(Spring Boot 4.1.1 application properties 부록). 대기열이 차면 span을 버리고 요청 스레드는 막히지 않는다.
@@ -116,6 +120,13 @@ metric과 ECS 로그는 나가지만 그것을 읽어 사람을 부르는 규칙
 - 재전송 선택 건수는 락이 빠지면 두 번 셀 수 있다.
 - 로컬에서는 알림이 발송되지 않고 firing 상태로만 보인다.
 - 샘플링 1.0의 비용은 재지 않았다.
+- 결과 불명 gauge(`payment_attempt_unknown`·`payment_attempt_reconciliation_pending`)는 기동 직후 첫 주기(1분)까지 0이다. replica가 하나이거나 전부 재기동하면 `UnknownPaymentResolutionStuck`(2h)·`ReconciliationPendingUnresolved`(24h)의 `for:`가 처음부터 다시 센다. 매일 배포하면 24시간 규칙은 사실상 울리지 않는다. replica가 여럿이면 다른 pod가 값을 내 유지된다. 근본 해법(가장 오래된 `UNKNOWN` 시도와 미해소 case의 나이 gauge)은 payment·reconciliation 변경이라 후속으로 넘긴다(범위 조정 10).
+- `kafka_consumer_fetch_manager_records_lag`는 앱의 Kafka 클라이언트가 내는 값이다. consumer가 없거나 fetch가 멈추면 사라지거나 마지막 값에 멈춘다. 운영에서는 브로커 쪽 lag도 따로 본다.
+- `/actuator/prometheus` scrape와 health probe도 샘플링 1.0으로 trace가 된다(scrape 15초마다). 비용이 보이면 actuator 요청의 observation을 뺀다. 그때 요청 metric도 함께 빠진다.
+- 실제 PG를 붙여 결과 불명 조회 배치가 락 TTL(10초)이나 대기(3초)를 넘기면 주기 작업 락의 `timeout` fail-open이 늘어 `LockFailOpen`이 울 수 있다. 실제 PG PR이 조회 타임아웃과 함께 다시 본다.
+- 단말 시계가 1970년으로 초기화된 값처럼 아주 오래된 `createdAt`은 그대로 기록돼 `_sum`·`_max`를 키운다. bucket 분포는 `+Inf`에만 더해진다.
+- 앱 컨테이너는 늘 Alloy로 span을 보낸다. `obs` profile 없이 띄우면 OTel exporter가 ERROR(`Failed to export spans`)를 남긴다(Alloy를 멈춘 25초 동안 1줄, 2026-10-21 실측).
+- 로컬 compose의 Alloy·otel-lgtm은 `latest` 태그다(로컬 개발 전용 이미지의 기존 사용자 결정). 실측은 otel-lgtm v0.37.0(Prometheus 3.15.0)이고 `AlertRulesTest`는 그 버전으로 고정했다. 이미지가 바뀌어 `/otel-lgtm/prometheus.yaml` 경로나 Prometheus 버전이 달라지면 compose 실측을 다시 한다.
 - Modulith가 `platform` 빈 호출마다 span을 만든다(checkout trace 32개 중 14개). 끄면 trace가 끊기거나 부모가 사라져 그대로 둔다(범위 조정 3). 다시 볼 조건: 부하테스트에서 span 저장량이 문제가 될 때, Modulith에 모듈을 골라 끄는 설정이 생길 때.
 - 한 JVM에 컨텍스트가 여럿 뜨면 Modulith 모듈 span은 처음 뜬 컨텍스트의 registry로 간다(범위 조정 7). 테스트에서만 드러나고 `Tx`·`Lock`의 전역 한계와 같은 종류다.
 
@@ -146,23 +157,23 @@ metric과 ECS 로그는 나가지만 그것을 읽어 사람을 부르는 규칙
 - README.md
 
 ## 인수 조건
-1. `docker/prometheus/alerts.yaml`이 위 13개 규칙을 담고 `promtool check rules`를 통과한다. 규칙마다 `severity` label과 `summary`·`runbook_url` annotation이 있고, `runbook_url`의 앵커가 `docs/wiki/runbook.md`의 절과 맞는다.
-2. `promtool test rules`가 규칙별 경계를 통과한다. 첫 DLT series, `failed`가 1시간 이어질 때와 중간에 0이 될 때, 작업이 기동한 뒤 한 번도 성공하지 못할 때, 신선도가 기동 직후 0일 때를 포함한다.
+1. `docker/prometheus/alerts.yaml`이 위 14개 규칙을 담고 `promtool check rules`를 통과한다. 규칙마다 `severity` label과 `summary`·`runbook_url` annotation이 있고, `runbook_url`의 앵커가 `docs/wiki/runbook.md`의 절과 맞는다(테스트로 대조한다).
+2. `promtool test rules`가 규칙별 경계를 통과한다. 첫 DLT series, scrape 실패 뒤 옛 DLT를 다시 울리지 않음, DLT 알림의 24시간 유지, 발행 기록의 나이가 1시간을 넘을 때, 작업이 기동한 뒤 한 번도 성공하지 못할 때, 신선도가 기동 직후 0일 때, 짧은 503·fail-open·gap 묶음은 울리지 않음, `/actuator`의 503은 울리지 않음, 앱 metric이 모두 사라짐을 포함한다.
 3. 규칙이 쓰는 metric 이름이 앱의 `/actuator/prometheus`에 있다(예외 목록 밖).
 4. 락이 fail-open되면 `lock_fail_open_total{lock="키 앞 두 마디", reason="timeout" 또는 "error"}`가 오르고, 기동할 때 토픽마다 `event_kafka_dead_letter_failed_total`이 0으로 나간다.
 5. 재전송 한 주기에 읽은 `FAILED` 행 수만큼 `event_publication_resubmit_selected_total`이 오른다.
-6. sync 배치의 항목 결과마다 `sync_operation_total{status}`가 오르고, 다섯 status가 기동할 때 0으로 나간다.
-7. `createdAt`이 있는 항목이 처음 확정되면 `sync_convergence_seconds`에 한 번 기록된다. `createdAt`이 없거나, 차이가 음수거나, 결과가 `DUPLICATE`·`GAP`·`CONFLICT`면 기록되지 않는다. `createdAt`만 다른 재전송은 `DUPLICATE`다. 형식이 틀리면 `400 BAD_REQUEST`다. REST Docs의 요청 필드에 `createdAt`이 있다.
+6. sync 배치의 항목 결과마다 `sync_operation_total{status}`가 오르고, 다섯 status가 기동할 때 0으로 나간다. 뒤 항목이 인프라 예외로 실패해도 그 전에 커밋된 항목은 세어진다.
+7. `createdAt`이 있는 항목이 처음 확정되면 `sync_convergence_seconds`에 한 번 기록된다. `createdAt`이 없거나, 차이가 음수거나, 결과가 `DUPLICATE`·`GAP`·`CONFLICT`면 기록되지 않는다. `createdAt`만 다른 재전송은 `DUPLICATE`다. 형식이 틀리면 배치는 정상 처리되고 수렴 시간 대신 `sync_created_at_invalid_total`이 오른다. REST Docs의 요청 필드에 `createdAt`이 있다.
 8. 주문 생성과 checkout 요청 하나가 만든 HTTP span, Kafka producer span, consumer span, 그 consumer가 낸 다음 이벤트의 producer span이 같은 traceId다(통합 테스트).
-9. ECS 로그 줄에 그 traceId가 실린다.
+9. consumer 스레드의 로그 줄에도 그 traceId가 실린다(통합 테스트, 평문). ECS 줄의 필드 이름(`traceId`)과 Loki `trace_id`는 compose에서 확인한다.
 10. `docker compose -f docker/docker-compose.yaml --profile app --profile obs up -d --build`에서 다음을 확인하고 결과를 이 spec에 남긴다.
-    - Prometheus가 규칙 13개를 싣고, 실제로 일으킨 장애 하나 이상에서 해당 규칙이 firing이 된다. 예: Redis를 멈춰 LockFailOpen과 OwnerSessionStoreUnavailable, DLT를 일으켜 KafkaDeadLetter.
+    - Prometheus가 규칙을 모두 싣고(첫 실측 때 13개), 실제로 일으킨 장애 하나 이상에서 해당 규칙이 firing이 된다. 예: Redis를 멈춰 LockFailOpen과 OwnerSessionStoreUnavailable, DLT를 일으켜 KafkaDeadLetter.
     - Tempo에서 checkout 요청의 trace가 HTTP → Kafka → consumer로 이어진다. Modulith 모듈 span도 보인다.
     - Loki에서 그 traceId로 로그가 조회되고, Grafana에서 trace와 로그가 서로 링크된다.
 11. 기존 테스트가 모두 통과한다.
 
 ## 검증
-- 인수 1~3: `./gradlew test --tests 'com.resilientpos.platform.AlertRulesTest'`(이름은 구현 때 확정). Docker가 필요하다.
+- 인수 1~3: `./gradlew test --tests 'com.resilientpos.platform.AlertRulesTest' --tests 'com.resilientpos.platform.ObservabilityConfigurationTest'`. Docker가 필요하다.
 - 인수 4~6: platform과 sync의 해당 테스트를 `./gradlew test --tests`로 좁혀 돌린다.
 - 인수 7: `SyncControllerTest`(REST Docs, 400)와 `SyncCommandFacadeIntegrationTest`(기록 여부).
 - 인수 8~9: trace 통합 테스트. span은 테스트용 in-memory exporter로 모은다.
@@ -200,6 +211,16 @@ metric과 ECS 로그는 나가지만 그것을 읽어 사람을 부르는 규칙
 6. **이름 대조의 예외에 `kafka_consumer_fetch_manager_records_lag`를 더했다.** Kafka 클라이언트가 파티션의 첫 fetch 뒤에 만들고, Micrometer `KafkaMetrics`가 새 클라이언트 metric을 60초마다 묶는다(micrometer-core 1.17.1 `DEFAULT_REFRESH_INTERVAL`). 테스트의 대기 20초 안에 나오지 않는다. 이름은 Kafka 클라이언트가 정하므로 이 저장소의 이름 변경과 무관하다.
 7. **trace 통합 테스트는 Modulith 모듈 span을 단언하지 않는다.** Modulith가 모듈별 interceptor를 정적 캐시(`ModuleEntryInterceptor.CACHE`, 2.1.1)에 두어, JVM에서 먼저 뜬 다른 테스트 컨텍스트의 `ObservationRegistry`를 계속 쓴다. 단독 실행에서는 보이고 전체 실행에서는 보이지 않았다. 운영은 JVM에 컨텍스트가 하나라 영향이 없다. 모듈 span은 compose 실측(인수 10)으로 확인한다.
 8. **도메인 모델은 §4.6이 아니라 §4.7을 고친다.** §4.6은 컨텍스트 사이 동기 호출의 규칙이고, "저장하지 않는다"는 결정은 §4.7 스키마 변경 검토의 sync 표 문단이 맞는 자리다.
+
+multi-review(Claude 76, Codex 74, Gemini는 CLI 없음) 뒤 사용자 결정으로 아래를 바꾼다.
+
+9. **`EventPublicationFailed`(`failed > 0 for: 1h`)를 `EventPublicationOverdue`(가장 오래된 미완료 기록의 나이 > 1시간, `for: 5m`)로 바꾼다.** 재전송 작업이 행을 `RESUBMITTED`로 바꾸면 전송이 실패로 끝날 때까지(브로커 장애 때 약 2분) 그 행은 `failed`에 잡히지 않는다(`EventPublicationMetrics`의 조회가 `FAILED`와 null만 센다). 행이 적으면 갱신 순간 `failed`가 0이 되어 series가 사라지고 `for: 1h`가 처음부터 다시 센다. 역직렬화할 수 없는 행도 `RESUBMITTED`로 5분씩 머물러 같다. 나이는 상태와 무관하게 늘어난다. 새 gauge는 `EventPublicationMetrics`의 같은 갱신에 조회 하나를 더한다(#94와 겹치지 않는 파일).
+10. **앱 부재 규칙 `ResilientPosMetricsAbsent`(critical)를 더한다.** 13개 규칙이 모두 앱의 series에 기대서, 모든 pod가 죽거나 scrape가 끊기면 아무것도 울리지 않는다. `absent(process_uptime_seconds{application="ResilientPOS"})`에 `for: 5m`이다. 기준선이 필요 없는 규칙이라 제외 사유에 해당하지 않는다. 결과 불명 gauge의 재기동 리셋은 한계 절에 적고 나이 gauge는 후속으로 넘긴다.
+11. **DLT 두 규칙에 `keep_firing_for: 24h`를 더한다.** 증가 조건은 10분 뒤 풀려 처리하지 않은 DLT가 남아 있어도 정상처럼 보였다. 미해소 건수 gauge는 #91의 재투입 기록과 함께 후속으로 넘긴다.
+12. **감지 창을 줄이고 규칙 식 둘을 고친다.** (a) 창과 `for:`가 같아 Redis가 1~2분 끊겨도 회복한 뒤에 critical이 울렸다. 503·락은 `[2m]`, gap은 `[5m]`으로 줄인다. (b) 503 규칙이 `/actuator/health`의 503(DB health DOWN, 기동·종료 중 readiness)까지 셌다. `uri!~"/actuator/.*"`로 뺀다. 필터 단계의 503은 `uri="UNKNOWN"`이라 그대로 잡힌다. (c) 첫 DLT 절의 `offset 10m` instant 조회는 scrape가 한 번 실패한 자리의 stale marker를 "없던 series"로 보아 옛 DLT를 다시 울렸다. `last_over_time(…[1h] offset 10m)`로 바꾼다. 각 반례를 promtool 시나리오로 둔다.
+13. **sync counter를 항목 결과가 정해질 때마다 올린다.** 배치 끝에 모아 세면 뒤 항목의 인프라 예외로 앞에서 커밋된 항목이 영영 세지지 않았다. 재전송하면 `DUPLICATE`로만 세어지고, 같은 항목의 수렴 시간은 기록돼 두 metric이 어긋났다.
+14. **형식이 틀린 `createdAt`을 거절하지 않는다.** 결정 5를 바꾼다. 요청 DTO는 문자열로 받고, Facade가 확정할 때 파싱해 실패하면 수렴 시간 대신 `sync_created_at_invalid_total`을 올린다. 400 문서는 지운다.
+15. **테스트와 문서를 보강한다.** runbook 앵커 대조, `promtool check config`, 실패할 때 promtool 출력을 메시지에 싣기, Kafka metric 테스트의 다섯 번째 토픽, consumer 스레드 로그의 traceId 단언을 더한다. wiki의 consumer lag 이름(`records_lag_max` → 규칙이 쓰는 `records_lag`)과 "503은 세션 저장소뿐" 문장을 고친다. runbook의 "10분에 5000건"은 pod 수와 실행 수에 따라 달라 인스턴스별 주기당 건수로 고친다.
 
 ## TDD 검증 기록
 업무 동작 변경(sync 요청 필드와 metric, 락·재전송 metric)과 trace 전파에 적용한다. 규칙 파일·compose·Alloy 설정은 promtool 테스트와 compose 실측으로 대신한다. sync 세 동작은 `tdd-driver`가 한 동작씩 맡았다.
