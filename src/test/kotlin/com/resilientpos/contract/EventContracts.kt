@@ -55,5 +55,19 @@ object EventContracts {
             OrderPaid.SCHEMA_VERSION,
             OrderPaid(eventId, occurredAt, orderId, storeId, terminalId, checkoutNo = 1, amount = amount),
         ),
+        EventContract(
+            PaymentReconciliationRequested::class.java,
+            PaymentReconciliationRequested.TOPIC,
+            PaymentReconciliationRequested.SCHEMA_VERSION,
+            PaymentReconciliationRequested(
+                eventId, occurredAt, paymentId, orderId, storeId, terminalId,
+                checkoutNo = 1, amount = amount,
+                reason = PaymentReconciliationReason.AMOUNT_MISMATCH,
+                unknownReason = PaymentUnknownReason.AMOUNT_MISMATCH,
+                queryCount = 3,
+                reportedAmount = Money.of("5000", Currency.getInstance("KRW")),
+                reportedProviderReference = "FAKE-0199f6a0",
+            ),
+        ),
     )
 }

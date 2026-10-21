@@ -1,0 +1,22 @@
+{
+  "eventId" : "0199f6a0-0000-7000-8000-000000000001",
+  "occurredAt" : "2026-10-20T01:02:03.456789Z",
+  "paymentId" : "0199f6a0-0000-7000-8000-000000000005",
+  "orderId" : "0199f6a0-0000-7000-8000-000000000002",
+  "storeId" : "0199f6a0-0000-7000-8000-000000000003",
+  "terminalId" : "0199f6a0-0000-7000-8000-000000000004",
+  "checkoutNo" : 1,
+  "amount" : {
+    "amount" : 4500,
+    "currency" : "KRW"
+  },
+  "reason" : "AMOUNT_MISMATCH",
+  "unknownReason" : "AMOUNT_MISMATCH",
+  "queryCount" : 3,
+  "reportedAmount" : {
+    "amount" : 5000,
+    "currency" : "KRW"
+  },
+  "reportedProviderReference" : "FAKE-0199f6a0",
+  "schemaVersion" : 1
+}
