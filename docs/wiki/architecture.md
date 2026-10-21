@@ -305,6 +305,7 @@ flowchart TB
 | `EntityVisibilityTest` | JPA 엔티티가 값을 받는 생성자와 public setter를 열지 않는다. 엔티티는 persistence adapter의 변환기로만 만들고 바꾼다 |
 | `TransactionDeclarationTest` | 클래스에 `@Transactional`을 달지 않고 `@Transactional(readOnly = true)`를 직접 쓰지 않는다. 트랜잭션 경계는 `Tx`로 선언한다 |
 | `KafkaEventDeliveryIntegrationTest` | `@KafkaListener`가 듣는 토픽이 기동 때 만드는 토픽 목록에 있다 |
+| `RateLimitedExceptionTest`, `RedisTerminalRateLimiterTest` | `RateLimitedException`은 `RedisTerminalRateLimiter`만 만들고 `acquire`는 `TerminalAuthenticationInterceptor`만 부른다. 429·`RATE_LIMITED`는 상태를 바꾸기 전의 거절이어야 단말이 같은 요청을 그대로 다시 보낼 수 있다. 양성 대조가 있어 시그니처가 바뀌어도 규칙이 비지 않는다 |
 
 모든 테스트는 `./gradlew test`로 돈다(통합 테스트는 Docker가 필요하다).
 
