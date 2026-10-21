@@ -7,6 +7,7 @@ import java.time.Duration
 import javax.sql.DataSource
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory
 import com.resilientpos.PostgresIntegrationTest
@@ -55,10 +56,13 @@ class ResourceLimitConfigurationTest(
     }
 
     @Test
-    fun `Redis 연결이 끊긴 동안 명령을 버퍼에 쌓지 않고 바로 거절하며 connect timeout은 그대로다`() {
+    fun `Redis 명령은 끊긴 연결에서 바로 거절되고 응답 없는 명령은 1000개까지만 받으며 connect timeout과 keepalive는 그대로다`() {
         val options = redisConnectionFactory.clientConfiguration.clientOptions.orElseThrow()
 
         assertEquals(ClientOptions.DisconnectedBehavior.REJECT_COMMANDS, options.disconnectedBehavior)
+        assertEquals(1_000, options.requestQueueSize)
         assertEquals(Duration.ofSeconds(1), options.socketOptions.connectTimeout)
+        // 유휴 연결이 RST 없이 끊긴 것을 1분 안에 알아챈다. Lettuce 기본값이고 Boot의 SocketOptions도 그대로 둔다.
+        assertTrue(options.socketOptions.keepAlive.isEnabled)
     }
 }

@@ -49,11 +49,14 @@ class PlatformConfiguration {
     /**
      * Lettuce 기본값은 연결이 끊긴 동안 명령을 버퍼에 받아 둔다. 그러면 Redis가 재시작하는 동안 단말 요청(빈도 상한)마다 timeout을 다 기다리고,
      * 끝난 명령도 재연결 전까지 버퍼에 남아 장애가 길면 힙이 불어난다. 바로 거절하면 빈도 상한과 잠금은 즉시 fail-open, 세션과 로그인은 즉시 503이다.
-     * Boot가 connect timeout과 `TimeoutOptions`를 넣은 뒤에 적용되므로 그 설정은 남는다.
+     * 응답 없는 명령(패킷이 사라지는 단절)도 기본값은 무제한으로 쌓아 연결이 끊길 때까지(커널 재전송 한도, 약 15분) 요청마다 timeout을 기다리게 한다.
+     * 1000개까지만 받으면 그 뒤로는 바로 거절돼 즉시 fail-open이다. 1000은 요청 스레드(Tomcat 기본 200)와 주기 작업이 한꺼번에 내는 명령보다 넉넉히 크다.
+     * Boot가 connect timeout과 `TimeoutOptions`를 넣은 뒤에 적용되므로 그 설정은 남는다. TCP keepalive는 Lettuce 기본값(켜짐)이다.
      */
     @Bean
-    fun rejectRedisCommandsWhileDisconnected() =
-        LettuceClientOptionsBuilderCustomizer { it.disconnectedBehavior(ClientOptions.DisconnectedBehavior.REJECT_COMMANDS) }
+    fun redisClientOptions() = LettuceClientOptionsBuilderCustomizer {
+        it.disconnectedBehavior(ClientOptions.DisconnectedBehavior.REJECT_COMMANDS).requestQueueSize(REDIS_REQUEST_QUEUE_SIZE)
+    }
 
     @Bean
     fun txInitializer(txRunner: TxRunner) = InitializingBean { Tx.initialize(txRunner) }
@@ -85,4 +88,8 @@ class PlatformConfiguration {
             addUrlPatterns("/admin/*")
             order = securityFilter.order - 1
         }
+
+    private companion object {
+        const val REDIS_REQUEST_QUEUE_SIZE = 1_000
+    }
 }
