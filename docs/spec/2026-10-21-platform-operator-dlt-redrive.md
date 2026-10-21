@@ -125,6 +125,8 @@ DLT 재투입은 지금 Kafka CLI 절차뿐이다([도메인 모델 §4.3](../wi
 - docs/wiki/observability.md
 - docs/wiki/architecture.md
 - docs/wiki/entity-map.md
+- docs/wiki/README.md
+- README.md
 - docs/spec/2026-10-21-platform-operator-dlt-redrive.md
 
 ## 인수 조건
@@ -199,7 +201,8 @@ create table t_dead_letter_redrive (
 - [이벤트 계약](../wiki/event-contract.md) 8절: API가 읽기 검사로 막는 것(높은 `schemaVersion`, 모르는 enum)과 운영자가 여전히 확인할 것(모든 pod 배포)을 적는다.
 - [관측성](../wiki/observability.md): 운영자 감사(`DEAD_LETTER_REDRIVEN`)와 재투입 counter, 노출 범위에 `/admin`(Bearer, 네트워크 제한은 배포), IdP 장애 503. #76(관측 마무리)과 겹치는 문서라 항목 추가만 하고, #76의 runbook이 이 절차를 링크한다.
 - [아키텍처](../wiki/architecture.md): 인증 수단이 셋(단말 인터셉터, 점주 세션 체인, 운영자 토큰 체인)이 된 것과 `platform`의 책임에 `/admin` 체인·DLT 재투입을 더한다.
-- [엔티티 맵](../wiki/entity-map.md): `t_dead_letter_redrive`.
+- [엔티티 맵](../wiki/entity-map.md): `t_dead_letter_redrive`. [wiki 인덱스](../wiki/README.md)의 엔티티 수.
+- [README](../../README.md) 아키텍처 절: 인증 문장에 `/admin/**`(사내 IdP Bearer 토큰).
 - 볼트 문서(저장소 밖): 현재 상태(운영자 주체, 재투입 API, 의존성), Modulith·Kafka 키워드(갱신 규칙대로 DLT 재투입 항목).
 - 요구사항 변화: 플랫폼 운영자 주체와 재투입 감사가 생긴다. 원문의 operator action audit 요구를 DLT 재투입에 대해 채운다. 업무 정합성 요구는 그대로다.
 
