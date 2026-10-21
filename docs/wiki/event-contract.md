@@ -86,7 +86,7 @@ Jackson이나 Boot를 올려 이 동작이 바뀌면 계약 테스트(6절)의 `
 - 대상 이벤트는 마지막 생성자 인자로 `val schemaVersion: Int = SCHEMA_VERSION`을 갖고, `companion object`에 `const val SCHEMA_VERSION`을 둔다. 지금은 모두 1이다.
 - **버전은 호환되지 않는 변경에만 올린다.** 필드 추가 같은 호환 변경에 올리면, 롤링 배포 중 옛 pod가 읽을 수 있는 메시지까지 아래 가드가 DLT로 보낸다. 그래서 fixture 번호(형식이 바뀔 때마다 는다)와 `schemaVersion`(변환이 필요할 때만 는다)은 따로 움직인다.
 - **가드**: 이벤트의 `init`이 `contract.requireKnownSchemaVersion`을 부른다. 받은 버전이 `SCHEMA_VERSION`보다 크면 `DomainException(UNSUPPORTED_EVENT_SCHEMA_VERSION, …, UNPROCESSABLE)`을 던진다. Jackson이 생성자를 부르므로 두 경로에 모두 걸린다.
-  - Kafka consumer: 재시도 없이 DLT로 가고 `event_kafka_dead_letter_total{reason="UNSUPPORTED_EVENT_SCHEMA_VERSION"}`이 는다. 이 reason이 보이면 롤링 배포 중 옛 pod가 새 버전 메시지를 받은 것이다. 배포가 끝난 뒤 그대로 재투입한다. 이 reason의 counter는 처음 DLT로 보낼 때 생긴다. 그래서 `increase()` 알림이 토픽마다 첫 건을 놓칠 수 있으니, 버전을 올린 배포 뒤에는 DLT를 직접 확인한다.
+  - Kafka consumer: 재시도 없이 DLT로 가고 `event_kafka_dead_letter_total{reason="UNSUPPORTED_EVENT_SCHEMA_VERSION"}`이 는다. 이 reason이 보이면 롤링 배포 중 옛 pod가 새 버전 메시지를 받은 것이다. 배포가 끝난 뒤 그대로 재투입한다. 이 reason의 counter는 처음 DLT로 보낼 때 생긴다. 첫 값은 `increase()`가 0으로 보므로 알림 규칙 `KafkaDeadLetter`가 10분 전에 없던 series를 따로 잡는다([runbook](runbook.md#kafkadeadletter)).
   - 발행 기록 재전송: 버전을 올린 변경에서, 옛 pod가 새 버전 기록을 옛 클래스 모양으로 다시 써서 새 필드를 잃은 채 보내는 일을 막는다. 버전을 올리지 않는 필드 추가는 막지 못한다(4.1).
 - **재전송의 대가**: 옛 pod가 새 버전 기록을 만나면 그 pod의 재전송 실행이 그 행에서 끊긴다(spring-modulith#1904, 도메인 모델 §4.3).
   - 옛 pod가 재전송 표시를 먼저 커밋하므로 그 행은 `RESUBMITTED`로 남는다. 5분(`stale-after`) 뒤 `FAILED`로 돌아와야 새 pod가 보낸다.
