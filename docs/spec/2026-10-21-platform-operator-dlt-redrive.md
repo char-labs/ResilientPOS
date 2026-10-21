@@ -31,7 +31,7 @@ DLT 재투입은 지금 Kafka CLI 절차뿐이다([도메인 모델 §4.3](../wi
 - `topic`은 설정된 DLT 토픽(`resilientpos.kafka.topics`의 각 이름 + `.DLT`)만 받는다. 원 토픽, 내부 토픽(`__consumer_offsets` 등), 모르는 이름은 `400 INVALID_DEAD_LETTER_POSITION`이다. 운영자 API로 임의 토픽을 읽지 못하게 한다. 없는 partition, 음수 offset, `limit`이 1~50 밖이어도 같은 400이다. `limit` 기본값은 50이다.
 - `fromOffset`부터 `limit`건 또는 그 partition의 끝까지 읽는다. 끝 이상이면 빈 목록이다. 다음 쪽은 마지막 `offset + 1`로 부른다.
 - 읽기는 `ConsumerFactory`의 consumer를 assign·seek로 쓰고 group 없이 offset을 커밋하지 않는다. 그래서 어떤 consumer group의 위치도 바뀌지 않는다. 끝 offset(`endOffsets`)을 먼저 읽어 그 범위만 poll한다. `KafkaTemplate.receive`는 쓰지 않는다. 레코드마다 따로 poll해서, 없는 offset마다 poll 시간 초과를 끝까지 기다리기 때문이다(spring-kafka 4.1.1 소스).
-- 항목: `partition`, `offset`, `timestamp`, `key`, `value`(UTF-8 문자열), `originalTopic`·`originalPartition`·`originalOffset`(헤더 `kafka_dlt-original-*`), `exception`(원인 예외 클래스, `kafka_dlt-exception-cause-fqcn`이 없으면 `kafka_dlt-exception-fqcn`), `exceptionMessage`(`kafka_dlt-exception-message`), `schemaVersion`(값 JSON의 필드, 없거나 JSON이 아니면 null), `redrive`(재투입 기록이 있으면 넣은 `partition`·`offset`·`operator`·`redrivenAt`, 없으면 null). 스택 트레이스 헤더는 싣지 않는다. 레코드마다 수 KB라 50건이면 응답이 커진다.
+- 항목: `partition`, `offset`, `timestamp`, `key`, `value`(UTF-8 문자열), `originalTopic`·`originalPartition`·`originalOffset`(헤더 `kafka_dlt-original-*`), `exception`(리스너가 던진 예외 클래스. `kafka_dlt-exception-cause-fqcn`이고 없으면 `kafka_dlt-exception-fqcn`이다. spring-kafka는 `ListenerExecutionFailedException`만 벗기므로 `JpaSystemException` 안의 SQL 예외 같은 더 깊은 원인은 실리지 않는다), `exceptionMessage`(`kafka_dlt-exception-message`, "포장 예외 메시지; 리스너 예외 메시지" 모양이다. 예: `Listener failed; 이미 처리된 주문입니다`), `schemaVersion`(값 JSON의 필드, 없거나 JSON이 아니면 null), `redrive`(재투입 기록이 있으면 넣은 `partition`·`offset`·`operator`·`redrivenAt`, 없으면 null). 스택 트레이스 헤더는 싣지 않는다. 레코드마다 수 KB라 50건이면 응답이 커진다.
 - 값에는 매장·단말·주문 ID와 금액이 들어 있다. 고객 개인정보는 이벤트에 없다. 운영자는 이미 CLI로 같은 값을 본다.
 
 **4. DLT 재투입: `POST /admin/v1/dead-letters/{topic}/{partition}/{offset}/redrive`, 본문 `{reason}`.**
@@ -63,7 +63,8 @@ DLT 재투입은 지금 Kafka CLI 절차뿐이다([도메인 모델 §4.3](../wi
 **8. 감사와 관측.**
 - 처음 재투입한 뒤 INFO 한 줄을 남긴다: `audit action=DEAD_LETTER_REDRIVEN operator=… dltTopic=… dltPartition=… dltOffset=… topic=… partition=… offset=…`. 사유 원문은 남기지 않는다. 자유 입력이고 DB 기록이 정본이다(대조 case 해소와 같은 기준). 같은 좌표의 재요청에는 남지 않아 줄 수가 곧 재투입 건수다.
 - counter `event.kafka.dead-letter.redriven{topic}`(Prometheus `event_kafka_dead_letter_redriven_total`)을 처음 재투입할 때만 올린다. `topic`은 원 토픽이다. 기동 때 토픽별 0으로 등록한다(DLT counter와 같은 이유).
-- 400·401·403·404·422는 advice의 기존 로그(WARN, 404는 INFO), 503은 ERROR다. 목록 조회는 로그를 남기지 않는다.
+- 400·401·403·404·422는 advice의 기존 로그(WARN, 404는 INFO), 503은 ERROR다. 목록 조회는 앱 로그를 남기지 않는다. 다만 요청마다 consumer를 만들므로 Kafka 클라이언트가 INFO(`ConsumerConfig values` 블록, partition 배정·seek, 종료)를 남긴다. 운영자가 드물게 부르는 조회라 로그 레벨을 바꾸지 않는다. 바꾸면 기동 때 실제 설정값을 확인하는 `ConsumerConfig values` 로그도 함께 사라진다.
+- 한계: consumer를 닫을 때(`close`) fetch session 정리로 최대 30초를 기다릴 수 있다. 레코드를 받은 뒤 브로커가 끊기면 응답이 5초 상한보다 그만큼 늦는다(코드의 `ponytail:` 표식). 브로커 호출의 503은 Kafka `TimeoutException`만이고, 권한·인증 같은 다른 `KafkaException`은 500이다.
 
 ### 계약 요약
 - **새 HTTP endpoint**: `GET /admin/v1/dead-letters`, `POST /admin/v1/dead-letters/{topic}/{partition}/{offset}/redrive`.
@@ -143,8 +144,8 @@ DLT 재투입은 지금 Kafka CLI 절차뿐이다([도메인 모델 §4.3](../wi
 | Checkpoint | 검증 명령 | 의존 |
 |---|---|---|
 | `/admin` 체인과 IdP 설정 (1~4) | `./gradlew test --tests 'com.resilientpos.platform.Admin*'` | 없음 |
-| DLT 목록 (5·11) | `./gradlew test --tests 'com.resilientpos.platform.DeadLetter*'` | `/admin` 체인 |
-| 재투입·기록·검사 (6~10·12) | `./gradlew test --tests 'com.resilientpos.platform.DeadLetter*' --tests 'com.resilientpos.SchemaMigrationTest'` | DLT 목록 |
+| DLT 목록 (5·11) | `./gradlew test --tests 'com.resilientpos.platform.deadletter.*'` | `/admin` 체인 |
+| 재투입·기록·검사 (6~10·12) | `./gradlew test --tests 'com.resilientpos.platform.deadletter.*' --tests 'com.resilientpos.SchemaMigrationTest'` | DLT 목록 |
 | REST Docs·회귀 (13·14) | `./gradlew test` | 전부 |
 
 ## 스키마 변경 검토
@@ -205,6 +206,7 @@ create table t_dead_letter_redrive (
 경로 겹침(2026-10-21, origin/main `c7810af`):
 - 열린 PR #94(Modulith 2.1.2 대기 draft)와 `build.gradle.kts`(의존성 줄 추가), `docs/wiki/domain-model.md`(§4.3의 다른 항목)가 겹친다. 먼저 머지된 쪽에 맞춰 rebase한다.
 - 진행 중인 #76(관측 마무리, 아직 push 전)과 `docs/wiki/observability.md`가 겹칠 수 있다. 이 PR은 항목 추가만 하고 DLT 재투입 절차는 이 PR이 맡는다(합의).
+- 구현 중(2026-10-21) 열린 PR #102(inbound rate limit, draft)와 `ApiControllerAdvice.kt`·`PlatformConfiguration.kt`·`application.yaml`·`docs/wiki/architecture.md`·`docs/wiki/observability.md`가 겹친다. 둘 다 항목 추가라 충돌은 줄 단위다. #102는 Controller 슬라이스 테스트들도 고치므로, 먼저 머지되면 이 PR의 `DeadLetterControllerTest`·`DeadLetterRedrive` 슬라이스도 같은 준비가 필요한지 rebase 때 본다.
 - 공용 헬퍼: `/admin`의 503 필터는 `OwnerSessionStoreFilter`와 모양이 같지만 잡는 예외와 경로가 달라 합치지 않는다. main과 열린 PR에 운영자 인증·DLT 읽기 코드는 없다.
 
 ## TDD 검증 기록
@@ -215,10 +217,11 @@ create table t_dead_letter_redrive (
 | 인수 1·2: `AdminSecurityIntegrationTest` 5개(`issuer audience 서명 만료가 맞고 운영자 권한이 있는 토큰은 체인을 통과해 없는 경로의 404 envelope가 되고 Set-Cookie가 없다`, `토큰이 없거나 서명 만료 issuer audience 중 하나가 틀리면 401 UNAUTHENTICATED와 WWW-Authenticate Bearer이고 Set-Cookie가 없다`(토큰 없음·같은 kid 다른 키·만료·다른 issuer·다른 audience), `운영자 권한이 없는 토큰은 403 ACCESS_DENIED이고 Set-Cookie가 없다`, `점주 세션 쿠키나 단말 토큰으로 admin을 부르면 401이다`, `운영자 토큰으로 owner와 v1을 부르면 401이다`) | 의존성·설정·테스트만 두고 체인은 컴포넌트가 아닌 상수 선언으로 둔 상태에서 `./gradlew test --tests 'com.resilientpos.platform.Admin*'` — 8개 중 5개 실패(403 기대 404, 토큰 없음 401 기대 404, 점주 쿠키 401 기대 404, 아래 기동 실패 2개). 유효 토큰의 404와 owner·v1의 401은 체인 없이도 통과한 characterization이다 | 체인 구현 뒤 같은 명령 8개 통과. 테스트 `audiences`에 다른 값을 더하면 다른 audience 사례가 401 대신 404로 실패해 aud 검사기가 401을 만든다는 것을 확인하고 되돌렸다 | `./gradlew test --tests 'com.resilientpos.platform.*' --tests 'com.resilientpos.owner.*' --tests 'com.resilientpos.terminal.*'` 230개 통과, `./gradlew test` 721개 통과 |
 | 인수 3: `AdminSecurityConfigurationTest` 4개(`issuer와 audience가 있으면 운영자 체인이 만들어진다`(대조군), `issuer가 비면 체인이 거부해 컨텍스트가 뜨지 않는다`, `issuer 없이 jwk-set-uri만 있으면 issuer 검사가 빠지므로 컨텍스트가 뜨지 않는다`, `audience가 비면 체인이 거부해 컨텍스트가 뜨지 않는다`) | 위와 같은 명령. issuer·audience 누락 2개는 `issuer 없이 컨텍스트가 떴다`·`audience 없이 컨텍스트가 떴다`로 실패. jwk-set-uri 사례는 첫 GREEN 뒤 리뷰에서 더했고, Boot에 맡긴 issuer 필수(JwtDecoder 없음)로는 4개 중 이것만 `issuer 없이 컨텍스트가 떴다`로 실패했다 | 체인에 issuer `check`를 더한 뒤 `./gradlew test --tests 'com.resilientpos.platform.Admin*'` 9개 통과 | 아래 다음 동작의 회귀에 포함 |
 | 인수 4: `AdminIdentityProviderFilterTest` 5개(두 예외를 `DependencyUnavailableException`으로 resolver에 넘김, 응답이 커밋됐으면 다시 던짐, 무관한 예외는 통과, 등록은 admin 경로이고 Security 필터보다 앞), `AdminIdentityProviderOutageIntegrationTest`의 `issuer discovery에 실패하면 admin 요청은 HTML이 아니라 503 SERVICE_UNAVAILABLE envelope이고 ERROR 로그에 토큰이 없다`, `AdminJwkOutageIntegrationTest`의 `decoder 초기화 뒤 JWK Set 재조회가 실패하면 admin 요청은 503 SERVICE_UNAVAILABLE envelope이고 토큰은 출력에 없다` | 예외 클래스·통과만 하는 필터·경로 없는 등록만 둔 상태에서 `./gradlew test --tests 'com.resilientpos.platform.Admin*'` — 16개 중 5개 실패. 필터 단위 2개는 예외가 그대로 전파, 등록은 `expected [/admin/*] but was []`, 통합 2개는 `JwtDecoderInitializationException`(원인 `UnknownHostException: operator-idp.test`)과 `AuthenticationServiceException`(JWK 500)이 MockMvc 밖으로 샜다. 필터만 두고 advice handler가 없을 때는 통합 2개가 500 `INTERNAL_ERROR`로 실패했다 | 같은 명령 16개 통과 | `./gradlew test --tests 'com.resilientpos.platform.*'` 133개 통과, `./gradlew test` 729개 통과 |
-| 인수 5·11: DLT 목록과 위치 검증, offset 미변경 | 미실행 | 미실행 | 미실행 |
+| 인수 5·11(목록): `DeadLetterListIntegrationTest` 4개(`설정된 DLT의 fromOffset부터 limit건을 원 위치 예외 schemaVersion과 함께 돌려주고 없는 헤더는 null이며 스택 트레이스는 싣지 않는다`, `fromOffset이 partition 끝 이상이면 빈 목록이다`, `설정에 없는 토픽 없는 partition 음수 offset 1에서 50 밖의 limit은 400 INVALID_DEAD_LETTER_POSITION이다`, `목록을 읽어도 consumer group이 늘지 않고 어떤 group도 DLT에 offset을 커밋하지 않는다`), `DeadLetterReaderTest`의 `브로커에 닿지 못해 Kafka 시간 초과가 나면 DependencyUnavailableException이고 consumer를 닫는다`. 첫 레코드는 실제 `DeadLetterPublishingRecoverer.accept`로 넣어 헤더 형식을 실물과 대조했다 | 매핑 없는 Controller·빈 목록 reader·DTO만 둔 상태에서 `./gradlew test --tests 'com.resilientpos.platform.deadletter.*'` — 12개 중 10개 실패(슬라이스·통합은 `Status expected 200·400·503 but was 404`, 단위는 예외 대신 빈 목록) | 같은 명령 12개 통과. 토픽 허용 목록을 지우면 원 토픽 400 사례가 200으로, reader가 group으로 `commitSync`하게 바꾸면 offset 테스트가 `{dlt-reader-mutation=[order.paid.DLT-0]}`로 실패하는 것을 보고 되돌렸다 | `./gradlew test --tests 'com.resilientpos.platform.*'` 145개 통과, `./gradlew test` 741개 통과 |
 | 인수 6·7·10: 재투입·기록·멱등·counter·감사 | 미실행 | 미실행 | 미실행 |
 | 인수 8·9: 읽기 검사 422, 없는 offset 404, 사유 400 | 미실행 | 미실행 | 미실행 |
-| 인수 13: REST Docs | 미실행 | 미실행 | 미실행 |
+| 인수 13(목록): `DeadLetterControllerTest` 7개(200과 항목·없는 헤더 null, 생략 시 0과 50, 400 `INVALID_DEAD_LETTER_POSITION`, 필수 파라미터 없으면 400이고 reader 미호출, 503, 401과 `WWW-Authenticate: Bearer`, 403). 스니펫 `dead-letters-list`·`-list-invalid-position`·`-list-unavailable`·`dead-letters-unauthenticated`·`dead-letters-access-denied` | 위 RED에 포함. 401·403은 Controller 없이도 통과한 characterization(운영자 체인) | 위 GREEN에 포함. `build/generated-snippets`에 다섯 디렉터리 확인 | 위와 같다 |
+| 인수 13(재투입) | 미실행 | 미실행 | 미실행 |
 
 ## 결과
 개발 전 작성. 개발 후 실행 결과와 변경 이유를 추가한다.
