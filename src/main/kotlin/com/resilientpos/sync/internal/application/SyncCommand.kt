@@ -4,7 +4,6 @@ import com.resilientpos.order.OrderId
 import com.resilientpos.store.StoreId
 import com.resilientpos.sync.internal.domain.OperationPayload
 import com.resilientpos.terminal.TerminalId
-import java.time.Instant
 import java.util.UUID
 
 /**
@@ -25,7 +24,7 @@ object SyncCommand {
             val operationId: UUID,
             val sequence: Long,
             val payload: OperationPayload,
-            val createdAt: Instant? = null,
+            val createdAt: String? = null,
         )
 
         /** 항목별 결과와 배치가 끝난 시점의 watermark. */

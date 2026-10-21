@@ -9,12 +9,11 @@ import com.resilientpos.sync.internal.domain.CheckoutPayload
 import com.resilientpos.sync.internal.domain.OrderPayload
 import com.resilientpos.terminal.TerminalId
 import java.math.BigDecimal
-import java.time.Instant
 import java.util.UUID
 
 /**
  * `POST /v1/terminals/{terminalId}/sync`의 요청 본문. 형식 오류는 Jackson 역직렬화가 거절하므로 여기서는 검증하지 않는다.
- * 항목의 `createdAt`(ISO-8601 offset 시각)은 선택이고 저장하지 않으며 수렴 시간 metric에만 쓰인다. payload에 넣지 않아 payload hash에 영향이 없다.
+ * 항목의 `createdAt`(ISO-8601 offset 시각)은 선택이고 저장하지 않으며 수렴 시간 metric에만 쓰인다. 형식이 틀리면 없는 것으로 다루고 Facade가 센다. payload에 넣지 않아 payload hash에 영향이 없다.
  * 항목의 `order`는 `POST /v1/orders` 본문에서 `terminalId`를 뺀 모양이다. 단말 ID는 경로에서만 온다. 두 입구의 수용 범위는 다르다(`quantity`는 여기서 소수도 받아 그 항목을 거절한다).
  * 항목은 `kind`로 종류가 갈린다. `kind`가 없거나 모르는 값이면 기본 종류로 빠지지 않고 역직렬화가 거절해 배치 전체가 400이다.
  * 통화·수량·단가를 `Currency`·`Int`·`Money`로 바꾸지 않고 raw로 받는다. 이 규칙 위반은 배치 전체의 400이 아니라 그 항목의 `REJECTED`여야 하므로 Facade가 항목 안에서 바꾼다.
@@ -39,7 +38,7 @@ sealed interface SyncOperationRequest {
         val operationId: UUID,
         val sequence: Long,
         val order: SyncOrderRequest,
-        val createdAt: Instant? = null,
+        val createdAt: String? = null,
     ) : SyncOperationRequest {
         override fun toCommand() = SyncCommand.ReceiveBatch.Operation(operationId, sequence, order.toPayload(), createdAt)
     }
@@ -53,7 +52,7 @@ sealed interface SyncOperationRequest {
         val sequence: Long,
         val clientOrderId: UUID,
         val amount: BigDecimal,
-        val createdAt: Instant? = null,
+        val createdAt: String? = null,
     ) : SyncOperationRequest {
         override fun toCommand() =
             SyncCommand.ReceiveBatch.Operation(operationId, sequence, CheckoutPayload(ClientOrderId(clientOrderId), amount), createdAt)

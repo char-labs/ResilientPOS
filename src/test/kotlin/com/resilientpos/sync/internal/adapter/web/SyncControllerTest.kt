@@ -17,7 +17,6 @@ import com.resilientpos.terminal.TerminalFixtures.TOKEN
 import com.resilientpos.terminal.TerminalId
 import com.resilientpos.terminal.TerminalManagement
 import java.math.BigDecimal
-import java.time.Instant
 import java.util.UUID
 import kotlin.test.Test
 import org.junit.jupiter.api.BeforeEach
@@ -118,12 +117,12 @@ class SyncControllerTest(
     }
 
     @Test
-    fun `createdAt이 있는 CREATE_ORDER와 REQUEST_CHECKOUT은 Instant로 Facade에 전달되고 요청 필드에 문서화된다`() {
+    fun `createdAt이 있는 CREATE_ORDER와 REQUEST_CHECKOUT은 원문 문자열 그대로 Facade에 전달되고 요청 필드에 문서화된다`() {
         val orderCreatedAt = "2026-10-21T09:00:00+09:00"
         val checkoutCreatedAt = "2026-10-21T00:00:05Z"
         val expected = command(
-            operation(1, ORDER_COMMAND, Instant.parse("2026-10-21T00:00:00Z")),
-            operation(2, CHECKOUT_COMMAND, Instant.parse(checkoutCreatedAt)),
+            operation(1, ORDER_COMMAND, orderCreatedAt),
+            operation(2, CHECKOUT_COMMAND, checkoutCreatedAt),
         )
         given(facade.receiveBatch(expected)).willReturn(SyncCommand.ReceiveBatch.Result(2, emptyList()))
 
@@ -142,28 +141,23 @@ class SyncControllerTest(
     }
 
     @Test
-    fun `형식이 틀린 createdAt이면 400 BAD_REQUEST이고 Facade를 부르지 않는다`() {
-        for (createdAt in listOf("어제", "2026-13-01")) {
-            postBatch(requestJson(operationJson(OPERATION_ID_1, 1, createdAt)))
-                .andExpect(status().isBadRequest)
-                .andExpect(jsonPath("$.result").value("FAIL"))
-                .andExpect(jsonPath("$.error.errorCode").value("BAD_REQUEST"))
-                .andDo(
-                    document(
-                        "sync-receive-batch-bad-created-at",
-                        AUTHORIZATION_HEADER, PATH_PARAMETERS,
-                        requestFields(subsectionWithPath("operations").description("operation 배열. createdAt이 ISO-8601 offset 시각이 아니면 배치 전체가 BAD_REQUEST")),
-                        responseFields(
-                            fieldWithPath("result").type(JsonFieldType.STRING).description("FAIL"),
-                            fieldWithPath("data").type(JsonFieldType.NULL).description("실패 응답에서는 null"),
-                            fieldWithPath("error.errorCode").type(JsonFieldType.STRING).description("BAD_REQUEST"),
-                            fieldWithPath("error.message").type(JsonFieldType.STRING).description("사람이 읽는 설명"),
-                        ),
-                    ),
-                )
-        }
+    fun `형식이 틀린 createdAt도 200이고 원문 그대로 Facade에 넘긴다`() {
+        val cases = mapOf(
+            "\"어제\"" to "어제",
+            "\"2026-10-21T09:00:00\"" to "2026-10-21T09:00:00",
+            "\"2026-13-01\"" to "2026-13-01",
+            "1729500000000" to "1729500000000",
+        )
+        for ((jsonValue, raw) in cases) {
+            val expected = command(operation(1, ORDER_COMMAND, raw))
+            given(facade.receiveBatch(expected)).willReturn(SyncCommand.ReceiveBatch.Result(1, emptyList()))
 
-        verifyNoInteractions(facade)
+            postBatch(requestJson(operationJson(OPERATION_ID_1, 1, "RAW").replace("\"RAW\"", jsonValue)))
+                .andExpect(status().isOk)
+                .andExpect(jsonPath("$.result").value("SUCCESS"))
+
+            verify(facade).receiveBatch(expected)
+        }
     }
 
     @Test
@@ -316,7 +310,7 @@ class SyncControllerTest(
 
         private val CHECKOUT_COMMAND = CheckoutPayload(ClientOrderId(UUID.fromString(CLIENT_ORDER_ID)), BigDecimal("3502"))
 
-        private fun operation(sequence: Long, payload: OperationPayload, createdAt: Instant? = null) =
+        private fun operation(sequence: Long, payload: OperationPayload, createdAt: String? = null) =
             SyncCommand.ReceiveBatch.Operation(if (sequence == 1L) OPERATION_ID_1 else OPERATION_ID_2, sequence, payload, createdAt)
 
         private fun command(vararg operations: SyncCommand.ReceiveBatch.Operation) =
@@ -348,7 +342,7 @@ class SyncControllerTest(
         private val REQUEST_FIELDS: List<FieldDescriptor> = listOf(
             fieldWithPath("operations[].operationId").type(JsonFieldType.STRING).description("단말이 부여한 operation ID(UUID v7). 재전송 판별 키"),
             fieldWithPath("operations[].sequence").type(JsonFieldType.NUMBER).description("단말 안에서 단조 증가하는 순번. 1부터 시작하고 서버는 watermark 다음 순번만 적용한다"),
-            fieldWithPath("operations[].createdAt").type(JsonFieldType.STRING).optional().description("선택. 단말이 operation을 만든 시각으로 ISO-8601 offset 시각 문자열이다(예: 2026-10-21T09:00:00+09:00). 저장하지 않고 수렴 시간 metric에만 쓴다. 없어도 된다. 형식이 틀리면 배치 전체가 400 BAD_REQUEST"),
+            fieldWithPath("operations[].createdAt").type(JsonFieldType.STRING).optional().description("선택. 단말이 operation을 만든 시각으로 ISO-8601 offset 시각 문자열이다(예: 2026-10-21T09:00:00+09:00). 저장하지 않고 수렴 시간 metric에만 쓴다. 없어도 된다. 형식이 틀리면 무시하고 수렴 시간을 기록하지 않는다"),
             fieldWithPath("operations[].kind").type(JsonFieldType.STRING).description("operation 종류. 필수이며 CREATE_ORDER(주문 생성) 또는 REQUEST_CHECKOUT(결제 요청)만 받는다. 없거나 모르는 값이면 배치 전체가 400 BAD_REQUEST"),
             fieldWithPath("operations[].clientOrderId").type(JsonFieldType.STRING).optional().description("REQUEST_CHECKOUT일 때만 있다. 결제를 요청할 주문의 clientOrderId(UUID). 같은 단말의 앞선 CREATE_ORDER가 만든 주문을 가리킨다"),
             fieldWithPath("operations[].amount").type(JsonFieldType.STRING).optional().description("REQUEST_CHECKOUT일 때만 있고 그 항목에서는 필수다. 단말이 본 주문 합계로 주문 통화 기준 decimal string이다. JSON 숫자도 받지만 문자열로 보내기를 권한다. 재전송 때 소수 자릿수(scale)가 바뀌면(3502와 3502.0) 다른 내용으로 판정되어 CONFLICT다. 통화 자릿수·범위에 맞지 않으면 그 항목은 REJECTED(INVALID_MONEY_SCALE 등)이고, 서버의 확정 금액과 다르면 그 항목은 REJECTED(CHECKOUT_AMOUNT_MISMATCH)이고 주문은 그대로다. 없으면 배치 전체가 400 BAD_REQUEST"),

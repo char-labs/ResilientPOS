@@ -18,6 +18,8 @@ import io.micrometer.core.instrument.MeterRegistry
 import io.micrometer.core.instrument.Timer
 import java.time.Clock
 import java.time.Duration
+import java.time.OffsetDateTime
+import java.time.format.DateTimeParseException
 import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.stereotype.Service
 
@@ -46,6 +48,7 @@ class SyncCommandFacade(
     init {
         // 한 번도 일어나지 않은 status도 0으로 나가야 알림의 increase()가 첫 증가를 잡는다.
         SyncItemStatus.entries.forEach { meterRegistry.counter(OPERATION_METRIC, "status", it.name) }
+        meterRegistry.counter(CREATED_AT_INVALID_METRIC)
     }
 
     // Micrometer 기본 bucket의 상한(30초)으로는 오프라인 수렴(분~시간)을 담지 못해 SLO bucket만 낸다.
@@ -87,10 +90,16 @@ class SyncCommandFacade(
         meterRegistry.counter(OPERATION_METRIC, "status", item.status.name).increment()
     }
 
-    /** 이번 배치에서 처음 확정된 항목(APPLIED·REJECTED)만 단말이 만든 시각부터 지금까지를 잰다. 앞선 항목이 커밋된 뒤 배치가 실패해도 남는다(재전송은 DUPLICATE라 중복 기록은 없다). */
+    /** 이번 배치에서 처음 확정된 항목(APPLIED·REJECTED)만 단말이 만든 시각부터 지금까지를 잰다. 앞선 항목이 커밋된 뒤 배치가 실패해도 남는다(재전송은 DUPLICATE라 중복 기록은 없다). 형식이 틀린 `createdAt`은 기록하지 않고 [CREATED_AT_INVALID_METRIC]을 센다. */
     private fun recordConvergence(operation: SyncCommand.ReceiveBatch.Operation, item: SyncCommand.ReceiveBatch.Item) {
-        val createdAt = operation.createdAt ?: return
+        val raw = operation.createdAt ?: return
         if (item.status != SyncItemStatus.APPLIED && item.status != SyncItemStatus.REJECTED) return
+        val createdAt = try {
+            OffsetDateTime.parse(raw).toInstant()
+        } catch (invalid: DateTimeParseException) {
+            meterRegistry.counter(CREATED_AT_INVALID_METRIC).increment()
+            return
+        }
         val elapsed = Duration.between(createdAt, clock.instant())
         if (!elapsed.isNegative) convergence.record(elapsed)
     }
@@ -189,6 +198,7 @@ class SyncCommandFacade(
 
         private const val OPERATION_METRIC = "sync.operation"
         private const val CONVERGENCE_METRIC = "sync.convergence"
+        private const val CREATED_AT_INVALID_METRIC = "sync.created-at.invalid"
         private val CONVERGENCE_SLOS = arrayOf(
             Duration.ofSeconds(1), Duration.ofSeconds(10), Duration.ofMinutes(1), Duration.ofMinutes(5),
             Duration.ofMinutes(15), Duration.ofHours(1), Duration.ofHours(6), Duration.ofHours(24),

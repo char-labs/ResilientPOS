@@ -51,7 +51,7 @@ class SyncCommandFacadeIntegrationTest(
         lines = command.lines.map { OrderPayload.Line(it.productCode, it.productName, it.unitPrice.amount, it.quantity.toBigDecimal()) },
     )
 
-    private fun operation(sequence: Long, payload: OperationPayload = payload(), operationId: UUID = UUID.randomUUID(), createdAt: Instant? = null) =
+    private fun operation(sequence: Long, payload: OperationPayload = payload(), operationId: UUID = UUID.randomUUID(), createdAt: String? = null) =
         SyncCommand.ReceiveBatch.Operation(operationId, sequence, payload, createdAt)
 
     // OrderFixtures 기본 line의 합계(1001 x 2 + 500 x 3)다. 단말이 본 합계로 싣는다.
@@ -634,7 +634,7 @@ class SyncCommandFacadeIntegrationTest(
         return (after.first - before.first) to (after.second - before.second)
     }
 
-    private fun secondsAgo(seconds: Long): Instant = Instant.now().minusSeconds(seconds)
+    private fun secondsAgo(seconds: Long): String = Instant.now().minusSeconds(seconds).toString()
 
     @Test
     fun `sync convergence timer는 기동 때 등록돼 있다`() {
@@ -672,7 +672,7 @@ class SyncCommandFacadeIntegrationTest(
     @Test
     fun `미래 createdAt은 기록하지 않고 항목은 정상 APPLIED다`() {
         val (count, _) = convergenceDelta {
-            val result = receive(operation(1, createdAt = Instant.now().plusSeconds(3600)))
+            val result = receive(operation(1, createdAt = Instant.now().plusSeconds(3600).toString()))
             assertEquals(SyncItemStatus.APPLIED, result.items.single().status)
         }
 
@@ -706,5 +706,69 @@ class SyncCommandFacadeIntegrationTest(
         }
 
         assertEquals(0L, count)
+    }
+
+    private fun invalidCount() = checkNotNull(meterRegistry.find("sync.created-at.invalid").counter()) { "sync.created-at.invalid counter가 없다" }.count()
+
+    @Test
+    fun `sync created-at invalid counter는 기동 때 0으로 등록돼 있다`() {
+        assertNotNull(meterRegistry.find("sync.created-at.invalid").counter())
+    }
+
+    @Test
+    fun `형식이 틀린 createdAt은 항목을 정상 처리하고 수렴 시간 대신 invalid를 센다`() {
+        val raws = listOf("어제", "2026-10-21T09:00:00", "2026-13-01", "1729500000000")
+        val beforeInvalid = invalidCount()
+
+        val (count, _) = convergenceDelta {
+            val result = receive(*raws.mapIndexed { i, raw -> operation(i + 1L, createdAt = raw) }.toTypedArray())
+            assertEquals(raws.map { SyncItemStatus.APPLIED }, result.items.map { it.status })
+        }
+
+        assertEquals(0L, count)
+        assertEquals(raws.size.toDouble(), invalidCount() - beforeInvalid)
+    }
+
+    @Test
+    fun `형식이 틀린 createdAt의 REJECTED 항목도 invalid를 센다`() {
+        val badScale = payload().let { it.copy(lines = listOf(it.lines.first().copy(unitPrice = BigDecimal("4500.5")))) }
+        val beforeInvalid = invalidCount()
+
+        val result = receive(operation(1, badScale, createdAt = "어제"))
+
+        assertEquals(SyncItemStatus.REJECTED, result.items.single().status)
+        assertEquals(1.0, invalidCount() - beforeInvalid)
+    }
+
+    @Test
+    fun `형식이 틀린 createdAt의 재전송 DUPLICATE과 GAP과 CONFLICT는 invalid를 다시 세지 않는다`() {
+        val applied = operation(1, createdAt = "어제")
+        receive(applied)
+        val beforeInvalid = invalidCount()
+
+        val result = receive(
+            applied,
+            operation(2, operationId = applied.operationId, createdAt = "어제"),
+            operation(5, createdAt = "어제"),
+        )
+
+        assertEquals(listOf(SyncItemStatus.DUPLICATE, SyncItemStatus.CONFLICT, SyncItemStatus.GAP), result.items.map { it.status })
+        assertEquals(0.0, invalidCount() - beforeInvalid)
+    }
+
+    @Test
+    fun `Z와 offset이 있는 createdAt은 둘 다 수렴 시간으로 기록하고 invalid를 세지 않는다`() {
+        val beforeInvalid = invalidCount()
+        val now = Instant.now()
+
+        val (count, _) = convergenceDelta {
+            receive(
+                operation(1, createdAt = now.minusSeconds(60).toString()),
+                operation(2, createdAt = now.minusSeconds(60).atOffset(java.time.ZoneOffset.ofHours(9)).toString()),
+            )
+        }
+
+        assertEquals(2L, count)
+        assertEquals(0.0, invalidCount() - beforeInvalid)
     }
 }
