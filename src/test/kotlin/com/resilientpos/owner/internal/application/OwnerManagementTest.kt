@@ -65,6 +65,24 @@ class OwnerManagementTest {
     }
 
     @Test
+    fun `같은 이메일로 다시 가입하면 커밋의 unique 위반을 OWNER_EMAIL_DUPLICATED로 바꾼다`() {
+        signUp()
+
+        assertEquals(Owner.OWNER_EMAIL_DUPLICATED, assertFailsWith<DomainException> { signUp() }.code)
+    }
+
+    @Test
+    fun `다른 제약의 위반은 번역하지 않고 그대로 던진다`() {
+        val other = DataIntegrityViolationException(
+            "could not execute statement",
+            SQLException("ERROR: duplicate key value violates unique constraint \"ux_other\"", "23505"),
+        )
+        owners.failure = other
+
+        assertSame(other, assertFailsWith<DataIntegrityViolationException> { signUp() })
+    }
+
+    @Test
     fun `맞는 비밀번호로 로그인하면 가입한 점주의 id와 정규화한 이메일을 돌려준다`() {
         val signedUp = signUp()
 
@@ -174,8 +192,10 @@ class OwnerManagementTest {
     private class InMemoryOwners : OwnerRepository {
         val byEmail = mutableMapOf<String, Owner>()
         var lookups = 0
+        var failure: RuntimeException? = null
 
         override fun save(owner: Owner): Owner {
+            failure?.let { throw it }
             if (byEmail.putIfAbsent(owner.email.value, owner) != null) throw uniqueViolation()
             return owner
         }
