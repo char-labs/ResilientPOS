@@ -2,6 +2,7 @@ package com.resilientpos.payment.internal.adapter.persistence.command
 
 import com.resilientpos.foundation.Money
 import com.resilientpos.contract.PaymentAttemptKind
+import com.resilientpos.contract.PaymentUnknownReason
 import com.resilientpos.payment.PaymentAttemptStatus
 import com.resilientpos.payment.PaymentId
 import com.resilientpos.payment.internal.domain.PaymentAttempt
@@ -15,6 +16,7 @@ import jakarta.persistence.Enumerated
 import jakarta.persistence.Id
 import jakarta.persistence.Table
 import java.math.BigDecimal
+import java.time.Instant
 import java.util.Currency
 import java.util.UUID
 import org.hibernate.annotations.JdbcTypeCode
@@ -36,7 +38,7 @@ import org.hibernate.type.SqlTypes
  *
  * `retriedFrom`은 재결제로 만든 시도가 가리키는 원래 시도다. 사실로 만든 시도는 null이다.
  *
- * 바뀌는 것은 결말뿐이다. [applyResult]만 값을 바꾸고 나머지는 시도가 만들어질 때 확정된다.
+ * 바뀌는 것은 결말과 넘김 상태(조회 횟수·넘긴 시각)뿐이다. [applyResult]만 값을 바꾸고 나머지는 시도가 만들어질 때 확정된다.
  * 전 필드는 `var`에 `protected set`이다. `val`로 두지 않는 이유는 `OrderEntity`의 KDoc에 있다. 생성은 `from`만 한다(도메인 규칙 §5).
  */
 @Entity
@@ -53,6 +55,9 @@ class PaymentAttemptEntity private constructor(
     status: PaymentAttemptStatus,
     providerReference: String?,
     retriedFrom: UUID?,
+    unknownReason: PaymentUnknownReason?,
+    queryCount: Int,
+    reconciliationRequestedAt: Instant?,
 ) : BaseEntity() {
 
     @Id
@@ -93,13 +98,32 @@ class PaymentAttemptEntity private constructor(
     var retriedFrom: UUID? = retriedFrom
         protected set
 
+    @Enumerated(EnumType.STRING)
+    var unknownReason: PaymentUnknownReason? = unknownReason
+        protected set
+
+    var queryCount: Int = queryCount
+        protected set
+
+    var reconciliationRequestedAt: Instant? = reconciliationRequestedAt
+        protected set
+
     /**
-     * provider 결과를 반영한다. 바꿀 수 있는 것이 이 둘뿐이라는 사실을 시그니처로 말한다.
-     * 무엇으로 바꿀 수 있는지는 aggregate의 `approve`·`decline`·`markUnknown`이 정하고, 여기는 그 결과를 옮기기만 한다.
+     * 결말과 넘김 상태를 반영한다. 바꿀 수 있는 것이 이 다섯뿐이라는 사실을 시그니처로 말한다.
+     * 무엇으로 바꿀 수 있는지는 aggregate의 전이(`approve`·`decline`·`markUnknown`·`recordUnknownQuery`·넘김)가 정하고, 여기는 그 결과를 옮기기만 한다.
      */
-    fun applyResult(status: PaymentAttemptStatus, providerReference: String?) {
+    fun applyResult(
+        status: PaymentAttemptStatus,
+        providerReference: String?,
+        unknownReason: PaymentUnknownReason?,
+        queryCount: Int,
+        reconciliationRequestedAt: Instant?,
+    ) {
         this.status = status
         this.providerReference = providerReference
+        this.unknownReason = unknownReason
+        this.queryCount = queryCount
+        this.reconciliationRequestedAt = reconciliationRequestedAt
     }
 
     fun toDomain(): PaymentAttempt = PaymentAttempt.restore(
@@ -113,6 +137,10 @@ class PaymentAttemptEntity private constructor(
         status = status,
         providerReference = providerReference,
         retriedFrom = retriedFrom?.let(::PaymentId),
+        // 롤링 배포 중 이전 버전이 만든 UNKNOWN 행은 사유가 null이다. 그 버전에는 금액 대조가 없어 불명 사유가 이것 하나였다.
+        unknownReason = unknownReason ?: PaymentUnknownReason.RESULT_UNCONFIRMED.takeIf { status == PaymentAttemptStatus.UNKNOWN },
+        queryCount = queryCount,
+        reconciliationRequestedAt = reconciliationRequestedAt,
     )
 
     companion object {
@@ -128,6 +156,9 @@ class PaymentAttemptEntity private constructor(
             status = attempt.status,
             providerReference = attempt.providerReference,
             retriedFrom = attempt.retriedFrom?.value,
+            unknownReason = attempt.unknownReason,
+            queryCount = attempt.queryCount,
+            reconciliationRequestedAt = attempt.reconciliationRequestedAt,
         )
     }
 }

@@ -2,6 +2,9 @@ package com.resilientpos.payment
 
 import com.resilientpos.contract.PaymentApproved
 import com.resilientpos.contract.PaymentAttemptKind
+import com.resilientpos.contract.PaymentReconciliationReason
+import com.resilientpos.contract.PaymentReconciliationRequested
+import com.resilientpos.contract.PaymentUnknownReason
 import com.resilientpos.foundation.DomainErrorKind
 import com.resilientpos.foundation.DomainException
 import com.resilientpos.foundation.Money
@@ -26,6 +29,7 @@ import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import org.springframework.context.ApplicationEventPublisher
 
@@ -64,6 +68,7 @@ class PaymentManagementTest {
         override fun findById(paymentId: PaymentId) = stored[paymentId]
         override fun findUnknownAuthorizationIds(after: PaymentId?, limit: Int) = emptyList<PaymentId>()
         override fun countUnknownAuthorizations() = 0L
+        override fun countReconciliationPendingAuthorizations() = 0L
         override fun findByIdForUpdate(paymentId: PaymentId) = lockedRead ?: stored[paymentId]
         override fun findByIdAndStoreIdForUpdate(paymentId: PaymentId, storeId: StoreId) =
             findByIdForUpdate(paymentId)?.takeIf { it.storeId == storeId }
@@ -94,6 +99,9 @@ class PaymentManagementTest {
             return queryOutcome
         }
     }
+
+    /** 승인 결말. 금액은 시도 금액과 같아야 승인으로 굳는다. */
+    private fun approved(amount: String = "4500") = AuthorizationOutcome.Approved("PROVIDER-REF", Money.of(amount, krw))
 
     /** `repository`를 주면 발행하는 순간까지 몇 번 갱신했는지도 적는다. 저장 → 발행 순서를 본다. */
     private class RecordingPublisher(private val repository: RecordingRepository? = null) : ApplicationEventPublisher {
@@ -127,6 +135,7 @@ class PaymentManagementTest {
             ids,
             clock,
             events,
+            UNKNOWN_QUERY_LIMIT,
         )
     }
 
@@ -181,7 +190,7 @@ class PaymentManagementTest {
     fun `승인을 적용하면 저장한 뒤 승인 사실을 발행한다`() {
         val repository = RecordingRepository()
         val publisher = RecordingPublisher(repository)
-        val gateway = StubGateway(AuthorizationOutcome.Approved("PROVIDER-REF"))
+        val gateway = StubGateway(approved())
         val management = management(repository, publisher, gateway)
         val created = management.createAttempt(command("4500"))
         publisher.published.clear()
@@ -225,13 +234,45 @@ class PaymentManagementTest {
         assertEquals(PaymentAttemptStatus.UNKNOWN, result.status)
         val unknown = publisher.published.single() as PaymentEvent.Unknown
         assertEquals(created.paymentId, unknown.paymentId)
+        assertEquals(PaymentUnknownReason.RESULT_UNCONFIRMED, repository.stored.getValue(created.paymentId).unknownReason)
+    }
+
+    @Test
+    fun `승인 응답의 금액이 시도와 다르면 승인으로 굳히지 않고 AMOUNT_MISMATCH 사유로 UNKNOWN을 적용한다`() {
+        val repository = RecordingRepository()
+        val publisher = RecordingPublisher()
+        val management = management(repository, publisher, StubGateway(approved("4501")))
+        val created = management.createAttempt(command("4500"))
+        publisher.published.clear()
+
+        val result = management.authorize(PaymentCommand.Authorize(created.paymentId))
+
+        assertEquals(PaymentAttemptStatus.UNKNOWN, result.status)
+        val stored = repository.stored.getValue(created.paymentId)
+        assertEquals(PaymentUnknownReason.AMOUNT_MISMATCH, stored.unknownReason)
+        assertEquals(null, stored.providerReference)
+        assertEquals(created.paymentId, (publisher.published.single() as PaymentEvent.Unknown).paymentId)
+    }
+
+    @Test
+    fun `승인 응답의 통화가 시도와 다르면 금액이 같아도 AMOUNT_MISMATCH 사유로 UNKNOWN을 적용한다`() {
+        val repository = RecordingRepository()
+        val publisher = RecordingPublisher()
+        val usdSameNumber = AuthorizationOutcome.Approved("PROVIDER-REF", Money.of("4502", Currency.getInstance("USD")))
+        val management = management(repository, publisher, StubGateway(usdSameNumber))
+        val created = management.createAttempt(command("4500"))
+
+        val result = management.authorize(PaymentCommand.Authorize(created.paymentId))
+
+        assertEquals(PaymentAttemptStatus.UNKNOWN, result.status)
+        assertEquals(PaymentUnknownReason.AMOUNT_MISMATCH, repository.stored.getValue(created.paymentId).unknownReason)
     }
 
     @Test
     fun `결말이 난 시도는 provider를 부르지 않고 그 결말을 돌려준다`() {
         val repository = RecordingRepository()
         val publisher = RecordingPublisher()
-        val gateway = StubGateway(AuthorizationOutcome.Approved("PROVIDER-REF"))
+        val gateway = StubGateway(approved())
         val management = management(repository, publisher, gateway)
         // 0원 시도는 만들어질 때 이미 APPROVED다.
         val created = management.createAttempt(command("0"))
@@ -247,7 +288,7 @@ class PaymentManagementTest {
 
     @Test
     fun `없는 시도를 승인하려 하면 거절하고 provider를 부르지 않는다`() {
-        val gateway = StubGateway(AuthorizationOutcome.Approved("PROVIDER-REF"))
+        val gateway = StubGateway(approved())
         val management = management(RecordingRepository(), RecordingPublisher(), gateway)
 
         val domain = assertFailsWith<DomainException> { management.authorize(PaymentCommand.Authorize(PaymentId(UUID.randomUUID()))) }
@@ -357,6 +398,9 @@ class PaymentManagementTest {
             status = PaymentAttemptStatus.DECLINED,
             providerReference = null,
             retriedFrom = null,
+            unknownReason = null,
+            queryCount = 0,
+            reconciliationRequestedAt = null,
         )
         repository.stored[cancellation.id] = cancellation
         repository.saved.clear()
@@ -397,7 +441,7 @@ class PaymentManagementTest {
     fun `조회가 승인이면 시도를 승인으로 확정하고 저장한 뒤 승인 사실을 발행한다`() {
         val repository = RecordingRepository()
         val publisher = RecordingPublisher(repository)
-        val gateway = StubGateway(AuthorizationOutcome.Unknown, AuthorizationOutcome.Approved("PROVIDER-REF"))
+        val gateway = StubGateway(AuthorizationOutcome.Unknown, approved("4502"))
         val management = management(repository, publisher, gateway)
         val unknown = unknownAttempt(management, publisher, repository)
         publisher.updatedBeforePublish.clear()
@@ -428,7 +472,7 @@ class PaymentManagementTest {
     }
 
     @Test
-    fun `조회로도 불명이면 아무것도 저장하지도 발행하지도 않고 UNKNOWN을 돌려준다`() {
+    fun `조회로도 불명이면 상한 전에는 조회 횟수만 저장하고 발행하지 않고 UNKNOWN을 돌려준다`() {
         val repository = RecordingRepository()
         val publisher = RecordingPublisher()
         val gateway = StubGateway(AuthorizationOutcome.Unknown)
@@ -439,6 +483,226 @@ class PaymentManagementTest {
 
         assertEquals(PaymentCommand.ResolveUnknown.Result(unknown, PaymentAttemptStatus.UNKNOWN), result)
         assertEquals(1, gateway.queryCalls)
+        val saved = repository.updated.single()
+        assertEquals(1, saved.queryCount)
+        assertNull(saved.reconciliationRequestedAt)
+        assertEquals(PaymentAttemptStatus.UNKNOWN, saved.status)
+        assertTrue(publisher.published.isEmpty())
+    }
+
+    @Test
+    fun `조회 횟수가 상한에 닿으면 넘긴 시각을 저장한 뒤 QUERY_LIMIT_EXCEEDED 사실을 발행한다`() {
+        val repository = RecordingRepository()
+        val publisher = RecordingPublisher(repository)
+        val gateway = StubGateway(AuthorizationOutcome.Unknown)
+        val management = management(repository, publisher, gateway)
+        val unknown = unknownAttempt(management, publisher, repository)
+        publisher.updatedBeforePublish.clear()
+
+        repeat(UNKNOWN_QUERY_LIMIT) { management.resolveUnknown(PaymentCommand.ResolveUnknown(unknown)) }
+
+        val stored = repository.stored.getValue(unknown)
+        assertEquals(UNKNOWN_QUERY_LIMIT, stored.queryCount)
+        assertEquals(Instant.parse("2026-09-22T01:00:00Z"), stored.reconciliationRequestedAt)
+        val fact = publisher.published.single() as PaymentReconciliationRequested
+        assertEquals(PaymentReconciliationReason.QUERY_LIMIT_EXCEEDED, fact.reason)
+        assertEquals(unknown.value, fact.paymentId)
+        assertEquals(UNKNOWN_QUERY_LIMIT, fact.queryCount)
+        assertEquals(PaymentUnknownReason.RESULT_UNCONFIRMED, fact.unknownReason)
+        assertNull(fact.reportedAmount)
+        assertNull(fact.reportedProviderReference)
+        // 저장한 뒤 발행한다. 상한 전 두 번은 사실 없이 갱신만 했다.
+        assertEquals(listOf(UNKNOWN_QUERY_LIMIT), publisher.updatedBeforePublish)
+    }
+
+    @Test
+    fun `조회가 다른 금액의 승인이면 확정하지 않고 넘긴 뒤 알려 준 금액과 참조를 담은 AMOUNT_MISMATCH 사실을 발행한다`() {
+        val repository = RecordingRepository()
+        val publisher = RecordingPublisher(repository)
+        val gateway = StubGateway(AuthorizationOutcome.Unknown, approved("4503"))
+        val management = management(repository, publisher, gateway)
+        val unknown = unknownAttempt(management, publisher, repository)
+        publisher.updatedBeforePublish.clear()
+
+        val result = management.resolveUnknown(PaymentCommand.ResolveUnknown(unknown))
+
+        assertEquals(PaymentCommand.ResolveUnknown.Result(unknown, PaymentAttemptStatus.UNKNOWN), result)
+        val stored = repository.stored.getValue(unknown)
+        assertEquals(1, stored.queryCount)
+        assertEquals(Instant.parse("2026-09-22T01:00:00Z"), stored.reconciliationRequestedAt)
+        assertNull(stored.providerReference)
+        val fact = publisher.published.single() as PaymentReconciliationRequested
+        assertEquals(PaymentReconciliationReason.AMOUNT_MISMATCH, fact.reason)
+        assertEquals(Money.of("4503", krw), fact.reportedAmount)
+        assertEquals("PROVIDER-REF", fact.reportedProviderReference)
+        assertEquals(Money.of("4502", krw), fact.amount)
+        assertEquals(listOf(1), publisher.updatedBeforePublish)
+    }
+
+    @Test
+    fun `조회가 다른 통화의 승인이면 금액이 같아도 넘긴다`() {
+        val repository = RecordingRepository()
+        val publisher = RecordingPublisher()
+        val gateway = StubGateway(AuthorizationOutcome.Unknown, AuthorizationOutcome.Approved("PROVIDER-REF", Money.of("4502", Currency.getInstance("USD"))))
+        val management = management(repository, publisher, gateway)
+        val unknown = unknownAttempt(management, publisher, repository)
+
+        management.resolveUnknown(PaymentCommand.ResolveUnknown(unknown))
+
+        val fact = publisher.published.single() as PaymentReconciliationRequested
+        assertEquals(PaymentReconciliationReason.AMOUNT_MISMATCH, fact.reason)
+        assertEquals(Money.of("4502", Currency.getInstance("USD")), fact.reportedAmount)
+    }
+
+    @Test
+    fun `넘긴 시도는 provider를 조회하지 않고 지금 상태를 돌려준다`() {
+        val repository = RecordingRepository()
+        val publisher = RecordingPublisher()
+        val gateway = StubGateway(AuthorizationOutcome.Unknown, approved("4502"))
+        val management = management(repository, publisher, gateway)
+        val unknown = unknownAttempt(management, publisher, repository)
+        repository.stored[unknown] = repository.stored.getValue(unknown)
+            .requestReconciliationForAmountMismatch(Money.of("4503", krw), "REF", UuidV7IdentifierGenerator(), Instant.parse("2026-09-22T00:30:00Z")).aggregate
+
+        val result = management.resolveUnknown(PaymentCommand.ResolveUnknown(unknown))
+
+        assertEquals(PaymentCommand.ResolveUnknown.Result(unknown, PaymentAttemptStatus.UNKNOWN), result)
+        assertEquals(0, gateway.queryCalls)
+        assertTrue(repository.updated.isEmpty())
+        assertTrue(publisher.published.isEmpty())
+    }
+
+    /** 넘긴 시각을 정한 UNKNOWN 시도를 저장소에 둔다. */
+    private fun handedOverAttempt(management: PaymentManagement, publisher: RecordingPublisher, repository: RecordingRepository): PaymentId {
+        val unknown = unknownAttempt(management, publisher, repository)
+        repository.stored[unknown] = repository.stored.getValue(unknown)
+            .requestReconciliationForAmountMismatch(Money.of("4503", krw), "REF", UuidV7IdentifierGenerator(), Instant.parse("2026-09-22T00:30:00Z")).aggregate
+        return unknown
+    }
+
+    @Test
+    fun `넘긴 시도에 승인 결론을 적용하면 APPROVED로 저장하고 승인 사실을 한 번 발행한다`() {
+        val repository = RecordingRepository()
+        val publisher = RecordingPublisher(repository)
+        val management = management(repository, publisher)
+        val unknown = handedOverAttempt(management, publisher, repository)
+        repository.updated.clear()
+        publisher.updatedBeforePublish.clear()
+
+        val result = management.resolveFromReconciliation(
+            PaymentCommand.ResolveFromReconciliation(unknown, PaymentCommand.ResolveFromReconciliation.Conclusion.APPROVED, "REF-9"),
+        )
+
+        assertEquals(PaymentCommand.ResolveFromReconciliation.Result(unknown, PaymentAttemptStatus.APPROVED), result)
+        assertEquals(1, repository.updated.size)
+        assertEquals("REF-9", repository.stored.getValue(unknown).providerReference)
+        assertEquals(PaymentAttemptStatus.APPROVED, repository.stored.getValue(unknown).status)
+        val approved = publisher.published.single() as PaymentApproved
+        assertEquals(unknown.value, approved.paymentId)
+        assertEquals("REF-9", approved.providerReference)
+        // 저장한 뒤 발행한다.
+        assertEquals(listOf(1), publisher.updatedBeforePublish)
+    }
+
+    @Test
+    fun `넘긴 시도에 거절 결론을 적용하면 DECLINED로 저장하고 거절 사실을 한 번 발행한다`() {
+        val repository = RecordingRepository()
+        val publisher = RecordingPublisher()
+        val management = management(repository, publisher)
+        val unknown = handedOverAttempt(management, publisher, repository)
+
+        val result = management.resolveFromReconciliation(
+            PaymentCommand.ResolveFromReconciliation(unknown, PaymentCommand.ResolveFromReconciliation.Conclusion.DECLINED, null),
+        )
+
+        assertEquals(PaymentCommand.ResolveFromReconciliation.Result(unknown, PaymentAttemptStatus.DECLINED), result)
+        assertEquals(1, repository.updated.size)
+        assertEquals(PaymentAttemptStatus.DECLINED, repository.stored.getValue(unknown).status)
+        assertEquals(unknown, (publisher.published.single() as PaymentEvent.Declined).paymentId)
+    }
+
+    @Test
+    fun `이미 결말이 난 시도에는 결론을 쓰지 않고 지금 상태를 돌려준다`() {
+        val repository = RecordingRepository()
+        val publisher = RecordingPublisher()
+        val management = management(repository, publisher, StubGateway(AuthorizationOutcome.Unknown, approved("4502")))
+        val unknown = unknownAttempt(management, publisher, repository)
+        management.resolveUnknown(PaymentCommand.ResolveUnknown(unknown))
+        repository.updated.clear()
+        publisher.published.clear()
+
+        val result = management.resolveFromReconciliation(
+            PaymentCommand.ResolveFromReconciliation(unknown, PaymentCommand.ResolveFromReconciliation.Conclusion.DECLINED, null),
+        )
+
+        assertEquals(PaymentCommand.ResolveFromReconciliation.Result(unknown, PaymentAttemptStatus.APPROVED), result)
+        assertTrue(repository.updated.isEmpty())
+        assertTrue(publisher.published.isEmpty())
+    }
+
+    @Test
+    fun `넘기지 않은 UNKNOWN 시도에 결론을 적용하면 PAYMENT_NOT_IN_RECONCILIATION으로 거절하고 쓰지 않는다`() {
+        val repository = RecordingRepository()
+        val publisher = RecordingPublisher()
+        val management = management(repository, publisher)
+        val unknown = unknownAttempt(management, publisher, repository)
+
+        val failure = assertFailsWith<DomainException> {
+            management.resolveFromReconciliation(
+                PaymentCommand.ResolveFromReconciliation(unknown, PaymentCommand.ResolveFromReconciliation.Conclusion.APPROVED, "REF"),
+            )
+        }
+
+        assertEquals(PaymentAttempt.PAYMENT_NOT_IN_RECONCILIATION, failure.code)
+        assertTrue(repository.updated.isEmpty())
+        assertTrue(publisher.published.isEmpty())
+    }
+
+    @Test
+    fun `없는 시도에 결론을 적용하면 PAYMENT_ATTEMPT_NOT_FOUND다`() {
+        val management = management(RecordingRepository(), RecordingPublisher())
+
+        val failure = assertFailsWith<DomainException> {
+            management.resolveFromReconciliation(
+                PaymentCommand.ResolveFromReconciliation(PaymentId(UUID.randomUUID()), PaymentCommand.ResolveFromReconciliation.Conclusion.DECLINED, null),
+            )
+        }
+
+        assertEquals(PaymentAttempt.PAYMENT_ATTEMPT_NOT_FOUND, failure.code)
+    }
+
+    @Test
+    fun `조회하는 동안 다른 호출이 먼저 넘겼으면 횟수도 쓰지 않고 발행하지 않는다`() {
+        val repository = RecordingRepository()
+        val publisher = RecordingPublisher()
+        val gateway = StubGateway(AuthorizationOutcome.Unknown, AuthorizationOutcome.Unknown)
+        val management = management(repository, publisher, gateway)
+        val unknown = unknownAttempt(management, publisher, repository)
+        // findById는 넘기지 않은 UNKNOWN을 읽었지만 잠그고 다시 읽으면 이미 넘겼다.
+        repository.lockedRead = repository.stored.getValue(unknown)
+            .requestReconciliationForAmountMismatch(Money.of("4503", krw), "REF", UuidV7IdentifierGenerator(), Instant.parse("2026-09-22T00:30:00Z")).aggregate
+
+        val result = management.resolveUnknown(PaymentCommand.ResolveUnknown(unknown))
+
+        assertEquals(PaymentCommand.ResolveUnknown.Result(unknown, PaymentAttemptStatus.UNKNOWN), result)
+        assertEquals(1, gateway.queryCalls)
+        assertTrue(repository.updated.isEmpty())
+        assertTrue(publisher.published.isEmpty())
+    }
+
+    @Test
+    fun `조회하는 동안 다른 호출이 먼저 넘겼으면 승인 조회 결과로도 덮지 않는다`() {
+        val repository = RecordingRepository()
+        val publisher = RecordingPublisher()
+        val gateway = StubGateway(AuthorizationOutcome.Unknown, approved("4502"))
+        val management = management(repository, publisher, gateway)
+        val unknown = unknownAttempt(management, publisher, repository)
+        repository.lockedRead = repository.stored.getValue(unknown)
+            .requestReconciliationForAmountMismatch(Money.of("4503", krw), "REF", UuidV7IdentifierGenerator(), Instant.parse("2026-09-22T00:30:00Z")).aggregate
+
+        val result = management.resolveUnknown(PaymentCommand.ResolveUnknown(unknown))
+
+        assertEquals(PaymentCommand.ResolveUnknown.Result(unknown, PaymentAttemptStatus.UNKNOWN), result)
         assertTrue(repository.updated.isEmpty())
         assertTrue(publisher.published.isEmpty())
     }
@@ -447,7 +711,7 @@ class PaymentManagementTest {
     fun `UNKNOWN이 아닌 시도는 provider를 조회하지 않고 지금 상태를 돌려준다`() {
         val repository = RecordingRepository()
         val publisher = RecordingPublisher()
-        val gateway = StubGateway(AuthorizationOutcome.Approved("PROVIDER-REF"))
+        val gateway = StubGateway(approved())
         val management = management(repository, publisher, gateway)
         val approved = management.createAttempt(command("4500"))
         management.authorize(PaymentCommand.Authorize(approved.paymentId))
@@ -464,7 +728,7 @@ class PaymentManagementTest {
 
     @Test
     fun `없는 시도를 확정하려 하면 거절하고 provider를 조회하지 않는다`() {
-        val gateway = StubGateway(AuthorizationOutcome.Approved("PROVIDER-REF"))
+        val gateway = StubGateway(approved())
         val management = management(RecordingRepository(), RecordingPublisher(), gateway)
 
         val failure = assertFailsWith<DomainException> {
@@ -479,7 +743,7 @@ class PaymentManagementTest {
     fun `UNKNOWN이어도 취소 시도는 provider를 조회하지 않고 지금 상태를 돌려준다`() {
         val repository = RecordingRepository()
         val publisher = RecordingPublisher()
-        val gateway = StubGateway(AuthorizationOutcome.Approved("PROVIDER-REF"))
+        val gateway = StubGateway(approved())
         val management = management(repository, publisher, gateway)
         val cancellation = PaymentAttempt.restore(
             id = PaymentId(UUID.randomUUID()),
@@ -492,6 +756,9 @@ class PaymentManagementTest {
             status = PaymentAttemptStatus.UNKNOWN,
             providerReference = null,
             retriedFrom = null,
+            unknownReason = null,
+            queryCount = 0,
+            reconciliationRequestedAt = null,
         )
         repository.stored[cancellation.id] = cancellation
 
@@ -519,5 +786,10 @@ class PaymentManagementTest {
         assertEquals(1, gateway.queryCalls)
         assertTrue(repository.updated.isEmpty())
         assertTrue(publisher.published.isEmpty())
+    }
+
+    private companion object {
+        /** 테스트 설정(`resilientpos.payment.unknown-query-limit`)과 같다. */
+        const val UNKNOWN_QUERY_LIMIT = 3
     }
 }

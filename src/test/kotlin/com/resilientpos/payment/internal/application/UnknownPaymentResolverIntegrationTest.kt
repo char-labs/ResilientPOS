@@ -196,6 +196,7 @@ class UnknownPaymentResolverIntegrationTest(
         val queries: Array<String> = statistics.queries
         val rendered = queries.single { "PaymentAttemptEntity" in it }
         assertTrue("PaymentAttemptStatus.UNKNOWN" in rendered && "PaymentAttemptKind.AUTHORIZATION" in rendered, "리터럴이 없다: $rendered")
+        assertTrue("reconciliationRequestedAt" in rendered, "넘긴 시도를 거르지 않는다: $rendered")
         assertTrue("?" !in rendered && ":" !in rendered, "바인드 파라미터가 있다: $rendered")
     }
 
@@ -248,15 +249,76 @@ class UnknownPaymentResolverIntegrationTest(
     }
 
     @Test
-    fun `한 주기 뒤 gauge가 그때의 결과 불명 승인 시도 수와 같다`() {
+    fun `한 주기 뒤 gauge가 그 주기가 확정한 시도를 뺀 결과 불명 승인 시도 수와 같다`() {
         attemptAt("4604", PaymentAttemptStatus.UNKNOWN)
-        attemptAt("4614", PaymentAttemptStatus.UNKNOWN)
+        val confirmedInCycle = attemptAt("4612", PaymentAttemptStatus.UNKNOWN)
+        val before = unknownCount()
 
-        // gauge는 한 주기의 시작에 센 값이다. 그 주기가 확정하는 건(끝자리 2·3)은 이 값에 아직 들어 있다.
-        val expectedAtStart = unknownCount()
         resolver.resolveUnknown()
 
-        assertEquals(expectedAtStart.toDouble(), meterRegistry.get("payment.attempt.unknown").gauge().value())
+        // gauge는 그 주기의 조회가 끝난 뒤 센 값이다. 이 주기에 확정된 건(끝자리 2)은 빠져 있다.
+        assertEquals("APPROVED", status(confirmedInCycle))
+        assertTrue(unknownCount() < before)
+        assertEquals(unknownCount().toDouble(), meterRegistry.get("payment.attempt.unknown").gauge().value())
+    }
+
+    /** 넘긴 시도를 만든다. 조회 횟수가 상한(3)에 닿아 넘긴 것과 같은 행 상태다. */
+    private fun markHandedOver(paymentId: PaymentId) {
+        jdbcTemplate.update(
+            "update t_payment_attempt set query_count = 3, reconciliation_requested_at = now() where id = ?",
+            paymentId.value,
+        )
+    }
+
+    @Test
+    fun `넘긴 시도는 작업이 고르지 않고 조회하지 않는다`() {
+        val handedOver = attemptAt("4684", PaymentAttemptStatus.UNKNOWN)
+        val resolvable = attemptAt("4692", PaymentAttemptStatus.UNKNOWN)
+        markHandedOver(handedOver)
+
+        resolver.resolveUnknown()
+
+        assertTrue(handedOver !in gateway.queried, "넘긴 시도를 조회했다")
+        assertEquals("UNKNOWN", status(handedOver))
+        assertEquals("APPROVED", status(resolvable))
+        assertTrue(handedOver !in repository.findUnknownAuthorizationIds(null, 10_000))
+    }
+
+    private fun pendingCount(): Long = jdbcTemplate.queryForObject(
+        "select count(*) from t_payment_attempt where kind = 'AUTHORIZATION' and status = 'UNKNOWN' and reconciliation_requested_at is not null and deleted_at is null",
+        Long::class.java,
+    )!!
+
+    @Test
+    fun `한 주기 뒤 pending gauge가 넘긴 뒤 아직 UNKNOWN인 승인 시도 수와 같다`() {
+        markHandedOver(attemptAt("4694", PaymentAttemptStatus.UNKNOWN))
+        markHandedOver(attemptAt("4704", PaymentAttemptStatus.UNKNOWN))
+        attemptAt("4714", PaymentAttemptStatus.UNKNOWN)
+        val expected = jdbcTemplate.queryForObject(
+            "select count(*) from t_payment_attempt where kind = 'AUTHORIZATION' and status = 'UNKNOWN' and reconciliation_requested_at is not null and deleted_at is null",
+            Long::class.java,
+        )!!
+
+        resolver.resolveUnknown()
+
+        assertTrue(expected >= 2)
+        assertEquals(expected.toDouble(), meterRegistry.get("payment.attempt.reconciliation.pending").gauge().value())
+        // 기존 gauge의 뜻(넘긴 시도를 포함한 결과 불명 전체)은 그대로다.
+        assertTrue(meterRegistry.get("payment.attempt.unknown").gauge().value() >= expected)
+    }
+
+    @Test
+    fun `그 주기에 넘긴 시도가 같은 주기 뒤 pending gauge에 보인다`() {
+        val handedOverInCycle = attemptAt("4724", PaymentAttemptStatus.UNKNOWN)
+        // 조회 횟수가 상한(3) 하나 전이라 이 주기의 조회(끝자리 4는 불명)가 상한에 닿아 넘긴다.
+        jdbcTemplate.update("update t_payment_attempt set query_count = 2 where id = ?", handedOverInCycle.value)
+        val pendingBefore = pendingCount()
+
+        resolver.resolveUnknown()
+
+        assertEquals(1, jdbcTemplate.queryForObject("select count(*) from t_payment_attempt where id = ? and reconciliation_requested_at is not null", Long::class.java, handedOverInCycle.value))
+        assertTrue(pendingCount() > pendingBefore)
+        assertEquals(pendingCount().toDouble(), meterRegistry.get("payment.attempt.reconciliation.pending").gauge().value())
     }
 
     @Test

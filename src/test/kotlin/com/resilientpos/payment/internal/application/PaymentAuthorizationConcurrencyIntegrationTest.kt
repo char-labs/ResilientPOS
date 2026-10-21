@@ -46,7 +46,7 @@ class PaymentAuthorizationConcurrencyIntegrationTest(
             arrived.countDown()
             check(arrived.await(5, TimeUnit.SECONDS)) { "두 호출이 provider에서 만나지 못했다" }
             return if (position == 0) {
-                AuthorizationOutcome.Approved("FIRST")
+                AuthorizationOutcome.Approved("FIRST", request.amount)
             } else {
                 AuthorizationOutcome.Declined("SECOND")
             }

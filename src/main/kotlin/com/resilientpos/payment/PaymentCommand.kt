@@ -80,4 +80,24 @@ object PaymentCommand {
             val status: PaymentAttemptStatus,
         )
     }
+
+    /**
+     * reconciliation case의 결론을 넘긴([PaymentAttemptStatus.UNKNOWN]) 시도에 적용한다.
+     * 승인 결론은 [providerReference]가 필수이고 거절 결론은 선택이다.
+     */
+    data class ResolveFromReconciliation(
+        val paymentId: PaymentId,
+        val conclusion: Conclusion,
+        val providerReference: String?,
+    ) {
+        enum class Conclusion { APPROVED, DECLINED }
+
+        /**
+         * 적용 결과. 결말이 이미 난 시도였으면 쓰지 않고 지금 상태를 그대로 돌려준다. 호출자가 결론과 비교한다.
+         */
+        data class Result(
+            val paymentId: PaymentId,
+            val status: PaymentAttemptStatus,
+        )
+    }
 }

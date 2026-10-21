@@ -18,7 +18,7 @@ class SchemaMigrationTest(
             "select version, success from flyway_schema_history order by installed_rank",
         ) { it.getString("version") to it.getBoolean("success") }
 
-        assertEquals(listOf("001" to true, "002" to true, "003" to true, "004" to true, "005" to true, "006" to true, "007" to true, "008" to true, "009" to true, "010" to true, "011" to true, "012" to true, "013" to true, "014" to true, "015" to true), applied)
+        assertEquals(listOf("001" to true, "002" to true, "003" to true, "004" to true, "005" to true, "006" to true, "007" to true, "008" to true, "009" to true, "010" to true, "011" to true, "012" to true, "013" to true, "014" to true, "015" to true, "016" to true, "017" to true), applied)
     }
 
     @Test
@@ -56,6 +56,7 @@ class SchemaMigrationTest(
                 "t_order_line",
                 "t_owner",
                 "t_payment_attempt",
+                "t_reconciliation_case",
                 "t_store",
                 "t_sync_operation",
                 "t_sync_watermark",
@@ -117,6 +118,40 @@ class SchemaMigrationTest(
                 "select conname from pg_constraint where conrelid = '$schema.t_terminal'::regclass and contype = 'u'",
             ) { it.getString("conname") }
             assertEquals(listOf("ux_terminal_store_code"), unique)
+        } finally {
+            dataSource.connection.use { c -> c.createStatement().use { it.execute("drop schema if exists $schema cascade") } }
+        }
+    }
+
+    @Test
+    fun `V016은 기존 UNKNOWN 행의 unknown_reason을 RESULT_UNCONFIRMED로 채우고 query_count는 0으로 둔다`() {
+        val schema = "v016_fill"
+        fun flyway(target: String) = Flyway.configure().dataSource(dataSource).schemas(schema).createSchemas(true)
+            .configuration(mapOf("flyway.postgresql.transactional.lock" to "false")).target(target).load()
+        val unknown = UUID.randomUUID()
+        val approved = UUID.randomUUID()
+        try {
+            flyway("015").migrate()
+            dataSource.connection.use { c ->
+                c.createStatement().use { s ->
+                    listOf(unknown to "UNKNOWN", approved to "APPROVED").forEach { (id, status) ->
+                        s.executeUpdate(
+                            "insert into $schema.t_payment_attempt (id, order_id, store_id, terminal_id, checkout_no, kind, amount, currency, status, created_at, updated_at) " +
+                                "values ('$id', '${UUID.randomUUID()}', '${UUID.randomUUID()}', '${UUID.randomUUID()}', 1, 'AUTHORIZATION', 4500, 'KRW', '$status', now(), now())",
+                        )
+                    }
+                }
+            }
+
+            flyway("016").migrate()
+
+            val rows = query(
+                "select id, unknown_reason, query_count, reconciliation_requested_at from $schema.t_payment_attempt",
+            ) { listOf(it.getString("id"), it.getString("unknown_reason"), it.getInt("query_count"), it.getTimestamp("reconciliation_requested_at")) }
+                .associateBy { it[0] }
+            assertEquals(listOf(unknown.toString(), "RESULT_UNCONFIRMED", 0, null), rows.getValue(unknown.toString()))
+            // 이미 확정된 행은 기록 이전이라 사유를 채우지 않는다.
+            assertEquals(listOf(approved.toString(), null, 0, null), rows.getValue(approved.toString()))
         } finally {
             dataSource.connection.use { c -> c.createStatement().use { it.execute("drop schema if exists $schema cascade") } }
         }

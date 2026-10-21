@@ -54,6 +54,9 @@ class PaymentQueryIntegrationTest(
         status = status,
         providerReference = null,
         retriedFrom = retriedFrom,
+        unknownReason = null,
+        queryCount = 0,
+        reconciliationRequestedAt = null,
     ).also { saved -> transactions.inTransaction { repository.save(saved) } }
 
     private fun PaymentAttempt.view() = PaymentAttemptView(id, checkoutNo, kind, status, amount)

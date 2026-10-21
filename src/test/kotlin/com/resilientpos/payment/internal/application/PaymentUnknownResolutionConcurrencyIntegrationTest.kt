@@ -61,7 +61,7 @@ class PaymentUnknownResolutionConcurrencyIntegrationTest(
             val position = queryCalls.getAndIncrement()
             arrived.countDown()
             check(arrived.await(5, TimeUnit.SECONDS)) { "두 조회가 provider에서 만나지 못했다" }
-            return if (position == 0) AuthorizationOutcome.Approved("FIRST") else AuthorizationOutcome.Declined("SECOND")
+            return if (position == 0) AuthorizationOutcome.Approved("FIRST", request.amount) else AuthorizationOutcome.Declined("SECOND")
         }
     }
 

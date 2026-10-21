@@ -77,7 +77,7 @@ sequenceDiagram
 - 같은 단말의 배치 둘은 watermark 행 잠금으로 항목 단위로 줄 선다. 이 경로에는 Redis 락이 없다.
 - 단말의 결제 요청은 주문의 checkout 확정이다. 결제 시도 생성은 커밋 뒤 이벤트가 잇는다(§3.2의 7번부터). 그래서 sync는 `payment`를 부르지 않는다.
 - 잠금 대기 초과·DB 장애 같은 인프라 실패는 항목 결과가 아니다. 그 항목만 롤백되고 배치 요청이 실패한다. 앞서 커밋된 항목은 재전송 때 `DUPLICATE`로 돌아온다.
-- 근거: [sync-intake](../spec/2026-09-30-sync-intake.md), [sync-request-checkout](../spec/2026-09-30-sync-request-checkout.md), [도메인 모델 §4.6](domain-model.md#46-컨텍스트-사이-동기-호출은-sync-intake-한-곳만-한-트랜잭션으로).
+- 근거: [sync-intake](../spec/2026-09-30-sync-intake.md), [sync-request-checkout](../spec/2026-09-30-sync-request-checkout.md), [도메인 모델 §4.6](domain-model.md#46-컨텍스트-사이-동기-쓰기는-sync-intake와-대조-해소-둘만-한-트랜잭션으로).
 
 ### 3.2 주문 생성 → checkout → 결제 승인 → PAID → fulfillment
 

@@ -1,5 +1,6 @@
 package com.resilientpos.payment.internal.domain
 
+import com.resilientpos.contract.PaymentUnknownReason
 import com.resilientpos.foundation.DomainErrorKind
 import com.resilientpos.foundation.DomainException
 import com.resilientpos.foundation.IdentifierGenerator
@@ -46,12 +47,12 @@ class PaymentAttemptConfirmationTest {
             now,
         ).aggregate
 
-    private fun unknown(): PaymentAttempt = requested().markUnknown(ids(1), now).aggregate
+    private fun unknown(): PaymentAttempt = requested().markUnknown(PaymentUnknownReason.AMOUNT_MISMATCH, ids(1), now).aggregate
 
     @Test
     fun `UNKNOWN을 승인으로 확정하면 APPROVED가 되고 approve와 같은 사실을 낸다`() {
         val origin = requested()
-        val attempt = origin.markUnknown(ids(1), now).aggregate
+        val attempt = origin.markUnknown(PaymentUnknownReason.AMOUNT_MISMATCH, ids(1), now).aggregate
 
         val confirmed = attempt.confirmApproved("PROVIDER-REF-1", ids(2), now)
 
@@ -65,13 +66,19 @@ class PaymentAttemptConfirmationTest {
     @Test
     fun `UNKNOWN을 거절로 확정하면 DECLINED가 되고 decline과 같은 사실을 낸다`() {
         val origin = requested()
-        val attempt = origin.markUnknown(ids(1), now).aggregate
+        val attempt = origin.markUnknown(PaymentUnknownReason.AMOUNT_MISMATCH, ids(1), now).aggregate
 
         val confirmed = attempt.confirmDeclined("PROVIDER-REF-2", ids(2), now)
 
         assertEquals(PaymentAttemptStatus.DECLINED, confirmed.aggregate.status)
         assertEquals("PROVIDER-REF-2", confirmed.aggregate.providerReference)
         assertEquals(origin.decline("PROVIDER-REF-2", ids(2), now).events, confirmed.events)
+    }
+
+    @Test
+    fun `확정해도 UNKNOWN이 된 때 정한 사유를 지우지 않는다`() {
+        assertEquals(PaymentUnknownReason.AMOUNT_MISMATCH, unknown().confirmApproved("REF", ids(2), now).aggregate.unknownReason)
+        assertEquals(PaymentUnknownReason.AMOUNT_MISMATCH, unknown().confirmDeclined(null, ids(2), now).aggregate.unknownReason)
     }
 
     @Test

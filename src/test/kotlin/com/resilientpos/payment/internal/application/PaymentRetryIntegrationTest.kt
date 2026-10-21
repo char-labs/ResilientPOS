@@ -59,7 +59,7 @@ class PaymentRetryIntegrationTest(
             if (declined.add(request.amount)) {
                 AuthorizationOutcome.Declined("DECLINED-${request.paymentId.value}")
             } else {
-                AuthorizationOutcome.Approved("APPROVED-${request.paymentId.value}")
+                AuthorizationOutcome.Approved("APPROVED-${request.paymentId.value}", request.amount)
             }
 
         override fun query(request: AuthorizationRequest): AuthorizationOutcome = AuthorizationOutcome.Unknown

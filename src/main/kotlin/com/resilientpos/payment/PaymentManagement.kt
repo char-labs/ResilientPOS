@@ -1,6 +1,9 @@
 package com.resilientpos.payment
 
 import com.resilientpos.contract.PaymentAttemptKind
+import com.resilientpos.contract.PaymentReconciliationReason
+import com.resilientpos.contract.PaymentReconciliationRequested
+import com.resilientpos.contract.PaymentUnknownReason
 import com.resilientpos.foundation.DomainEvent
 import com.resilientpos.foundation.IdentifierGenerator
 import com.resilientpos.foundation.Transition
@@ -14,7 +17,9 @@ import com.resilientpos.platform.Lock
 import com.resilientpos.platform.Tx
 import com.resilientpos.platform.logger
 import java.time.Clock
+import java.time.Instant
 import java.util.UUID
+import org.springframework.beans.factory.annotation.Value
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Propagation
 import org.springframework.transaction.annotation.Transactional
@@ -30,6 +35,7 @@ class PaymentManagement(
     private val identifierGenerator: IdentifierGenerator,
     private val clock: Clock,
     private val eventPublisher: PaymentEventPublisher,
+    @Value("\${resilientpos.payment.unknown-query-limit}") private val unknownQueryLimit: Int,
 ) {
 
     /**
@@ -118,24 +124,67 @@ class PaymentManagement(
      * 확정은 `Tx.masterTx`가 따로 열어 반환 전에 커밋한다. 호출자 트랜잭션에 합류하지 않으므로 §4.6 sync intake의 한 커밋 안에서 부르지 않는다.
      * 그 안에서 부르면 바깥이 롤백돼도 확정 결과는 따로 커밋된다.
      *
-     * `UNKNOWN`이 아니거나 승인 시도가 아니면 provider를 부르지 않고 지금 상태를 돌려준다. 조회 요청은 승인 요청이라 취소 시도에 쓰면
-     * 취소를 승인 조회로 확정하게 된다. 조회도 불명이면 아무것도 쓰지 않는다. 가짜 성공도 가짜 실패도 만들지 않는다.
-     * 정합성은 행을 잠근 뒤 `UNKNOWN`을 다시 확인하는 데서 나온다. 조회하는 동안 다른 호출이 먼저 확정했으면 덮지 않고 그 결말을 돌려준다.
+     * `UNKNOWN`이 아니거나 승인 시도가 아니거나 reconciliation으로 넘긴 시도면 provider를 부르지 않고 지금 상태를 돌려준다.
+     * 조회 요청은 승인 요청이라 취소 시도에 쓰면 취소를 승인 조회로 확정하게 된다. 넘긴 시도는 reconciliation의 결론으로만 확정된다.
+     *
+     * 조회도 불명이면 가짜 성공도 가짜 실패도 만들지 않고 조회 횟수만 하나 올린다. 횟수가 상한(`unknown-query-limit`)에 닿으면
+     * 시도를 넘기고 [PaymentReconciliationRequested]를 같은 커밋에 발행한다. 조회가 승인인데 금액(통화 포함)이 시도와 다르면 확정하지 않고 바로 넘긴다.
+     * 금액이 같은 승인과 거절은 확정한다.
+     *
+     * 정합성은 행을 잠근 뒤 `UNKNOWN`이고 넘기지 않았음을 다시 확인하는 데서 나온다. 조회하는 동안 다른 호출이 먼저 확정하거나 넘겼으면 덮지 않고 지금 상태를 돌려준다.
+     * 넘김 WARN은 트랜잭션이 반환된(커밋된) 뒤에 남긴다.
      */
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
     fun resolveUnknown(command: PaymentCommand.ResolveUnknown): PaymentCommand.ResolveUnknown.Result {
         val attempt = Tx.masterTx { repository.findById(command.paymentId) } ?: throw PaymentAttempt.notFound()
-        if (attempt.status != PaymentAttemptStatus.UNKNOWN || attempt.kind != PaymentAttemptKind.AUTHORIZATION) {
+        if (attempt.status != PaymentAttemptStatus.UNKNOWN || attempt.kind != PaymentAttemptKind.AUTHORIZATION || attempt.reconciliationRequestedAt != null) {
             return PaymentCommand.ResolveUnknown.Result(attempt.id, attempt.status)
         }
 
         val outcome = gateway.query(AuthorizationRequest(attempt.id, attempt.amount))
-        if (outcome == AuthorizationOutcome.Unknown) {
-            log.warn { "조회로도 결과를 확인하지 못했다 paymentId=${attempt.id.value} orderId=${attempt.orderId}" }
-            return PaymentCommand.ResolveUnknown.Result(attempt.id, attempt.status)
+        return when (outcome) {
+            is AuthorizationOutcome.Declined -> confirmUnknown(command.paymentId, outcome)
+            is AuthorizationOutcome.Approved ->
+                if (outcome.amount == attempt.amount) {
+                    confirmUnknown(command.paymentId, outcome)
+                } else {
+                    recordAndLog(command.paymentId) { current, now ->
+                        current.requestReconciliationForAmountMismatch(outcome.amount, outcome.providerReference, identifierGenerator, now)
+                    }
+                }
+            AuthorizationOutcome.Unknown ->
+                recordAndLog(command.paymentId, logUnconfirmed = true) { current, now ->
+                    current.recordUnknownQuery(unknownQueryLimit, identifierGenerator, now)
+                }
+        }
+    }
+
+    /**
+     * reconciliation의 결론을 넘긴 시도에 적용한다. 호출자(`ReconciliationManagement.resolve`)의 트랜잭션 안에서만 부른다(도메인 모델 §4.6,
+     * `createInCallerTransaction`과 같은 KDoc 계약, 검사 코드 없음). 그 트랜잭션이 case 행을 먼저 잠그고 이 메서드가 시도 행을 잠근다.
+     * 결말이 이미 난 시도면 쓰지 않고 지금 상태를 돌려준다. provider를 부르지 않으므로 `NOT_SUPPORTED`가 아니다. 로그는 호출자가 커밋 뒤 남긴다.
+     */
+    fun resolveFromReconciliation(command: PaymentCommand.ResolveFromReconciliation): PaymentCommand.ResolveFromReconciliation.Result =
+        Tx.masterTx {
+            val current = repository.findByIdForUpdate(command.paymentId) ?: throw PaymentAttempt.notFound()
+            if (current.status != PaymentAttemptStatus.UNKNOWN) {
+                return@masterTx PaymentCommand.ResolveFromReconciliation.Result(current.id, current.status)
+            }
+            val now = clock.instant()
+            val concluded = when (command.conclusion) {
+                PaymentCommand.ResolveFromReconciliation.Conclusion.APPROVED ->
+                    updateAndPublish(
+                        current.concludeApproved(requireNotNull(command.providerReference), identifierGenerator, now),
+                        eventPublisher::publish,
+                    )
+                PaymentCommand.ResolveFromReconciliation.Conclusion.DECLINED ->
+                    updateAndPublish(current.concludeDeclined(command.providerReference, identifierGenerator, now), eventPublisher::publish)
+            }
+            PaymentCommand.ResolveFromReconciliation.Result(concluded.id, concluded.status)
         }
 
-        val (result, confirmed) = Tx.masterTx { confirm(command.paymentId, outcome) }
+    private fun confirmUnknown(paymentId: PaymentId, outcome: AuthorizationOutcome): PaymentCommand.ResolveUnknown.Result {
+        val (result, confirmed) = Tx.masterTx { confirm(paymentId, outcome) }
         if (confirmed != null) {
             log.info {
                 "결과 불명 결제를 확정했다 paymentId=${confirmed.id.value} orderId=${confirmed.orderId} " +
@@ -143,6 +192,46 @@ class PaymentManagement(
             }
         }
         return result
+    }
+
+    /** 기록·넘김을 한 트랜잭션으로 저장하고, 반환된(커밋된) 뒤에 WARN을 남긴다. 아무것도 쓰지 않았으면 남기지 않는다. */
+    private fun recordAndLog(
+        paymentId: PaymentId,
+        logUnconfirmed: Boolean = false,
+        transition: (PaymentAttempt, Instant) -> Transition<PaymentAttempt, PaymentReconciliationRequested>,
+    ): PaymentCommand.ResolveUnknown.Result {
+        val (result, recorded) = Tx.masterTx { lockAndRecord(paymentId, transition) }
+        if (recorded == null) return result
+
+        val attempt = recorded.aggregate
+        if (logUnconfirmed) {
+            log.warn { "조회로도 결과를 확인하지 못했다 paymentId=${attempt.id.value} orderId=${attempt.orderId} queryCount=${attempt.queryCount}" }
+        }
+        recorded.events.forEach {
+            log.warn {
+                "결제 시도를 reconciliation으로 넘겼다 paymentId=${it.paymentId} orderId=${it.orderId} reason=${it.reason} " +
+                    "queryCount=${it.queryCount} reportedAmount=${it.reportedAmount} reportedProviderReference=${it.reportedProviderReference}"
+            }
+        }
+        return result
+    }
+
+    /**
+     * 잠그고 다시 읽는다. 아직 넘기지 않은 `UNKNOWN`이면 [transition]이 정한 기록·넘김을 저장하고 발행한 뒤 그 전이를 함께 돌려준다.
+     * 이미 다른 호출이 확정하거나 넘겼으면 아무것도 쓰지 않고 `null`과 지금 상태를 돌려준다.
+     */
+    private fun lockAndRecord(
+        paymentId: PaymentId,
+        transition: (PaymentAttempt, Instant) -> Transition<PaymentAttempt, PaymentReconciliationRequested>,
+    ): Pair<PaymentCommand.ResolveUnknown.Result, Transition<PaymentAttempt, PaymentReconciliationRequested>?> {
+        val current = repository.findByIdForUpdate(paymentId) ?: throw PaymentAttempt.notFound()
+        if (current.status != PaymentAttemptStatus.UNKNOWN || current.reconciliationRequestedAt != null) {
+            return PaymentCommand.ResolveUnknown.Result(current.id, current.status) to null
+        }
+
+        val recorded = transition(current, clock.instant())
+        updateAndPublish(recorded, eventPublisher::publish)
+        return PaymentCommand.ResolveUnknown.Result(current.id, recorded.aggregate.status) to recorded
     }
 
     /** 잠그고 다시 읽는다. 호출하는 동안 다른 `authorize`가 먼저 적용했으면 덮지 않고 그 결말을 돌려준다. */
@@ -155,25 +244,37 @@ class PaymentManagement(
         val now = clock.instant()
         val applied = when (outcome) {
             is AuthorizationOutcome.Approved ->
-                updateAndPublish(current.approve(outcome.providerReference, identifierGenerator, now), eventPublisher::publish)
+                if (outcome.amount == current.amount) {
+                    updateAndPublish(current.approve(outcome.providerReference, identifierGenerator, now), eventPublisher::publish)
+                } else {
+                    // provider가 분명히 승인했어도 다른 금액은 믿지 않고 결과 불명으로 둔다. 굳히면 주문의 markPaid가 거절해 DLT로 간다.
+                    log.warn {
+                        "승인 응답의 금액이 시도와 다르다 paymentId=${current.id.value} expected=${current.amount} " +
+                            "reported=${outcome.amount} providerReference=${outcome.providerReference}"
+                    }
+                    updateAndPublish(
+                        current.markUnknown(PaymentUnknownReason.AMOUNT_MISMATCH, identifierGenerator, now),
+                        eventPublisher::publish,
+                    )
+                }
             is AuthorizationOutcome.Declined ->
                 updateAndPublish(current.decline(outcome.providerReference, identifierGenerator, now), eventPublisher::publish)
             AuthorizationOutcome.Unknown ->
-                updateAndPublish(current.markUnknown(identifierGenerator, now), eventPublisher::publish)
+                updateAndPublish(current.markUnknown(PaymentUnknownReason.RESULT_UNCONFIRMED, identifierGenerator, now), eventPublisher::publish)
         }
         return PaymentCommand.Authorize.Result(applied.id, applied.status)
     }
 
     /**
-     * 잠그고 다시 읽는다. 아직 `UNKNOWN`이면 조회 결과대로 확정하고 그 시도를 함께 돌려준다. 이미 다른 호출이 확정했으면 `null`과 그 결말을 돌려준다.
-     * `UNKNOWN` 결과는 호출 전에 걸러지므로 여기 오지 않는다.
+     * 잠그고 다시 읽는다. 아직 넘기지 않은 `UNKNOWN`이면 조회 결과대로 확정하고 그 시도를 함께 돌려준다. 이미 다른 호출이 확정하거나 넘겼으면 `null`과 지금 상태를 돌려준다.
+     * 불명 결과와 다른 금액의 승인은 호출 전에 걸러지므로 여기 오지 않는다.
      */
     private fun confirm(
         paymentId: PaymentId,
         outcome: AuthorizationOutcome,
     ): Pair<PaymentCommand.ResolveUnknown.Result, PaymentAttempt?> {
         val current = repository.findByIdForUpdate(paymentId) ?: throw PaymentAttempt.notFound()
-        if (current.status != PaymentAttemptStatus.UNKNOWN) {
+        if (current.status != PaymentAttemptStatus.UNKNOWN || current.reconciliationRequestedAt != null) {
             return PaymentCommand.ResolveUnknown.Result(current.id, current.status) to null
         }
 

@@ -52,6 +52,7 @@ class PaymentAttemptPersistenceAdapter(
         }?.toDomain()
 
     /**
+     * 넘기지 않은 시도만 읽는다(`reconciliation_requested_at is null`). 넘긴 시도는 `payment`가 더 조회하지 않는다.
      * `kind`·`status`를 바인드 파라미터가 아니라 리터럴로 렌더한다(`enumLiteral`). 바인드 파라미터의 generic plan은
      * partial 인덱스 `ix_payment_attempt_unknown_authorization`(V013)의 술어를 증명하지 못해 쓰지 못한다.
      */
@@ -63,6 +64,7 @@ class PaymentAttemptPersistenceAdapter(
                 .where(
                     and(
                         unknownAuthorization(),
+                        path(PaymentAttemptEntity::reconciliationRequestedAt).isNull(),
                         after?.let { path(PaymentAttemptEntity::id).gt(it.value) },
                     ),
                 )
@@ -76,6 +78,15 @@ class PaymentAttemptPersistenceAdapter(
             select(count(PaymentAttemptEntity::id))
                 .from(entity(PaymentAttemptEntity::class))
                 .where(unknownAuthorization())
+        } ?: 0L
+
+    /** [countUnknownAuthorizations]와 같이 리터럴로 렌더해 partial 인덱스를 쓴다. 넘긴 시각이 있는 것만 센다. */
+    @ReadOnlyTransactional
+    override fun countReconciliationPendingAuthorizations(): Long =
+        queries.findFirst {
+            select(count(PaymentAttemptEntity::id))
+                .from(entity(PaymentAttemptEntity::class))
+                .where(and(unknownAuthorization(), path(PaymentAttemptEntity::reconciliationRequestedAt).isNotNull()))
         } ?: 0L
 
     override fun findByIdForUpdate(paymentId: PaymentId): PaymentAttempt? =
@@ -102,7 +113,9 @@ class PaymentAttemptPersistenceAdapter(
     override fun update(attempt: PaymentAttempt): PaymentAttempt {
         val entity: PaymentAttemptEntity = entityManager.find(PaymentAttemptEntity::class.java, attempt.id.value)
             ?: error("갱신하려는 결제 시도가 없다: ${attempt.id.value}")
-        entity.applyResult(attempt.status, attempt.providerReference)
+        entity.applyResult(
+            attempt.status, attempt.providerReference, attempt.unknownReason, attempt.queryCount, attempt.reconciliationRequestedAt,
+        )
         return attempt
     }
 

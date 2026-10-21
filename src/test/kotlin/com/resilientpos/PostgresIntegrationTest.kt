@@ -27,6 +27,7 @@ import org.testcontainers.postgresql.PostgreSQLContainer
         "resilientpos.kafka.retry.initial-interval=PT0.02S",
         "resilientpos.event-publication.resubmit-interval=P1D",
         "resilientpos.payment.unknown-resolve-interval=P1D",
+        "resilientpos.payment.unknown-query-limit=3",
     ],
 )
 abstract class PostgresIntegrationTest {

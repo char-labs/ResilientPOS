@@ -104,7 +104,8 @@ class KafkaEventDeliveryIntegrationTest(
     fun `consumer가 듣는 토픽은 모두 설정 목록에 있어 앱이 만든다`() {
         val listened = listenerRegistry.allListenerContainers.flatMap { it.containerProperties.topics.orEmpty().toList() }
 
-        assertEquals(topics, listened.toSet())
+        // 넘김 토픽은 consumer(reconciliation)가 듣지만 checkout 흐름에는 오르지 않아 네 토픽의 흐름 검사와 따로 둔다.
+        assertEquals(topics + "payment.reconciliation-requested", listened.toSet())
         assertEquals(configuredTopics.toSet(), listened.toSet(), "설정 목록(resilientpos.kafka.topics)")
     }
 
