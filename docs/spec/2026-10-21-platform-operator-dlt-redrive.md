@@ -239,6 +239,7 @@ create table t_dead_letter_redrive (
 - 진행 중인 #76(관측 마무리, 아직 push 전)과 `docs/wiki/observability.md`가 겹칠 수 있다. 이 PR은 항목 추가만 하고 DLT 재투입 절차는 이 PR이 맡는다(합의).
 - 구현 중(2026-10-21) 열린 PR #102(inbound rate limit, draft)와 `ApiControllerAdvice.kt`·`PlatformConfiguration.kt`·`application.yaml`·`docs/wiki/architecture.md`·`docs/wiki/observability.md`가 겹친다. 둘 다 항목 추가라 충돌은 줄 단위다. #102는 Controller 슬라이스 테스트들도 고치므로, 먼저 머지되면 이 PR의 `DeadLetterControllerTest`·`DeadLetterRedrive` 슬라이스도 같은 준비가 필요한지 rebase 때 본다.
 - 공용 헬퍼: `/admin`의 503 필터는 `OwnerSessionStoreFilter`와 모양이 같지만 잡는 예외와 경로가 달라 합치지 않는다. main과 열린 PR에 운영자 인증·DLT 읽기 코드는 없다.
+- PR 생성 직전 재확인(2026-10-21, origin/main `c7810af` 그대로): #76이 PR #106(ready)으로 열렸다. 겹치는 경로는 `build.gradle.kts`·`docker/docker-compose.yaml`·`README.md`·`application.yaml`·`docs/wiki/README.md`·`domain-model.md`·`event-contract.md`·`observability.md`이고, `git merge-tree`로 합쳐 보면 실제 충돌은 `observability.md` 하나다. #102와는 `observability.md`·`ApiControllerAdvice.kt`·`PlatformConfiguration.kt`가 줄 단위로 충돌하고, #94와는 충돌 없이 합쳐진다. 모두 서로 항목을 더한 변경이라 먼저 머지된 쪽에 맞춰 rebase하고 전체 테스트를 다시 돌린다.
 
 ## TDD 검증 기록
 `/admin` 체인과 Controller·재투입 동작은 TDD로 한다. 개발 전 테스트 의도이고 실행 뒤 채운다.
@@ -263,4 +264,11 @@ create table t_dead_letter_redrive (
 | 인수 13(재투입): `DeadLetterControllerTest`에 3개(`재투입은 200과 넣은 자리 운영자 시각을 돌려주고 토큰의 sub를 운영자로 넘긴다`, `사유가 규칙에 어긋나면 400 INVALID_REDRIVE_REASON이고 본문에 사유가 없으면 빈 사유로 넘긴다`, `그 offset에 레코드가 없으면 404 DEAD_LETTER_NOT_FOUND다`)와 목록 스니펫의 `redrive` 필드. 스니펫 `dead-letters-redrive`·`-redrive-invalid-reason`·`-redrive-not-found`. 422 예는 다음 행 | 위 RED에 포함. 목록 스니펫의 `redrive` 문서화는 mock reader의 DTO 모양만 보므로 RED에서도 통과했다 | 위 GREEN에 포함. 스니펫 디렉터리 확인 | 위와 같다 |
 
 ## 결과
-개발 전 작성. 개발 후 실행 결과와 변경 이유를 추가한다.
+- 인수 조건 1~19를 TDD로 구현했다. 테스트 이름과 RED·GREEN·회귀 명령은 TDD 검증 기록 표에 있다.
+- `./gradlew test`: 121개 클래스, 777개 테스트, 실패·오류·건너뜀 0(2026-10-21 09:47–09:53 UTC, 리뷰 반영을 모두 넣은 `279541d` 위).
+- `python3 scripts/check_pr.py --base origin/main --worktree`와 `--worktree` 없는 제출 전 검사가 통과했다.
+- multi-review(Claude 85점, Codex 판정 "주의 병합", spring-backend-specialist P0 없음·P1 2건, Gemini 미실행)를 반영했다. 사용자가 고른 것은 두 가지다. 기록 없는 전송은 순서를 유지하고 WARN 감사 줄로 남기고, 멱등 키에 DLT 레코드 시각을 더한다. 반영한 것과 받지 않은 것은 범위 조정(multi-review 반영) 절에 있다.
+- 리뷰어 주장 중 소스로 확인해 받지 않은 것이 둘이다. IdP HTTP 호출은 "상한 없음"이 아니라 각 30초였고(그래도 2·3초로 줄였다), `Properties`의 Boolean 값은 무시되지 않았다.
+- 스키마 변경 검토는 구현자가 아닌 리뷰어가 두 번 대조했다(처음 보강 3곳, 반영 뒤 불일치 없음).
+- 볼트 문서(저장소 밖)도 갱신했다. 현재 상태(운영자 주체·재투입 API·의존성)와 Modulith·Kafka 키워드(재투입 절과 8.11 갱신, 8.37 재투입 방식, 8.38 DLT 읽기 수단, 7절 DLT 좌표와 원 좌표)다.
+- 실행하지 않은 것: compose의 앱에서 `/admin` 호출(로컬 IdP가 없다), connect 2초 상한(응답 없는 주소가 환경마다 달라 read 상한만 실측), 실제 IdP와 롤링 배포 중의 재투입.
