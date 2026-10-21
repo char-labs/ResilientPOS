@@ -609,6 +609,21 @@ class SyncCommandFacadeIntegrationTest(
         assertEquals(SyncItemStatus.entries.associateWith { 0.0 }, delta)
     }
 
+    @Test
+    fun `둘째 항목 저장이 인프라 예외로 실패해도 이미 커밋된 첫 항목은 APPLIED로 세고 실패한 항목은 세지 않는다`() {
+        jdbcTemplate.update(
+            "insert into t_sync_operation (id, terminal_id, operation_id, sequence, payload_hash, status, created_at, updated_at) " +
+                "values (?, ?, ?, 2, 'stray', 'APPLIED', now(), now())",
+            UUID.randomUUID(), terminalId.value, UUID.randomUUID(),
+        )
+
+        val delta = countedDelta {
+            assertFailsWith<DataIntegrityViolationException> { receive(operation(1), operation(2)) }
+        }
+
+        assertEquals(mapOf(SyncItemStatus.APPLIED to 1.0), delta.filterValues { it != 0.0 })
+    }
+
     private fun convergence() = checkNotNull(meterRegistry.find("sync.convergence").timer()) { "sync.convergence timer가 없다" }
 
     /** (건수 증가, 총 시간 증가 초)를 돌려준다. */

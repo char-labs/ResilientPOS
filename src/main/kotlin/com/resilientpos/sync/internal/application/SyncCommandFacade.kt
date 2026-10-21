@@ -65,22 +65,26 @@ class SyncCommandFacade(
         var gapped = false
         val items = command.operations.sortedBy { it.sequence }.map { operation ->
             if (gapped) {
-                SyncCommand.ReceiveBatch.Item(operation.operationId, SyncItemStatus.GAP, null, null)
+                SyncCommand.ReceiveBatch.Item(operation.operationId, SyncItemStatus.GAP, null, null).also(::countItem)
             } else {
                 applyOperation(command.terminalId, command.storeId, operation).also {
                     gapped = it.status == SyncItemStatus.GAP
+                    countItem(it)
                     recordConvergence(operation, it)
                 }
             }
         }
         val lastAckedSequence = Tx.readOnlyTx { repository.findWatermark(command.terminalId) }?.lastAckedSequence ?: 0
-        // 배치가 끝까지 간 뒤에만 센다. 상한 거절과 인프라 예외로 실패한 배치는 항목 결과가 확정되지 않았다.
         val counts = items.groupingBy { it.status }.eachCount()
-        counts.forEach { (status, count) -> meterRegistry.counter(OPERATION_METRIC, "status", status.name).increment(count.toDouble()) }
         log.info {
             "sync 배치 처리 terminalId=${command.terminalId.value} operations=${items.size} lastAckedSequence=$lastAckedSequence counts=$counts"
         }
         return SyncCommand.ReceiveBatch.Result(lastAckedSequence, items)
+    }
+
+    /** 항목 결과가 정해지는 즉시 센다. 뒤 항목이 인프라 예외로 배치를 실패시켜도 이미 커밋된 앞 항목은 남고, 항목이 없는 상한 거절은 세지 않는다. */
+    private fun countItem(item: SyncCommand.ReceiveBatch.Item) {
+        meterRegistry.counter(OPERATION_METRIC, "status", item.status.name).increment()
     }
 
     /** 이번 배치에서 처음 확정된 항목(APPLIED·REJECTED)만 단말이 만든 시각부터 지금까지를 잰다. 앞선 항목이 커밋된 뒤 배치가 실패해도 남는다(재전송은 DUPLICATE라 중복 기록은 없다). */
