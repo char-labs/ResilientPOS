@@ -41,15 +41,16 @@
 - 치르는 것: Lua 약 25줄을 이 저장소가 소유하고 테스트한다. `/v1` 요청마다 Redis 왕복이 하나 는다.
 
 **결정 4: Redis 장애는 fail-open이다.**
-- `DataAccessException`과 `IllegalStateException`(종료 중이라 닫힌 커넥션 팩토리)이면 제한 없이 통과시키고 WARN 한 줄(예외 클래스와 메시지, 스택 없음)을 남긴다. 장애 중에는 `/v1` 요청마다 이 줄이 남으므로 스택을 붙이면 로그가 장애를 키운다. 그 밖의 예외는 프로그래밍 오류라 삼키지 않는다. 잡는 범위는 `RedisDistributedLock`과 같다.
+- `DataAccessException`과 `IllegalStateException`(종료 중이라 닫힌 커넥션 팩토리)이면 제한 없이 통과시키고 스택 없는 한 줄을 남긴다(아래 수준·간격). 장애 중에는 실패가 요청마다 나므로 스택을 붙이면 로그가 장애를 키운다. 그 밖의 예외는 프로그래밍 오류라 삼키지 않는다. 잡는 범위는 `RedisDistributedLock`과 같다.
 - 로그 수준은 근본 원인으로 가른다. 근본 원인이 Redis의 오류 응답(Lettuce `RedisCommandExecutionException`)이고 그 코드가 기다리면 풀리는 것(LOADING·BUSY·TRYAGAIN·CLUSTERDOWN·MASTERDOWN)이 아니면 ERROR다. 스크립트 오류, OOM, NOPERM, CROSSSLOT, READONLY, WRONGTYPE, 연결 단계의 WRONGPASS·NOAUTH가 여기에 든다. 사람이 설정이나 스크립트를 고치기 전까지 모든 요청에서 보호가 꺼져 있기 때문이다. 그 밖(연결 실패, timeout, 끊긴 동안의 거절, 기다리면 풀리는 오류 응답)은 WARN이다. 통과(fail-open)는 같다. 줄에는 감싼 예외가 아니라 근본 원인의 클래스와 메시지를 남긴다.
-- 같은 수준의 줄은 10초에 한 줄만 남기고 그 사이 제한 없이 통과한 건수를 다음 줄에 함께 적는다. `REJECT_COMMANDS`로 실패가 바로 나므로 요청마다 남기면 로그 양이 요청 수(부하·공격)와 같아져 수집기와 디스크를 누른다(재리뷰 Codex·Claude 지적, 2026-10-21 사용자 결정으로 "요청마다 한 줄"을 바꿨다).
-- 기동할 때 검사용 키(`rate-limit:{preflight}:…`)로 스크립트를 한 번 돌린다. 기다려도 풀리지 않는 오류(위 ERROR와 같은 기준)면 기동을 멈춘다. 잘못된 ACL·스크립트·slot이 모든 pod의 보호를 조용히 끄는 대신 rollout에서 멈추게 하려는 것이다. Redis에 닿지 못하거나 일시 오류면 WARN만 남기고 뜬다(`/v1`은 Redis 장애에 막히지 않는다). 대가로 Redis 설정을 고칠 때까지 앱을 배포할 수 없다(2026-10-21 사용자 결정).
+- 같은 수준의 줄은 10초에 한 줄만 남기고 그 사이 제한 없이 통과한 건수와 직전 줄의 시각을 다음 줄에 함께 적는다(`suppressedSinceLast`, `lastLoggedAt`). 시각이 있어야 장애 사이를 넘어 이월된 건수를 가를 수 있다. 시계가 뒤로 가면 바로 남긴다. `REJECT_COMMANDS`로 실패가 바로 나므로 요청마다 남기면 로그 양이 요청 수(부하·공격)와 같아져 수집기와 디스크를 누른다(재리뷰 Codex·Claude 지적, 2026-10-21 사용자 결정으로 "요청마다 한 줄"을 바꿨다).
+- 기동할 때 검사용 키(`rate-limit:{preflight}:…`, 운영 키와 같은 함수로 만든다)로 스크립트를 한 번 돌리고 결과도 운영과 같은 함수로 읽는다. 앱 쪽 설정 오류면 기동을 멈춘다. 설정 오류는 Redis가 NOPERM·NOAUTH·WRONGPASS·CROSSSLOT·WRONGTYPE이나 스크립트 오류(`ERR user_script`, `ERR Error running script`), 막힌 명령(`ERR unknown command`)으로 답한 경우만이다. 잘못된 ACL·스크립트·slot이 모든 pod의 보호를 끄는 대신 rollout에서 멈추게 하려는 것이다. 그 밖(Redis에 닿지 못함, OOM, READONLY, 연결 수 초과처럼 Redis 쪽 상태)은 WARN만 남기고 뜬다. Redis 사고 중에도 다시 뜨는 pod와 앱 핫픽스가 막히지 않게 하려는 것이다(3차 리뷰 Claude H1·specialist P2. 처음 구현은 런타임 ERROR 기준을 그대로 써서 이 경우에도 기동을 막았다). 대가로 Redis ACL·스크립트를 고칠 때까지 앱을 배포할 수 없다(2026-10-21 사용자 결정). 기동 시점의 `IllegalStateException`은 잡지 않는다. 기동에는 닫힌 커넥션 팩토리가 없으므로 그 예외는 수명 주기 문제이고, 삼키면 검사가 조용히 꺼진다.
+- 연결 계열 실패(연결 실패, timeout, 끊긴 동안의 거절, Lettuce queue 초과, 기다리면 풀리는 오류 응답) 뒤 1초 동안은 Redis를 부르지 않고 바로 통과시킨다. 한 번도 연결되지 못한 pod는 Spring 공유 연결의 잠금 안에서 요청마다 connect timeout(1초)을 기다려 사실상 멈추고, Redis가 느리거나 단절되면 요청마다 1초가 더해지기 때문이다. 이렇게 하면 Redis 호출은 pod당 1초에 한 번으로 줄고 나머지는 기다리지 않는다. Redis가 오류로 답한 설정 오류는 건너뛰지 않는다(기다려도 풀리지 않고, 호출이 빠르다). 대가로 Redis가 돌아온 뒤 최대 1초 동안 보호가 없다(3차 리뷰 Claude M1, 2026-10-21 사용자 결정으로 "circuit breaker 제외"를 이 1초 창만큼 바꿨다). 건너뛴 요청도 다음 WARN 줄의 건수에 들어간다.
 - 잡는 범위를 연결 실패·timeout으로 좁히지 않는다. Redis의 OOM·READONLY·NOPERM도 `RedisSystemException`(`DataAccessException`)으로 오므로, 좁히면 이런 인프라 장애에서 모든 `/v1`이 500이 되어 이 결정과 어긋난다. 대가로 스크립트 결함과 CROSSSLOT도 통과로 삼켜진다. 스크립트는 실제 Redis 통합 테스트가, CROSSSLOT은 두 키가 같은 slot인지 고정하는 테스트가 막고, 그래도 운영에서 나면 위의 ERROR가 드러낸다(multi-review의 Codex 지적을 좁히기 대신 ERROR로 받은 이유). `IllegalStateException`도 메시지로 가르지 않는다. 잡는 `try` 블록에는 `redis.execute` 호출 하나뿐이고 이 경로에서 그 예외는 닫힌 커넥션 팩토리만 던진다. 이 저장소 코드의 프로그래밍 오류는 블록 밖이라 삼켜지지 않는다. 잠금·로그인 카운터와 같은 기준이다.
 - Lettuce는 기본값(`DisconnectedBehavior.DEFAULT`, `requestQueueSize` 무제한)에서 연결이 끊긴 동안 명령을 버퍼에 받아 둔다. 그러면 Redis가 재시작하는 동안 `/v1` 요청마다 timeout 1초를 다 기다리고, 끝난 명령도 재연결 전까지 버퍼에 남아 장애가 길면 힙이 불어난다(lettuce-core 7.5.2 `DefaultEndpoint` 소스로 확인). `platform`에 `LettuceClientOptionsBuilderCustomizer`를 두어 `REJECT_COMMANDS`로 바꾼다. Boot가 넣은 connect timeout과 `TimeoutOptions` 뒤에 적용되므로 그 설정은 남는다. 끊긴 것을 아는 동안 명령이 바로 실패해 빈도 상한과 잠금은 즉시 fail-open, 점주 세션과 로그인은 즉시 503이 된다. 지금 정책과 방향이 같다. 대가로 유휴 연결이 닫히거나 Redis가 연결을 끊은 뒤 재연결하는 몇 ms 사이에도 점주 세션과 로그인은 바로 503이고, 처리 중이던 명령도 다시 보내지 않는다.
-- 같은 customizer에서 `requestQueueSize`를 1000으로 묶는다. 기본값(무제한)이면 패킷이 사라지는 단절(RST 없음)에서 응답 없는 명령이 연결이 끊길 때까지(커널 재전송 한도, Linux 기본 약 15분) 쌓이고 그동안 모든 `/v1` 요청이 timeout 1초를 기다린다. 묶으면 응답 없는 명령이 1000개 쌓인 뒤부터 새 명령이 바로 거절돼 즉시 fail-open이 되고 힙도 그만큼만 쓴다(lettuce-core 7.5.2 `CommandHandler`의 "Internal stack size exceeded"로 확인). 1000은 요청 스레드(Tomcat 기본 200)와 주기 작업이 한꺼번에 내는 명령보다 넉넉히 크다. TCP keepalive는 Lettuce 기본값으로 켜져 있어(13초 쉬면 13초 간격 3회) 밤사이 유휴 연결이 조용히 끊기는 경우는 1분 안에 드러난다. 바쁜 연결의 단절을 몇 초 안에 잡는 `TCP_USER_TIMEOUT`은 epoll·io_uring 네이티브 transport가 있어야 해서 넣지 않는다(새 의존성).
+- 같은 customizer에서 `requestQueueSize`를 1000으로 묶는다. 기본값(무제한)이면 패킷이 사라지는 단절(RST 없음)에서 응답 없는 명령이 연결이 끊길 때까지(커널 재전송 한도, Linux 기본 약 15분) 쌓이고 그동안 모든 `/v1` 요청이 timeout 1초를 기다린다. 묶으면 응답 없는 명령이 1000개 쌓인 뒤부터 새 명령이 바로 거절돼 즉시 fail-open이 되고 힙도 그만큼만 쓴다(lettuce-core 7.5.2 `CommandHandler`의 "Internal stack size exceeded"로 확인). 1000은 요청 스레드(Tomcat 기본 200)와 주기 작업이 한꺼번에 내는 명령보다 넉넉히 크다. 스레드 수를 바꾸는 변경(virtual thread 포함)은 이 값을 다시 본다. queue가 차면 Lettuce의 `DefaultEndpoint`가 거절마다 스택이 붙은 WARN(`Unexpected exception during request`)을 자기 로거로 남긴다(7.5.2 `RetryListener`). 그 로거는 이 WARN 한 종류뿐이고 실패는 호출자(빈도 상한·세션·잠금)가 이미 남기므로 `application.yaml`에서 그 로거를 ERROR로 올린다(3차 리뷰 specialist P1). TCP keepalive는 Lettuce 기본값으로 켜져 있어(13초 쉬면 13초 간격 3회, 확장 keepalive를 지원하는 JDK 11+ NIO에서) 밤사이 유휴 연결이 조용히 끊기는 경우는 1분 안에 드러난다. 바쁜 연결의 단절을 몇 초 안에 잡는 `TCP_USER_TIMEOUT`은 epoll·io_uring 네이티브 transport가 있어야 해서 넣지 않는다(새 의존성).
 - 근거: `/v1`은 Redis 장애에 막히지 않는다는 현재 설계를 지킨다. Redis health를 끈 것, `publish-request-handled-events: false`, 잠금의 fail-open이 모두 이 원칙에서 나왔다. 로그인 실패 카운터가 fail-closed인 것은 비밀번호 대입을 막는 장치이고 점주 경로라서다.
-- 치르는 것: 장애 중에는 보호가 없다. Redis가 느리면 `/v1` 요청마다 최대 1초가 더해진다(circuit breaker는 제외). 패킷이 사라지는 단절에서는 응답 없는 명령 1000개까지 1초씩 기다리고 그 뒤로는 바로 통과한다. 한 번도 연결되지 못한 pod(단절 중에 뜬 pod)는 Spring의 공유 연결이 잠금 안에서 연결을 만들므로 동시 요청이 connect timeout(1초)씩 줄을 선다(spring-data-redis 4.1.1 `SharedConnection`으로 확인). 기동 때 연결을 강제하면 Redis가 없을 때 앱이 뜨지 못하므로 받아들인다.
+- 치르는 것: 장애 중에는 보호가 없다. 연결 계열 실패 뒤 1초 생략창 덕에 Redis가 느리거나 단절되거나 한 번도 연결되지 못한 pod에서도 Redis를 기다리는 요청은 pod당 1초에 한 번이다. 다만 `REJECT_COMMANDS`의 부작용으로 잠금(`RedisDistributedLock`)의 Redis 오류 WARN(스택 포함)은 1초 대기 없이 잠금 호출마다 남는다. 잠금은 이 PR 밖이라 후속에서 같은 방식(근본 원인 한 줄, 간격)으로 바꾼다.
 - 설정 오류 메시지에는 어느 bucket의 어떤 값인지 적는다.
 - 설정 값이 capacity 1 미만이거나 refill이 0 이하·무한대·NaN이면 기동하지 못한다. 그런 값이면 스크립트가 계산에서 오류를 내고 fail-open이 그 오류를 삼켜 보호가 조용히 꺼지기 때문이다. 빈 bucket이 가득 차는 시간(capacity ÷ refill, 곧 키 TTL)이 하루를 넘거나 capacity가 2^53(Lua의 double이 정수를 정확히 다루는 상한)을 넘어도 기동하지 못한다. 앞은 단위 실수(초당을 하루당으로 적음)이고 뒤는 토큰 차감이 정밀도에 묻혀 제한이 사라지는 값이다.
 
@@ -79,7 +80,7 @@
 
 **결정 7: 관측은 counter 하나와 거절 INFO 로그다.**
 - counter `inbound.rate.limited{scope}`(Prometheus 이름 `inbound_rate_limited_total`), `scope`는 `terminal`이나 `store`다. `terminalId`·`storeId`는 label로 쓰지 않는다([관측성](../wiki/observability.md)).
-- 거절마다 advice가 INFO 한 줄(`method`·`uri`·`errorCode`와 예외 메시지의 scope·terminalId·storeId)을 남긴다. 예외를 로그의 cause로 넘기지 않아 예외 줄이 따로 붙지 않는다(`HttpMessageNotReadableException` 처리 선례). backlog를 비우다 받는 429는 정상 동작이라 WARN 경보를 채우지 않게 INFO로 둔다. 고장 감지는 counter의 증가율로 한다.
+- 거절 로그는 limiter가 scope별로 10초에 한 줄 INFO(`빈도 상한으로 거절했다 scope=… terminalId=… storeId=… retryAfterSeconds=… suppressedSinceLast=… lastLoggedAt=…`)로 남기고 advice는 429를 로그로 남기지 않는다. `Retry-After`를 무시하는 단말이 초당 수천 번 보내도 로그 양이 그만큼 늘지 않게 하려는 것이다(3차 리뷰 Codex 3, 2026-10-21 사용자 결정으로 "거절마다 한 줄"을 바꿨다). counter는 거절마다 오른다. 한 단말이 폭주하면 거의 모든 줄이 그 단말이라 여전히 드러난다. 여러 단말이 함께 거절될 때(매장 전체 재연결)는 표본 한 단말만 보인다. backlog를 비우다 받는 429는 정상 동작이라 WARN이 아니라 INFO다. 고장 감지는 counter의 증가율로 한다.
 - 원인 단말은 `scope=terminal` 줄의 terminalId다. `scope=store` 줄의 terminalId는 매장 bucket이 빈 순간 막힌 단말(피해 단말)이다. 원인 단말이 자기 상한 안에서 매장 bucket을 비웠다면 그 단말의 거절 줄은 없다.
 - Redis 오류는 결정 4의 WARN·ERROR(10초에 한 줄)다.
 - 버린 것: 로그만 남기는 안(참고 문서 §7.1의 필수 신호 `rate_limited_total`이 비고, #77 측정과 경보가 로그를 세야 한다), fail-open 횟수 counter를 더하고 거절을 WARN으로 남기는 안(metric이 하나 더 늘고 정상적인 backlog 배출도 WARN을 쌓는다).
@@ -123,6 +124,13 @@
 - Claude L6·L8·M2, specialist P4-3·P4-4, Codex 1·6: ACL 명령 목록, 설정 오류 메시지의 값, 낡은 spec 문장, REJECT_COMMANDS의 점주 경로 부작용, edge 상한 전제조건을 추적되는 wiki(관측성)에 적는다.
 - 받지 않은 것: Redis 키의 앱·환경 namespace(Codex 4, 기존 키 관례. 환경마다 Redis를 따로 둔다를 배포 확인에 적었다). `TCP_USER_TIMEOUT`(네이티브 transport 의존성). 미연결 pod의 연결 줄 서기 해소(기동 때 연결을 강제해야 해서 원칙과 어긋난다). 유효 토큰 폭주의 앱 안 차단(인증 결과 캐시는 폐기 즉시성과 충돌하고 토큰 digest 키는 Redis 키를 무한히 늘린다. edge가 맡는다).
 
+**범위 조정(2026-10-21, 3차 리뷰 반영).** 3차는 Claude 82(-3, 기동 검사가 너무 넓었다), Codex 76(+3), spring-backend-specialist P0 없음(P1 1, P2 1, P3 2, P4 2)이었다. 반영한 것:
+- 사용자 결정 둘: 연결 계열 실패 뒤 1초 생략창(Claude M1). 429 거절 로그를 limiter가 scope별 10초에 한 줄로 남김(Codex 3).
+- Claude H1·specialist P2: 기동 검사를 앱 쪽 설정 오류로만 좁힌다. specialist P3: 기동 검사가 `IllegalStateException`을 삼키지 않는다.
+- specialist P1: queue가 차면 Lettuce가 거절마다 남기는 스택 WARN을 로거 수준으로 막고 테스트로 고정한다(소스로 확인).
+- Claude L2·specialist P4: 기동 검사와 운영이 키 형식·결과 해석을 같은 함수로 쓴다. Claude L3: 기동 검사가 실제 빈 생성에서 도는지 테스트한다. Claude L4: 구조 테스트를 이름과 소유 타입으로 맞춘다. Claude L5·L6·specialist P3: 로그 줄에 직전 시각을 넣고 시계가 뒤로 가면 바로 남긴다. Claude L7·specialist P4: keepalive 값을 고정한다. Claude L8: queue 값과 스레드 수의 관계를 적는다. Claude L9·L10·L11, specialist P4: 낡은 문장, ACL 키 패턴, 모르는 토큰의 401 경로, 15분과 얼린 컨테이너의 정확한 뜻을 고친다. Claude L1: 잠금 WARN의 부작용을 한계로 적는다.
+- 받지 않은 것: 기동 뒤 설정 오류에 readiness를 내리거나 프로세스를 끝내는 것(Codex 2. Redis 문제로 모든 pod의 `/v1`이 멈춰 fail-open 결정과 충돌한다. ERROR가 10초에 한 줄 드러낸다). 인증 전 폭주의 앱 안 차단과 키 namespace(Codex 1·4, 위와 같은 이유). 생성자 인자를 `@ConfigurationProperties`로 묶는 것(값 넷이 한 클래스에서만 쓰여 @Value 선례를 따른다).
+
 ## 제외
 - 인증 전 요청의 제한. 잘못된 토큰을 반복하는 요청은 단말을 모르므로 세지 않고, 요청마다 인증 조회 한 번을 그대로 치른다. 이런 요청은 edge(API gateway·ingress)가 IP 단위로 막는다(§5.1).
 - 점주 경로(`/owner/**`)와 가입·로그인의 IP별 rate limit. 현재 상태가 외부 노출 조건으로 따로 적은 항목이다.
@@ -130,11 +138,11 @@
 - 점주 단위와 전역 총량. 점주가 매장을 N개 만들면 상한도 N배다. edge가 맡는다.
 - `Retry-After`를 무시하는 폭주의 사전 차단. 거절된 요청도 인증 조회 1회와 Redis 왕복 1회를 치르며, edge가 `Authorization` 해시나 IP 단위로 막는다. 이 edge 요청 상한은 단말 API를 외부에 노출하기 전의 전제조건이다. 머지할 때 현재 상태(볼트)의 외부 노출 조건에 더한다.
 - endpoint별 bucket과 sync 항목 수 가중. 결정 2.
-- Redis 지연에 대한 circuit breaker. 결정 4.
+- 1초 생략창 이상의 circuit breaker(실패율 집계, half-open 탐침). 결정 4.
 - Redis 장애(fail-open) 횟수 metric. 결정 7.
 - outbound(provider) rate limit과 bulkhead.
 - 시연 화면(`static/terminal`)의 `Retry-After` 처리. 지금도 전송에 실패하면 5초 뒤 다시 보낸다.
-- 한계: 패킷이 사라지는 단절(RST 없음)에서는 Lettuce가 끊김을 몰라 `REJECT_COMMANDS`가 듣지 않는다. 응답 없는 명령 1000개까지는 timeout 1초씩 기다린 뒤 통과하고, 그 뒤로는 바로 통과한다. 연결은 커널 재전송 한도(Linux 기본 약 15분)가 지나야 끊기므로 Redis가 먼저 복구돼도 그동안 보호가 없다. 줄이려면 pod의 `net.ipv4.tcp_retries2`를 낮추거나 네이티브 transport로 `TCP_USER_TIMEOUT`을 건다(배포 결정).
+- 한계: 패킷이 사라지는 단절(RST 없음)에서는 Lettuce가 끊김을 몰라 `REJECT_COMMANDS`가 듣지 않는다. 응답 없는 명령 1000개까지는 timeout 1초씩 기다린 뒤 통과하고, 그 뒤로는 바로 통과한다. 연결은 커널 재전송 한도(Linux 기본 약 15분)가 지나야 끊기므로, 이전 주소가 계속 응답하지 않으면(Redis가 다른 주소로 옮겨 감) 그동안 보호가 없다. 같은 주소로 네트워크가 돌아오면 다음 재전송(최대 2분) 안에 회복한다. 줄이려면 pod의 `net.ipv4.tcp_retries2`를 낮추거나 네이티브 transport로 `TCP_USER_TIMEOUT`을 건다(배포 결정).
 - 한계: 한 번도 연결되지 못한 pod는 동시 요청이 connect timeout씩 줄을 선다(결정 4).
 - 배포 확인: health probe가 요청 스레드 풀과 함께 굶지 않게 `management.server.port`를 분리하는 것을 배포에서 검토한다(Redis가 느린 동안 `/v1` 요청이 스레드를 1초씩 쥔다).
 - 배포 확인: 운영 Redis의 `maxmemory-policy`와 앱 계정 ACL(EVAL·EVALSHA 허용). ACL은 EVAL·EVALSHA와 스크립트 안 명령(TIME·HMGET·HSET·PEXPIRE)을 허용해야 한다. 빠지면 기동 검사가 기동을 멈춘다. 운영 중에 바뀌어 NOPERM이나 `noeviction`의 OOM이 나면 fail-open이 이어지고 ERROR가 10초에 한 줄 남는다.
@@ -172,19 +180,21 @@
 6. `Retry-After`는 토큰 1개를 다시 얻기까지의 시간을 초로 올림한 값이고 최소 1이다. 두 bucket이 모두 거절하면 더 오래 기다려야 하는 쪽의 시간과 scope다.
 7. 연결 실패·timeout·끊긴 동안의 거절·기다리면 풀리는 Redis 오류 응답이면 요청은 통과하고 스택 없는 WARN이 남는다. 같은 수준의 줄은 10초에 한 줄이고 그 사이 통과 건수를 함께 적는다.
 8. 인증에 실패한 요청은 limiter를 부르지 않고 401이다.
-9. 거절마다 `inbound_rate_limited_total{scope}`가 1 오르고, INFO 로그 한 줄(예외 줄이 따로 붙지 않는다)에 scope·terminalId·storeId가 남는다. 토큰과 `Authorization` 값은 남지 않는다.
+9. 거절마다 `inbound_rate_limited_total{scope}`가 1 오른다. 거절 INFO는 scope별 10초에 한 줄이고 scope·terminalId·storeId·건수·직전 시각을 담는다. advice는 429를 남기지 않는다. 토큰과 `Authorization` 값은 남지 않는다.
 10. capacity가 1 미만이거나 refill이 0 이하·무한대·NaN이면, 또는 빈 bucket이 가득 차는 시간이 하루를 넘거나 capacity가 2^53을 넘으면 기동하지 못한다.
 11. 429 응답을 REST Docs 스니펫으로 문서화한다.
 12. 상한 값이 #77의 권장 값이고 그 근거가 이 spec에 있다. ready로 바꾸기 전 조건이다.
 13. 기존 테스트가 하나도 깨지지 않는다.
 14. 앱의 Lettuce 클라이언트는 끊긴 연결에서 명령을 버퍼에 받지 않고 바로 거절한다(`REJECT_COMMANDS`). Boot가 넣는 connect timeout은 그대로다.
-15. 단말 키와 매장 키는 같은 Redis Cluster slot에 있고, 키에는 빈 bucket이 가득 차는 시간 이하의 TTL이 걸린다.
+15. 단말 키와 매장 키는 같은 Redis Cluster slot에 있고, 키에는 빈 bucket이 가득 차는 시간(ms 올림)만큼 TTL이 걸린다.
 16. Redis가 기다려도 풀리지 않는 오류로 답하면(스크립트 오류·NOPERM·OOM 등, 연결 단계의 WRONGPASS 포함) 통과하되 ERROR가 남는다. 줄에는 근본 원인의 클래스와 메시지가 있다.
 17. 저장된 시각이 Redis의 지금보다 미래여도 refill이 멈추지 않는다.
 18. 실제 Redis가 내려가면 요청은 timeout을 기다리지 않고 바로 통과한다.
 19. `RateLimitedException`은 limiter만 만들고, `acquire`는 인증 인터셉터만 부른다.
-20. 기동 때 스크립트가 기다려도 풀리지 않는 오류로 실패하면 기동하지 못하고, Redis에 닿지 못하면 뜬다.
-21. 응답 없는 Redis(멈춘 컨테이너)에서 묶은 queue가 차면 다음 요청은 timeout을 기다리지 않고 통과한다. 앱 설정의 `requestQueueSize`는 1000이고 keepalive가 켜져 있다.
+20. 기동 때 스크립트가 앱 쪽 설정 오류(NOPERM·NOAUTH·WRONGPASS·CROSSSLOT·WRONGTYPE·스크립트 오류·막힌 명령)로 실패하면 기동하지 못한다. Redis에 닿지 못하거나 OOM·READONLY·연결 수 초과면 WARN을 남기고 뜬다. 이 검사는 실제 빈 생성에서 돈다.
+21. 응답 없는 Redis(얼린 컨테이너. 연결은 살아 있고 응답만 없다)에서 묶은 queue가 차면 다음 요청은 timeout을 기다리지 않고 통과하고, Lettuce의 `Unexpected exception during request` WARN은 남지 않는다. 앱 설정의 `requestQueueSize`는 1000이고 keepalive는 켜져 있으며 13초·13초·3회다.
+22. 연결 계열 실패 뒤 1초 동안은 Redis를 부르지 않고 통과하고, 1초가 지나면 다시 부른다. 설정 오류로 실패한 뒤에는 건너뛰지 않는다.
+23. 형식은 맞지만 모르는 토큰이면 limiter를 부르지 않고 401이다.
 
 ## 검증
 - `./gradlew test --tests 'com.resilientpos.terminal.*'` — 인터셉터와 Lua 스크립트. 스크립트는 Testcontainers Redis로 실제 실행한다.
@@ -262,7 +272,7 @@ multi-review 반영분이다. 대상 명령은 limiter 명령에 `--tests 'com.r
 
 ## 결과
 - 인증된 `/v1/**` 요청은 `TerminalAuthenticationInterceptor`가 `authenticate` 직후 부르는 `RedisTerminalRateLimiter`를 통과해야 Controller에 닿는다. 단말 bucket과 매장 bucket을 Lua 스크립트 한 번으로 확인하고 둘 다 남을 때만 둘 다 차감한다. 넘으면 429 `RATE_LIMITED`와 `Retry-After`(정수 초)이고, 거절은 `inbound_rate_limited_total{scope}`와 INFO 한 줄로 남는다.
-- Redis 오류면 통과시키고 근본 원인을 담은 WARN(기다리면 풀림)이나 ERROR(사람이 고쳐야 함)를 10초에 한 줄 남긴다. Lettuce는 연결이 끊긴 동안 명령을 바로 거절하고(`REJECT_COMMANDS`) 응답 없는 명령을 1000개까지만 받아, 재시작이나 단절 중에도 요청이 계속 1초씩 기다리지 않는다. 기동 때 스크립트를 한 번 돌려 설정 오류면 기동을 멈춘다.
-- 검증: 전체 회귀는 아래 TDD 기록의 마지막 줄에 있다. limiter 테스트는 스크립트·설정에 결함을 넣어 각각 잡히는지 확인했다.
-- multi-review: Claude 80점, Codex 68점, spring-backend-specialist P0 없음(Gemini 미실행). 반영과 받지 않은 것은 범위의 "범위 조정(multi-review 반영)"에 있다. 단말별 동시 요청 상한은 #101로 뺐다.
+- Redis 오류면 통과시키고 근본 원인을 담은 WARN(기다리면 풀림)이나 ERROR(사람이 고쳐야 함)를 10초에 한 줄 남긴다. 연결 계열 실패 뒤 1초는 Redis를 부르지 않는다. Lettuce는 연결이 끊긴 동안 명령을 바로 거절하고(`REJECT_COMMANDS`) 응답 없는 명령을 1000개까지만 받는다. 기동 때 스크립트를 한 번 돌려 앱 쪽 설정 오류면 기동을 멈춘다.
+- 검증: 전체 회귀는 위 TDD 기록의 마지막 줄에 있다. limiter 테스트는 스크립트·설정에 결함을 넣어 각각 잡히는지 확인했다.
+- multi-review(Gemini는 CLI가 없어 미실행): 1차 Claude 80·Codex 68·specialist P0 없음, 2차 Claude 85·Codex 73·specialist P0·P1 없음, 3차 Claude 82·Codex 76·specialist P0 없음(P1 1). 반영과 받지 않은 것은 범위의 범위 조정 절들에 있다. 단말별 동시 요청 상한은 #101로 뺐다.
 - 남은 것: 상한 값은 아직 자리값이다(인수 조건 12). #77의 권장 값과 근거를 결정 8에 적고 검증을 다시 돌린 뒤 ready로 바꾼다. 현재 상태(볼트)는 머지할 때 고친다.
