@@ -26,7 +26,7 @@ spring:
         connectTimeout: 3
         socketTimeout: 30
         # unique 위반 등의 서버 오류 상세("Key (email)=(...) already exists")를 예외 메시지에서 뺀다. 안 그러면 Hibernate가 WARN으로
-        # 점주 이메일을 로그에 남긴다. 제약 이름은 메시지 본문에 남아 adapter의 판정에 쓸 수 있다.
+        # 점주 이메일을 로그에 남긴다. 제약 이름은 메시지 본문에 남아 커밋을 연 Facade의 판정에 쓸 수 있다.
         logServerErrorDetail: false
   flyway:
     enabled: true
