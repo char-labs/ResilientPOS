@@ -59,8 +59,8 @@
 - 순서: 같은 파일(`RedisDistributedLock.kt`)을 #76이 고치므로 이 Timer는 #76이 main에 머지된 뒤 그 위로 rebase해서 구현한다. 그동안 k6 스크립트, 가짜 provider 지연, 실행기 넘침 처리를 먼저 한다. 측정은 #76 머지 뒤 이 브랜치로 한다. #76이 늦어지면 두 브랜치를 로컬에서만 합친 빌드로 재고 그 커밋 SHA를 결과에 남긴 뒤, 머지 뒤 S2를 다시 돌려 같은 수치인지 확인한다. 합친 빌드는 push하지 않는다(스택 PR이 아니다).
 
 ### 코드 변경(동작이 바뀌는 것은 TDD)
-- **가짜 provider 지연**: `FakePaymentGateway`가 `resilientpos.payment.fake-gateway.latency`(기본 `PT0S`)만큼 `authorize`·`query`에서 잠든다. 기본값 0이라 지금 동작은 그대로다. compose `app` 서비스 환경 변수 한 줄(`RESILIENTPOS_PAYMENT_FAKE_GATEWAY_LATENCY`, 기본 `PT0S`)로 켠다.
-- **실행기 큐 상한**: Modulith의 `EventExternalizerModuleListener.externalize`는 `@ApplicationModuleListener`(`@Async`)라 Boot의 `applicationTaskExecutor`(코어 8, 큐 무제한)에서 돈다. 큐에 상한(`spring.task.execution.pool.queue-capacity`와 `max-size`, 값은 S5)을 두고, 넘친 작업은 `ThreadPoolTaskExecutorCustomizer`가 건 거절 처리기가 버린다. 버릴 때 WARN 한 줄과 counter `task_execution_rejected_total`을 남긴다. Boot 4.1.1에는 거절 정책 설정이 없고 기본 `AbortPolicy`는 커밋 뒤(afterCommit)에 `TaskRejectedException`을 던져 이미 커밋된 요청이 500이 되기 때문이다. 버린 이벤트는 발행 기록이 미완료로 남아 `stale-after`(5분) 뒤 재전송 작업이 다시 보낸다.
+- **가짜 provider 지연**: `FakePaymentGateway`가 `resilientpos.payment.fake-gateway.latency`(기본 `PT0S`)만큼 `authorize`·`query`에서 잠든다. 기본값 0이라 지금 동작은 그대로다. compose `app` 서비스 환경 변수 한 줄(`RESILIENTPOS_PAYMENT_FAKEGATEWAY_LATENCY`, 호스트의 `FAKE_GATEWAY_LATENCY`로 주고 기본 `PT0S`)로 켠다. Spring의 환경 변수 바인딩은 점을 밑줄로 바꾸고 하이픈을 지운다.
+- **실행기 큐 상한**: Modulith의 `EventExternalizerModuleListener.externalize`는 `@ApplicationModuleListener`(`@Async`)라 Boot의 `applicationTaskExecutor`(코어 8, 큐 무제한)에서 돈다. 큐에 상한(`spring.task.execution.pool.queue-capacity`와 `max-size`, 값은 S5)을 두고, 넘친 작업은 `ThreadPoolTaskExecutorCustomizer`가 건 거절 처리기가 버린다. 버릴 때 WARN 한 줄과 counter `task_execution_rejected_total`을 남긴다. Boot 4.1.1에는 거절 정책 설정이 없다. 기본 `AbortPolicy`여도 요청은 성공하고 유실도 없다. `@TransactionalEventListener`의 `AFTER_COMMIT`은 afterCompletion에서 돌고, Spring 7.0.9의 `TransactionSynchronizationUtils.invokeAfterCompletion`이 그 안의 `TaskRejectedException`을 잡아 ERROR 스택 트레이스(`TransactionSynchronization.afterCompletion threw exception`)로 남기기 때문이다. 브로커가 멈추면 거절마다 스택 트레이스가 쌓이므로 WARN 한 줄과 counter로 바꾼다. 버린 이벤트는 발행 기록이 미완료로 남아 `stale-after`(5분) 뒤 재전송 작업이 다시 보낸다.
 - **값 변경**: 아래 판정 규칙을 충족하는 값만 바꾼다. 바꾸지 않은 값도 규칙과 수치를 결과에 남긴다.
 - **provider 호출 구조**: 아래 규칙으로 고른 안을 이 spec에 범위 조정으로 먼저 적고 구현한다. Kafka consumer 설정을 바꾸면 Spring Kafka·Apache Kafka 공식 문서로 Best Practice를 대조해 근거를 이 spec에 남기고, 기본값은 sources jar나 기동 로그의 ConsumerConfig values로 확인한다. PR 전에 Modulith·Kafka 키워드(`docs/wiki/modulith-kafka-keywords.md`, 볼트)를 그 문서의 갱신 규칙대로 고친다.
 
@@ -104,7 +104,7 @@
 
 **계약**: HTTP 응답 모양, 이벤트, 오류 code, 스키마는 바뀌지 않는다. 바뀌는 것은 metric 추가, 값 변경, provider 호출 구조, 실행기의 넘침 처리다. sync 배치 크기 상한이 줄면 단말 계약이 바뀌므로 그때 wiki와 결과에 적는다.
 
-**실패와 복구**: 실행기가 버린 이벤트는 발행 기록 재전송이 다시 보낸다. provider timeout은 `UNKNOWN`이고 결과 불명 확정 작업이 조회한다. 락 metric 기록이 실패해도 락 동작은 바뀌지 않는다(Micrometer 기록은 던지지 않는다).
+**실패와 복구**: 실행기가 버린 이벤트는 발행 기록 재전송이 `stale-after`(5분) 뒤 다시 보낸다. provider timeout은 `UNKNOWN`이고 결과 불명 확정 작업이 조회한다. 락 metric 기록이 실패해도 락 동작은 바뀌지 않는다(Micrometer 기록은 던지지 않는다).
 
 **관측성**: 락 시간 Timer 둘과 실행기 거절 counter. [관측성](../wiki/observability.md)에 이름·태그·쓰는 법을 적는다.
 
@@ -143,7 +143,7 @@
 2. `Lock` 블록이 잠금을 얻으면 `distributed_lock_wait_seconds{lock, outcome="acquired"}`와 `distributed_lock_held_seconds{lock}`이 하나씩 기록된다. 대기 한도를 넘기면 `outcome="timeout"`, Redis 오류면 `outcome="error"`가 기록되고 보유 시간은 기록되지 않는다. `lock` 태그는 #76의 `lock_fail_open_total`과 같은 값(키 앞 두 마디)이고 키의 식별자는 태그에 없다. `Lock`의 호출 모양과 키 값은 바뀌지 않는다.
 3. k6 sync 배치가 항목마다 `createdAt`을 싣고, 측정 빌드에서 #76의 `sync_operation_total`·`sync_convergence_seconds`·`lock_fail_open_total`이 결과 표의 근거로 쓰인다.
 4. `resilientpos.payment.fake-gateway.latency`를 주면 가짜 provider의 `authorize`·`query`가 그만큼 늦게 답하고, 주지 않으면 지금처럼 바로 답한다.
-5. 비동기 실행기의 큐가 차면 넘친 작업을 던지지 않고 버린다. 그 이벤트를 발행한 요청은 성공 응답을 받고, `task_execution_rejected_total`이 오르고 WARN이 남으며, 발행 기록은 미완료로 남는다.
+5. 공용 실행기의 큐가 차면 넘친 작업을 던지지 않고 버리고, `task_execution_rejected_total`이 오르고 WARN 한 줄이 남는다. counter는 거절이 없어도 0으로 나간다. 버린 외부화 이벤트의 발행 기록이 미완료로 남았다가 재전송으로 끝나는 것은 S5에서 `event_publication_incomplete`로 본다.
 6. 결과 절에 S1~S5의 원시 수치, 환경, 재현 명령이 있다. 판정 규칙 표의 항목마다 바꿨는지와 근거 수치가 있다.
 7. provider 호출 구조는 판정 규칙대로 고른 안이 이 spec에 범위 조정으로 먼저 적혀 있고 구현돼 있다. 바꾼 consumer 설정마다 공식 문서 근거와 ConsumerConfig 실제 값이 있다. 느린 provider(S4 같은 지연)에서 다른 주문의 승인이 그 지연에 막혀 줄 서지 않는다는 것을 바꾼 뒤 측정으로 보인다.
 8. Redisson 기각 기준 세 개의 판정과 수치가 결과에 있고, [용량 기준](../wiki/capacity.md)에 "Redisson이 필요해지는 시점"이 지켜볼 metric 조건(PromQL)과 측정 임계값으로 있다.
@@ -180,8 +180,9 @@
 | 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
 |---|---|---|---|
 | 인수 2, 락 시간 metric: 얻으면 대기·보유 시간을, 대기 초과·Redis 오류면 그 outcome의 대기 시간만 기록한다 | 미실행 | 미실행 | 미실행 |
-| 인수 4, 가짜 provider가 설정한 지연만큼 늦게 답하고 기본값이면 바로 답한다 | 미실행 | 미실행 | 미실행 |
-| 인수 5, 실행기 큐가 차면 넘친 외부화 작업을 버리고 요청은 성공하며 발행 기록은 미완료로 남는다 | 미실행 | 미실행 | 미실행 |
+| 인수 4, `FakePaymentGatewayTest`의 `지연을 주면 승인과 조회가 그만큼 늦게 답한다` | `./gradlew test --tests 'com.resilientpos.payment.internal.adapter.gateway.FakePaymentGatewayTest'`. 생성자에 `latency`만 선언하고 쓰지 않은 채 실행. `AssertionFailedError`(승인이 176.875us만에 답했다) | 같은 명령. `authorize`·`query`가 `Thread.sleep(latency)` 뒤 답하게 하고, `query`의 기본 갈래가 `authorize`를 다시 불러 두 번 잠들지 않게 답 고르기를 `answer`로 뺀 뒤 14개 통과. 기본값(`PT0S`)의 기존 13개도 그대로 통과 | `PaymentAuthorizationIntegrationTest`와 함께 실행해 23개 통과(인자 없는 생성자를 쓰는 통합 테스트 픽스처 포함) |
+| 인수 5, `RejectedTaskDiscardTest`의 `큐가 차면 넘친 작업을 던지지 않고 버리고 센다` | `./gradlew test --tests 'com.resilientpos.platform.RejectedTaskDiscardTest'`. 아무것도 하지 않는 customizer만 빈으로 선언하고 실행. 셋째 `execute`가 `TaskRejectedException`(ExecutorService in active state did not accept task) | 같은 명령. customizer가 거절 처리기(counter 증가와 WARN)를 걸게 한 뒤 통과 | - |
+| 인수 5, `ObservabilityConfigurationTest`의 `prometheus 엔드포인트가 공용 실행기의 거절 수를 거절이 없어도 돌려준다` | characterization. Boot가 `applicationTaskExecutor`에 customizer를 거는지 고정한다. 처음부터 통과했고, `discardRejectedTasks`의 `@Bean`을 뗀 변이로 `AssertionFailedError`(task_execution_rejected_total이 없다)를 확인하고 되돌렸다 | `./gradlew test --tests 'com.resilientpos.platform.ObservabilityConfigurationTest'` 4개 통과 | - |
 | 인수 7, provider 호출 구조(측정 뒤 범위 조정에서 동작을 적는다) | 미실행 | 미실행 | 미실행 |
 
 ## 결과
