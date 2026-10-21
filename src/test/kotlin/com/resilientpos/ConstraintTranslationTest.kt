@@ -9,10 +9,13 @@ import com.tngtech.archunit.core.domain.properties.HasName.Predicates.nameMatchi
 import com.tngtech.archunit.core.domain.properties.HasOwner.Predicates.With.owner
 import com.tngtech.archunit.core.importer.ClassFileImporter
 import com.tngtech.archunit.core.importer.ImportOption
+import com.tngtech.archunit.lang.syntax.ArchRuleDefinition.classes
 import com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses
 import jakarta.persistence.EntityManager
 import kotlin.test.Test
+import org.hibernate.query.QueryProducer
 import org.springframework.data.repository.Repository as SpringDataRepository
+import org.springframework.stereotype.Repository
 import org.springframework.transaction.TransactionStatus
 
 class ConstraintTranslationTest {
@@ -61,15 +64,26 @@ class ConstraintTranslationTest {
 
     /**
      * Facade는 블록 안 조회의 auto-flush가 드러낸 위반도 `DataIntegrityViolationException`으로 받는다고 기댄다. `@Repository`인 [JdslQueryExecutor]와
-     * Spring Data repository가 번역하기 때문이다. `@Component` 어댑터가 `EntityManager`로 직접 쿼리를 만들면 Hibernate 예외가 그대로 나와 그 번역을 빗나간다.
+     * Spring Data repository가 번역하기 때문이다. `@Component` 어댑터가 `EntityManager`나 Hibernate 세션(`QueryProducer`)으로 직접 쿼리를 만들면
+     * Hibernate 예외가 그대로 나와 그 번역을 빗나간다. 이름 목록은 hibernate-core 7.4.5의 `createStoredProcedureCall`·`getNamedQuery` 등을 포함한다.
      */
     @Test
     fun `EntityManager의 쿼리는 JdslQueryExecutor만 만든다`() {
         noClasses()
             .that().doNotHaveFullyQualifiedName(JdslQueryExecutor::class.java.name)
             .should().callMethodWhere(
-                target(nameMatching("create.*Query")).and(target(owner(assignableTo(EntityManager::class.java)))),
+                target(nameMatching("(create|getNamed).*(Query|Call)"))
+                    .and(target(owner(assignableTo(EntityManager::class.java).or(assignableTo(QueryProducer::class.java))))),
             )
+            .check(productionClasses)
+    }
+
+    /** 위 규칙이 쿼리를 이 클래스로 묶어도, 위반을 실제로 번역하는 것은 이 애너테이션이다. */
+    @Test
+    fun `JdslQueryExecutor는 @Repository다`() {
+        classes()
+            .that().haveFullyQualifiedName(JdslQueryExecutor::class.java.name)
+            .should().beAnnotatedWith(Repository::class.java)
             .check(productionClasses)
     }
 }
