@@ -37,14 +37,14 @@
 - kotlin-logging이 기동할 때 logback을 거치지 않고 평문 한 줄(`kotlin-logging: initializing...`)을 찍는다. JSON이 아니라 label이 없어서 Loki가 `service_name="unknown_service"`로 둔다.
 
 ## 아직 없는 것
-- 기준선이 없어 넣지 않은 알림. 기준선이 생기는 PR(부하테스트, 대시보드)이 더한다.
+- 기준선이 없어 넣지 않은 알림. 기준선이 생기는 PR(부하테스트, 대시보드)이 더한다(#103).
   - HTTP 지연·오류율 SLO 알림(주문 p95 200ms 등). 부하테스트 기준선이 없다.
   - sync 수렴 시간 알림. 오프라인 길이는 매장 사정이라 임계값 근거가 없다.
   - 재전송 선택 건수 알림. 지금은 진단용이고, 실패 1시간 알림이 같은 상황을 덮는다.
 - Alertmanager와 알림 발송 경로, Grafana 대시보드 provisioning, exemplar(metric에서 trace로 가는 링크).
 - tail sampling. 부하테스트에서 exporter·저장 비용이 보이면 Alloy tail sampling(오류·느린 trace는 모두, 나머지는 일부)으로 바꾼다.
 - 재전송 메시지가 원래 요청의 trace를 잇는 것. 발행 기록에 trace context를 저장해야 한다.
-- 결과 불명 결제와 미해소 대조 case의 나이 gauge. 지금 gauge `payment_attempt_unknown`·`payment_attempt_reconciliation_pending`은 기동 직후 첫 주기(1분)까지 0이라, replica가 하나이거나 전부 재기동하면 2시간·24시간 규칙의 `for:`가 처음부터 다시 센다. 가장 오래된 `UNKNOWN` 시도와 미해소 case의 나이를 내는 PR이 규칙을 나이로 바꾼다.
-- DLT 미해소 건수. DLT 메시지는 지워지지 않는데 지금 규칙은 증가를 보고 24시간 붙잡을 뿐이다. #91의 재투입 기록과 함께 "아직 재투입하지 않은 DLT 수"를 내면 그것으로 상태 알림을 건다.
+- 결과 불명 결제와 미해소 대조 case의 나이 gauge. 지금 gauge `payment_attempt_unknown`·`payment_attempt_reconciliation_pending`은 기동 직후 첫 주기(1분)까지 0이라, replica가 하나이거나 전부 재기동하면 2시간·24시간 규칙의 `for:`가 처음부터 다시 센다. 가장 오래된 `UNKNOWN` 시도와 미해소 case의 나이를 내는 PR이 규칙을 나이로 바꾼다(#104).
+- DLT 미해소 건수. DLT 메시지는 지워지지 않는데 지금 규칙은 증가를 보고 24시간 붙잡을 뿐이다. #91의 재투입 기록과 함께 "아직 재투입하지 않은 DLT 수"를 내면 그것으로 상태 알림을 건다(#105).
 - 발생 수 metric(`payment_unknown_total` 같은 것).
 - histogram bucket 범위와 SLO 경계. 지금은 Micrometer 기본 bucket이다. endpoint가 늘어 series 비용이 보이면 `minimum-expected-value`·`maximum-expected-value`나 `slo`로 좁힌다.
