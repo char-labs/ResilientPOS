@@ -132,6 +132,7 @@
 - src/test/kotlin/com/resilientpos/reconciliation/internal/adapter/web/**
 - docs/wiki/architecture.md
 - docs/wiki/observability.md
+- README.md
 
 ## 인수 조건
 1. 단말 bucket에 토큰이 없으면 인증된 `/v1` 요청은 429 `RATE_LIMITED`와 `Retry-After`를 받고 Controller에 닿지 않는다.
@@ -160,6 +161,7 @@
 ## Wiki 영향
 - [아키텍처](../wiki/architecture.md) — 요청 흐름 1번(인증) 뒤에 빈도 상한 단계와 429 재시도 규약을 넣는다.
 - [관측성](../wiki/observability.md) — counter `inbound_rate_limited_total{scope}`, 거절 INFO 로그, Redis 오류 WARN을 적는다.
+- [README](../../README.md) 아키텍처 절 — "Redis는 두 가지에만 씁니다"에 세 번째 쓰임으로 단말·매장 빈도 상한(fail-open)을 더한다.
 - 현재 상태(`docs/wiki/current-state.md`, 볼트) — "속도 제한(rate limit)도 없다"를 이 PR의 상태로 바꾸고 Redis 쓰임에 단말 rate limit을 더한다. 볼트 파일이라 이 PR diff에는 없다. **머지할 때 고친다.** 볼트는 모든 worktree가 main의 현재 상태로 읽는다. 이 PR이 #77을 기다리며 draft로 머무는 동안 먼저 적으면, 다른 작업(특히 #77의 k6 측정)이 main에 상한이 있다고 잘못 읽는다.
 - `application.yaml`의 Redis 주석 — 쓰는 곳에 빈도 상한을 더하고, "단말 경로는 Redis 장애에 영향이 없다"를 "막히지 않는다(잠금과 빈도 상한은 fail-open)"로 고친다.
 - Modulith·Kafka 키워드(`docs/wiki/modulith-kafka-keywords.md`, 볼트) — 무영향. Kafka·Modulith 작업이 아니다.
