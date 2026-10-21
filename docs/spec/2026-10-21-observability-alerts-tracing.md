@@ -98,7 +98,7 @@ metric과 ECS 로그는 나가지만 그것을 읽어 사람을 부르는 규칙
 관측성: 이 PR이 그 마무리다.
 
 ## 제외
-- 기준선이 없어 넣지 않는 알림. 기준선이 생기는 PR(부하테스트, 대시보드)이 더한다. 이 목록은 [관측성](../wiki/observability.md)의 "아직 없는 것"에도 같은 조건으로 남긴다.
+- 기준선이 없어 넣지 않는 알림. 기준선이 생기는 PR(부하테스트, 대시보드)이 더한다(#103). 이 목록은 [관측성](../wiki/observability.md)의 "아직 없는 것"에도 같은 조건으로 남긴다.
   - HTTP 지연·오류율 SLO 알림(주문 p95 200ms 등, 시스템 설계 7절). 부하테스트 기준선이 없다.
   - 수렴 시간 알림. 결정 4.
   - 재전송 선택 건수 알림. 진단용이고, 실패 1시간 알림이 같은 상황을 덮는다.
@@ -120,7 +120,7 @@ metric과 ECS 로그는 나가지만 그것을 읽어 사람을 부르는 규칙
 - 재전송 선택 건수는 락이 빠지면 두 번 셀 수 있다.
 - 로컬에서는 알림이 발송되지 않고 firing 상태로만 보인다.
 - 샘플링 1.0의 비용은 재지 않았다.
-- 결과 불명 gauge(`payment_attempt_unknown`·`payment_attempt_reconciliation_pending`)는 기동 직후 첫 주기(1분)까지 0이다. replica가 하나이거나 전부 재기동하면 `UnknownPaymentResolutionStuck`(2h)·`ReconciliationPendingUnresolved`(24h)의 `for:`가 처음부터 다시 센다. 매일 배포하면 24시간 규칙은 사실상 울리지 않는다. replica가 여럿이면 다른 pod가 값을 내 유지된다. 근본 해법(가장 오래된 `UNKNOWN` 시도와 미해소 case의 나이 gauge)은 payment·reconciliation 변경이라 후속으로 넘긴다(범위 조정 10).
+- 결과 불명 gauge(`payment_attempt_unknown`·`payment_attempt_reconciliation_pending`)는 기동 직후 첫 주기(1분)까지 0이다. replica가 하나이거나 전부 재기동하면 `UnknownPaymentResolutionStuck`(2h)·`ReconciliationPendingUnresolved`(24h)의 `for:`가 처음부터 다시 센다. 매일 배포하면 24시간 규칙은 사실상 울리지 않는다. replica가 여럿이면 다른 pod가 값을 내 유지된다. 근본 해법(가장 오래된 `UNKNOWN` 시도와 미해소 case의 나이 gauge)은 payment·reconciliation 변경이라 후속으로 넘긴다(범위 조정 10, #104).
 - `kafka_consumer_fetch_manager_records_lag`는 앱의 Kafka 클라이언트가 내는 값이다. consumer가 없거나 fetch가 멈추면 사라지거나 마지막 값에 멈춘다. 운영에서는 브로커 쪽 lag도 따로 본다.
 - `/actuator/prometheus` scrape와 health probe도 샘플링 1.0으로 trace가 된다(scrape 15초마다). 비용이 보이면 actuator 요청의 observation을 뺀다. 그때 요청 metric도 함께 빠진다.
 - 실제 PG를 붙여 결과 불명 조회 배치가 락 TTL(10초)이나 대기(3초)를 넘기면 주기 작업 락의 `timeout` fail-open이 늘어 `LockFailOpen`이 울 수 있다. 실제 PG PR이 조회 타임아웃과 함께 다시 본다.
@@ -216,7 +216,7 @@ multi-review(Claude 76, Codex 74, Gemini는 CLI 없음) 뒤 사용자 결정으�
 
 9. **`EventPublicationFailed`(`failed > 0 for: 1h`)를 `EventPublicationOverdue`(가장 오래된 미완료 기록의 나이 > 1시간, `for: 5m`)로 바꾼다.** 재전송 작업이 행을 `RESUBMITTED`로 바꾸면 전송이 실패로 끝날 때까지(브로커 장애 때 약 2분) 그 행은 `failed`에 잡히지 않는다(`EventPublicationMetrics`의 조회가 `FAILED`와 null만 센다). 행이 적으면 갱신 순간 `failed`가 0이 되어 series가 사라지고 `for: 1h`가 처음부터 다시 센다. 역직렬화할 수 없는 행도 `RESUBMITTED`로 5분씩 머물러 같다. 나이는 상태와 무관하게 늘어난다. 새 gauge는 `EventPublicationMetrics`의 같은 갱신에 조회 하나를 더한다(#94와 겹치지 않는 파일).
 10. **앱 부재 규칙 `ResilientPosMetricsAbsent`(critical)를 더한다.** 13개 규칙이 모두 앱의 series에 기대서, 모든 pod가 죽거나 scrape가 끊기면 아무것도 울리지 않는다. `absent(process_uptime_seconds{application="ResilientPOS"})`에 `for: 5m`이다. 기준선이 필요 없는 규칙이라 제외 사유에 해당하지 않는다. 결과 불명 gauge의 재기동 리셋은 한계 절에 적고 나이 gauge는 후속으로 넘긴다.
-11. **DLT 두 규칙에 `keep_firing_for: 24h`를 더한다.** 증가 조건은 10분 뒤 풀려 처리하지 않은 DLT가 남아 있어도 정상처럼 보였다. 미해소 건수 gauge는 #91의 재투입 기록과 함께 후속으로 넘긴다.
+11. **DLT 두 규칙에 `keep_firing_for: 24h`를 더한다.** 증가 조건은 10분 뒤 풀려 처리하지 않은 DLT가 남아 있어도 정상처럼 보였다. 미해소 건수 gauge는 #91의 재투입 기록과 함께 후속으로 넘긴다(#105).
 12. **감지 창을 줄이고 규칙 식 둘을 고친다.** (a) 창과 `for:`가 같아 Redis가 1~2분 끊겨도 회복한 뒤에 critical이 울렸다. 503·락은 `[2m]`, gap은 `[5m]`으로 줄인다. (b) 503 규칙이 `/actuator/health`의 503(DB health DOWN, 기동·종료 중 readiness)까지 셌다. `uri!~"/actuator/.*"`로 뺀다. 필터 단계의 503은 `uri="UNKNOWN"`이라 그대로 잡힌다. (c) 첫 DLT 절의 `offset 10m` instant 조회는 scrape가 한 번 실패한 자리의 stale marker를 "없던 series"로 보아 옛 DLT를 다시 울렸다. `last_over_time(…[1h] offset 10m)`로 바꾼다. 각 반례를 promtool 시나리오로 둔다.
 13. **sync counter를 항목 결과가 정해질 때마다 올린다.** 배치 끝에 모아 세면 뒤 항목의 인프라 예외로 앞에서 커밋된 항목이 영영 세지지 않았다. 재전송하면 `DUPLICATE`로만 세어지고, 같은 항목의 수렴 시간은 기록돼 두 metric이 어긋났다.
 14. **형식이 틀린 `createdAt`을 거절하지 않는다.** 결정 5를 바꾼다. 요청 DTO는 문자열로 받고, Facade가 확정할 때 파싱해 실패하면 수렴 시간 대신 `sync_created_at_invalid_total`을 올린다. 400 문서는 지운다.
