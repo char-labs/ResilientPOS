@@ -2,18 +2,30 @@
 # 조건과 조치는 docs/wiki/runbook.md, metric의 뜻은 docs/wiki/observability.md에 있다.
 # 검증: docker/prometheus/alerts.test.yaml(promtool), AlertRulesTest가 ./gradlew test에서 돌린다.
 # 여러 pod가 같은 DB를 세는 gauge는 max로 모으고, pod마다 도는 작업은 instance별로 본다.
+# increase(x[W]) > 0은 마지막 증가 뒤에도 W 동안 참이라, for를 두는 규칙의 창은 for보다 짧게 둔다(scrape 15초의 4배 이상).
 groups:
   - name: resilientpos
     rules:
-      - alert: EventPublicationFailed
-        expr: max(event_publication_incomplete{application="ResilientPOS", status="failed"}) > 0
-        # 재전송 작업이 1분마다 다시 보내므로 잠깐의 실패는 스스로 준다. 0이 되면 시계열이 사라져 for가 처음부터 다시 센다.
-        for: 1h
+      - alert: ResilientPosMetricsAbsent
+        # 아래 규칙은 모두 앱이 내는 series에 기댄다. 모든 인스턴스가 죽거나 scrape가 끊기면 그 규칙들은 빈 결과라 울리지 않는다.
+        expr: absent(process_uptime_seconds{application="ResilientPOS"})
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: ResilientPOS 인스턴스의 metric이 5분 넘게 보이지 않는다
+          runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#resilientposmetricsabsent
+
+      - alert: EventPublicationOverdue
+        # 나이는 상태가 FAILED와 RESUBMITTED를 오가도 계속 는다. failed 개수는 재전송 중인 행을 세지 않아 브로커 장애 중에도 0이 될 수 있다.
+        # shortcut: 1시간은 처음 wiki가 정한 "failed가 한 시간 이어지면"을 옮긴 시작값이다. 부하테스트 뒤 조정한다.
+        expr: max(event_publication_incomplete_oldest_seconds{application="ResilientPOS"}) > 3600
+        for: 5m
         labels:
           severity: warning
         annotations:
-          summary: 브로커로 보내지 못한 발행 기록이 한 시간 넘게 남아 있다
-          runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#eventpublicationfailed
+          summary: 1시간 넘게 나가지 못한 발행 기록이 있다
+          runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#eventpublicationoverdue
 
       - alert: EventPublicationMetricStale
         # 갱신이 실패한 인스턴스는 시각을 멈춘다. 갱신 주기는 1분이다.
@@ -26,14 +38,17 @@ groups:
           runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#eventpublicationmetricstale
 
       - alert: KafkaDeadLetter
-        # 둘째 줄은 10분 전에 없던 series다. 도메인 reason은 처음 DLT로 보낼 때 생겨 첫 값을 increase()가 0으로 본다.
+        # 둘째 줄은 10분 전까지 1시간 동안 없던 series다. 도메인 reason은 처음 DLT로 보낼 때 생겨 첫 값을 increase()가 0으로 본다.
+        # range 조회라 scrape 실패로 생긴 stale marker를 "없던 series"로 보지 않는다.
         expr: |
           sum by (topic, reason) (increase(event_kafka_dead_letter_total{application="ResilientPOS"}[10m])) > 0
           or
           sum by (topic, reason) (
             event_kafka_dead_letter_total{application="ResilientPOS"}
-            unless event_kafka_dead_letter_total{application="ResilientPOS"} offset 10m
+            unless on (instance, topic, reason) last_over_time(event_kafka_dead_letter_total{application="ResilientPOS"}[1h] offset 10m)
           ) > 0
+        # DLT 메시지는 지워지지 않는다. 재투입과 업무 상태를 확인한 뒤 사람이 silence로 끈다.
+        keep_firing_for: 24h
         labels:
           severity: critical
         annotations:
@@ -47,8 +62,9 @@ groups:
           or
           sum by (topic) (
             event_kafka_dead_letter_failed_total{application="ResilientPOS"}
-            unless event_kafka_dead_letter_failed_total{application="ResilientPOS"} offset 10m
+            unless on (instance, topic) last_over_time(event_kafka_dead_letter_failed_total{application="ResilientPOS"}[1h] offset 10m)
           ) > 0
+        keep_firing_for: 24h
         labels:
           severity: critical
         annotations:
@@ -113,8 +129,9 @@ groups:
 
       - alert: LockFailOpen
         # 배포·재기동 중 한두 번은 넘기고 이어질 때만 본다. 이 counter는 처음 fail-open될 때 생겨 첫 증가는 세지 않는다.
-        # shortcut: 감지 창 10분은 근거 없는 시작값이다. 부하테스트 뒤 락 시간과 함께 조정한다.
-        expr: sum by (lock, reason) (increase(lock_fail_open_total{application="ResilientPOS"}[10m])) > 0
+        # Redis 장애 때는 주기 작업 둘이 pod마다 1분에 한 번 락을 잡아 2분 창이 끊기지 않는다.
+        # shortcut: 10분은 근거 없는 시작값이다. 부하테스트 뒤 락 시간과 함께 조정한다.
+        expr: sum by (lock, reason) (increase(lock_fail_open_total{application="ResilientPOS"}[2m])) > 0
         for: 10m
         labels:
           severity: warning
@@ -131,8 +148,8 @@ groups:
           runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#syncconflict
 
       - alert: SyncGapPersistent
-        # shortcut: 감지 창 30분은 근거 없는 시작값이다. 단말 재전송 주기가 정해지면 조정한다.
-        expr: sum(increase(sync_operation_total{application="ResilientPOS", status="GAP"}[30m])) > 0
+        # shortcut: 창 5분과 30분은 근거 없는 시작값이다. 단말 재전송 주기가 정해지면 조정한다.
+        expr: sum(increase(sync_operation_total{application="ResilientPOS", status="GAP"}[5m])) > 0
         for: 30m
         labels:
           severity: warning
@@ -141,8 +158,9 @@ groups:
           runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#syncgappersistent
 
       - alert: OwnerSessionStoreUnavailable
-        # 지금 503을 내는 곳은 점주 세션 저장소(Redis) 장애 처리뿐이다. uri로 거르지 않는다(필터 단계의 503은 uri가 UNKNOWN).
-        expr: sum(increase(http_server_requests_seconds_count{application="ResilientPOS", status="503"}[5m])) > 0
+        # actuator 밖에서 503을 내는 곳은 지금 점주 세션 저장소(Redis) 장애 처리뿐이다. health는 DB가 DOWN이거나 기동·종료 중이면 503이라 뺀다.
+        # 필터 단계의 503은 uri가 UNKNOWN이라 그대로 잡힌다. 점주 요청이 드물면 놓칠 수 있어 Redis 장애의 주 신호는 LockFailOpen(reason=error)이다.
+        expr: sum(increase(http_server_requests_seconds_count{application="ResilientPOS", status="503", uri!~"/actuator/.*"}[2m])) > 0
         for: 5m
         labels:
           severity: critical

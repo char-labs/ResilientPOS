@@ -7,34 +7,63 @@ rule_files:
 evaluation_interval: 1m
 
 tests:
-  - name: 실패 기록이 한 시간 이어질 때만 울리고 중간에 사라지면 처음부터 다시 센다
+  - name: 앱 metric이 모두 사라지면 5분 뒤 울린다
     interval: 1m
     input_series:
-      - series: event_publication_incomplete{application="ResilientPOS", status="failed", module="unknown", listener="EventExternalizerModuleListener", instance="a"}
-        values: 2x70
-      - series: event_publication_incomplete{application="ResilientPOS", status="failed", module="unknown", listener="EventExternalizerModuleListener", instance="b"}
-        values: 1x30 _x10 1x40
+      - series: process_uptime_seconds{application="ResilientPOS", instance="a"}
+        values: 0+60x10
     alert_rule_test:
-      - eval_time: 59m
-        alertname: EventPublicationFailed
+      - eval_time: 9m
+        alertname: ResilientPosMetricsAbsent
         exp_alerts: []
-      - eval_time: 61m
-        alertname: EventPublicationFailed
+      # 마지막 표본(10분) 뒤 lookback 5분이 지나야 사라지고, 다시 for 5분이다.
+      - eval_time: 18m
+        alertname: ResilientPosMetricsAbsent
+        exp_alerts: []
+      - eval_time: 22m
+        alertname: ResilientPosMetricsAbsent
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              application: ResilientPOS
+            exp_annotations:
+              summary: "ResilientPOS 인스턴스의 metric이 5분 넘게 보이지 않는다"
+              runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#resilientposmetricsabsent
+
+  - name: 가장 오래된 미완료 발행 기록이 1시간을 넘으면 울리고 끝나면 풀린다
+    interval: 1m
+    input_series:
+      # 재전송 중이라 failed 개수가 0과 1을 오가도 나이는 계속 는다. b는 정상 인스턴스다.
+      - series: event_publication_incomplete_oldest_seconds{application="ResilientPOS", instance="a"}
+        values: 0+60x70 0x10
+      - series: event_publication_incomplete_oldest_seconds{application="ResilientPOS", instance="b"}
+        values: 0x80
+    alert_rule_test:
+      - eval_time: 64m
+        alertname: EventPublicationOverdue
+        exp_alerts: []
+      - eval_time: 67m
+        alertname: EventPublicationOverdue
         exp_alerts:
           - exp_labels:
               severity: warning
             exp_annotations:
-              summary: 브로커로 보내지 못한 발행 기록이 한 시간 넘게 남아 있다
-              runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#eventpublicationfailed
+              summary: "1시간 넘게 나가지 못한 발행 기록이 있다"
+              runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#eventpublicationoverdue
+      - eval_time: 75m
+        alertname: EventPublicationOverdue
+        exp_alerts: []
 
-  - name: 실패 기록이 사라지면 for가 처음부터 다시 센다
+  - name: 세지 못한 인스턴스의 NaN은 나이 알림을 붙잡지 않는다
     interval: 1m
     input_series:
-      - series: event_publication_incomplete{application="ResilientPOS", status="failed", module="unknown", listener="EventExternalizerModuleListener", instance="a"}
-        values: 1x30 _x10 1x40
+      - series: event_publication_incomplete_oldest_seconds{application="ResilientPOS", instance="a"}
+        values: NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN
+      - series: event_publication_incomplete_oldest_seconds{application="ResilientPOS", instance="b"}
+        values: 0x80
     alert_rule_test:
-      - eval_time: 61m
-        alertname: EventPublicationFailed
+      - eval_time: 70m
+        alertname: EventPublicationOverdue
         exp_alerts: []
 
   - name: 신선도는 갱신이 멈춘 인스턴스만 울린다
@@ -45,6 +74,9 @@ tests:
         values: 0+60x40
       - series: event_publication_incomplete_refreshed_seconds{application="ResilientPOS", instance="stuck"}
         values: 0+60x10 600x30
+      # 기동 직후 첫 갱신 전에는 0이다. 2분 뒤 갱신되면 for 5분을 채우지 못해 울리지 않는다.
+      - series: event_publication_incomplete_refreshed_seconds{application="ResilientPOS", instance="booting"}
+        values: _x18 0 0 1200+60x20
     alert_rule_test:
       - eval_time: 14m
         alertname: EventPublicationMetricStale
@@ -100,8 +132,36 @@ tests:
             exp_annotations:
               summary: "payment.approved 메시지가 DLT로 갔다(reason=error)"
               runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#kafkadeadletter
-      # 늘지 않으면 10분 뒤 풀린다. 그 사이 사람이 DLT를 확인한다.
+      # 늘지 않아도 keep_firing_for로 24시간 유지한다. 사람이 재투입을 확인한 뒤 silence로 끈다.
       - eval_time: 28m
+        alertname: KafkaDeadLetter
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              topic: payment.approved
+              reason: PAYMENT_APPROVAL_MISMATCH
+            exp_annotations:
+              summary: "payment.approved 메시지가 DLT로 갔다(reason=PAYMENT_APPROVAL_MISMATCH)"
+              runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#kafkadeadletter
+          - exp_labels:
+              severity: critical
+              topic: payment.approved
+              reason: error
+            exp_annotations:
+              summary: "payment.approved 메시지가 DLT로 갔다(reason=error)"
+              runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#kafkadeadletter
+      - eval_time: 25h
+        alertname: KafkaDeadLetter
+        exp_alerts: []
+
+  - name: scrape가 한 번 실패해도 옛 DLT를 다시 울리지 않는다
+    interval: 1m
+    input_series:
+      # 10분에 DLT가 나 24시간 붙잡은 뒤, 1512분에 scrape가 한 번 실패한다(stale marker). 10분 뒤 offset 지점이 그 자리다.
+      - series: event_kafka_dead_letter_total{application="ResilientPOS", topic="order.paid", reason="error", instance="a"}
+        values: 0x10 3x1500 stale 3x30
+    alert_rule_test:
+      - eval_time: 1522m
         alertname: KafkaDeadLetter
         exp_alerts: []
 
@@ -264,6 +324,9 @@ tests:
         values: 1+1x30
       - series: lock_fail_open_total{application="ResilientPOS", lock="platform:event-publication", reason="timeout", instance="a"}
         values: _x3 1 2x26
+      # 1~2분짜리 Redis 장애: 세 번 오르고 멈춘다. 회복한 뒤에 울리면 안 된다.
+      - series: lock_fail_open_total{application="ResilientPOS", lock="payment:unknown-resolve", reason="error", instance="a"}
+        values: 1 2 3 3x27
     alert_rule_test:
       - eval_time: 15m
         alertname: LockFailOpen
@@ -319,6 +382,16 @@ tests:
               summary: "앞 순번을 채우지 못한 sync 항목이 30분 넘게 계속 온다"
               runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#syncgappersistent
 
+  - name: 몇 분 간격의 gap 두 번은 울리지 않는다
+    interval: 1m
+    input_series:
+      - series: sync_operation_total{application="ResilientPOS", status="GAP", instance="a"}
+        values: 0 1 1 2 2x60
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: SyncGapPersistent
+        exp_alerts: []
+
   - name: 점주 세션 저장소 503은 5분 넘게 이어지면 울린다
     interval: 1m
     input_series:
@@ -326,6 +399,9 @@ tests:
         values: 1+3x20
       - series: http_server_requests_seconds_count{application="ResilientPOS", status="200", uri="/v1/orders", instance="a"}
         values: 0+10x20
+      # health는 DB가 DOWN이거나 기동·종료 중이면 503이다. 세션 저장소 장애가 아니다.
+      - series: http_server_requests_seconds_count{application="ResilientPOS", status="503", uri="/actuator/health", instance="b"}
+        values: 0+3x20
     alert_rule_test:
       - eval_time: 3m
         alertname: OwnerSessionStoreUnavailable
@@ -338,3 +414,18 @@ tests:
             exp_annotations:
               summary: "점주 요청이 5분 넘게 503으로 실패한다"
               runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#ownersessionstoreunavailable
+
+  - name: 짧은 503 묶음과 health의 503은 울리지 않는다
+    interval: 1m
+    input_series:
+      - series: http_server_requests_seconds_count{application="ResilientPOS", status="503", uri="UNKNOWN", instance="a"}
+        values: 0 0 1 2 3 3x20
+      - series: http_server_requests_seconds_count{application="ResilientPOS", status="503", uri="/actuator/health", instance="a"}
+        values: 0+3x20
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: OwnerSessionStoreUnavailable
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: OwnerSessionStoreUnavailable
+        exp_alerts: []
