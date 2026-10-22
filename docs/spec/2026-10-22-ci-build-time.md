@@ -55,8 +55,15 @@ PR 검사(`.github/workflows/pr-checks.yml`) 한 번이 5분 넘게 걸린다. �
 ### 범위 조정
 **1. 컨텍스트 캐시 확대를 뺀다(2026-10-22, 사용자 결정).** 결정 6의 전제는 맞았다. 쉬는 컨텍스트의 Kafka listener container는 멈추고 consumer는 group을 떠난다(결과 절). 그런데 두 가지 이유로 뺀다.
 - 쉬는 컨텍스트에서는 `LettuceConnectionFactory`(SmartLifecycle)도 멈춰 Redis client를 닫는다. #109의 `LockReleaseListener`는 구독 컨테이너를 빈이 아닌 내부 객체로 두고 `ApplicationReadyEvent`에서만 구독한다. 그래서 다시 시작한 컨텍스트에는 해제 알림 구독이 없고 `LockIntegrationTest`가 깨진다. 고치려면 `src/main`을 바꿔야 한다.
-- 실험용으로 리스너를 고쳐 fork 2개와 합쳐 쟀더니 test task가 fork 2개만일 때보다 느렸다(155초에서 179초).
+- 실험용으로 리스너를 고쳐 fork 2개와 합쳐 쟀더니 test task가 fork 2개만일 때보다 느렸다(155초에서 179초, 각각 한 번 측정).
 - 그래서 `maxSize=1`을 그대로 두고 `src/main`은 바꾸지 않는다. 리스너의 재시작 한계는 운영에서 컨텍스트를 멈췄다 다시 시작하지 않으므로 이 PR에서 고치지 않고 사용자에게 보고한다.
+
+**2. 리뷰(Claude·Codex)를 반영해 둘을 더하고 인수 조건을 다듬는다(2026-10-22).**
+- REST Docs 스니펫 디렉터리(`build/generated-snippets`)를 Test output으로 선언한다. 선언하지 않으면 test가 캐시에서 올 때 스니펫이 생기지 않는다. 로컬에서 `clean` 뒤 캐시가 적중한 빌드에 이 디렉터리가 없었다. [테스트 전략](../wiki/testing-strategy.md)의 "테스트 실행 후 실제 파일을 확인한다"가 깨진다.
+- `OwnerSessionStoreOutageIntegrationTest`의 "아무도 듣지 않는 Redis 포트"를 닫은 임시 포트에서 고정 포트 1로 바꾼다. fork가 병렬로 돌면 다른 fork의 컨테이너 포트 매핑이나 웹 서버가 닫은 임시 포트를 가져갈 수 있다.
+- 인수 조건 2의 CI 적중 실측은 머지 전에 할 수 없다. main 캐시에 build cache 항목이 아직 없고 PR 실행은 캐시를 저장하지 않는다. 그래서 PR 재실행에서 적중하지 않는 것, 로컬 적중, 문서 근거로 좁힌다. main push 적중은 머지 뒤 확인할 항목으로 사용자에게 보고한다.
+- 같은 커밋 재실행은 run id가 같고 attempt 번호만 오른다. 인수 조건 3은 run id와 attempt로 적고, attempt마다 시작부터 끝까지 잰다.
+- fork 2와 3의 CI 비교를 인수 조건에 넣는다. 인수 조건 3은 고른 값이 들어간 최종 커밋의 실행이다.
 
 계약: 업무 계약(HTTP·이벤트·토픽·consumer group)은 바뀌지 않는다. 바뀌는 것은 PR 검사 job 구성, Gradle 빌드 설정, 테스트 기반 설정이다.
 
@@ -68,6 +75,12 @@ PR 검사(`.github/workflows/pr-checks.yml`) 한 번이 5분 넘게 걸린다. �
 - 테스트 삭제·병합, 검증 동작을 약하게 하는 대기 시간 단축.
 - 모듈 분할.
 - 볼트 rules(`engineering-principles.md`의 "GitHub Actions와 pre-push hook이 없어")와 `resilientpos-git` 스킬("GitHub Actions workflow를 쓰지 않습니다")의 낡은 문구. 볼트 파일이라 이 PR에서 고치지 않고 PR 끝에 사용자에게 보고한다.
+
+## 한계
+- 문서만 바꾼 머지가 이어지면 main push의 test도 캐시에서 온다. 그동안 태그가 움직이는 이미지(`postgres:18-alpine`, `redis:8-alpine`)가 바뀌어도 main은 녹색이고, 다음 코드 PR이 자기 변경과 상관없이 깨질 수 있다. 의심되면 `./gradlew test --rerun`으로 다시 돌린다.
+- 시간 상한을 단언하는 테스트(`RedisTerminalRateLimiterOutageIntegrationTest`의 500ms, `AdminIdentityProviderTimeoutsTest`, `awaitUntil` 마감)는 fork가 CPU를 나눠 쓰면 여유가 줄어든다. 결정 9의 감시 대상이다.
+- fork 수가 같아도 클래스를 fork에 나누는 순서와 fork 안의 실행 순서는 환경마다 다를 수 있다. 고정값은 CPU 수에 따라 배치가 바뀌지 않게 할 뿐이다.
+- 로컬 후보 비교는 다른 세션과 compose 스택이 함께 도는 머신에서 각각 한 번 잰 값이다.
 
 ## 관련 문서
 없음. 이 PR이 따르는 장기 스펙 문서가 없다. 앞 PR은 [flyway-version-guard](2026-09-15-flyway-version-guard.md)(Flyway gate), [kafka-event-redelivery](2026-09-26-kafka-event-redelivery.md)(컨텍스트 캐시 1개 제한)다.
@@ -83,18 +96,21 @@ PR 검사(`.github/workflows/pr-checks.yml`) 한 번이 5분 넘게 걸린다. �
 
 ## 인수 조건
 1. PR 실행에서 Gradle build와 Flyway version gate가 함께 시작한다(`needs` 없음).
-2. `gradle.properties`가 build cache를 켠다. 결과 절에 setup-gradle 공식 문서 근거와, 어떤 실행에서 어떤 task가 `FROM-CACHE`였는지 실측이 있다.
-3. 이 PR 같은 커밋의 PR 실행 3번이 모두 성공하고 중앙값이 3분 이하다. 결과 절에 run id 셋과 각 시간이 있다.
-4. 로컬 `./gradlew test` 전체가 3회 연속 통과한다. `@Disabled`·재시도 플러그인을 쓰지 않는다.
+2. `gradle.properties`가 build cache를 켠다. 결과 절에 setup-gradle 공식 문서 근거, 로컬 `FROM-CACHE` 실측, PR 재실행에서 적중하지 않는다는 CI 실측이 있다(범위 조정 2).
+3. 이 PR 최종 커밋의 PR 실행 3번(attempt 1·2·3)이 모두 성공하고 중앙값이 3분 이하다. 결과 절에 run id와 attempt별 시간이 있다.
+4. 로컬 `./gradlew test --rerun` 전체가 3회 연속 통과한다. `@Disabled`·재시도 플러그인을 쓰지 않는다.
 5. 결과 절에 기준선과 후보별(캐시만, fork만, 합침) 로컬 수치, 머신 사양, CI run id가 있다.
 6. 컨텍스트 캐시를 키웠다면 결과 절에 pause가 Kafka listener container를 멈춰 consumer가 group을 떠난다는 공식 문서·sources jar 근거와 실측이 있다. 키우지 않았다면 이유가 있다.
 7. 테스트의 Kafka consumer·listener 설정을 바꿨다면 공식 문서 근거와 기본값 확인이 이 spec에 있고 Modulith·Kafka 키워드 문서가 갱신됐다.
 8. [개발 규칙](../wiki/development-workflow.md)의 "PR 워크플로" 절이 병렬 구성과 build cache를 적는다.
+9. 결과 절에 CI에서 잰 fork 2와 3의 run id·test step 시간과 고른 값이 있다.
+10. test가 캐시에서 와도 `build/generated-snippets`가 되살아난다. `OwnerSessionStoreOutageIntegrationTest`가 닫은 임시 포트를 쓰지 않는다.
 
 ## 검증
 - 개발 중: `python3 scripts/check_pr.py --base origin/main --worktree`
 - 제출 전: `python3 scripts/check_pr.py --base origin/main`
-- 전체 테스트: `./gradlew test`를 3회 연속 실행한다. 후보별 측정은 `./gradlew test --rerun`으로 build cache를 건너뛰고 잰다.
+- 전체 테스트: `./gradlew test --rerun`을 3회 연속 실행한다. 캐시를 켠 뒤에는 `--rerun` 없이 돌리면 test가 `FROM-CACHE`나 up-to-date로 건너뛰어진다. 후보별 측정도 `--rerun`으로 잰다.
+- CI 시간: attempt마다 `gh api repos/char-labs/ResilientPOS/actions/runs/실행번호/attempts/번호`의 `run_started_at`부터 `updated_at`까지다. 기준선 39736986219도 같은 방법으로 잰다.
 - 로컬 수치: `build/test-results/test/*.xml`의 클래스 수·테스트 수·시간 합계, wall clock, "Started … in N seconds" 로그 수와 합계.
 - CI: `gh run view 실행번호 --json jobs`로 job·step 시간을 읽는다. 같은 커밋 재실행은 `gh run rerun 실행번호`다.
 - 실패 시나리오: fork나 캐시 변경 뒤 특정 순서에서만 깨지는 테스트가 나오면 결정 9를 따른다.
@@ -115,7 +131,6 @@ PR 검사(`.github/workflows/pr-checks.yml`) 한 번이 5분 넘게 걸린다. �
 적용하지 않는다. 업무 동작 변경이 없고 빌드·CI 설정과 테스트 기반 설정만 바꾼다. 검증은 전체 테스트 반복 통과와 CI 실측이다.
 
 ## 결과
-개발 전 작성. 개발 후 실행 결과와 변경 이유를 추가한다.
 
 ### 측정 환경
 - 로컬: Apple M3 Pro 11코어, 메모리 36GB, Docker는 OrbStack(VM 11 CPU, 16GB), JDK Corretto 25.0.4, Gradle 9.7.1. 다른 worktree의 compose 스택(`resilientpos`)과 다른 세션이 함께 돈다. 시간은 `./gradlew test --rerun`의 test task wall이다(컴파일 제외, 미리 `testClasses`).
