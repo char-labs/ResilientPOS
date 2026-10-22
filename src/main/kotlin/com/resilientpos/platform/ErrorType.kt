@@ -15,7 +15,7 @@ enum class ErrorType(val status: HttpStatus, val message: String, val level: Lev
     UNAUTHENTICATED(HttpStatus.UNAUTHORIZED, "인증이 필요합니다.", Level.WARN),
     ACCESS_DENIED(HttpStatus.FORBIDDEN, "접근 권한이 없습니다.", Level.WARN),
     CONCURRENT_REQUEST(HttpStatus.CONFLICT, "동시 처리 충돌로 요청을 완료하지 못했습니다.", Level.WARN),
-    // INFO인 이유: backlog를 비우다 받는 429는 정상 동작이라 WARN 경보를 채우지 않는다. 고장 감지는 counter가 맡는다.
+    // advice는 이 항목의 code와 문구만 쓰고 로그를 남기지 않는다(level은 쓰이지 않는다). 거절 로그는 limiter가 scope별 10초에 한 줄 INFO로 남긴다.
     RATE_LIMITED(HttpStatus.TOO_MANY_REQUESTS, "요청이 많아 잠시 후 다시 시도해 주세요.", Level.INFO),
     SERVICE_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "일시적으로 요청을 처리할 수 없습니다.", Level.ERROR),
 }

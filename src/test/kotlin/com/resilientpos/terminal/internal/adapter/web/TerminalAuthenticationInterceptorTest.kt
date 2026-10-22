@@ -11,7 +11,6 @@ import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
-import kotlin.test.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.extension.ExtendWith
 import org.mockito.BDDMockito.given
@@ -88,7 +87,17 @@ class TerminalAuthenticationInterceptorTest(@Autowired private val mockMvc: Mock
     }
 
     @Test
-    fun `limiter가 거절하면 429 RATE_LIMITED와 Retry-After이고 Controller에 닿지 않으며 INFO 한 줄에 토큰이 남지 않는다`(output: CapturedOutput) {
+    fun `형식은 맞지만 모르는 토큰이면 limiter를 부르지 않고 401이다`() {
+        get("Bearer ${"B".repeat(43)}").andExpect {
+            status { isUnauthorized() }
+            jsonPath("$.error.errorCode") { value("UNAUTHENTICATED") }
+        }
+
+        verifyNoInteractions(rateLimiter)
+    }
+
+    @Test
+    fun `limiter가 거절하면 429 RATE_LIMITED와 Retry-After이고 Controller에 닿지 않으며 advice는 로그를 남기지 않는다`(output: CapturedOutput) {
         val mark = output.all.length // 이 테스트가 낸 출력만 본다. 클래스 단위 캡처에는 앞 테스트의 출력도 남는다
         val reason = "scope=terminal terminalId=${terminal.terminalId.value} storeId=${terminal.storeId.value}"
         willThrow(RateLimitedException(2, reason)).given(rateLimiter).acquire(terminal)
@@ -103,12 +112,10 @@ class TerminalAuthenticationInterceptorTest(@Autowired private val mockMvc: Mock
         }
 
         assertEquals(0, InterceptorTestController.calls, "거절된 요청이 Controller에 닿았다")
+        // 거절 로그는 limiter가 scope별 10초에 한 줄로 남긴다. advice가 요청마다 남기면 Retry-After를 무시하는 단말이 로그를 요청 수만큼 늘린다.
         val logged = output.all.substring(mark)
-        val line = logged.lines().single { it.contains("errorCode=RATE_LIMITED") }
-        assertTrue(line.contains(" INFO "), "거절은 INFO여야 한다: $line")
-        assertTrue(line.contains(reason), "scope·terminalId·storeId가 로그에 없다: $line")
-        // 메시지가 이미 그 줄에 있으므로 예외를 cause로 붙여 예외 줄이 하나 더 찍히지 않게 한다.
-        assertFalse(logged.contains(RateLimitedException::class.java.name), "거절 로그에 예외 줄이 붙었다")
+        assertFalse(logged.contains("errorCode=RATE_LIMITED"), "advice가 429를 로그로 남겼다")
+        assertFalse(logged.contains(RateLimitedException::class.java.name), "예외 줄이 찍혔다")
         assertFalse(logged.contains(TOKEN), "토큰 값(Authorization 헤더 값)이 출력에 남았다")
     }
 }
