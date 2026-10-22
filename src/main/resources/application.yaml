@@ -86,6 +86,13 @@ spring:
     execution:
       # 커밋 뒤 리스너(Modulith externalizer 포함)가 도는 applicationTaskExecutor로 요청의 trace를 넘긴다. 기본값 false면 Kafka 전송 span이 새 trace로 끊긴다.
       propagate-context: true
+      pool:
+        # 큐가 무제한이면 외부화가 밀릴 때(브로커 정지, 외부화 상한을 넘는 부하) 큐가 힙을 채운다. 작업 하나가 약 16KB라
+        # 최대 힙(805MB)의 25% 안인 12,000에서 자른다. 넘친 작업은 버리고 재전송 작업이 다시 보낸다(PlatformConfiguration).
+        queue-capacity: 12000
+        # 큐에 상한을 두면 Boot는 큐가 찰 때 이 값까지 스레드를 늘린다(기본 무제한). 병목이 DB 커밋이라 늘려도 처리량이 늘지 않고
+        # HTTP와 커넥션을 다툰다(용량 기준 wiki). 코어(8)와 같게 둔다.
+        max-size: 8
     scheduling:
       pool:
         # 공용 스케줄러의 기본 스레드는 하나라 결과 불명 확정 작업이 길어지면 발행 기록 재전송과 Moments가 멈춘다. 실제 PG PR이 조회 타임아웃과 함께 다시 본다.
