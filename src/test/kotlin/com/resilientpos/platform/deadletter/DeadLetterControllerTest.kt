@@ -4,8 +4,8 @@ import com.resilientpos.foundation.DomainErrorKind
 import com.resilientpos.foundation.DomainException
 import com.resilientpos.platform.AdminSecurityFilterChain
 import com.resilientpos.platform.DependencyUnavailableException
+import com.resilientpos.terminal.MockTerminalRateLimiter
 import com.resilientpos.terminal.TerminalManagement
-import com.resilientpos.terminal.internal.adapter.redis.RedisTerminalRateLimiter
 import java.time.Instant
 import java.util.function.Consumer
 import kotlin.test.Test
@@ -53,6 +53,7 @@ import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
 @WebMvcTest(DeadLetterController::class)
 @AutoConfigureRestDocs
 @ExtendWith(OutputCaptureExtension::class)
+@MockTerminalRateLimiter
 class DeadLetterControllerTest(
     @Autowired private val mockMvc: MockMvc,
 ) {
@@ -66,9 +67,6 @@ class DeadLetterControllerTest(
     /** 슬라이스가 싣는 단말 인증 인터셉터의 의존성이다. 이 API는 단말을 쓰지 않는다. */
     @MockitoBean
     private lateinit var terminals: TerminalManagement
-
-    @MockitoBean
-    private lateinit var rateLimiter: RedisTerminalRateLimiter
 
     private val operator = jwt().jwt { it.subject(OPERATOR) }.authorities(SimpleGrantedAuthority(AdminSecurityFilterChain.OPERATOR_AUTHORITY))
 
