@@ -17,6 +17,8 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import org.springframework.beans.factory.annotation.Autowired
+import org.springframework.data.redis.connection.RedisStandaloneConfiguration
+import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory
 import org.springframework.data.redis.core.RedisCallback
 import org.springframework.data.redis.core.StringRedisTemplate
 
@@ -175,6 +177,34 @@ class RedisTerminalRateLimiterIntegrationTest(
         listOf(terminalKey(terminal) to 6_000L, storeKey(terminal) to 5_000L).forEach { (key, fillMillis) ->
             val ttl = checkNotNull(redis.getExpire(key, TimeUnit.MILLISECONDS))
             assertTrue(ttl in (fillMillis - 1_000)..fillMillis, "$key TTL이 범위 밖이다: $ttl")
+        }
+    }
+
+    @Test
+    fun `ACL이 스크립트 안의 쓰기 명령을 막으면 기동 검사가 기동을 멈춘다`() {
+        // 스크립트 안의 ACL 거부 문구는 Redis 버전마다 다르다. 단위 테스트의 문구 목록이 이 이미지의 실제 응답과 맞는지 본다.
+        val container = PostgresIntegrationTest.redis
+        val user = "rate-limit-no-hset-${UUID.randomUUID()}"
+        assertEquals("OK", container.execInContainer("redis-cli", "ACL", "SETUSER", user, "on", ">pw", "~*", "+@all", "-hset").stdout.trim())
+        val factory = LettuceConnectionFactory(
+            RedisStandaloneConfiguration(container.host, container.getMappedPort(6379)).apply {
+                username = user
+                setPassword("pw")
+            },
+        ).apply {
+            afterPropertiesSet()
+            start()
+        }
+        try {
+            val restricted = StringRedisTemplate(factory)
+            // 인증은 된다. 아래 실패가 WRONGPASS가 아니라 스크립트 안의 HSET 거부라는 뜻이다.
+            assertFalse(restricted.hasKey("rate-limit:{acl}:probe"))
+            val limiter = RedisTerminalRateLimiter(restricted, SimpleMeterRegistry(), Clock.systemUTC(), 1_000, 0.02, 1_000, 0.02)
+
+            assertFailsWith<IllegalStateException> { limiter.checkScriptAtStartup() }
+        } finally {
+            factory.destroy()
+            container.execInContainer("redis-cli", "ACL", "DELUSER", user)
         }
     }
 }

@@ -10,7 +10,9 @@ import java.time.Clock
 import java.time.Duration
 import java.time.Instant
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.ceil
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.core.NestedExceptionUtils
@@ -62,6 +64,12 @@ class RedisTerminalRateLimiter(
     /** 마지막 연결 계열 실패 시각. 그 뒤 [SKIP_AFTER_CONNECTION_FAILURE] 동안은 Redis를 부르지 않는다. */
     private val connectionFailedAt = AtomicLong(NEVER)
 
+    /** 창이 지난 뒤 Redis를 다시 불러 보는 요청(탐침)이 있는가. 탐침이 1초 넘게 걸려도 둘째 탐침이 겹치지 않는다. */
+    private val probing = AtomicBoolean(false)
+
+    /** 창을 연 실패와 같은 수준의 로그. 창 안에서 건너뛴 건수를 그 다음 줄에 적는다. */
+    private val windowLog = AtomicReference(warnLog)
+
     /**
      * 기동할 때 이 인스턴스만의 새 검사용 키로 스크립트를 한 번 돌리고 결과를 운영과 같은 함수로 읽는다. 새 bucket이라 반드시 통과 분기(HSET·PEXPIRE)까지
      * 돌아 쓰기 권한도 검사된다. 키를 pod끼리 나누면 비어 있는 bucket에서 거절 분기만 돌아 쓰기 권한 누락을 놓친다. Redis가 앱 쪽 설정 오류(권한·인증·스크립트·slot·타입)로
@@ -83,7 +91,7 @@ class RedisTerminalRateLimiter(
             throw IllegalStateException("Redis가 rate limit 스크립트를 거절했다. ACL·스크립트·Cluster slot을 확인한다: ${root.javaClass.simpleName}: ${root.message}", failure)
         }
         // 닿지 못한 채 뜨면 첫 요청들이 공유 연결 잠금에 줄을 서지 않게 창을 연 채로 시작한다.
-        if (opensSkipWindow(failure, root)) connectionFailedAt.set(clock.millis())
+        if (opensSkipWindow(failure, root)) openWindow(if (needsOperator(root)) errorLog else warnLog, clock.millis())
         log.warn { "기동 검사를 건너뛴다(Redis에 닿지 못하거나 Redis 쪽 상태 오류) cause=${root.javaClass.simpleName}: ${root.message}" }
     }
 
@@ -91,20 +99,26 @@ class RedisTerminalRateLimiter(
     fun acquire(terminal: AuthenticatedTerminal) {
         val now = clock.millis()
         val failedAt = connectionFailedAt.get()
-        // 창 안이면 건너뛴다. 창이 지났으면 compareAndSet에서 이긴 요청 하나만 Redis를 다시 불러 보고(탐침) 나머지는 계속 건너뛴다.
-        if (failedAt != NEVER && (now - failedAt in 0 until SKIP_AFTER_CONNECTION_FAILURE.toMillis() || !connectionFailedAt.compareAndSet(failedAt, now))) {
-            warnLog.skip()
+        val window = SKIP_AFTER_CONNECTION_FAILURE.toMillis()
+        // shortcut: 1초 창과 탐침 하나뿐인 차단기다. 실패율 집계가 없어 Redis가 돌아온 뒤 탐침이 성공할 때까지 보호가 없다. 창이 잦게 열리면 Resilience4j circuit breaker로 바꾼다.
+        // 창 안이면 건너뛴다. 1초 안의 음수 차이는 동시 요청의 기록 순서가 뒤바뀐 것이다. 창이 지났으면 탐침 하나만 Redis를 다시 부르고 탐침이 끝날 때까지 나머지는 건너뛴다.
+        if (failedAt != NEVER && (now - failedAt in -window until window || !probing.compareAndSet(false, true))) {
+            windowLog.get().skip()
             return
         }
-        val (rejected, waitMicros) = try {
-            verdict(redis.execute(ACQUIRE, keys(terminal.storeId.value.toString(), terminal.terminalId.value.toString()), *bucketArgs))
+        // 창이 열려 있었는데 여기까지 왔으면 이 요청이 탐침이다. 실패면 실패 시각을 기록한 뒤에 탐침을 끝낸다.
+        val result = try {
+            redis.execute(ACQUIRE, keys(terminal.storeId.value.toString(), terminal.terminalId.value.toString()), *bucketArgs)
         } catch (e: DataAccessException) {
-            return proceedUnlimited(terminal, e)
+            return proceedUnlimited(terminal, e, failedAt)
         } catch (e: IllegalStateException) {
-            return proceedUnlimited(terminal, e)
+            return proceedUnlimited(terminal, e, failedAt)
+        } finally {
+            if (failedAt != NEVER) probing.set(false)
         }
-        // 탐침이 성공했다. 평소에는 읽기만 해서 요청마다 쓰지 않는다.
-        if (connectionFailedAt.get() != NEVER) connectionFailedAt.set(NEVER)
+        // 탐침이 성공하면 창을 닫는다. 탐침이 아닌 요청의 늦은 성공이나, 탐침이 기다리는 동안 기록된 더 새 실패는 건드리지 않는다.
+        if (failedAt != NEVER) connectionFailedAt.compareAndSet(failedAt, NEVER)
+        val (rejected, waitMicros) = verdict(result)
         if (rejected == 0) return
         val scope = SCOPES[rejected - 1]
         rejectCounters.getValue(scope).increment()
@@ -121,15 +135,21 @@ class RedisTerminalRateLimiter(
      * `REJECT_COMMANDS`로 실패가 바로 나므로 장애 중 줄 수가 요청 수와 같아진다. 같은 수준은 10초에 한 줄만 남기고 그 사이 건수와 직전 시각을 적는다.
      * 연결 계열 실패면 [SKIP_AFTER_CONNECTION_FAILURE] 동안 Redis를 부르지 않는다. 한 번도 연결되지 못한 pod는 Spring 공유 연결의 잠금 안에서
      * 요청마다 connect timeout을 기다려 사실상 멈추고, Redis가 느리거나 단절되면 요청마다 timeout이 더해지기 때문이다. 설정 오류는 건너뛰지 않는다.
+     * [failedAt]은 이 요청이 탐침이면 탐침이 본 창의 실패 시각이고 아니면 [NEVER]다.
      */
-    // shortcut: 1초 창과 탐침 하나뿐인 차단기다. 실패율 집계가 없고 창 길이가 고정이라 Redis가 돌아온 뒤 최대 1초 보호가 없다. 창이 잦게 열리면 Resilience4j circuit breaker로 바꾼다.
-    private fun proceedUnlimited(terminal: AuthenticatedTerminal, e: RuntimeException) {
+    private fun proceedUnlimited(terminal: AuthenticatedTerminal, e: RuntimeException, failedAt: Long) {
         // 호출 전 시각이 아니라 실패를 본 시각이다. timeout(1초)으로 실패하면 호출 전 시각은 이미 1초 전이라 창이 바로 닫힌다.
         val now = clock.millis()
         val root = NestedExceptionUtils.getMostSpecificCause(e)
         val operator = needsOperator(root)
-        if (opensSkipWindow(e, root)) connectionFailedAt.set(now)
-        val logged = (if (operator) errorLog else warnLog).pass(now) ?: return
+        val level = if (operator) errorLog else warnLog
+        if (opensSkipWindow(e, root)) {
+            openWindow(level, now)
+        } else if (failedAt != NEVER) {
+            // 탐침이 명령 단계의 오류(설정 오류·OOM)를 받았다. Redis가 바로 답하므로 창을 닫아 건너뛰지 않는다.
+            connectionFailedAt.compareAndSet(failedAt, NEVER)
+        }
+        val logged = level.pass(now) ?: return
         val detail = "terminalId=${terminal.terminalId.value} storeId=${terminal.storeId.value} " +
             "cause=${root.javaClass.simpleName}: ${root.message} $logged"
         if (operator) {
@@ -137,6 +157,12 @@ class RedisTerminalRateLimiter(
         } else {
             log.warn { "제한 없이 통과시킨다(Redis 오류) $detail" }
         }
+    }
+
+    /** 창을 연다. 창을 여는 수준을 먼저 바꿔 둬야 창 안에서 건너뛴 건수가 그 수준의 줄로 간다. */
+    private fun openWindow(level: Throttle, at: Long) {
+        windowLog.set(level)
+        connectionFailedAt.set(at)
     }
 
     /** Redis가 오류로 답했고 그 오류가 기다려도 풀리지 않는가. 연결 실패·timeout·끊긴 동안의 거절은 Redis의 오류 응답이 아니다. */
@@ -214,7 +240,8 @@ class RedisTerminalRateLimiter(
         val CONFIG_REDIS_ERRORS = setOf("NOPERM", "NOAUTH", "WRONGPASS", "CROSSSLOT", "WRONGTYPE")
 
         /**
-         * 스크립트 오류와 막히거나 이름이 바뀐 명령. 스크립트 안에서 ACL에 막히거나 없는 명령을 부르면 NOPERM이 아니라 `ERR`로 온다(Redis 8.10 실측).
+         * 스크립트 오류와 막히거나 이름이 바뀐 명령. 스크립트 안에서 ACL에 막히거나 없는 명령을 부르면 NOPERM이 아니라 `ERR`로 온다.
+         * Redis 7.0·7.2·7.4·8.10에서 실측했고 스크립트 안 ACL 거부 문구만 7.0이 다르다.
          * 연결 수 초과(`ERR max number of clients`)는 여기에 들지 않는다.
          * Redis 7 미만의 `ERR Error running script`는 스크립트 안 쓰기의 OOM·READONLY까지 감싸 와서 넣지 않는다(Redis 7 이상이 배포 전제다).
          */
@@ -222,6 +249,7 @@ class RedisTerminalRateLimiter(
             "ERR user_script",
             "ERR Error compiling script",
             "ERR ACL failure in script",
+            "ERR The user executing the script can't run this command or subcommand",
             "ERR Unknown Redis command called from script",
             "ERR unknown command",
         )

@@ -183,6 +183,10 @@ class RedisTerminalRateLimiterTest {
         limiter.acquire(terminal)
 
         assertEquals(2, calls)
+        // 탐침이 실패해도 다음 창이 지나면 다시 부른다. 탐침 표시가 남으면 다음 탐침이 영영 없어 보호가 꺼진 채로 남는다.
+        clock.advanceMillis(1_000)
+        limiter.acquire(terminal)
+        assertEquals(3, calls)
     }
 
     @Test
@@ -226,12 +230,15 @@ class RedisTerminalRateLimiterTest {
     }
 
     @Test
-    fun `탐침이 성공하면 창을 닫아 다음 요청은 Redis를 부른다`() {
+    fun `탐침이 성공하면 창을 닫아 그 뒤로는 동시 요청도 Redis를 부른다`() {
         var calls = 0
-        val limiter = limiter(
+        lateinit var limiter: RedisTerminalRateLimiter
+        limiter = limiter(
             mock(StringRedisTemplate::class.java) {
                 calls++
                 if (calls == 1) throw RedisConnectionFailureException("Unable to connect to Redis")
+                // 창이 닫힌 뒤의 요청이 Redis를 기다리는 동안 다른 요청이 들어온다.
+                if (calls == 3) limiter.acquire(terminal)
                 listOf(0L, 0L)
             },
         )
@@ -241,7 +248,130 @@ class RedisTerminalRateLimiterTest {
 
         limiter.acquire(terminal)
 
-        assertEquals(3, calls)
+        // 창이 남으면 지난 창 때문에 요청마다 탐침이 되어 Redis는 한 번에 하나만 부르고 동시 요청은 제한 없이 통과한다.
+        assertEquals(4, calls)
+    }
+
+    @Test
+    fun `탐침이 1초 넘게 걸려도 끝날 때까지 다른 요청은 건너뛴다`() {
+        var calls = 0
+        lateinit var limiter: RedisTerminalRateLimiter
+        limiter = limiter(
+            mock(StringRedisTemplate::class.java) {
+                calls++
+                // 탐침이 connect timeout(1초)에 지연이 더해져 1.5초째 기다리는 동안 다른 요청이 들어온다.
+                if (calls == 2) {
+                    clock.advanceMillis(1_500)
+                    limiter.acquire(terminal)
+                }
+                throw RedisConnectionFailureException("Unable to connect to Redis")
+            },
+        )
+        limiter.acquire(terminal)
+        clock.advanceMillis(1_000)
+
+        limiter.acquire(terminal)
+
+        // 두 번째 탐침이 들면 미연결 pod의 공유 연결 잠금을 limiter가 쉬지 않고 쥔다.
+        assertEquals(2, calls)
+    }
+
+    @Test
+    fun `창이 열리기 전에 보낸 요청이 늦게 성공해도 창을 닫지 않는다`() {
+        var calls = 0
+        lateinit var limiter: RedisTerminalRateLimiter
+        limiter = limiter(
+            mock(StringRedisTemplate::class.java) {
+                calls++
+                when (calls) {
+                    // 이 요청이 Redis를 기다리는 동안 다른 요청이 연결 실패로 창을 연다.
+                    1 -> {
+                        limiter.acquire(terminal)
+                        listOf(0L, 0L)
+                    }
+                    2 -> throw RedisConnectionFailureException("Unable to connect to Redis")
+                    else -> listOf(0L, 0L)
+                }
+            },
+        )
+        limiter.acquire(terminal)
+
+        limiter.acquire(terminal)
+
+        // 늦게 온 성공은 탐침이 아니라 막 열린 창을 닫지 못한다.
+        assertEquals(2, calls)
+    }
+
+    @Test
+    fun `탐침이 창을 열지 않는 오류를 받으면 창을 닫아 그 뒤로는 동시 요청도 Redis를 부른다`() {
+        var calls = 0
+        lateinit var limiter: RedisTerminalRateLimiter
+        limiter = limiter(
+            mock(StringRedisTemplate::class.java) {
+                calls++
+                when (calls) {
+                    1 -> throw RedisConnectionFailureException("Unable to connect to Redis")
+                    2 -> throw RedisSystemException("Error in execution", RedisCommandExecutionException("NOPERM no permissions"))
+                    // 창이 닫힌 뒤의 요청이 Redis를 기다리는 동안 다른 요청이 들어온다.
+                    3 -> {
+                        limiter.acquire(terminal)
+                        listOf(0L, 0L)
+                    }
+                    else -> listOf(0L, 0L)
+                }
+            },
+        )
+        limiter.acquire(terminal)
+        clock.advanceMillis(1_000)
+        limiter.acquire(terminal)
+
+        limiter.acquire(terminal)
+
+        // 명령 단계의 설정 오류는 Redis가 바로 답하므로 건너뛰지 않는다. 창이 남으면 동시 요청은 건너뛴다.
+        assertEquals(4, calls)
+    }
+
+    @Test
+    fun `창 판정은 1초 안의 시계 차이는 건너뛰고 그보다 크게 뒤로 가면 바로 다시 불러 본다`() {
+        var calls = 0
+        val limiter = limiter(
+            mock(StringRedisTemplate::class.java) {
+                calls++
+                throw RedisConnectionFailureException("Unable to connect to Redis")
+            },
+        )
+        limiter.acquire(terminal)
+
+        // 시각을 읽은 직후 다른 요청이 실패 시각을 기록하면 차이가 조금 음수가 된다.
+        clock.advanceMillis(-1)
+        limiter.acquire(terminal)
+        assertEquals(1, calls)
+
+        // 크게 뒤로 간 시계를 기다리면 그만큼 Redis를 부르지 않아 보호가 꺼진다.
+        clock.advanceSeconds(-3_600)
+        limiter.acquire(terminal)
+        assertEquals(2, calls)
+    }
+
+    @Test
+    fun `창을 연 실패가 ERROR면 창 안에서 건너뛴 건수를 다음 ERROR 줄에 적는다`(output: CapturedOutput) {
+        val mark = output.all.length
+        val wrongPassword = RedisConnectionFailureException(
+            "Redis connection failed",
+            RedisConnectionException("Unable to connect", RedisCommandExecutionException("WRONGPASS invalid username-password pair")),
+        )
+        val limiter = limiter(redisThrowing(wrongPassword))
+
+        limiter.acquire(terminal)
+        repeat(3) { limiter.acquire(terminal) }
+        clock.advanceSeconds(10)
+        limiter.acquire(terminal)
+
+        val lines = output.limiterLines(mark)
+        assertEquals(2, lines.size, lines.joinToString("\n"))
+        assertContains(lines[1], "ERROR")
+        // 창 안에서 제한 없이 통과한 셋이 보호가 꺼진 규모로 같은 수준의 줄에 남는다.
+        assertContains(lines[1], "suppressedSinceLast=3")
     }
 
     @Test
@@ -351,8 +481,9 @@ class RedisTerminalRateLimiterTest {
             "ERR user_script:1: Script attempted to access nonexistent global variable",
             "ERR Error compiling script (new function): user_script:1: unexpected symbol near 'local'",
             "ERR unknown command 'EVALSHA', with args beginning with:",
-            // 스크립트 안에서 막힌 명령은 NOPERM이 아니라 이 문구로 온다(Redis 8.10 실측).
+            // 스크립트 안에서 막힌 명령은 NOPERM이 아니라 이 문구로 온다. 앞은 Redis 7.2 이상, 뒤는 7.0이다(실측).
             "ERR ACL failure in script: User app has no permissions to run the 'hset' command script: bcd81f92, on @user_script:23.",
+            "ERR The user executing the script can't run this command or subcommand script: bcd81f92, on @user_script:23.",
             "ERR Unknown Redis command called from script script: bcd81f92, on @user_script:1.",
         ).forEach { reply ->
             val limiter = limiter(redisThrowing(RedisSystemException("Error in execution", RedisCommandExecutionException(reply))))
