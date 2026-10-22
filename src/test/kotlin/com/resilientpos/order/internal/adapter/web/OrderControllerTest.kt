@@ -10,6 +10,7 @@ import com.resilientpos.order.OrderId
 import com.resilientpos.order.OrderStatus
 import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.AuthenticatedTerminal
+import com.resilientpos.terminal.MockTerminalRateLimiter
 import com.resilientpos.terminal.TerminalFixtures.AUTHORIZATION_HEADER
 import com.resilientpos.terminal.TerminalFixtures.BEARER
 import com.resilientpos.terminal.TerminalFixtures.TOKEN
@@ -47,6 +48,7 @@ import org.springframework.test.web.servlet.post
  * `POST /v1/orders` 웹 슬라이스. Facade는 [MockitoBean]으로 대체하고 HTTP 매핑·직렬화·오류 변환만 검사한다.
  * 문서화하는 사례는 assertion으로 먼저 검증한 같은 요청·응답으로 스니펫을 만든다.
  */
+@MockTerminalRateLimiter
 @WebMvcTest(OrderController::class)
 @AutoConfigureRestDocs
 class OrderControllerTest(

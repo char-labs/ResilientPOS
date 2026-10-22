@@ -1,5 +1,6 @@
 package com.resilientpos.platform
 
+import com.resilientpos.terminal.MockTerminalRateLimiter
 import com.resilientpos.terminal.TerminalManagement
 import kotlin.test.Test
 import org.springframework.beans.factory.annotation.Autowired
@@ -14,6 +15,7 @@ private const val DEMO_PAGE = "/terminal/index.html"
 /**
  * 시연 화면은 인증 없이 열리고 sync endpoint를 부른다. 운영 jar에 실려도 기본 프로필에서는 서빙되지 않아야 한다.
  */
+@MockTerminalRateLimiter
 @WebMvcTest(ApiAdviceTestController::class)
 class DemoPageHiddenByDefaultTest(@Autowired private val mockMvc: MockMvc) {
 
@@ -30,6 +32,7 @@ class DemoPageHiddenByDefaultTest(@Autowired private val mockMvc: MockMvc) {
     }
 }
 
+@MockTerminalRateLimiter
 @WebMvcTest(ApiAdviceTestController::class)
 @ActiveProfiles("demo")
 class DemoPageOpenInDemoProfileTest(@Autowired private val mockMvc: MockMvc) {

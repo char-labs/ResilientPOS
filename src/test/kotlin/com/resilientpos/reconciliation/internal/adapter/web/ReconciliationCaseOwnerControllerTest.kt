@@ -20,6 +20,7 @@ import com.resilientpos.reconciliation.ReconciliationQueryFacade
 import com.resilientpos.reconciliation.internal.domain.ReconciliationCase
 import com.resilientpos.store.StoreId
 import com.resilientpos.store.StoreManagement
+import com.resilientpos.terminal.MockTerminalRateLimiter
 import com.resilientpos.terminal.TerminalId
 import com.resilientpos.terminal.TerminalManagement
 import java.time.Instant
@@ -60,6 +61,7 @@ import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
  * 점주 대조 case API 웹 슬라이스. Facade는 [MockitoBean]으로 대체하고 HTTP 매핑·직렬화·validation·오류 변환·문서 계약만 검사한다.
  * 인증과 CSRF는 `TerminalOwnerControllerTest`와 같은 방식이다(UUID 문자열 principal, 운영과 같은 CSRF 쿠키·헤더).
  */
+@MockTerminalRateLimiter
 @WebMvcTest(ReconciliationCaseOwnerController::class)
 @AutoConfigureRestDocs
 class ReconciliationCaseOwnerControllerTest(

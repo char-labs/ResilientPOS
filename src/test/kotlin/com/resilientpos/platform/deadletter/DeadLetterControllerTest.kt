@@ -4,6 +4,7 @@ import com.resilientpos.foundation.DomainErrorKind
 import com.resilientpos.foundation.DomainException
 import com.resilientpos.platform.AdminSecurityFilterChain
 import com.resilientpos.platform.DependencyUnavailableException
+import com.resilientpos.terminal.MockTerminalRateLimiter
 import com.resilientpos.terminal.TerminalManagement
 import java.time.Instant
 import java.util.function.Consumer
@@ -52,6 +53,7 @@ import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
 @WebMvcTest(DeadLetterController::class)
 @AutoConfigureRestDocs
 @ExtendWith(OutputCaptureExtension::class)
+@MockTerminalRateLimiter
 class DeadLetterControllerTest(
     @Autowired private val mockMvc: MockMvc,
 ) {

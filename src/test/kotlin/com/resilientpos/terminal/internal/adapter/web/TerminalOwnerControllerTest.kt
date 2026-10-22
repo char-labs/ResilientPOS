@@ -10,6 +10,7 @@ import com.resilientpos.terminal.TerminalCode
 import com.resilientpos.terminal.TerminalCommand
 import com.resilientpos.terminal.TerminalId
 import com.resilientpos.terminal.TerminalManagement
+import com.resilientpos.terminal.internal.adapter.redis.RedisTerminalRateLimiter
 import com.resilientpos.terminal.TerminalQuery
 import com.resilientpos.terminal.TerminalQueryFacade
 import com.resilientpos.terminal.TerminalStatus
@@ -61,6 +62,9 @@ class TerminalOwnerControllerTest(
 
     @MockitoBean
     private lateinit var management: TerminalManagement
+
+    @MockitoBean
+    private lateinit var rateLimiter: RedisTerminalRateLimiter
 
     @MockitoBean
     private lateinit var queryFacade: TerminalQueryFacade

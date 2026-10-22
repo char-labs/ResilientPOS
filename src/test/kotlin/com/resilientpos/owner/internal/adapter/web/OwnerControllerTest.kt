@@ -8,6 +8,7 @@ import com.resilientpos.owner.OwnerManagement
 import com.resilientpos.owner.internal.domain.Owner
 import com.resilientpos.platform.UnauthenticatedException
 import com.resilientpos.platform.withCsrf
+import com.resilientpos.terminal.MockTerminalRateLimiter
 import com.resilientpos.terminal.TerminalManagement
 import java.util.UUID
 import kotlin.test.Test
@@ -55,6 +56,7 @@ import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
  * 점주 가입·로그인·로그아웃·CSRF 토큰 웹 슬라이스. Facade는 [MockitoBean]으로 대체하고 HTTP 매핑·세션·CSRF·오류 변환·문서 계약만 검사한다.
  * 실제 Redis 세션 저장소와 세션 ID 교체는 `OwnerAuthenticationIntegrationTest`가 본다.
  */
+@MockTerminalRateLimiter
 @WebMvcTest(OwnerController::class)
 @AutoConfigureRestDocs
 @ExtendWith(OutputCaptureExtension::class)

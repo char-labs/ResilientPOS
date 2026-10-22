@@ -429,3 +429,37 @@ tests:
       - eval_time: 15m
         alertname: OwnerSessionStoreUnavailable
         exp_alerts: []
+
+  - name: 매장 bucket 거절이 5분 넘게 이어지면 울린다
+    interval: 1m
+    input_series:
+      - series: inbound_rate_limited_total{application="ResilientPOS", scope="store", instance="a"}
+        values: 0+5x20
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: InboundStoreRateLimited
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: InboundStoreRateLimited
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "매장 단위 빈도 상한 거절이 5분 넘게 이어진다"
+              runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#inboundstoreratelimited
+
+  - name: 짧은 매장 거절과 이어지는 단말 거절은 울리지 않는다
+    interval: 1m
+    input_series:
+      - series: inbound_rate_limited_total{application="ResilientPOS", scope="store", instance="a"}
+        values: 0 0 3 6 6x20
+      # 오래 오프라인이던 단말의 backlog 회복은 단말 bucket 거절을 길게 이어 가도 정상이다.
+      - series: inbound_rate_limited_total{application="ResilientPOS", scope="terminal", instance="a"}
+        values: 0+50x20
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: InboundStoreRateLimited
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: InboundStoreRateLimited
+        exp_alerts: []

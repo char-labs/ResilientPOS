@@ -47,12 +47,13 @@ spring:
   data:
     redis:
       # 쓰는 곳: (1) 결제 시도 생성·주문 생성의 중복 완화 잠금과 발행 기록 재전송·결과 불명 확정 작업의 pod 간 줄 세우기(platform.Lock),
-      # (2) 점주 세션(Spring Session), (3) 점주 로그인 실패 카운터. 정합성의 정본은 DB다.
-      # 세션은 필수다. Redis가 죽으면 점주 요청(/owner)이 실패하고 단말 경로(/v1)는 영향이 없다.
+      # (2) 점주 세션(Spring Session), (3) 점주 로그인 실패 카운터, (4) 단말·매장 빈도 상한(RedisTerminalRateLimiter). 정합성의 정본은 DB다.
+      # 세션은 필수다. Redis가 죽으면 점주 요청(/owner)이 실패하고 단말 경로(/v1)는 막히지 않는다(잠금과 빈도 상한은 fail-open).
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
-      # 잠금은 Redis가 느리거나 없으면 잠금 없이 진행한다(fail-open). 기본 60초를 기다리면 그동안 결제와 주문 생성이 멈춘다.
+      # 잠금과 빈도 상한은 Redis가 느리거나 없으면 그것 없이 진행한다(fail-open). 기본 60초를 기다리면 그동안 결제와 주문 생성, 단말 요청이 멈춘다.
       # 세션과 로그인 실패 카운터는 fail-closed다. 이 시간 안에 응답이 없으면 그 점주 요청은 503이고, 로그인은 비밀번호를 비교하지 않는다.
+      # 연결이 끊긴 것을 Lettuce가 아는 동안에는 이 시간을 기다리지 않고 명령을 바로 거절한다. 응답 없는 명령은 1000개까지만 받는다(PlatformConfiguration).
       timeout: 1s
       connect-timeout: 1s
   web:
@@ -155,6 +156,16 @@ resilientpos:
     # 조회 결과가 불명인 채로 이 횟수에 닿으면 시도를 reconciliation case로 넘기고 더 조회하지 않는다. 기본 간격에서 약 1시간이다.
     # 실제 PG를 근거로 삼지 못해 "결과 불명이 1시간 넘게 이어지면 사람이 본다"에 맞춘 값이다. 간격을 바꾸면 이 값이 뜻하는 시간도 바뀐다.
     unknown-query-limit: 60
+  rate-limit:
+    # 인증된 /v1 요청의 단말·매장 token bucket(RedisTerminalRateLimiter). capacity는 쉬었다 온 단말이 바로 보낼 수 있는 요청 수,
+    # refill-per-second는 그 뒤로 이어 보낼 수 있는 초당 요청 수다. 매장 값은 그 매장 단말 전부의 합에 걸린다.
+    # #77 k6 실측으로 정한 값이다. 매장 단말 4대를 전제로 매장 capacity가 4 × 단말 capacity다. 근거는 inbound-rate-limit spec 결정 8.
+    terminal:
+      capacity: 10
+      refill-per-second: 2
+    store:
+      capacity: 40
+      refill-per-second: 8
   kafka:
     # 이름은 저장 형식이다. 이벤트 클래스의 TOPIC 상수와 같아야 한다(KafkaConfiguration).
     topics: order.payment-requested,payment.attempt-created,payment.approved,order.paid,payment.reconciliation-requested
@@ -183,8 +194,8 @@ management:
         enabled: false
   health:
     redis:
-      # 켜면 Redis 장애에 모든 pod의 readiness가 빠져 Redis를 쓰지 않는 단말 핫패스(/v1)까지 막힌다. 점주 요청만 실패하는 편이 낫다.
-      # 잠금은 fail-open이라 결제와 주문 생성은 Redis 없이도 계속된다. 세션과 로그인 카운터는 fail-closed라 점주 요청만 503이다.
+      # 켜면 Redis 장애에 모든 pod의 readiness가 빠져 Redis 없이도 도는 단말 핫패스(/v1)까지 막힌다. 점주 요청만 실패하는 편이 낫다.
+      # 잠금과 빈도 상한은 fail-open이라 결제와 주문 생성, 단말 요청은 Redis 없이도 계속된다. 세션과 로그인 카운터는 fail-closed라 점주 요청만 503이다.
       enabled: false
   endpoints:
     web:
@@ -200,6 +211,13 @@ management:
       percentiles-histogram:
         # 기본값은 _count·_sum·_max뿐이라 p95를 계산할 수 없다. bucket을 내보내 histogram_quantile로 구한다.
         http.server.requests: true
+
+logging:
+  level:
+    # Redis의 응답 없는 명령이 queue 상한(PlatformConfiguration)을 채우면 Lettuce가 거절마다 스택이 붙은 WARN
+    # ("Unexpected exception during request")을 이 로거로 남긴다. 이 로거의 WARN은 그 한 종류뿐이고, 실패는 호출자(빈도 상한·세션·잠금)가
+    # 이미 남긴다. 그대로 두면 단절 동안 로그 양이 Redis 명령 수와 같아진다. Lettuce를 올리면 이 로거가 남기는 WARN 종류를 다시 본다.
+    io.lettuce.core.protocol.DefaultEndpoint: ERROR
 
 # 구조화 로그는 여기 적지 않는다. 배포 환경에서 LOGGING_STRUCTURED_FORMAT_CONSOLE=ecs를 주면
 # stdout이 한 줄에 JSON 객체 하나가 되어 Loki(Alloy)가 필드로 읽는다. 기본값은 사람이 읽는 평문이다.

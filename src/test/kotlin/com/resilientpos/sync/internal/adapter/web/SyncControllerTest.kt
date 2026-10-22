@@ -11,6 +11,8 @@ import com.resilientpos.sync.internal.domain.CheckoutPayload
 import com.resilientpos.sync.internal.domain.OperationPayload
 import com.resilientpos.sync.internal.domain.OrderPayload
 import com.resilientpos.terminal.AuthenticatedTerminal
+import com.resilientpos.terminal.MockTerminalRateLimiter
+import com.resilientpos.terminal.rejectByRateLimit
 import com.resilientpos.terminal.TerminalFixtures.AUTHORIZATION_HEADER
 import com.resilientpos.terminal.TerminalFixtures.BEARER
 import com.resilientpos.terminal.TerminalFixtures.TOKEN
@@ -21,14 +23,18 @@ import java.util.UUID
 import kotlin.test.Test
 import org.junit.jupiter.api.BeforeEach
 import org.mockito.BDDMockito.given
+import org.mockito.BDDMockito.willThrow
 import org.mockito.Mockito.verify
 import org.mockito.Mockito.verifyNoInteractions
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.restdocs.test.autoconfigure.AutoConfigureRestDocs
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest
+import org.springframework.context.ApplicationContext
 import org.springframework.http.MediaType
 import org.springframework.restdocs.mockmvc.MockMvcRestDocumentation.document
 import org.springframework.restdocs.mockmvc.RestDocumentationRequestBuilders.post
+import org.springframework.restdocs.headers.HeaderDocumentation.headerWithName
+import org.springframework.restdocs.headers.HeaderDocumentation.responseHeaders
 import org.springframework.restdocs.payload.FieldDescriptor
 import org.springframework.restdocs.payload.JsonFieldType
 import org.springframework.restdocs.payload.PayloadDocumentation.fieldWithPath
@@ -48,10 +54,12 @@ import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
  * `POST /v1/terminals/{terminalId}/sync` 웹 슬라이스. Facade는 [MockitoBean]으로 대체하고 HTTP 매핑·직렬화·오류 변환만 검사한다.
  * 경로 변수를 문서화하려면 URL 템플릿이 필요해서 Kotlin DSL 대신 REST Docs의 request builder를 쓴다.
  */
+@MockTerminalRateLimiter
 @WebMvcTest(SyncController::class)
 @AutoConfigureRestDocs
 class SyncControllerTest(
     @Autowired private val mockMvc: MockMvc,
+    @Autowired private val context: ApplicationContext,
 ) {
 
     @MockitoBean
@@ -167,6 +175,37 @@ class SyncControllerTest(
             .andExpect(header().string("WWW-Authenticate", "Bearer"))
             .andExpect(jsonPath("$.result").value("FAIL"))
             .andExpect(jsonPath("$.error.errorCode").value("UNAUTHENTICATED"))
+
+        verifyNoInteractions(facade)
+    }
+
+    @Test
+    fun `limiter가 거절하면 429 RATE_LIMITED와 Retry-After이고 Facade를 부르지 않는다`() {
+        context.rejectByRateLimit(AuthenticatedTerminal(TerminalId(UUID.fromString(TERMINAL_ID)), StoreId(UUID.fromString(STORE_ID))), retryAfterSeconds = 2)
+
+        postBatch(requestJson(operationJson(OPERATION_ID_1, 1)))
+            .andExpect(status().isTooManyRequests)
+            .andExpect(header().string("Retry-After", "2"))
+            .andExpect(jsonPath("$.result").value("FAIL"))
+            .andExpect(jsonPath("$.data").value(null))
+            .andExpect(jsonPath("$.error.errorCode").value("RATE_LIMITED"))
+            .andExpect(jsonPath("$.error.message").value("요청이 많아 잠시 후 다시 시도해 주세요."))
+            .andDo(
+                document(
+                    "sync-receive-batch-rate-limited",
+                    AUTHORIZATION_HEADER, PATH_PARAMETERS,
+                    requestFields(REQUEST_FIELDS),
+                    responseHeaders(
+                        headerWithName("Retry-After").description("다시 보내기까지 기다릴 정수 초(1 이상). 같은 요청을 이 초에 0~1초 jitter를 더한 뒤 그대로 다시 보낸다"),
+                    ),
+                    responseFields(
+                        fieldWithPath("result").type(JsonFieldType.STRING).description("FAIL"),
+                        fieldWithPath("data").type(JsonFieldType.NULL).description("실패 응답에서는 null"),
+                        fieldWithPath("error.errorCode").type(JsonFieldType.STRING).description("RATE_LIMITED. 단말이나 매장의 요청 빈도가 상한을 넘었다. 어느 쪽인지는 구분하지 않는다"),
+                        fieldWithPath("error.message").type(JsonFieldType.STRING).description("사람이 읽는 설명"),
+                    ),
+                ),
+            )
 
         verifyNoInteractions(facade)
     }

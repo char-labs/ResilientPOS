@@ -2,6 +2,7 @@ package com.resilientpos.platform
 
 import com.resilientpos.foundation.DomainErrorKind
 import com.resilientpos.foundation.DomainException
+import com.resilientpos.terminal.MockTerminalRateLimiter
 import com.resilientpos.terminal.TerminalManagement
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -33,6 +34,7 @@ import org.springframework.web.bind.annotation.RestController
  * 공개 endpoint가 아직 없어서 테스트 전용 Controller로 응답 envelope와 오류 변환 계약을 고정한다.
  */
 @ExtendWith(OutputCaptureExtension::class)
+@MockTerminalRateLimiter
 @WebMvcTest(ApiAdviceTestController::class)
 class ApiAdviceTest(@Autowired private val mockMvc: MockMvc) {
 

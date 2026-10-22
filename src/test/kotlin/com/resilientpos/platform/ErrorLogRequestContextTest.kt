@@ -4,6 +4,7 @@ import ch.qos.logback.classic.Level
 import ch.qos.logback.classic.Logger
 import ch.qos.logback.classic.spi.ILoggingEvent
 import ch.qos.logback.core.read.ListAppender
+import com.resilientpos.terminal.MockTerminalRateLimiter
 import com.resilientpos.terminal.TerminalManagement
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
@@ -22,6 +23,7 @@ import org.springframework.test.web.servlet.post
  * 오류 로그 한 줄만으로 어떤 요청이었는지 특정할 수 있어야 한다.
  * 형식을 눈으로 보고 넘어가면 다음 변경이 조용히 지우므로 실제 로그를 가로채서 확인한다.
  */
+@MockTerminalRateLimiter
 @WebMvcTest(ApiAdviceTestController::class)
 class ErrorLogRequestContextTest(@Autowired private val mockMvc: MockMvc) {
 
