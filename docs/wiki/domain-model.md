@@ -70,7 +70,7 @@ Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰�
 | `Store` | policy 버전 | 정책을 바꿀 때 새 버전 행이 함께 커밋되지 않으면 이미 발행된 checkout이 가리키는 버전이 없어진다 |
 | `Fulfillment`, `ReceiptDelivery` | 없음(단독 루트) | natural key 한 건이면 충분하다 |
 
-지금 있는 JPA 엔티티 13개의 역할·참조 관계·UX 흐름별 동작은 [엔티티 지도](entity-map.md)에 있다. 자식 엔티티는 루트를 통해서만 만들고 바꾼다. 다른 aggregate의 사실(예: 결제 승인)이 필요하면 자식으로 끌어오지 않고 이벤트로 받는다. 한 컨텍스트에 루트가 여럿일 수 있다(`fulfillment`). 루트 하나가 곧 컨텍스트는 아니다.
+지금 있는 JPA 엔티티 14개의 역할·참조 관계·UX 흐름별 동작은 [엔티티 지도](entity-map.md)에 있다. 자식 엔티티는 루트를 통해서만 만들고 바꾼다. 다른 aggregate의 사실(예: 결제 승인)이 필요하면 자식으로 끌어오지 않고 이벤트로 받는다. 한 컨텍스트에 루트가 여럿일 수 있다(`fulfillment`). 루트 하나가 곧 컨텍스트는 아니다.
 
 ## 3. 유비쿼터스 언어 용어집
 
@@ -148,7 +148,7 @@ Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰�
   - **재시도는 blocking이고 허용 목록이다.** 잠금 대기 초과·쿼리 타임아웃·트랜잭션 시간 초과·unique 경합, 그리고 처리 도중 DB 연결이 끊겨 롤백까지 실패한 경우(`JpaSystemException`·`TransactionSystemException`으로 온다)는 같은 자리에서 1초에서 2배씩 5회(합계 약 31초, `resilientpos.kafka.retry.*`) 다시 시도하고, DB에 닿지 못하는 실패(커넥션 획득 실패·연결 끊김)는 횟수 없이 30초 간격까지 늘려 기다린다. 그동안 같은 파티션의 뒤 메시지는 기다린다. 경합 재시도가 모두 실패하면 `원토픽.DLT`로(key로 파티션을 정해) 보내고 offset을 넘긴다. 목록 밖의 예외(`DomainException`, 변환 실패, 버그)는 다시 해도 같은 결과라 바로 DLT로 간다. **파티션 안의 순서는 전송 순서다.** externalizer가 비동기라 같은 주문의 두 이벤트가 커밋 순서와 다르게 전송될 수 있으므로 consumer는 순서에 기대지 않고 멱등으로 견딘다. `PAYMENT_APPROVAL_MISMATCH`의 case 자리가 발행 기록에서 `payment.approved.DLT`로 옮겨졌다.
   - DLT 전송 자체가 실패하면 재시도 상태가 처음으로 돌아가 같은 메시지를 다시 처리한다(메시지를 버리지 않는다). 그때 ERROR 로그와 `event_kafka_dead_letter_failed_total{topic}`이 남는다. 복제 수는 설정하지 않으면 브로커 기본값을 따르고, 한 번의 poll은 최대 50건이며(`max-poll-records`), 기동 때 브로커에 닿지 못하면 앱이 뜨지 않는다(`admin.fail-fast`).
   - **DLT 재투입.** 원인을 고친 뒤 플랫폼 운영자가 `/admin` API로 DLT의 메시지를 원 토픽에 다시 넣는다. consumer가 멱등이라 다시 넣어도 결과는 하나다([platform-operator-dlt-redrive](../spec/2026-10-21-platform-operator-dlt-redrive.md)).
-    1. `GET /admin/v1/dead-letters?topic=order.paid.DLT&partition=0&fromOffset=0&limit=50`으로 메시지를 고른다. 항목에 key, 값, 원 토픽·partition·offset, 원인 예외, `schemaVersion`, 재투입 기록이 있다. 설정된 DLT 토픽만 읽고 consumer group의 offset을 바꾸지 않는다. 다음 쪽은 마지막 `offset + 1`이다.
+    1. `GET /admin/v1/dead-letters?topic=order.paid.DLT&partition=0&fromOffset=0&limit=50`으로 메시지를 고른다. 항목에 key, 값, 원 토픽·partition·offset, 원인 예외, `schemaVersion`, 재투입 기록, 폐기 기록이 있다. 설정된 DLT 토픽만 읽고 consumer group의 offset을 바꾸지 않는다. 다음 쪽은 마지막 `offset + 1`이다.
     2. `POST /admin/v1/dead-letters/{topic}/{partition}/{offset}/redrive`에 사유(`reason`)를 실어 한 건씩 넣는다. 같은 key와 값 바이트를 원 토픽에 보내고, 넣은 자리·운영자(`sub`)·사유를 `t_dead_letter_redrive`에 남긴다. 같은 레코드(좌표와 레코드 시각)를 다시 요청하면 다시 보내지 않고 처음 기록을 돌려준다. DLT 토픽을 다시 만들어 offset이 재사용돼도 레코드 시각이 달라 새 메시지로 본다. 동시 요청의 진 쪽처럼 보냈는데 기록이 남지 않으면 WARN 감사 줄(`DEAD_LETTER_REDRIVE_UNRECORDED`)이 행위자를 남긴다.
     3. 넣기 전에 지금 코드로 값을 읽어 본다. 아는 것보다 높은 `schemaVersion`이나 모르는 enum 값이면 `422 DEAD_LETTER_NOT_READABLE`이고 아무것도 보내지 않는다([이벤트 계약](event-contract.md) 8절). 롤링 배포 중이면 요청을 받은 pod만 확인하므로, 그 버전을 아는 코드가 모든 pod에 배포됐는지는 운영자가 본다.
     4. 원인이 남아 있으면 넣은 메시지가 다시 DLT로 간다. 새 DLT 레코드의 `kafka_dlt-original-offset`이 재투입 기록의 넣은 offset과 같아 목록에서 이어 볼 수 있다.
@@ -194,7 +194,7 @@ Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰�
   - 지난 주기에 읽은 마지막 `id` 다음부터 읽고(pod 메모리의 keyset 커서), 100건보다 적게 읽히면 다음 주기는 처음부터 읽는다. 그래서 영영 불명인 건이 100건을 넘어도 새 건은 늦어도 `ceil(불명 건수 / 100)` 주기 안에 조회된다. 커서는 pod마다 따로이고 재기동하면 처음부터다. 조회가 겹치거나 늦어질 뿐 정합성에는 닿지 않는다.
   - 한 건이 던지면 ERROR 로그를 남기고 다음 건으로 간다.
   - 조회 횟수가 상한(`resilientpos.payment.unknown-query-limit`, 60)에 닿거나 조회가 다른 금액의 승인을 알려 주면 그 시도를 reconciliation case로 넘긴다. 넘김과 `PaymentReconciliationRequested` 발행이 같은 커밋이다. 넘긴 시도는 대상 조회가 고르지 않는다(§2, [payment-reconciliation-case](../spec/2026-10-20-payment-reconciliation-case.md)).
-  - 주기마다 결과 불명 승인 시도 수와 그중 넘긴 시도 수를 세어 gauge `payment.attempt.unknown`과 `payment.attempt.reconciliation.pending`에 둔다(observability).
+  - 주기마다 결과 불명 승인 시도 수와 그중 넘긴 시도 수를 세어 gauge `payment.attempt.unknown`과 `payment.attempt.reconciliation.pending`에 두고, 넘기지 않은 시도 가운데 가장 오래된 것의 나이와 넘긴 시도 가운데 가장 이른 넘긴 시각부터의 나이를 `payment.attempt.resolution.oldest`·`payment.attempt.reconciliation.pending.oldest`에 둔다(observability). 알림은 나이로 건다.
 - `event_publication`의 인덱스는 V004가 만든 두 개(`serialized_event` hash, `completion_date`)와 V009의 `status`다. `status` 인덱스는 재전송 작업과 Modulith가 매분 status로 거르는 조회(`countByStatus`, `findFailedPublications`)를 위한 것이고, Modulith가 파라미터로 거는 조회의 generic plan에서도 쓰이도록 partial이 아닌 전체 인덱스로 두었다(실측은 [event-publication-resubmit](../spec/2026-09-29-event-publication-resubmit.md) 스키마 변경 검토).
 - `event_publication`은 테이블·컬럼 이름을 Modulith의 JPA 엔티티가 정한다. `t_` 접두어 규칙과 `BaseEntity` 공통 컬럼의 예외다. 엔티티가 라이브러리 안에 있어서 바꿀 수 없다. 스키마는 같은 버전 JDBC 모듈의 공식 PostgreSQL 스키마를 기준으로 Flyway 마이그레이션에 직접 쓴다. JPA가 `validate`라서 Modulith를 올릴 때 엔티티의 컬럼이 바뀌었는지 확인하고 마이그레이션을 함께 넣어야 한다([event-publication-registry](../spec/2026-09-21-event-publication-registry.md)).
 - **Modulith 버전을 올리는 PR의 절차.** 라이브러리는 이 테이블을 만들어 주지 않는다. JPA 모듈에는 스키마 SQL이 없고 스키마의 소유자는 Flyway다.
