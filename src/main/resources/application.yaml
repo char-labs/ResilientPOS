@@ -108,8 +108,9 @@ spring:
       # 기본값 latest면 consumer가 파티션을 받기 전에 들어온 메시지를 건너뛴다. 처음 뜬 group도 처음부터 읽는다.
       auto-offset-reset: earliest
       # 기본값 500이면 레코드 처리가 느려질 때(DB가 느리거나 provider 호출) 한 poll의 처리가 max.poll.interval.ms(300초)를
-      # 넘어 group에서 쫓겨나고 배치 전체가 다시 처리된다. 레코드 최대 처리 시간 × 이 값이 300초보다 충분히 작아야 한다.
-      max-poll-records: 50
+      # 넘어 group에서 쫓겨나고 배치 전체가 다시 처리된다. 레코드 최대 처리 시간 × 이 값이 300초의 절반 아래여야 한다.
+      # 승인 consumer의 최대는 provider deadline 3초 + provider 밖 처리 최대 0.7초(부하 측정)라 3.7초 × 40 = 148초다(용량 기준 wiki).
+      max-poll-records: 40
     admin:
       # 기동할 때 브로커에 닿지 못하면 앱을 띄우지 않는다. 끄면 토픽 없이 떠서 consumer가 조용히 논다.
       fail-fast: true
