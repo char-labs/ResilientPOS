@@ -23,7 +23,7 @@
 
 ## EventPublicationOverdue
 
-- **뜻.** 완료되지 않은 발행 기록 가운데 가장 오래된 것(`event_publication_incomplete_oldest_seconds`)이 1시간을 넘었다. 재전송 작업이 1분마다 다시 보내므로 브로커가 살아 있으면 저절로 나간다. 브로커 장애가 이어지거나, 영영 나가지 못하는 기록이 있다는 뜻이다. 나이는 행이 `FAILED`와 `RESUBMITTED`를 오가도 계속 늘어서, `failed` 개수가 잠깐 0이 되어도 이 알림은 끊기지 않는다.
+- **뜻.** 완료되지 않은 발행 기록 가운데 가장 오래된 것(`event_publication_incomplete_oldest_seconds`)이 1시간을 넘었다. 재전송 작업이 1분마다 다시 보내므로 브로커가 살아 있으면 저절로 나간다. 브로커 장애가 이어지거나, 영영 나가지 못하는 기록이 있다는 뜻이다. 경과 시간은 행이 `FAILED`와 `RESUBMITTED`를 오가도 계속 늘어서, `failed` 개수가 잠깐 0이 되어도 이 알림은 끊기지 않는다.
 - **먼저 볼 것.**
   1. `max(event_publication_incomplete_oldest_seconds)`가 줄었다가 다시 오르면 새 기록은 나가고 있다. 계속 오르면 같은 기록이 막혀 있다. `max(event_publication_incomplete{status="failed"})`로 막힌 양을 본다.
   2. [EventPublicationResubmitterNotSucceeding](#eventpublicationresubmitternotsucceeding)이 함께 울렸으면 그 절부터 본다.
@@ -35,7 +35,7 @@
 
 ## EventPublicationMetricStale
 
-- **뜻.** 그 인스턴스가 5분 넘게 발행 기록을 세지 못했다(갱신 주기 1분). 세지 못한 인스턴스는 개수를 내리고 나이를 `NaN`으로 내므로 [EventPublicationOverdue](#eventpublicationoverdue)가 그 인스턴스의 값을 보지 못한다. 모든 인스턴스가 막히면 발행 지연 알림이 해소된 것처럼 풀린다.
+- **뜻.** 그 인스턴스가 5분 넘게 발행 기록을 세지 못했다(갱신 주기 1분). 세지 못한 인스턴스는 개수를 내리고 경과 시간을 `NaN`으로 내므로 [EventPublicationOverdue](#eventpublicationoverdue)가 그 인스턴스의 값을 보지 못한다. 모든 인스턴스가 막히면 발행 지연 알림이 해소된 것처럼 풀린다.
 - **먼저 볼 것.** 그 인스턴스의 WARN `발행 기록을 세지 못해 개수를 내리고 이번 갱신을 건너뛴다`와 예외, Hikari 대기(`hikaricp_connections_pending`), DB 상태.
 - **조치.** DB나 커넥션 문제를 고친다. 다음 갱신에 `event_publication_incomplete_refreshed_seconds`가 다시 움직이면 풀린다.
 
@@ -76,7 +76,7 @@
 
 ## UnknownPaymentResolverNotSucceeding
 
-- **뜻.** 그 인스턴스의 결과 불명 확정 작업(`UnknownPaymentResolver.resolveUnknown`)이 20분 안팎 동안 한 번도 성공하지 못했다. 결과 불명 결제가 확정되지 않고, 개수 gauge(`payment_attempt_unknown`·`payment_attempt_reconciliation_pending`)와 나이 gauge(`payment_attempt_resolution_oldest_seconds`·`payment_attempt_reconciliation_pending_oldest_seconds`)가 마지막 성공값에 멈춘다. 모든 인스턴스가 멈추면 나이가 늘지 않아 [UnknownPaymentResolutionStuck](#unknownpaymentresolutionstuck)이 늦게 울리거나 울리지 않는다. 한 건의 실패는 작업을 실패시키지 않는다(ERROR 로그만 남긴다). 실패는 대상 조회나 개수 세기가 던진 경우다.
+- **뜻.** 그 인스턴스의 결과 불명 확정 작업(`UnknownPaymentResolver.resolveUnknown`)이 20분 안팎 동안 한 번도 성공하지 못했다. 결과 불명 결제가 확정되지 않고, 개수 gauge(`payment_attempt_unknown`·`payment_attempt_reconciliation_pending`)와 경과 시간 gauge(`payment_attempt_resolution_oldest_seconds`·`payment_attempt_reconciliation_pending_oldest_seconds`)가 마지막 성공값에 멈춘다. 모든 인스턴스가 멈추면 경과 시간이 늘지 않아 [UnknownPaymentResolutionStuck](#unknownpaymentresolutionstuck)이 늦게 울리거나 울리지 않는다. 한 건의 실패는 작업을 실패시키지 않는다(ERROR 로그만 남긴다). 실패는 대상 조회나 개수 세기가 던진 경우다.
 - **먼저 볼 것.** `tasks_scheduled_execution_seconds_count{code_function="resolveUnknown"}`의 `outcome="ERROR"`와 `exception`, 스케줄러 ERROR 로그, DB 상태.
 - **조치.** 원인(DB)을 고친다. 다음 주기(1분)에 성공하면 풀린다.
 
@@ -91,14 +91,14 @@
 
 ## UnknownPaymentResolutionStuck
 
-- **뜻.** reconciliation으로 넘기지 않은 결과 불명 승인 시도 가운데 가장 오래된 것이 만들어진 지 2시간이 넘었다(`payment_attempt_resolution_oldest_seconds`, 시도의 `created_at`부터). 정상이면 한 건은 조회 상한 60회(약 1시간) 안에 확정되거나 넘어간다. 작업이 멈췄거나, 조회나 확정이 건마다 실패하고 있다. 나이는 DB에서 다시 세므로 재기동해도 첫 갱신 뒤 5분이면 다시 운다. pod가 하나면 재기동하는 동안 잠깐 풀렸다가 다시 운다.
+- **뜻.** reconciliation으로 넘기지 않은 결과 불명 승인 시도 가운데 가장 오래된 것이 만들어진 지 2시간이 넘었다(`payment_attempt_resolution_oldest_seconds`, 시도의 `created_at`부터). 정상이면 한 건은 조회 상한 60회(약 1시간) 안에 확정되거나 넘어간다. 작업이 멈췄거나, 조회나 확정이 건마다 실패하고 있다. 경과 시간은 DB에서 다시 세므로 재기동해도 첫 갱신 뒤 5분이면 다시 운다. pod가 하나면 재기동하는 동안 잠깐 풀렸다가 다시 운다.
 - **먼저 볼 것.** [UnknownPaymentResolverNotSucceeding](#unknownpaymentresolvernotsucceeding)이 함께 울렸는지. `max(payment_attempt_unknown) - max(payment_attempt_reconciliation_pending)`로 몇 건인지. ERROR `결과 불명 결제 확정에 실패했다 paymentId=…`(건마다 실패), WARN `조회로도 결과를 확인하지 못했다 … queryCount=…`의 `queryCount`가 오르는지(조회는 돌고 있다). `payment.attempt-created.DLT`에 오래 머물다 늦게 재투입된 시도는 만들어진 지 오래라 바로 이 알림에 걸린다. 그 시도는 조회 상한(약 1시간) 안에 넘어가면 풀린다.
-- **조치.** 작업이나 건별 실패의 원인을 고친다. 결제 상태는 작업이 확정한다. 확정됐는데 풀리지 않으면 `max by (instance) (payment_attempt_resolution_oldest_seconds)`로 인스턴스별 값을 본다. 작업이 멈춘 인스턴스는 나이가 마지막 성공값에 멈춰 `max`를 붙잡는다. [UnknownPaymentResolverNotSucceeding](#unknownpaymentresolvernotsucceeding)이 가리키는 인스턴스를 고치거나 재시작한다. [ReconciliationPendingUnresolved](#reconciliationpendingunresolved)도 같다.
+- **조치.** 작업이나 건별 실패의 원인을 고친다. 결제 상태는 작업이 확정한다. 확정됐는데 풀리지 않으면 `max by (instance) (payment_attempt_resolution_oldest_seconds)`로 인스턴스별 값을 본다. 작업이 멈춘 인스턴스는 경과 시간이 마지막 성공값에 멈춰 `max`를 붙잡는다. [UnknownPaymentResolverNotSucceeding](#unknownpaymentresolvernotsucceeding)이 가리키는 인스턴스를 고치거나 재시작한다. [ReconciliationPendingUnresolved](#reconciliationpendingunresolved)도 같다.
 - **하지 말 것.** `t_payment_attempt`의 상태를 DB에서 직접 고치지 않는다. 승인 이벤트가 나가지 않아 주문이 `PAID`가 되지 않는다.
 
 ## ReconciliationPendingUnresolved
 
-- **뜻.** reconciliation으로 넘긴 뒤 아직 결과 불명인 승인 시도 가운데 가장 오래된 것이 넘긴 지 24시간이 넘었다(`payment_attempt_reconciliation_pending_oldest_seconds`, `reconciliation_requested_at`부터). 점주가 대조 case를 해소하지 않았거나, case 열기가 실패했다. 그 주문은 `CHECKOUT_REQUESTED`에 머물고 재결제도 막혀 있다. 나이는 DB에서 다시 세므로 재기동해도 첫 갱신 뒤 5분이면 다시 운다.
+- **뜻.** reconciliation으로 넘긴 뒤 아직 결과 불명인 승인 시도 가운데 가장 오래된 것이 넘긴 지 24시간이 넘었다(`payment_attempt_reconciliation_pending_oldest_seconds`, `reconciliation_requested_at`부터). 점주가 대조 case를 해소하지 않았거나, case 열기가 실패했다. 그 주문은 `CHECKOUT_REQUESTED`에 머물고 재결제도 막혀 있다. 경과 시간은 DB에서 다시 세므로 재기동해도 첫 갱신 뒤 5분이면 다시 운다.
 - **먼저 볼 것.** 해소를 기다리는 case와 매장을 찾는다.
   ```sql
   select store_id, count(*), min(opened_at) from t_reconciliation_case
