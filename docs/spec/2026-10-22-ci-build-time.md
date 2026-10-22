@@ -52,6 +52,12 @@ PR 검사(`.github/workflows/pr-checks.yml`) 한 번이 5분 넘게 걸린다. �
 
 **10. Kafka consumer·listener 설정을 테스트에서 바꾸면** 공식 문서로 Best Practice를 대조해 근거를 이 spec에 남긴다. 기본값은 sources jar나 기동 로그의 ConsumerConfig values로 확인한다. PR 전에 Modulith·Kafka 키워드 문서(볼트)를 그 문서의 갱신 규칙대로 고친다.
 
+### 범위 조정
+**1. 컨텍스트 캐시 확대를 뺀다(2026-10-22, 사용자 결정).** 결정 6의 전제는 맞았다. 쉬는 컨텍스트의 Kafka listener container는 멈추고 consumer는 group을 떠난다(결과 절). 그런데 두 가지 이유로 뺀다.
+- 쉬는 컨텍스트에서는 `LettuceConnectionFactory`(SmartLifecycle)도 멈춰 Redis client를 닫는다. #109의 `LockReleaseListener`는 구독 컨테이너를 빈이 아닌 내부 객체로 두고 `ApplicationReadyEvent`에서만 구독한다. 그래서 다시 시작한 컨텍스트에는 해제 알림 구독이 없고 `LockIntegrationTest`가 깨진다. 고치려면 `src/main`을 바꿔야 한다.
+- 실험용으로 리스너를 고쳐 fork 2개와 합쳐 쟀더니 test task가 fork 2개만일 때보다 느렸다(155초에서 179초).
+- 그래서 `maxSize=1`을 그대로 두고 `src/main`은 바꾸지 않는다. 리스너의 재시작 한계는 운영에서 컨텍스트를 멈췄다 다시 시작하지 않으므로 이 PR에서 고치지 않고 사용자에게 보고한다.
+
 계약: 업무 계약(HTTP·이벤트·토픽·consumer group)은 바뀌지 않는다. 바뀌는 것은 PR 검사 job 구성, Gradle 빌드 설정, 테스트 기반 설정이다.
 
 ## 제외
