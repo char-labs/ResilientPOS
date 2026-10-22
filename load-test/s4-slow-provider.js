@@ -44,6 +44,7 @@ let cursor = 0;
 
 export default function (data) {
   if (!outboxes) outboxes = ownedTerminals(data.terminals).map(newOutbox);
+  if (outboxes.length === 0) throw new Error('이 VU에 맡길 단말이 없다. STORES를 늘리거나 VUS를 줄인다');
   const outbox = outboxes[cursor++ % outboxes.length];
   enqueueSales(outbox, 1, new Date().toISOString());
   const result = flush(outbox, 500, {});

@@ -10,15 +10,18 @@ STOP_AFTER_SECONDS="${STOP_AFTER_SECONDS:-150}"
 COMPOSE=(docker compose -f docker/docker-compose.yaml)
 
 mkdir -p load-test/results
+times="load-test/results/s5-rate${RATE}.times"
+# 중간에 끊겨도 kafka를 멈춘 채 두지 않는다.
+trap '"${COMPOSE[@]}" start kafka >/dev/null 2>&1 || true' EXIT
 k6 run -e RATE="$RATE" -e DURATION=6m --summary-trend-stats "avg,min,med,p(90),p(95),p(99),max" \
   --summary-export "load-test/results/s5-rate${RATE}.json" load-test/s1-baseline.js &
 k6_pid=$!
 
 sleep "$STOP_AFTER_SECONDS"
-echo "kafka 정지 $(date -u +%FT%TZ)"
+echo "kafka 정지 $(date -u +%FT%TZ)" | tee "$times"
 "${COMPOSE[@]}" stop kafka
 sleep "$STOP_SECONDS"
-echo "kafka 시작 $(date -u +%FT%TZ)"
+echo "kafka 시작 $(date -u +%FT%TZ)" | tee -a "$times"
 "${COMPOSE[@]}" start kafka
 
 wait "$k6_pid"

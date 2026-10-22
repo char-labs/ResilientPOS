@@ -48,5 +48,8 @@ export function burst(data) {
   const request = ['POST', `${BASE_URL}/v1/orders`, body, { headers: terminalHeaders(terminal), tags: { name: 'order_create_contended' } }];
   const responses = http.batch(Array.from({ length: CONTENDERS }, () => request));
   const orderIds = new Set(responses.filter((r) => r.status === 201).map((r) => r.json('data.orderId')));
-  check(responses, { '같은 키의 201은 모두 같은 주문': () => orderIds.size <= 1 });
+  check(responses, {
+    '경합 응답은 201이나 409뿐이다': (rs) => rs.every((r) => r.status === 201 || r.status === 409),
+    '같은 키의 201은 하나 이상이고 모두 같은 주문': () => orderIds.size === 1,
+  });
 }

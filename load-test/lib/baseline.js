@@ -10,6 +10,7 @@ export const DURATION = __ENV.DURATION || '2m';
 export const ABUSIVE = Number(__ENV.ABUSIVE || 0);
 const ABUSIVE_RATE = Number(__ENV.ABUSIVE_RATE || 2);
 // #87 시나리오 3. bucket이 가득 찬 고장 단말 하나가 같은 sync 배치를 TERMINAL_BURST개 동시에 보낸다. 초마다 한 번.
+// VU 하나라 단말도 하나다. 한 묶음이 1초를 넘기면 다음 묶음은 dropped_iterations로 보인다.
 export const TERMINAL_BURST = Number(__ENV.TERMINAL_BURST || 0);
 const SYNC_VUS = Number(__ENV.SYNC_VUS || 300);
 const HTTP_VUS = Number(__ENV.HTTP_VUS || 100);
@@ -28,7 +29,7 @@ export function baselineScenarios() {
   if (TERMINAL_BURST > 0) {
     scenarios.terminal_burst = {
       executor: 'constant-arrival-rate', exec: 'terminalBurst', rate: 1, timeUnit: '1s',
-      duration: DURATION, preAllocatedVUs: 5, maxVUs: 5,
+      duration: DURATION, preAllocatedVUs: 1, maxVUs: 1,
     };
   }
   if (ABUSIVE > 0) {
@@ -70,7 +71,7 @@ export function terminalBurst(data) {
   const outbox = myOutboxes(data)[0];
   enqueueSales(outbox, 1, new Date().toISOString());
   const request = [
-    'POST', `${BASE_URL}/v1/terminals/${outbox.terminal.terminalId}/sync`, JSON.stringify({ operations: outbox.pending }),
+    'POST', `${BASE_URL}/v1/terminals/${outbox.terminal.terminalId}/sync`, JSON.stringify({ operations: outbox.pending.slice(0, 500) }),
     { headers: terminalHeaders(outbox.terminal), tags: { name: 'sync', traffic: 'burst' } },
   ];
   const acked = http.batch(Array.from({ length: TERMINAL_BURST }, () => request))

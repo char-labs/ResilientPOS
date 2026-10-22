@@ -83,7 +83,7 @@ export function saleOperations(terminal, firstSequence, createdAt) {
 
 // 단말 하나의 outbox. 확정된 순번(lastAckedSequence)까지만 지우고 나머지는 다음 요청에 다시 보낸다(시연 단말과 같은 규약).
 export function newOutbox(terminal) {
-  return { terminal, nextSequence: 1, pending: [] };
+  return { terminal, nextSequence: 1, acked: 0, pending: [] };
 }
 
 export function enqueueSales(outbox, sales, createdAt) {
@@ -102,7 +102,14 @@ export function flush(outbox, batchSize, tags) {
   );
   if (!check(res, { 'sync 200': (r) => r.status === 200 })) return null;
   const data = res.json('data');
-  outbox.pending = outbox.pending.filter((op) => op.sequence > data.lastAckedSequence);
+  // 확정 순번을 믿고 outbox를 지우므로 응답이 규약에 맞는지 먼저 본다. 어긋나면 그 실행은 버린다(README).
+  check(data, {
+    'sync 항목 수가 보낸 수와 같다': (d) => d.items.length === operations.length,
+    'sync 확정 순번이 뒤로 가지 않고 매긴 순번 안이다': (d) => d.lastAckedSequence >= outbox.acked && d.lastAckedSequence < outbox.nextSequence,
+    'sync 항목에 CONFLICT·REJECTED가 없다': (d) => d.items.every((item) => item.status !== 'CONFLICT' && item.status !== 'REJECTED'),
+  });
+  outbox.acked = Math.max(outbox.acked, data.lastAckedSequence);
+  outbox.pending = outbox.pending.filter((op) => op.sequence > outbox.acked);
   syncGaps.add(data.items.filter((item) => item.status === 'GAP').length);
   return data;
 }
