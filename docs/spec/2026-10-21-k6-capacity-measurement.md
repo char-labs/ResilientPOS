@@ -281,6 +281,19 @@ S1에서 HTTP 지연은 300 RPS까지 NFR 안이었지만, 이벤트 외부화�
 - 원인은 DB 커밋이다. p32h10 300 RPS 중(08:31Z 무렵) `pg_stat_activity`를 1초 간격 15번 표본으로 본 활성 세션은 `LWLock:WALWrite` 22, `IO:WalSync` 15가 모두 `COMMIT`이었다. 외부화 한 건이 발행 기록을 처리 중·완료로 두 번 커밋하고(Modulith `JpaEventPublicationRepository`, 완료는 hash 인덱스 `event_publication_serialized_event_hash_idx`로 찾는다), 요청과 consumer 단계도 저마다 커밋한다. `event_publication`은 09시 무렵 966,683행·751MB였다(완료 모드 `update`, 보관 7일).
 - 판정: 규칙의 "미완료가 늘지 않는 가장 작은 조합"이 없다. 300 RPS에서 sync p95·실패·힙이 가장 나은 것은 기본 설정이므로 **실행기와 Hikari 풀을 바꾸지 않는다**. 가상 스레드는 채택하지 않는다. 외부화 처리량은 커밋 처리량에 묶여 있어 실행기 크기로 풀리지 않는다.
 
+### S4 느린 provider(변경 전: consumer 스레드에서 동기 호출)
+재현: 측정 빌드를 `FAKE_GATEWAY_LATENCY=<지연>`으로 다시 띄우고 S1 50 RPS 30초로 데운 뒤 `k6 run -e SALES_PER_SECOND=20 -e DURATION=60s -e SAMPLE=0.2 -e VUS=300 -e STORES=100 load-test/s4-slow-provider.js`. 실행 사이에는 지연 0으로 다시 띄워 lag를 비웠다. 지연 0은 10:00Z, 1초·3초는 다음 날 00:01~00:06Z에 돌았다(그 사이 맥이 잠들어 0.3초 실행은 버렸다).
+
+| provider 지연 | `payment.attempt-created` 처리(초당) | lag 최대 | 메시지당 처리 시간 | sync p95 |
+|---|---|---|---|---|
+| 0 | 20~30(입력만큼) | 0 | 평균 4.3ms(`spring_kafka_listener_seconds`) | 24ms |
+| 1초 | 2~3 | 2,398 | - | 27ms |
+| 3초 | 1 | 5,870 | - | 242ms |
+
+- 처리량이 파티션 3 ÷ provider 지연으로 묶인다(Little의 법칙). 지연 1초면 인스턴스 하나가 초당 3건만 승인한다. 단말 응답(sync)은 비동기 경로라 지연과 거의 무관하고, 승인만 뒤로 밀린다.
+- provider 밖 처리 시간이 4.3ms라 파티션 하나의 상한은 지연 0에서 약 230건/초다. 판정 규칙의 필요 동시 호출 수(450 또는 외부화 상한 기준 100)는 파티션 수로 맞출 수 없다.
+- 이 스크립트의 첫 실행에서 승인 시간 표본이 남지 않았다(시나리오 기본 `gracefulStop` 30초에 폴링이 끊김). `gracefulStop`을 폴링 한도보다 길게 고쳤다.
+
 ### 과부하 뒤 회복
 - 500 RPS 단계 뒤 07:41:47Z에 미완료 발행 기록이 50,784건이었다. `PUBLISHED` 33,925(실행기 큐에서 기다림), `FAILED` 15,847(07:31:23~07:36:09에 외부화 실패), `RESUBMITTED` 33, `PROCESSING` 8.
 - 실행기 큐는 부하가 끝난 뒤에도 잘 줄지 않았다(07:42~07:45Z에 약 50,600에서 47,900). 실행기가 초당 약 125건을 끝내도 완료된 이벤트가 consumer를 거쳐 다음 단계의 이벤트를 다시 넣는다. 판매 1건이 4단계라 순감은 처리량의 일부다.
