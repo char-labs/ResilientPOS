@@ -5,6 +5,7 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry
 import java.time.Duration
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import org.mockito.ArgumentMatchers.any
 import org.mockito.ArgumentMatchers.anyString
@@ -25,6 +26,43 @@ class LockTest {
 
     private fun failOpenCount(lock: String, reason: String): Double =
         registry.find("lock.fail.open").tags("lock", lock, "reason", reason).counter()?.count() ?: 0.0
+
+    private fun waitCount(lock: String, outcome: String): Long =
+        registry.find("distributed.lock.wait").tags("lock", lock, "outcome", outcome).timer()?.count() ?: 0
+
+    private fun heldCount(lock: String): Long = registry.find("distributed.lock.held").tags("lock", lock).timer()?.count() ?: 0
+
+    private fun redisAnswering(setIfAbsent: Boolean): StringRedisTemplate {
+        @Suppress("UNCHECKED_CAST") // mock(ValueOperations::class.java)는 타입 인자를 모른다. 이 테스트는 String 키·값만 쓴다.
+        val values = mock(ValueOperations::class.java) as ValueOperations<String, String>
+        given(values.setIfAbsent(anyString(), anyString(), any(Duration::class.java))).willReturn(setIfAbsent)
+        val redis = mock(StringRedisTemplate::class.java)
+        given(redis.opsForValue()).willReturn(values)
+        return redis
+    }
+
+    @Test
+    fun `잠그면 대기 시간과 보유 시간을 키 앞 두 마디로 하나씩 남긴다`() {
+        val lock = lock(redisAnswering(setIfAbsent = true))
+
+        val token = assertNotNull(lock.tryAcquire("order:create-lock:terminal:client-order"))
+        lock.release("order:create-lock:terminal:client-order", token)
+
+        assertEquals(1, waitCount("order:create-lock", "acquired"))
+        assertEquals(1, heldCount("order:create-lock"))
+    }
+
+    @Test
+    fun `잠그지 못하면 그 결과의 대기 시간만 남기고 보유 시간은 남기지 않는다`() {
+        assertNull(lock(redisAnswering(setIfAbsent = false)).tryAcquire("payment:checkout-lock:order:1"))
+        val down = mock(StringRedisTemplate::class.java)
+        given(down.opsForValue()).willThrow(RedisConnectionFailureException("Redis down"))
+        assertNull(lock(down).tryAcquire("payment:checkout-lock:order:2"))
+
+        assertEquals(1, waitCount("payment:checkout-lock", "timeout"))
+        assertEquals(1, waitCount("payment:checkout-lock", "error"))
+        assertEquals(0, heldCount("payment:checkout-lock"))
+    }
 
     @Test
     fun `Redis 오류면 던지지 않고 토큰 없이 돌아오며 키 앞 두 마디와 error로 센다`() {

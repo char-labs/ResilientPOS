@@ -3,6 +3,8 @@ package com.resilientpos.platform
 import com.resilientpos.foundation.IdentifierGenerator
 import io.micrometer.core.instrument.MeterRegistry
 import java.time.Duration
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
 import org.springframework.dao.DataAccessException
 import org.springframework.data.redis.core.StringRedisTemplate
 import org.springframework.data.redis.core.script.RedisScript
@@ -18,6 +20,9 @@ import org.springframework.stereotype.Component
  * 그 밖의 예외는 프로그래밍 오류라 삼키지 않는다.
  * 잠그지 못하고 진행할 때마다 counter `lock.fail.open{lock, reason}`이 오른다. 처음 일어날 때 생기므로 미리 등록하지 않는다
  * (업무 모듈의 키를 `platform`이 모른다).
+ *
+ * 시도마다 Timer `distributed.lock.wait{lock, outcome}`(`acquired`·`timeout`·`error`)에 얻기까지 걸린 시간을, 얻은 잠금은
+ * Timer `distributed.lock.held{lock}`에 풀 때까지의 시간을 남긴다. 대기 한도·TTL을 정하고 Redisson이 필요해지는지 보는 근거다(용량 기준 wiki).
  */
 @Component
 class RedisDistributedLock(
@@ -26,24 +31,33 @@ class RedisDistributedLock(
     private val meterRegistry: MeterRegistry,
 ) : DistributedLock {
 
+    /** 얻은 잠금의 토큰별 얻은 시각(nanoTime). [release]가 꺼내 지운다. `Lock`이 `finally`에서 늘 풀므로 쌓이지 않는다. */
+    private val acquiredAt = ConcurrentHashMap<String, Long>()
+
     override fun tryAcquire(key: String): String? {
+        val started = System.nanoTime()
         val token = identifierGenerator.next().toString()
         val acquired = try {
             acquire(key, token)
         } catch (e: DataAccessException) {
-            return proceedWithoutLock(key, e)
+            return proceedWithoutLock(key, e, started)
         } catch (e: IllegalStateException) {
-            return proceedWithoutLock(key, e)
+            return proceedWithoutLock(key, e, started)
         }
         if (!acquired) {
+            recordWait(key, "timeout", started)
             log.warn { "잠금 없이 진행한다(대기 ${WAIT.toMillis()}ms 초과) key=$key" }
             countFailOpen(key, "timeout")
             return null
         }
+        acquiredAt[token] = recordWait(key, "acquired", started)
         return token
     }
 
     override fun release(key: String, token: String) {
+        acquiredAt.remove(token)?.let {
+            meterRegistry.timer(HELD_METRIC, "lock", lockName(key)).record(System.nanoTime() - it, TimeUnit.NANOSECONDS)
+        }
         val released = try {
             redis.execute(RELEASE, listOf(key), token)
         } catch (e: DataAccessException) {
@@ -54,7 +68,15 @@ class RedisDistributedLock(
         if (released == 0L) log.warn { "잠금이 풀기 전에 만료됐다(블록이 TTL ${TTL.toSeconds()}초를 넘김) key=$key" }
     }
 
-    private fun proceedWithoutLock(key: String, e: RuntimeException): String? {
+    /** 얻기까지 걸린 시간을 남기고 지금 시각을 돌려준다. */
+    private fun recordWait(key: String, outcome: String, started: Long): Long {
+        val now = System.nanoTime()
+        meterRegistry.timer(WAIT_METRIC, "lock", lockName(key), "outcome", outcome).record(now - started, TimeUnit.NANOSECONDS)
+        return now
+    }
+
+    private fun proceedWithoutLock(key: String, e: RuntimeException, started: Long): String? {
+        recordWait(key, "error", started)
         log.warn(e) { "잠금 없이 진행한다(Redis 오류) key=$key" }
         countFailOpen(key, "error")
         return null
@@ -81,6 +103,8 @@ class RedisDistributedLock(
 
         /** 잠그지 못하고 진행한 횟수. `lock`은 [lockName], `reason`은 `timeout`(대기 초과)이나 `error`(Redis 오류)다. */
         private const val FAIL_OPEN_METRIC = "lock.fail.open"
+        private const val WAIT_METRIC = "distributed.lock.wait"
+        private const val HELD_METRIC = "distributed.lock.held"
 
         /** 키의 앞 두 마디(`모듈:이름`). 뒤 마디는 식별자라 metric label로 쓰지 않는다([Lock]의 키 규칙). */
         fun lockName(key: String): String = key.split(':').take(2).joinToString(":")
