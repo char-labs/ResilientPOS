@@ -13,6 +13,7 @@ import org.testcontainers.postgresql.PostgreSQLContainer
  * 컨테이너는 JVM 전체에서 한 번만 뜬다. JUnit의 컨테이너 생명주기를 쓰면 첫 테스트 클래스가 끝날 때
  * 컨테이너가 내려가는데 Spring은 캐시된 컨텍스트를 그대로 재사용해서 다음 클래스가 연결에 실패한다.
  * 정리는 Testcontainers의 ryuk이 JVM 종료 시 수행한다.
+ * test fork(`build.gradle.kts`의 `maxParallelForks`)마다 따로 뜬다. 컨테이너 reuse를 켜면 fork끼리 DB와 consumer group을 같이 쓰게 된다.
  *
  * 브로커의 자동 토픽 생성을 끈다. 운영과 같이 앱이 만든 토픽만 있어야 이름이 틀린 발행이 조용히 새 토픽을 만들지 않고 실패한다.
  * 캐시된 컨텍스트가 여럿 살아 있으면 같은 consumer group을 나눠 가져 다른 컨텍스트가 메시지를 처리하므로
