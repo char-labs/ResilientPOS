@@ -191,7 +191,7 @@ Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰�
   - 승인 시도만 다룬다. 취소 시도는 고르지 않고 `resolveUnknown`에 직접 넘겨도 조회하지 않는다. provider가 아직 처리 중이라고 답하면 `Unknown`이다(어댑터 계약). 처리 중을 거절로 접으면 재결제가 이중 청구가 된다.
   - Spring 공용 스케줄러를 쓰고 `spring.task.scheduling.pool.size`를 2로 두었다. 기본값(스레드 하나)이면 이 작업이 provider 조회로 길어질 때 발행 기록 재전송과 Moments가 멈춘다.
   - `resolveUnknown`은 `authorize`와 같은 모양이다. provider 조회는 트랜잭션 밖이고, 확정은 행을 잠근 뒤 `UNKNOWN`을 다시 확인하고 적용한다. 승인이면 `PaymentApproved`가 나가 기존 consumer가 주문을 `PAID`로 넘기고, 거절이면 그 시도가 재결제 대상이 된다. 조회로도 불명이면 조회 횟수만 하나 올린다(가짜 성공 금지). 승인인데 금액이 시도와 다르면 확정하지 않는다.
-  - 락은 provider 중복 조회를 줄이는 완화 수단이다. 배치가 락 대기 한도(3초)를 넘기면 늦게 온 pod는 fail-open으로 함께 돈다. fail-open이나 TTL 초과로 pod가 겹쳐도 조회는 읽기이고, 같은 확정이 두 번 적용되는 일은 잠근 뒤 재확인이 막는다. 이 블록은 `Lock` 안에서 행 잠금을 기다리는 예외다. 그 행을 잠그는 다른 경로(`authorize`의 적용, `retryAuthorization`)는 이 키를 잡지 않아 순환이 없다.
+  - 락은 provider 중복 조회를 줄이는 완화 수단이다. 배치가 락 대기 한도(1.5초)를 넘기면 늦게 온 pod는 fail-open으로 함께 돈다. fail-open이나 TTL 초과로 pod가 겹쳐도 조회는 읽기이고, 같은 확정이 두 번 적용되는 일은 잠근 뒤 재확인이 막는다. 이 블록은 `Lock` 안에서 행 잠금을 기다리는 예외다. 그 행을 잠그는 다른 경로(`authorize`의 적용, `retryAuthorization`)는 이 키를 잡지 않아 순환이 없다.
   - 지난 주기에 읽은 마지막 `id` 다음부터 읽고(pod 메모리의 keyset 커서), 100건보다 적게 읽히면 다음 주기는 처음부터 읽는다. 그래서 영영 불명인 건이 100건을 넘어도 새 건은 늦어도 `ceil(불명 건수 / 100)` 주기 안에 조회된다. 커서는 pod마다 따로이고 재기동하면 처음부터다. 조회가 겹치거나 늦어질 뿐 정합성에는 닿지 않는다.
   - 한 건이 던지면 ERROR 로그를 남기고 다음 건으로 간다.
   - 조회 횟수가 상한(`resilientpos.payment.unknown-query-limit`, 60)에 닿거나 조회가 다른 금액의 승인을 알려 주면 그 시도를 reconciliation case로 넘긴다. 넘김과 `PaymentReconciliationRequested` 발행이 같은 커밋이다. 넘긴 시도는 대상 조회가 고르지 않는다(§2, [payment-reconciliation-case](../spec/2026-10-20-payment-reconciliation-case.md)).
