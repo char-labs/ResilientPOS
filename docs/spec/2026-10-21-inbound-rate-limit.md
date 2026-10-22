@@ -148,6 +148,8 @@
 - 끊김 테스트의 기준을 500ms로 좁힌다(Claude F9). Lettuce 재연결 간격(최대 30초, sources jar로 확인)과 기존 연결의 재인증 실패가 limiter에서 WARN으로 남는 것을 관측성 wiki에 적는다(specialist P4, Claude F6). 결정 4의 목록과 낡은 문장을 고친다(Claude F7·F10). shortcut 표식을 KDoc과 함수 사이에서 창 판정 위로 옮긴다(Claude F11).
 - 받지 않은 것: MOVED·ASK를 설정 오류로 보는 것(Claude F12). 근거가 추측이고, standalone 클라이언트를 Cluster에 붙이면 세션도 함께 깨져 드러난다.
 
+**범위 조정(2026-10-22, 알림 규칙 사용자 결정).** #77 값을 반영할 때, 매장 bucket 거절이 이어지면 warning을 울리는 규칙 하나를 `docker/prometheus/alerts.yaml`에 더한다. 매장 bucket 거절은 그 매장 단말 전부가 막힌 것이라 영업에 바로 영향이 있다. 단말 bucket 거절은 오래 오프라인이던 단말이 정상으로 회복할 때도 이어지므로 경보하지 않는다. 지속 시간은 #77이 잰 한 매장 4대 동시 재연결의 회복 시간보다 길게 잡아, 정상 backlog 회복에는 울리지 않게 한다. counter에 매장 ID가 없으므로(결정 7) 규칙은 어느 매장이든 매장 거절이 이어진다는 것만 알리고, 어느 매장인지는 `scope=store` 거절 로그로 찾는다. 여러 매장이 번갈아 회복하면 매장마다는 정상이어도 울릴 수 있다. runbook 절과 promtool 단위 테스트를 함께 더한다.
+
 ## 제외
 - 인증 전 요청의 제한. 잘못된 토큰을 반복하는 요청은 단말을 모르므로 세지 않고, 요청마다 인증 조회 한 번을 그대로 치른다. 이런 요청은 edge(API gateway·ingress)가 IP 단위로 막는다(§5.1).
 - 점주 경로(`/owner/**`)와 가입·로그인의 IP별 rate limit. 현재 상태가 외부 노출 조건으로 따로 적은 항목이다.
@@ -188,6 +190,9 @@
 - docs/wiki/architecture.md
 - docs/wiki/observability.md
 - README.md
+- docs/wiki/runbook.md
+- docker/prometheus/alerts.yaml
+- docker/prometheus/alerts.test.yaml
 
 ## 인수 조건
 1. 단말 bucket에 토큰이 없으면 인증된 `/v1` 요청은 429 `RATE_LIMITED`와 `Retry-After`를 받고 Controller에 닿지 않는다.
@@ -214,6 +219,7 @@
 22. 연결 계열 실패(연결 단계의 오류 응답 포함)를 본 시각부터 1초 동안은 Redis를 부르지 않고 통과한다(timeout으로 1초를 기다린 실패도 같다). 1초 안의 음수 시각 차이도 창 안이고, 1초보다 크게 뒤로 간 시계는 바로 다시 부른다. 창이 지나면 요청 하나만 Redis를 다시 부르고 그 탐침이 끝날 때까지 온 요청은 건너뛴다(탐침이 1초 넘게 걸려도). 탐침이 성공하거나 명령 단계의 오류를 받으면 창을 닫고, 탐침이 아닌 요청의 성공은 창을 닫지 않는다. 명령 단계의 설정 오류 뒤에는 건너뛰지 않는다. 창 안에서 건너뛴 건수는 창을 연 실패와 같은 수준의 다음 줄에 적는다. 기동 검사가 Redis에 닿지 못하면 창을 연 채로 시작한다.
 23. 형식은 맞지만 모르는 토큰이면 limiter를 부르지 않고 401이다.
 24. 실제 Redis에서 ACL이 스크립트 안의 쓰기 명령을 막으면 기동 검사가 기동을 멈춘다.
+25. 매장 bucket 거절이 #77이 잰 정상 회복 시간보다 오래 이어지면 warning 경보가 울리고, 그보다 짧은 거절과 단말 bucket 거절에는 울리지 않는다(promtool 단위 테스트). 경보에는 runbook의 같은 이름 절이 있다.
 
 ## 검증
 - `./gradlew test --tests 'com.resilientpos.terminal.*'` — 인터셉터와 Lua 스크립트. 스크립트는 Testcontainers Redis로 실제 실행한다.
@@ -224,7 +230,8 @@
 
 ## Wiki 영향
 - [아키텍처](../wiki/architecture.md) — 요청 흐름 1번(인증) 뒤에 빈도 상한 단계와 429 재시도 규약을 넣는다. §6.4 구조 테스트 표에 rate limit 규칙 둘을 더한다.
-- [관측성](../wiki/observability.md) — counter `inbound_rate_limited_total{scope}`, 거절 INFO 로그, Redis 오류 WARN·ERROR(10초에 한 줄), 기동 검사, ACL 명령, 환경별 Redis 분리, edge 상한 전제조건을 적는다.
+- [관측성](../wiki/observability.md) — counter `inbound_rate_limited_total{scope}`, 거절 INFO 로그, Redis 오류 WARN·ERROR(10초에 한 줄), 기동 검사, ACL 명령, 환경별 Redis 분리, edge 상한 전제조건을 적는다. 매장 거절 지속 경보를 알림 항목에 더한다.
+- [runbook](../wiki/runbook.md) — 매장 거절 지속 경보의 절(원인 매장 찾기, 정상 회복과 고장 단말 가르기)을 더한다.
 - [README](../../README.md) 아키텍처 절 — "Redis는 두 가지에만 씁니다"에 세 번째 쓰임으로 단말·매장 빈도 상한(fail-open)을 더한다.
 - 현재 상태(`docs/wiki/current-state.md`, 볼트) — "속도 제한(rate limit)도 없다"를 이 PR의 상태로 바꾸고 Redis 쓰임에 단말 rate limit을 더한다. 볼트 파일이라 이 PR diff에는 없다. **머지할 때 고친다.** 볼트는 모든 worktree가 main의 현재 상태로 읽는다. 이 PR이 #77을 기다리며 draft로 머무는 동안 먼저 적으면, 다른 작업(특히 #77의 k6 측정)이 main에 상한이 있다고 잘못 읽는다.
 - `application.yaml`의 Redis 주석 — 쓰는 곳에 빈도 상한을 더하고, "단말 경로는 Redis 장애에 영향이 없다"를 "막히지 않는다(잠금과 빈도 상한은 fail-open)"로 고친다.
