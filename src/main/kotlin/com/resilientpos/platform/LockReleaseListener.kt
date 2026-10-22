@@ -1,6 +1,8 @@
 package com.resilientpos.platform
 
+import java.time.Duration
 import java.util.concurrent.ScheduledThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 import org.springframework.beans.factory.DisposableBean
 import org.springframework.boot.context.event.ApplicationReadyEvent
 import org.springframework.context.ApplicationListener
@@ -17,8 +19,9 @@ import org.springframework.stereotype.Component
  * 구독이 없어도 락은 재시도 간격으로 기다리므로 이 구독은 기다림을 줄일 뿐이다.
  *
  * 기동이 끝난 뒤에 구독한다. Spring Data Redis 4.1.1 `RedisMessageListenerContainer.start`는 구독이 2초 안에 되지 않으면 던져서,
- * 기동 단계에서 시작하면 Redis 없이 앱이 뜨지 않는다. 실패하면 WARN을 남기고 컨테이너가 5초마다 다시 구독한다(그때마다 ERROR가 남는다).
- * 다시 구독하는 일은 [recovery]에서 돈다. 그 실행기가 `ScheduledExecutorService`가 아니면 컨테이너가 부른 스레드를 재우며 되풀이한다.
+ * 기동 단계에서 시작하면 Redis 없이 앱이 뜨지 않는다. 그 컨테이너는 첫 구독에서 연결하지 못하면 스스로 다시 시도하지 않으므로
+ * (`Subscriber.initialize`가 첫 시도의 연결 실패를 그대로 돌려준다) 실패하면 WARN을 남기고 [RESUBSCRIBE_INTERVAL] 뒤 다시 구독한다.
+ * 컨테이너가 연결 뒤의 실패를 다시 시도할 때도 [recovery]를 쓴다. 그 실행기가 `ScheduledExecutorService`가 아니면 부른 스레드를 재운다.
  * 받은 메시지는 기다리는 요청을 깨우기만 하므로 수신 스레드에서 바로 처리한다. 기본 실행기는 메시지마다 스레드를 만든다.
  */
 @Component
@@ -38,11 +41,15 @@ class LockReleaseListener(connectionFactory: RedisConnectionFactory, lock: Redis
         afterPropertiesSet()
     }
 
-    override fun onApplicationEvent(event: ApplicationReadyEvent) {
+    override fun onApplicationEvent(event: ApplicationReadyEvent) = subscribe()
+
+    private fun subscribe() {
         try {
             container.start()
         } catch (e: RuntimeException) {
-            log.warn(e) { "잠금 해제 알림을 구독하지 못했다. 락은 재시도 간격으로만 기다리고 구독은 5초마다 다시 시도한다" }
+            log.warn { "잠금 해제 알림을 구독하지 못했다(${e.message}). 락은 재시도 간격으로만 기다리고 ${RESUBSCRIBE_INTERVAL.toSeconds()}초 뒤 다시 구독한다" }
+            container.stop()
+            recovery.schedule({ subscribe() }, RESUBSCRIBE_INTERVAL.toMillis(), TimeUnit.MILLISECONDS)
         }
     }
 
@@ -53,5 +60,8 @@ class LockReleaseListener(connectionFactory: RedisConnectionFactory, lock: Redis
 
     private companion object {
         private val log by logger()
+
+        /** 컨테이너의 연결 뒤 재시도 간격(`FixedBackOff` 기본 5초)과 같다. */
+        private val RESUBSCRIBE_INTERVAL: Duration = Duration.ofSeconds(5)
     }
 }
