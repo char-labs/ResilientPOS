@@ -51,6 +51,8 @@ class PlatformConfiguration {
      * 끝난 명령도 재연결 전까지 버퍼에 남아 장애가 길면 힙이 불어난다. 바로 거절하면 빈도 상한과 잠금은 즉시 fail-open, 세션과 로그인은 즉시 503이다.
      * 응답 없는 명령(패킷이 사라지는 단절)도 기본값은 무제한으로 쌓아 연결이 끊길 때까지(커널 재전송 한도, 약 15분) 요청마다 timeout을 기다리게 한다.
      * 1000개까지만 받으면 그 뒤로는 바로 거절돼 즉시 fail-open이다. 1000은 요청 스레드(Tomcat 기본 200)와 주기 작업이 한꺼번에 내는 명령보다 넉넉히 크다.
+     * 스레드 수를 바꾸는 변경(virtual thread 포함)은 이 값을 다시 본다. 정상 부하에서 넘으면 빈도 상한은 fail-open(WARN 10초에 한 줄), 세션은 503이 된다.
+     * queue가 차면 Lettuce가 거절마다 스택이 붙은 WARN을 남기므로 그 로거는 application.yaml에서 ERROR로 올린다.
      * Boot가 connect timeout과 `TimeoutOptions`를 넣은 뒤에 적용되므로 그 설정은 남는다. TCP keepalive는 Lettuce 기본값(켜짐)이다.
      */
     @Bean

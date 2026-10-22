@@ -7,7 +7,9 @@ import java.time.Duration
 import javax.sql.DataSource
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory
 import com.resilientpos.PostgresIntegrationTest
@@ -62,7 +64,18 @@ class ResourceLimitConfigurationTest(
         assertEquals(ClientOptions.DisconnectedBehavior.REJECT_COMMANDS, options.disconnectedBehavior)
         assertEquals(1_000, options.requestQueueSize)
         assertEquals(Duration.ofSeconds(1), options.socketOptions.connectTimeout)
-        // 유휴 연결이 RST 없이 끊긴 것을 1분 안에 알아챈다. Lettuce 기본값이고 Boot의 SocketOptions도 그대로 둔다.
-        assertTrue(options.socketOptions.keepAlive.isEnabled)
+        // 유휴 연결이 RST 없이 끊긴 것을 1분 안에 알아챈다(13초 쉬면 13초 간격 3회). Lettuce 기본값이고 Boot의 SocketOptions도 그대로 둔다.
+        // 값은 확장 keepalive(JDK 11+ NIO)일 때만 적용되고 아니면 OS 기본값(Linux 2시간)이다. Lettuce를 올려 기본값이 바뀌면 여기서 드러난다.
+        val keepAlive = options.socketOptions.keepAlive
+        assertTrue(keepAlive.isEnabled)
+        assertEquals(Duration.ofSeconds(13), keepAlive.idle)
+        assertEquals(Duration.ofSeconds(13), keepAlive.interval)
+        assertEquals(3, keepAlive.count)
+    }
+
+    @Test
+    fun `Lettuce가 queue 초과로 거절할 때마다 남기는 WARN은 끈다`() {
+        // 실패는 호출자(빈도 상한·세션·잠금)가 남긴다. 이 로거의 WARN은 이 한 종류뿐이다(lettuce-core 7.5.2 DefaultEndpoint.RetryListener).
+        assertFalse(LoggerFactory.getLogger("io.lettuce.core.protocol.DefaultEndpoint").isWarnEnabled)
     }
 }

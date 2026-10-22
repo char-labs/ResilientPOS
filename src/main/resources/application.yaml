@@ -212,6 +212,13 @@ management:
         # 기본값은 _count·_sum·_max뿐이라 p95를 계산할 수 없다. bucket을 내보내 histogram_quantile로 구한다.
         http.server.requests: true
 
+logging:
+  level:
+    # Redis의 응답 없는 명령이 queue 상한(PlatformConfiguration)을 채우면 Lettuce가 거절마다 스택이 붙은 WARN
+    # ("Unexpected exception during request")을 이 로거로 남긴다. 이 로거의 WARN은 그 한 종류뿐이고, 실패는 호출자(빈도 상한·세션·잠금)가
+    # 이미 남긴다. 그대로 두면 단절 동안 로그 양이 Redis 명령 수와 같아진다. Lettuce를 올리면 이 로거가 남기는 WARN 종류를 다시 본다.
+    io.lettuce.core.protocol.DefaultEndpoint: ERROR
+
 # 구조화 로그는 여기 적지 않는다. 배포 환경에서 LOGGING_STRUCTURED_FORMAT_CONSOLE=ecs를 주면
 # stdout이 한 줄에 JSON 객체 하나가 되어 Loki(Alloy)가 필드로 읽는다. 기본값은 사람이 읽는 평문이다.
 ---
