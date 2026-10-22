@@ -69,6 +69,8 @@ class PaymentManagementTest {
         override fun findUnknownAuthorizationIds(after: PaymentId?, limit: Int) = emptyList<PaymentId>()
         override fun countUnknownAuthorizations() = 0L
         override fun countReconciliationPendingAuthorizations() = 0L
+        override fun oldestUnreconciledUnknownAuthorizationCreatedAt(): Instant? = error("unused")
+        override fun oldestReconciliationRequestedAt(): Instant? = error("unused")
         override fun findByIdForUpdate(paymentId: PaymentId) = lockedRead ?: stored[paymentId]
         override fun findByIdAndStoreIdForUpdate(paymentId: PaymentId, storeId: StoreId) =
             findByIdForUpdate(paymentId)?.takeIf { it.storeId == storeId }

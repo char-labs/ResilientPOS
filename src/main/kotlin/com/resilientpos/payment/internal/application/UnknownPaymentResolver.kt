@@ -8,6 +8,9 @@ import com.resilientpos.platform.Lock
 import com.resilientpos.platform.logger
 import io.micrometer.core.instrument.Gauge
 import io.micrometer.core.instrument.MeterRegistry
+import java.time.Clock
+import java.time.Duration
+import java.time.Instant
 import java.util.concurrent.atomic.AtomicLong
 import org.springframework.scheduling.annotation.Scheduled
 import org.springframework.stereotype.Component
@@ -32,15 +35,26 @@ import org.springframework.stereotype.Component
  *
  * 결과 불명 시도 수는 gauge `payment.attempt.unknown`(넘긴 시도 포함), 넘긴 뒤 아직 불명인 시도 수는 `payment.attempt.reconciliation.pending`으로 낸다.
  * 한 주기의 조회·넘김이 끝난 뒤(락 밖)에 세어 갱신하므로 scrape가 DB를 부르지 않고, 그 주기에 확정하거나 넘긴 시도가 같은 주기의 값에 반영된다. 세기가 던지면 값은 마지막 성공값으로 남는다.
+ *
+ * 같은 갱신에서 나이도 낸다. `payment.attempt.resolution.oldest`는 넘기지 않은 불명 시도 가운데 가장 오래된 것의 나이(생성 시각부터, 초),
+ * `payment.attempt.reconciliation.pending.oldest`는 넘긴 불명 시도 가운데 가장 이른 넘긴 시각부터의 나이(초)다. 대상이 없으면 0, 첫 갱신 전에는 `NaN`이고
+ * 세다 던지면 마지막 성공값으로 남는다. 알림은 나이로 건다. 개수로 `for:`를 세면 재기동할 때마다 처음부터 다시 세지만 나이는 DB에서 다시 계산해 이어진다.
  */
 @Component
 class UnknownPaymentResolver(
     private val repository: PaymentAttemptRepository,
     private val paymentManagement: PaymentManagement,
     meterRegistry: MeterRegistry,
+    private val clock: Clock,
 ) {
     private val unknownCount = AtomicLong(0)
     private val reconciliationPendingCount = AtomicLong(0)
+
+    @Volatile
+    private var oldestUnresolvedSeconds = Double.NaN
+
+    @Volatile
+    private var oldestPendingSeconds = Double.NaN
 
     @Volatile
     private var cursor: PaymentId? = null
@@ -51,6 +65,14 @@ class UnknownPaymentResolver(
             .register(meterRegistry)
         Gauge.builder("payment.attempt.reconciliation.pending", reconciliationPendingCount) { it.toDouble() }
             .description("reconciliation으로 넘긴 뒤 아직 결과 불명인 승인 시도 수, 작업 주기마다 갱신")
+            .register(meterRegistry)
+        Gauge.builder("payment.attempt.resolution.oldest", this) { it.oldestUnresolvedSeconds }
+            .description("reconciliation으로 넘기지 않은 가장 오래된 결과 불명 승인 시도의 나이(생성 시각부터), 작업 주기마다 갱신")
+            .baseUnit("seconds")
+            .register(meterRegistry)
+        Gauge.builder("payment.attempt.reconciliation.pending.oldest", this) { it.oldestPendingSeconds }
+            .description("reconciliation으로 넘긴 뒤 아직 결과 불명인 승인 시도 가운데 가장 이른 넘긴 시각부터의 나이, 작업 주기마다 갱신")
+            .baseUnit("seconds")
             .register(meterRegistry)
     }
 
@@ -66,7 +88,13 @@ class UnknownPaymentResolver(
         }
         unknownCount.set(repository.countUnknownAuthorizations())
         reconciliationPendingCount.set(repository.countReconciliationPendingAuthorizations())
+        oldestUnresolvedSeconds = ageSeconds(repository.oldestUnreconciledUnknownAuthorizationCreatedAt())
+        oldestPendingSeconds = ageSeconds(repository.oldestReconciliationRequestedAt())
     }
+
+    /** [since]부터 지금까지의 초. 대상이 없으면 0이다. */
+    private fun ageSeconds(since: Instant?): Double =
+        since?.let { Duration.between(it, clock.instant()).toMillis() / 1000.0 } ?: 0.0
 
     private fun resolveOne(paymentId: PaymentId) {
         try {

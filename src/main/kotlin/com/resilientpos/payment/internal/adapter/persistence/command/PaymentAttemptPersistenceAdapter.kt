@@ -11,6 +11,7 @@ import com.resilientpos.platform.selectFrom
 import com.resilientpos.platform.ReadOnlyTransactional
 import com.resilientpos.store.StoreId
 import jakarta.persistence.EntityManager
+import java.time.Instant
 import java.util.UUID
 import org.springframework.stereotype.Component
 
@@ -88,6 +89,25 @@ class PaymentAttemptPersistenceAdapter(
                 .from(entity(PaymentAttemptEntity::class))
                 .where(and(unknownAuthorization(), path(PaymentAttemptEntity::reconciliationRequestedAt).isNotNull()))
         } ?: 0L
+
+    /** [findUnknownAuthorizationIds]와 같이 리터럴로 렌더하고 `id` 오름차순 첫 행(partial 인덱스 순서)의 `created_at`을 읽는다. */
+    @ReadOnlyTransactional
+    override fun oldestUnreconciledUnknownAuthorizationCreatedAt(): Instant? =
+        queries.findFirst {
+            select(path(PaymentAttemptEntity::createdAt))
+                .from(entity(PaymentAttemptEntity::class))
+                .where(and(unknownAuthorization(), path(PaymentAttemptEntity::reconciliationRequestedAt).isNull()))
+                .orderBy(path(PaymentAttemptEntity::id).asc())
+        }
+
+    /** [countReconciliationPendingAuthorizations]와 같은 조건을 리터럴로 렌더한다. 대상이 없으면 `min`이 `null`이다. */
+    @ReadOnlyTransactional
+    override fun oldestReconciliationRequestedAt(): Instant? =
+        queries.findFirst {
+            select(min(path(PaymentAttemptEntity::reconciliationRequestedAt)))
+                .from(entity(PaymentAttemptEntity::class))
+                .where(and(unknownAuthorization(), path(PaymentAttemptEntity::reconciliationRequestedAt).isNotNull()))
+        }
 
     override fun findByIdForUpdate(paymentId: PaymentId): PaymentAttempt? =
         queries.findFirstForUpdate {
