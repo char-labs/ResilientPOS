@@ -109,10 +109,11 @@ class RedisDistributedLock(
         /** 키의 앞 두 마디(`모듈:이름`). 뒤 마디는 식별자라 metric label로 쓰지 않는다([Lock]의 키 규칙). */
         fun lockName(key: String): String = key.split(':').take(2).joinToString(":")
 
-        /** 행 잠금 대기(`findByIdForUpdate`)와 같은 3초다. */
-        private val WAIT: Duration = Duration.ofSeconds(3)
+        /** 견딜 수 있는 부하에서 잰 보유 시간 p99.9(최대 0.5초)의 3배를 0.5초 단위로 올린 값이다(용량 기준 wiki). 행 잠금 대기(3초)보다 짧다. */
+        private val WAIT: Duration = Duration.ofMillis(1500)
         private val TTL: Duration = Duration.ofSeconds(10)
-        private val RETRY_INTERVAL: Duration = Duration.ofMillis(50)
+        /** 보유 시간 p50(1~7ms)보다 길면 기다린 쪽이 간격만큼 늦는다. 하한 10ms는 스핀이 Redis에 주는 부하를 묶는다(용량 기준 wiki). */
+        private val RETRY_INTERVAL: Duration = Duration.ofMillis(10)
 
         private val RELEASE: RedisScript<Long> = RedisScript.of(
             "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
