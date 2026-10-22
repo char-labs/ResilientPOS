@@ -282,7 +282,7 @@ S1에서 HTTP 지연은 300 RPS까지 NFR 안이었지만, 이벤트 외부화�
 - 판정: 규칙의 "미완료가 늘지 않는 가장 작은 조합"이 없다. 300 RPS에서 sync p95·실패·힙이 가장 나은 것은 기본 설정이므로 **실행기와 Hikari 풀을 바꾸지 않는다**. 가상 스레드는 채택하지 않는다. 외부화 처리량은 커밋 처리량에 묶여 있어 실행기 크기로 풀리지 않는다.
 
 ### S4 느린 provider(변경 전: consumer 스레드에서 동기 호출)
-재현: 측정 빌드를 `FAKE_GATEWAY_LATENCY=<지연>`으로 다시 띄우고 S1 50 RPS 30초로 데운 뒤 `k6 run -e SALES_PER_SECOND=20 -e DURATION=60s -e SAMPLE=0.2 -e VUS=300 -e STORES=100 load-test/s4-slow-provider.js`. 실행 사이에는 지연 0으로 다시 띄워 lag를 비웠다. 지연 0은 10:00Z, 1초·3초는 다음 날 00:01~00:06Z에 돌았다(그 사이 맥이 잠들어 0.3초 실행은 버렸다).
+재현: 측정 빌드를 `FAKE_GATEWAY_LATENCY`에 지연(예: `PT1S`)을 주어 다시 띄우고 S1 50 RPS 30초로 데운 뒤 `k6 run -e SALES_PER_SECOND=20 -e DURATION=60s -e SAMPLE=0.2 -e VUS=300 -e STORES=100 load-test/s4-slow-provider.js`. 실행 사이에는 지연 0으로 다시 띄워 lag를 비웠다. 지연 0은 10:00Z, 1초·3초는 다음 날 00:01~00:06Z에 돌았다(그 사이 맥이 잠들어 0.3초 실행은 버렸다).
 
 | provider 지연 | `payment.attempt-created` 처리(초당) | lag 최대 | 메시지당 처리 시간 | sync p95 |
 |---|---|---|---|---|
