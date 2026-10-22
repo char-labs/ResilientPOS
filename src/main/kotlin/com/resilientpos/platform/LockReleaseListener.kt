@@ -1,8 +1,10 @@
 package com.resilientpos.platform
 
 import java.time.Duration
+import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.ScheduledThreadPoolExecutor
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import org.springframework.beans.factory.DisposableBean
 import org.springframework.boot.context.event.ApplicationReadyEvent
 import org.springframework.context.ApplicationListener
@@ -28,6 +30,9 @@ import org.springframework.stereotype.Component
 class LockReleaseListener(connectionFactory: RedisConnectionFactory, lock: RedisDistributedLock) :
     ApplicationListener<ApplicationReadyEvent>, DisposableBean {
 
+    /** [destroy]가 세운다. 예약된 다시 구독이 종료 뒤에 구독을 열지 않게 한다. */
+    private val closed = AtomicBoolean()
+
     private val recovery = ScheduledThreadPoolExecutor(1, CustomizableThreadFactory("lock-release-").apply { setDaemon(true) })
 
     private val container = RedisMessageListenerContainer().apply {
@@ -44,18 +49,25 @@ class LockReleaseListener(connectionFactory: RedisConnectionFactory, lock: Redis
     override fun onApplicationEvent(event: ApplicationReadyEvent) = subscribe()
 
     private fun subscribe() {
+        if (closed.get()) return
         try {
             container.start()
         } catch (e: RuntimeException) {
+            if (closed.get()) return
             log.warn { "잠금 해제 알림을 구독하지 못했다(${e.message}). 락은 재시도 간격으로만 기다리고 ${RESUBSCRIBE_INTERVAL.toSeconds()}초 뒤 다시 구독한다" }
             container.stop()
-            recovery.schedule({ subscribe() }, RESUBSCRIBE_INTERVAL.toMillis(), TimeUnit.MILLISECONDS)
+            try {
+                recovery.schedule({ subscribe() }, RESUBSCRIBE_INTERVAL.toMillis(), TimeUnit.MILLISECONDS)
+            } catch (_: RejectedExecutionException) {
+                // 위의 확인 뒤 destroy가 실행기를 닫았다. 종료 중이라 다시 구독하지 않는다.
+            }
         }
     }
 
     override fun destroy() {
-        container.destroy()
+        closed.set(true)
         recovery.shutdownNow()
+        container.destroy()
     }
 
     private companion object {
