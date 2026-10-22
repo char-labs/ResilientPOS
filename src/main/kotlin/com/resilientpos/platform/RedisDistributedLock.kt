@@ -21,8 +21,11 @@ import org.springframework.stereotype.Component
  * 잠그지 못하고 진행할 때마다 counter `lock.fail.open{lock, reason}`이 오른다. 처음 일어날 때 생기므로 미리 등록하지 않는다
  * (업무 모듈의 키를 `platform`이 모른다).
  *
- * 시도마다 Timer `distributed.lock.wait{lock, outcome}`(`acquired`·`timeout`·`error`)에 얻기까지 걸린 시간을, 얻은 잠금은
- * Timer `distributed.lock.held{lock}`에 풀 때까지의 시간을 남긴다. 대기 한도·TTL을 정하고 Redisson이 필요해지는지 보는 근거다(용량 기준 wiki).
+ * 시도마다 Timer `distributed.lock.wait{lock, outcome}`에 얻기까지 걸린 시간을 남긴다. `outcome`은 첫 SET에 얻은 `acquired`,
+ * 다시 시도해서 얻은 `waited`, 잠금 없이 진행한 `timeout`·`error`다. 얻은 잠금은 Timer `distributed.lock.held{lock}`에 풀 때까지의
+ * 시간을 남긴다. 대기 한도·TTL을 정하고 Redisson이 필요해지는지 보는 근거다(용량 기준 wiki).
+ *
+ * 대기 한도는 다시 시도하기를 멈추는 시각이다. 마지막 SET이 Redis 명령 timeout(`spring.data.redis.timeout`)까지 걸리면 그만큼 더 늦게 돌아온다.
  */
 @Component
 class RedisDistributedLock(
@@ -37,20 +40,20 @@ class RedisDistributedLock(
     override fun tryAcquire(key: String): String? {
         val started = System.nanoTime()
         val token = identifierGenerator.next().toString()
-        val acquired = try {
+        val attempts = try {
             acquire(key, token)
         } catch (e: DataAccessException) {
             return proceedWithoutLock(key, e, started)
         } catch (e: IllegalStateException) {
             return proceedWithoutLock(key, e, started)
         }
-        if (!acquired) {
+        if (attempts == null) {
             recordWait(key, "timeout", started)
             log.warn { "잠금 없이 진행한다(대기 ${WAIT.toMillis()}ms 초과) key=$key" }
             countFailOpen(key, "timeout")
             return null
         }
-        acquiredAt[token] = recordWait(key, "acquired", started)
+        acquiredAt[token] = recordWait(key, if (attempts == 1) "acquired" else "waited", started)
         return token
     }
 
@@ -88,11 +91,14 @@ class RedisDistributedLock(
     private fun releaseFailed(key: String, e: RuntimeException) =
         log.warn(e) { "잠금을 풀지 못했다. TTL ${TTL.toSeconds()}초 뒤 사라진다 key=$key" }
 
-    private fun acquire(key: String, token: String): Boolean {
+    /** 얻으면 SET을 부른 횟수, 대기 한도 안에 얻지 못하면 null이다. */
+    private fun acquire(key: String, token: String): Int? {
         val deadline = System.nanoTime() + WAIT.toNanos()
+        var attempts = 0
         while (true) {
-            if (redis.opsForValue().setIfAbsent(key, token, TTL) == true) return true
-            if (System.nanoTime() >= deadline) return false
+            attempts++
+            if (redis.opsForValue().setIfAbsent(key, token, TTL) == true) return attempts
+            if (System.nanoTime() + RETRY_INTERVAL.toNanos() > deadline) return null
             // ponytail: 폴링이다. 대기가 흔해지면 Redis pub/sub로 해제를 알린다.
             Thread.sleep(RETRY_INTERVAL.toMillis())
         }
