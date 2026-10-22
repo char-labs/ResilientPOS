@@ -125,3 +125,10 @@
 - **뜻.** 점주 요청이 5분 넘게 `503 SERVICE_UNAVAILABLE`로 실패한다. `/actuator` 밖에서 503을 내는 곳은 점주 세션 저장소(Redis) 장애 처리와 플랫폼 운영자 경로(`/admin/**`)의 IdP·Kafka 브로커 장애 처리다. 운영자 경로의 503도 이 규칙에 잡힌다. `/actuator/health`의 503(DB health DOWN, 기동·종료 중)은 이 규칙이 세지 않는다. 단말 경로(`/v1/**`)는 Redis 장애에 막히지 않는다.
 - **먼저 볼 것.** ERROR `errorCode=SERVICE_UNAVAILABLE` 로그의 `uri`. `/admin/`으로 시작하면 Redis가 아니라 IdP나 브로커 장애다(줄 끝의 `operator IdP unavailable`·`kafka broker unavailable`, [관측성](observability.md) 플랫폼 운영자 항목). 그 밖이면 Redis 상태를 본다. [LockFailOpen](#lockfailopen)(`reason="error"`)도 함께 울릴 것이다. 점주 요청이 드물면 2분 창이 끊겨 이 알림은 늦거나 울리지 않는다. Redis 장애의 주 신호는 주기 작업이 매분 만드는 `LockFailOpen`이다.
 - **조치.** Redis를 되살린다. 503은 변경이 커밋되지 않았다는 뜻이 아니다. 단말 등록·자격 회전 뒤 503을 받았으면 목록으로 결과를 확인한다([관측성](observability.md) 점주 세션 저장소 항목).
+
+## InboundStoreRateLimited
+
+- **뜻.** 매장 bucket이 비어 그 매장 단말의 `/v1` 요청이 5분 넘게 `429 RATE_LIMITED`로 거절된다. 매장 bucket 거절은 그 매장 단말 전부를 막는다. 단말 하나는 자기 bucket에 먼저 막혀 매장 bucket을 혼자 비우지 못하고, 한 매장 단말 4대가 함께 재연결해 backlog를 보내도 매장 bucket은 비지 않았다(#77 측정, [inbound-rate-limit](../spec/2026-10-21-inbound-rate-limit.md) 결정 8). 그래서 이어지는 매장 거절은 정상 회복이 아니다. 한 매장에서 여러 단말이 함께 고장 났거나, 매장의 단말 수가 상한 값이 전제한 수(4대)보다 많다. counter에 매장 ID가 없어 이 알림은 어느 매장인지 모르고, 여러 매장이 번갈아 짧게 거절돼도 울릴 수 있다. 단말 bucket 거절은 이 알림이 보지 않는다.
+- **먼저 볼 것.** Loki에서 `{service_name="ResilientPOS"} |= "빈도 상한으로 거절했다 scope=store"`로 거절 줄의 `storeId`를 본다(scope별 10초에 한 줄). 줄의 `terminalId`는 매장 bucket이 빈 순간 막힌 단말이라 원인이 아닐 수 있다. 같은 매장의 `scope=terminal` 줄에 한 `terminalId`가 되풀이되면 그 단말이 자기 상한까지 보내고 있다. 그런 줄 없이 여러 단말이 막혀 있으면 단말들이 각자 상한 안에서 합쳐 매장 bucket을 비운 것이니 그 매장의 등록 단말 수를 본다.
+- **조치.** 고장 단말이면 매장에 그 단말의 재시작이나 업데이트를 요청한다(`Retry-After`를 지키는지, 같은 sync 배치를 되풀이하는지). 정상 단말이 많은 매장이면 매장 상한 값(`resilientpos.rate-limit.store.*`)을 다시 정한다. 값은 spec 결정 6의 조건(매장 capacity는 매장 단말 수 × 단말 capacity 이상)을 따른다.
+- **하지 말 것.** 상한을 크게 올리거나 꺼서 알림을 끄지 않는다. 매장 bucket은 한 매장의 단말들이 다른 매장 몫의 처리량을 쓰지 못하게 하는 장치다.
