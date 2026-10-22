@@ -465,3 +465,7 @@ Redisson 기각 기준:
 3. 충족. 흔들리지 않은 실행의 보유 p99.9 최대 0.50초로 TTL의 1/10 아래다. 과부하에서 보유가 11.61초까지 늘어난 것은 락 블록 안의 커넥션 대기다.
 
 #87 권장 상한: 단말 capacity 10·refill 2/s, 매장 capacity 40·refill 8/s. 하한·격리 조건은 성립하고 상한 조건은 성립하지 않는다(용량 기준 wiki의 "단말·매장 rate limit 권장값"). #102 세션에 근거와 함께 전했다.
+
+### 실행 결과
+- `./gradlew test` 전체: a6d015f에서 818개 통과(06:21~06:25Z). 리뷰 반영 전 4d3d034에서는 첫 실행의 `UnknownPaymentResolverIntegrationTest`가 `TimeoutException`으로 한 번 실패했고 다시 돌려 810개가 통과했다.
+- `python3 scripts/check_pr.py --base origin/main --worktree`: 개발 중 PASS. 제출 전 `--worktree` 없이도 PASS(일반 27개 파일).
