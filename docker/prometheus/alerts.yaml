@@ -168,3 +168,15 @@ groups:
         annotations:
           summary: 점주 요청이 5분 넘게 503으로 실패한다
           runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#ownersessionstoreunavailable
+
+      - alert: InboundStoreRateLimited
+        # 매장 bucket 거절은 그 매장 단말 전부를 막는다. #77에서 한 매장 단말 4대가 함께 재연결해 backlog를 보내도 매장 거절은 없었으므로 이어지는 매장 거절은 정상 회복이 아니다.
+        # 단말 bucket 거절은 오래 오프라인이던 단말의 정상 회복에도 이어지므로 보지 않는다. counter에 매장 ID가 없어 어느 매장인지는 거절 로그로 찾는다(runbook).
+        # shortcut: 5분은 감지 지연으로 고른 시작값이다. 여러 매장이 번갈아 짧게 거절돼도 울릴 수 있다. 운영에서 그런 경보가 잦으면 다시 본다.
+        expr: sum(increase(inbound_rate_limited_total{application="ResilientPOS", scope="store"}[2m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: 매장 단위 빈도 상한 거절이 5분 넘게 이어진다
+          runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#inboundstoreratelimited
