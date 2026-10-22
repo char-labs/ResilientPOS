@@ -160,6 +160,9 @@ Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰�
       --property parse.key=true --property key.separator=$'\t' < redrive.txt
     ```
   - **경합 재시도는 `REQUESTED` 시도로 provider를 다시 부른다.** 승인 뒤 결과 저장이 잠금 대기 초과 같은 경합으로 실패하면 같은 시도에 승인을 다시 요청하게 된다. 지금은 `FakePaymentGateway`라 해가 없고, 실제 provider를 붙이는 PR은 `paymentId`를 provider 멱등 키로 넘겨야 한다.
+  - **provider 호출의 deadline은 3초다.** 넘으면 승인 요청은 결과 불명(`UNKNOWN`)이고 결과 불명 확정 작업이 조회로 수렴시킨다. 지금은 `FakePaymentGateway`가 `resilientpos.payment.fake-gateway.deadline`으로 흉내 내고, 실제 PG adapter에서는 HTTP client timeout이 이 자리다(외부 연동 전략 §4.2 출발값).
+    승인 consumer는 consumer 스레드에서 provider를 동기로 부르므로 처리량이 파티션 수 ÷ provider 지연에 묶인다(지연 1초면 인스턴스 하나가 초당 3건, [용량 기준](capacity.md)). 느린 provider는 메시지당 최대 deadline만큼 그 파티션을 막는다.
+    비동기 반환 listener로 풀지 않는 이유는 실패한 레코드의 offset이 재시도·DLT보다 먼저 커밋되어 재시작 때 시도가 `REQUESTED`에 남을 수 있기 때문이다(spring-kafka 4.1.1). 오래 `REQUESTED`에 머문 시도를 다시 집어드는 회수 경로가 생기면 다시 본다([k6-capacity-measurement](../spec/2026-10-21-k6-capacity-measurement.md)).
   - **배포 조건(리스너를 consumer로 바꾸는 배포).** 옛 리스너 이름으로 남은 미완료 기록은 끝낼 주체가 없다. 배포 전에 `completion_date is null`이고 `listener_id`에 네 리스너 클래스 이름이 든 행이 0건이어야 한다. 조건 SQL은 [kafka-event-redelivery](../spec/2026-09-26-kafka-event-redelivery.md)에 있다.
   - **Kafka 관련 작업은 공식 문서로 대조한다.** [Spring Modulith 이벤트](https://docs.spring.io/spring-modulith/reference/events.html), [Spring Kafka 오류 처리](https://docs.spring.io/spring-kafka/reference/kafka/annotation-error-handling.html), Apache Kafka 설정 문서를 보고, 문서가 기본값을 설명하지 않거나 페이지를 읽지 못하면 클라이언트가 기동 때 찍는 `ProducerConfig values`·`ConsumerConfig values` 로그로 실제 값을 확인한다. 2026-09-27 점검 결과와 남은 결정(전송 직렬화, 운영 복제 수, 리밸런스 프로토콜)은 [kafka-event-redelivery](../spec/2026-09-26-kafka-event-redelivery.md)에 있다. `DefaultErrorHandler`는 `RuntimeException`만 다루므로 consumer 본문에서 `Error`를 던지지 않는다.
   - **브로커로 보내지 못한 기록은 주기 작업이 다시 보낸다**(`platform.EventPublicationResubmitter`, [event-publication-resubmit](../spec/2026-09-29-event-publication-resubmit.md)). 1분마다 세 단계를 돈다.
