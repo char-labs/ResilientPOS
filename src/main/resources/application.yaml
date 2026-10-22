@@ -159,13 +159,13 @@ resilientpos:
   rate-limit:
     # 인증된 /v1 요청의 단말·매장 token bucket(RedisTerminalRateLimiter). capacity는 쉬었다 온 단말이 바로 보낼 수 있는 요청 수,
     # refill-per-second는 그 뒤로 이어 보낼 수 있는 초당 요청 수다. 매장 값은 그 매장 단말 전부의 합에 걸린다.
-    # 자리값이다. #77 k6 실측 값으로 바꾸기 전에는 PR을 ready로 바꾸지 않는다(inbound-rate-limit spec 결정 8).
+    # #77 k6 실측으로 정한 값이다. 매장 단말 4대를 전제로 매장 capacity가 4 × 단말 capacity다. 근거는 inbound-rate-limit spec 결정 8.
     terminal:
-      capacity: 100
-      refill-per-second: 5
+      capacity: 10
+      refill-per-second: 2
     store:
-      capacity: 500
-      refill-per-second: 25
+      capacity: 40
+      refill-per-second: 8
   kafka:
     # 이름은 저장 형식이다. 이벤트 클래스의 TOPIC 상수와 같아야 한다(KafkaConfiguration).
     topics: order.payment-requested,payment.attempt-created,payment.approved,order.paid,payment.reconciliation-requested
