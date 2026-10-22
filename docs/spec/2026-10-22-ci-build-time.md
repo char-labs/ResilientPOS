@@ -116,3 +116,42 @@ PR 검사(`.github/workflows/pr-checks.yml`) 한 번이 5분 넘게 걸린다. �
 
 ## 결과
 개발 전 작성. 개발 후 실행 결과와 변경 이유를 추가한다.
+
+### 측정 환경
+- 로컬: Apple M3 Pro 11코어, 메모리 36GB, Docker는 OrbStack(VM 11 CPU, 16GB), JDK Corretto 25.0.4, Gradle 9.7.1. 다른 worktree의 compose 스택(`resilientpos`)과 다른 세션이 함께 돈다. 시간은 `./gradlew test --rerun`의 test task wall이다(컴파일 제외, 미리 `testClasses`).
+- CI: GitHub 표준 러너 `ubuntu-latest`(ubuntu-24.04, 이미지 20261018.339.1). 저장소가 public이라 4 vCPU, 16GB다.
+
+### 로컬 후보별 실측 (main 309e93d, 133개 클래스, 901개 테스트)
+| 실험 | test task wall | 클래스 시간 합계 | 컨텍스트 기동 수 / "Started" 합계 | 결과 |
+|---|---|---|---|---|
+| 기준선(fork 1, 캐시 1) | 278초 | 273.8초 | 58번 / 72.2초 | 통과 |
+| 캐시만(크기 64, 실험용 PostgreSQL 연결 한도 1000) | 260초 | 250.2초 | 34번 / 45.5초 | `LockIntegrationTest` 1건 실패(20초 대기) |
+| fork 2만 | 155초 | 286.2초 | 57번 / 91.4초 | 통과 |
+| fork 3만 | 143초 | 347.3초 | 65번 / 117.5초 | 통과 |
+| fork 2와 캐시(실험용 리스너 수정 포함) | 179초 | 308.3초 | 36번 / 91.8초 | 통과 |
+
+- 기준선이 사용자 측정(130개 클래스, 868개 테스트, 251초)보다 큰 것은 #109가 테스트를 더했기 때문이다.
+- 서로 다른 컨텍스트 구성은 34개이고 그 가운데 DB를 쓰는 것이 23개다(캐시만 실험의 기동 수와 HikariPool 수). 캐시를 키우면 쉬는 컨텍스트도 Hikari 풀(기본 10개 연결)을 쥐어 PostgreSQL 기본 한도 100을 넘는다. 그래서 캐시 실험은 연결 한도를 임시로 올렸다.
+- fork 2와 캐시를 합친 첫 실행은 머신이 17시 04분에 564초 동안 잠들어(`pmset -g log`의 Idle Sleep) 무효로 하고 `caffeinate -i`로 다시 쟀다. 이후 측정은 모두 잠자기를 막았다.
+- fork 3은 fork 2보다 12초 빨랐지만 컨텍스트 기동 합계가 91.4초에서 117.5초로 늘어 경합이 보인다. 코어가 4개인 CI에서는 차이가 더 작을 수 있어 fork 수는 CI 실측으로 정한다(결정 7).
+- 최종 구성(fork 2, 캐시 1)으로 `./gradlew test --rerun`을 3회 연속 돌려 모두 통과했다(901개, 실패 0). wall은 305초, 305초, 300초인데, 이때 머신이 스왑 39.9GB 가운데 38.9GB를 쓰고 load average가 147이어서 시간은 비교에 쓰지 않는다.
+
+### 컨텍스트 pause 근거 (결정 6, 범위 조정 1)
+- [Spring Framework 7.0 Context Pausing](https://docs.spring.io/spring-framework/reference/testing/testcontext-framework/ctx-management/context-pausing.html): 캐시된 컨텍스트는 쓰이지 않을 때 멈추고, 다시 꺼낼 때 auto-startup 빈을 다시 시작한다. 기본 `PauseMode`는 `ON_CONTEXT_SWITCH`다(다음에 꺼내는 컨텍스트가 다를 때만 멈춘다).
+- spring-test 7.0.9 `ContextCache`(sources jar): `spring.test.context.cache.pause`는 7.0.3부터 있고 기본값이 `on_context_switch`다. `DefaultContextCache`가 컨텍스트를 바꿀 때 쓰지 않는 컨텍스트에 `pause()`를, 꺼낼 때 `restart()`를 부른다.
+- spring-context 7.0.9 `DefaultLifecycleProcessor.onPause`(sources jar): `isPauseable()`이 true인(기본값) SmartLifecycle 빈만 멈춘다. 문서는 Lifecycle도 멈춘다고 적지만 코드는 SmartLifecycle만 멈춘다.
+- spring-kafka 4.1.1 `KafkaListenerEndpointRegistry`(sources jar): SmartLifecycle이고 `isPauseable`을 다시 정의하지 않아 멈춘다. 멈추면 `KafkaMessageListenerContainer`가 consumer 스레드를 끝내며 `consumer.close()`를 부른다.
+- kafka-clients 4.2.2 `CloseOptions`(sources jar): 기본 `close()`는 dynamic member면 group을 떠난다. 이 앱은 `group.instance.id`를 두지 않아 dynamic member다.
+- spring-context 7.0.9 `ExecutorLifecycleDelegate`: 스케줄러 실행기도 멈추고, 멈춘 동안 작업은 재시작까지 기다린다.
+- spring-data-redis 4.1.1 `LettuceConnectionFactory`(sources jar): SmartLifecycle이고 `stop()`이 Redis client를 닫는다. `LockReleaseListener`의 구독 컨테이너는 빈이 아니라 멈추지도 다시 시작하지도 않고, 구독은 `ApplicationReadyEvent`에서 한 번만 연다. 다시 시작한 컨텍스트에서 `LockIntegrationTest`의 "앱과 테스트가 해제 알림 채널을 구독한다"가 20초 안에 충족되지 않았다.
+- 캐시만 실험에서 Kafka 테스트는 실패하지 않았다. 쉬는 컨텍스트가 파티션을 가져가는 문제는 재현되지 않았다.
+- 테스트의 Kafka consumer·listener 설정은 바꾸지 않았다. 결정 10은 해당하지 않아 Modulith·Kafka 키워드 문서는 고치지 않는다.
+
+### build cache 근거 (결정 4)
+- [setup-gradle 문서](https://github.com/gradle/actions/blob/main/docs/setup-gradle.md): Gradle 홈의 `caches`(local build cache `caches/build-cache-1` 포함)와 `notifications`를 저장·복원한다. 기본 브랜치 job에서만 캐시를 쓰고 다른 브랜치 job은 읽기만 한다. 복원은 같은 브랜치를 먼저, 그다음 기본 브랜치를 찾는다. `pull_request` 실행의 캐시 범위는 merge ref이고 기본값으로 쓰지 않는다. `cache-cleanup: on-success`(기본값)는 저장 전에 이번 실행이 쓰지 않은 파일을 지운다.
+- 그래서 적중하는 곳은 main 캐시와 입력이 같은 task뿐이다. 문서만 고친 PR은 compile·test가 적중하고(test 입력인 runbook·알림 규칙 제외), 소스를 고친 PR은 다시 돈다. PR을 같은 커밋으로 다시 돌려도 PR 실행이 캐시를 저장하지 않아 처음 실행과 같다. main push를 같은 커밋으로 다시 돌리면 첫 실행이 저장한 캐시(키가 job과 커밋)에서 모두 적중한다. main 쪽 두 경우는 문서에서 끌어낸 것이고, 이 PR이 머지되기 전에는 main 캐시에 build cache 항목이 없어 CI로 확인할 수 없다.
+- 로컬 실측: 최종 구성으로 test를 돌린 뒤 `./gradlew clean build`를 하면 `compileKotlin`·`compileTestKotlin`·`test`가 `FROM-CACHE`이고 3초에 끝났다.
+
+### 전역 상태와 consumer group 재검증 (결정 8)
+- fork는 JVM마다 PostgreSQL·Redis·Kafka 컨테이너를 따로 띄운다. 전역 `Tx`·`Lock`은 JVM 단위라 fork끼리 섞이지 않고, consumer group은 브로커가 달라 fork끼리 나누지 않는다.
+- 컨텍스트 캐시는 1개 그대로라 한 JVM 안의 전역 상태와 group 공유 조건은 바뀌지 않았다.
