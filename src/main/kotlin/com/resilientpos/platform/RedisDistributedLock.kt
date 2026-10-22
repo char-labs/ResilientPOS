@@ -31,7 +31,8 @@ import org.springframework.stereotype.Component
  * 대기 한도는 다시 시도하기를 멈추는 시각이다. 마지막 SET이 Redis 명령 timeout(`spring.data.redis.timeout`)까지 걸리면 그만큼 더 늦게 돌아온다.
  *
  * 기다리는 요청은 해제 알림으로 깨어 바로 다시 시도한다. 해제 스크립트가 지운 키를 [RELEASED_CHANNEL]로 PUBLISH하고(왕복은 한 번 그대로),
- * [LockReleaseListener]가 받아 [onReleased]를 부른다. 알림 하나는 그 pod에서 가장 먼저 기다린 요청 하나만 깨운다.
+ * [LockReleaseListener]가 받아 [onReleased]를 부른다. 알림 하나는 그 pod 대기열의 맨 앞 하나만 깨운다. 기다림이 간격으로 끝나 다시 시도한
+ * 요청이나 깨어났지만 SET을 빼앗긴 요청은 줄 뒤에 다시 서므로, 먼저 온 순서를 보장하지 않는다.
  * 알림은 놓칠 수 있다(대기 등록 전의 해제, TTL 만료, 구독이 끊긴 동안, 깨운 요청이 막 포기한 때). 그때는 재시도 간격이 지나 다시 시도한다.
  */
 @Component
@@ -82,12 +83,16 @@ class RedisDistributedLock(
     }
 
     /**
-     * 해제 알림을 받은 키를 가장 먼저 기다린 요청 하나만 깨운다. 모두 깨우면 해제마다 기다리는 수만큼 SET이 몰려,
+     * 해제 알림을 받은 키의 대기열 맨 앞 하나만 깨운다. 모두 깨우면 해제마다 기다리는 수만큼 SET이 몰려,
      * 같은 키 20개 동시에서 SET이 고정 간격 스핀보다도 많았다(용량 기준 wiki).
+     * Lettuce I/O 스레드에서 불리므로 맵 잠금 없이 꺼낸다. 빈 대기열은 꺼내진 요청이 기다림을 끝내며 지운다.
      */
     fun onReleased(key: String) {
-        waiters.computeIfPresent(key) { _, queue -> queue.apply { poll()?.countDown() }.ifEmpty { null } }
+        waiters[key]?.poll()?.countDown()
     }
+
+    /** 그 키를 기다리는 요청 수. 기다림이 끝나면 0으로 돌아와야 한다. */
+    internal fun waitingCount(key: String): Int = waiters[key]?.size ?: 0
 
     /** 얻기까지 걸린 시간을 남기고 지금 시각을 돌려준다. */
     private fun recordWait(key: String, outcome: String, started: Long): Long {

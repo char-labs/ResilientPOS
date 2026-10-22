@@ -147,6 +147,24 @@ class LockTest {
     }
 
     @Test
+    fun `기다림이 끝나면 얻었든 포기했든 대기열에서 빠진다`() {
+        @Suppress("UNCHECKED_CAST") // mock(ValueOperations::class.java)는 타입 인자를 모른다. 이 테스트는 String 키·값만 쓴다.
+        val values = mock(ValueOperations::class.java) as ValueOperations<String, String>
+        given(values.setIfAbsent(anyString(), anyString(), any(Duration::class.java))).willReturn(false, true).willReturn(false)
+        val redis = mock(StringRedisTemplate::class.java)
+        given(redis.opsForValue()).willReturn(values)
+        val lock = lock(redis)
+        val key = "order:create-lock:terminal:client-order"
+
+        assertNotNull(lock.tryAcquire(key))
+        val afterAcquired = lock.waitingCount(key)
+        assertNull(lock.tryAcquire(key))
+
+        assertEquals(0, afterAcquired)
+        assertEquals(0, lock.waitingCount(key))
+    }
+
+    @Test
     fun `커넥션 팩토리가 닫혀도 던지지 않고 토큰 없이 돌아온다`() {
         assertNull(lock(closedRedis()).tryAcquire("test:lock"))
         assertEquals(1.0, failOpenCount("test:lock", "error"))
