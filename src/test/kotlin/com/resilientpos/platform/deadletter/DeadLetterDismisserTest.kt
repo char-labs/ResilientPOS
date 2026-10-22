@@ -4,6 +4,7 @@ import com.resilientpos.foundation.DomainErrorKind
 import com.resilientpos.foundation.DomainException
 import com.resilientpos.foundation.IdentifierGenerator
 import com.resilientpos.platform.BaseEntity
+import com.resilientpos.platform.DependencyUnavailableException
 import com.resilientpos.platform.Tx
 import com.resilientpos.platform.TxRunner
 import jakarta.persistence.EntityManager
@@ -96,6 +97,15 @@ class DeadLetterDismisserTest {
         given(reader.readRecord(DLT, 0, DLT_OFFSET)).willThrow(invalid)
 
         assertSame(invalid, assertFailsWith<DomainException> { dismiss() })
+        verifyNoInteractions(dismissals, entityManager)
+    }
+
+    @Test
+    fun `DLT를 읽다 브로커에 닿지 못하면 기록하지 않고 DependencyUnavailableException을 그대로 던진다`() {
+        val unavailable = DependencyUnavailableException("Kafka", RuntimeException("timeout"))
+        given(reader.readRecord(DLT, 0, DLT_OFFSET)).willThrow(unavailable)
+
+        assertSame(unavailable, assertFailsWith<DependencyUnavailableException> { dismiss() })
         verifyNoInteractions(dismissals, entityManager)
     }
 

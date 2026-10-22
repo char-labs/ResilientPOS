@@ -3,17 +3,22 @@ package com.resilientpos.platform.deadletter
 import com.jayway.jsonpath.JsonPath
 import com.resilientpos.KafkaTestSupport
 import com.resilientpos.PostgresIntegrationTest
+import com.resilientpos.awaitUntil
 import com.resilientpos.contract.OrderPaid
 import com.resilientpos.foundation.DomainException
 import com.resilientpos.foundation.Money
 import com.resilientpos.platform.OperatorTokens
 import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.TerminalId
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry
 import java.sql.Timestamp
+import java.time.Clock
 import java.time.Duration
 import java.time.Instant
 import java.util.Currency
 import java.util.UUID
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -23,6 +28,7 @@ import org.apache.kafka.clients.consumer.ConsumerRecord
 import org.apache.kafka.common.TopicPartition
 import org.junit.jupiter.api.extension.ExtendWith
 import org.springframework.beans.factory.annotation.Autowired
+import org.springframework.beans.factory.annotation.Value
 import org.springframework.boot.test.system.CapturedOutput
 import org.springframework.boot.test.system.OutputCaptureExtension
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc
@@ -30,18 +36,23 @@ import org.springframework.context.annotation.Import
 import org.springframework.http.HttpHeaders
 import org.springframework.http.MediaType
 import org.springframework.jdbc.core.JdbcTemplate
+import org.springframework.jdbc.core.queryForObject
+import org.springframework.kafka.core.KafkaAdmin
 import org.springframework.kafka.core.KafkaTemplate
 import org.springframework.kafka.listener.DeadLetterPublishingRecoverer
 import org.springframework.kafka.listener.ListenerExecutionFailedException
+import org.springframework.mock.web.MockHttpServletResponse
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.ResultActionsDsl
 import org.springframework.test.web.servlet.get
 import org.springframework.test.web.servlet.post
+import org.springframework.transaction.support.TransactionTemplate
 import tools.jackson.databind.json.JsonMapper
 
 private const val TOPIC = "order.paid"
 private const val DLT = "order.paid.DLT"
 private const val OLD_OPERATOR = "operator-before-recreate"
+private const val WINNER_OPERATOR = "operator-winner"
 
 /**
  * DLT 폐기를 실제 브로커·DB·운영자 토큰(운영과 같은 issuer decoder)으로 HTTP부터 기록·목록까지 잇는다. Docker가 필요하다.
@@ -56,6 +67,11 @@ class DeadLetterDismissIntegrationTest(
     @Autowired private val kafkaTemplate: KafkaTemplate<Any, Any>,
     @Autowired private val jsonMapper: JsonMapper,
     @Autowired private val jdbcTemplate: JdbcTemplate,
+    @Autowired private val transaction: TransactionTemplate,
+    @Autowired private val kafkaAdmin: KafkaAdmin,
+    @Autowired private val queries: DeadLetterHandledQueries,
+    @Autowired private val clock: Clock,
+    @Value("\${resilientpos.kafka.topics}") private val topics: List<String>,
 ) : PostgresIntegrationTest() {
 
     private fun orderPaid(orderId: UUID): String = jsonMapper.writeValueAsString(
@@ -214,5 +230,66 @@ class DeadLetterDismissIntegrationTest(
 
         assertEquals(emptyList(), rows(missing))
         assertEquals(emptyList(), rows(dltOffset))
+    }
+
+    @Test
+    fun `API로 폐기하면 그 토픽의 미처리 수가 다음 갱신에 하나 준다`() {
+        val dltOffset = deadLetter(UUID.randomUUID())
+        val registry = SimpleMeterRegistry()
+        val metrics = UnhandledDeadLetterMetrics(kafkaAdmin, registry, queries, clock, topics)
+        try {
+            metrics.countUnhandled()
+            val before = registry.get("event.kafka.dead-letter.unhandled").tag("topic", TOPIC).gauge().value()
+            assertTrue(before >= 1.0, "방금 넣은 레코드가 미처리다: $before")
+
+            dismiss(dltOffset, "미처리 수 확인").andExpect { status { isOk() } }
+
+            metrics.countUnhandled()
+            assertEquals(before - 1, registry.get("event.kafka.dead-letter.unhandled").tag("topic", TOPIC).gauge().value())
+        } finally {
+            metrics.destroy()
+        }
+    }
+
+    /**
+     * [locksBlockedBy]: holder backend에 막혀 아직 얻지 못한 잠금 수. `pg_stat_activity`는 트랜잭션 안에서 처음 읽은 시점에 고정되므로 매번 새로 읽는 `pg_locks`를 본다.
+     */
+    private fun locksBlockedBy(holder: Int): Long =
+        jdbcTemplate.queryForObject<Long>("select count(*) from pg_locks where not granted and ? = any(pg_blocking_pids(pid))", holder) ?: 0L
+
+    /**
+     * 같은 레코드를 동시에 폐기한 경합을 실제 DB로 만든다. 이긴 쪽 기록을 커밋 전에 붙들어 두면 진 쪽의 기록 확인(READ COMMITTED)은 그 행을 보지 못하고 INSERT한다.
+     * 진 쪽 INSERT는 커밋 때 이긴 쪽 커밋을 기다리다 unique에 걸리고, 그 위반을 번역해 이긴 기록을 돌려준다.
+     */
+    @Test
+    fun `기록 확인이 커밋 전인 같은 레코드의 기록을 못 보고 저장하면 unique 위반을 번역해 이긴 기록을 200으로 돌려주고 행은 하나이며 감사 줄을 남기지 않는다`(output: CapturedOutput) {
+        val dltOffset = deadLetter(UUID.randomUUID())
+        val timestamp = dltTimestamp(dltOffset)
+        val executor = Executors.newSingleThreadExecutor()
+        val response = try {
+            checkNotNull(
+                transaction.execute {
+                    jdbcTemplate.update(
+                        "insert into t_dead_letter_dismissal (id, dlt_topic, dlt_partition, dlt_offset, dlt_timestamp, operator_subject, reason, created_at, updated_at) " +
+                            "values (?, ?, 0, ?, ?, ?, '먼저 온 사유', now(), now())",
+                        UUID.randomUUID(), DLT, dltOffset, Timestamp.from(timestamp), WINNER_OPERATOR,
+                    )
+                    // JpaTransactionManager가 DataSource에 이 트랜잭션의 연결을 묶어 두므로 JdbcTemplate도 같은 backend를 쓴다.
+                    val holder = checkNotNull(jdbcTemplate.queryForObject<Int>("select pg_backend_pid()"))
+                    val losing = executor.submit<MockHttpServletResponse> { dismiss(dltOffset, "늦게 온 사유 7731").andReturn().response }
+                    awaitUntil("폐기의 기록 INSERT가 이긴 기록의 커밋을 기다린다") { locksBlockedBy(holder) != 0L }
+                    losing
+                },
+            ).get(10, TimeUnit.SECONDS)
+        } finally {
+            executor.shutdown()
+            executor.awaitTermination(10, TimeUnit.SECONDS)
+        }
+
+        assertEquals(200, response.status, response.contentAsString)
+        assertEquals(WINNER_OPERATOR, JsonPath.read<String>(response.contentAsString, "$.data.operator"))
+        assertEquals(listOf(WINNER_OPERATOR), rows(dltOffset).map { it["operator_subject"] })
+        assertEquals(emptyList(), auditLines(output, dltOffset))
+        assertFalse("늦게 온 사유 7731" in output.all, "사유 원문이 로그에 남았다")
     }
 }
