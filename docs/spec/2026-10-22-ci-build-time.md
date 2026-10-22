@@ -90,8 +90,9 @@ PR 검사(`.github/workflows/pr-checks.yml`) 한 번이 5분 넘게 걸린다. �
 - .github/workflows/pr-checks.yml
 - gradle.properties
 - build.gradle.kts
-- src/test/resources/**
-- src/test/kotlin/com/resilientpos/**
+- src/test/resources/spring.properties
+- src/test/kotlin/com/resilientpos/PostgresIntegrationTest.kt
+- src/test/kotlin/com/resilientpos/platform/OwnerSessionStoreOutageIntegrationTest.kt
 - docs/wiki/development-workflow.md
 
 ## 인수 조건
@@ -170,3 +171,9 @@ PR 검사(`.github/workflows/pr-checks.yml`) 한 번이 5분 넘게 걸린다. �
 ### 전역 상태와 consumer group 재검증 (결정 8)
 - fork는 JVM마다 PostgreSQL·Redis·Kafka 컨테이너를 따로 띄운다. 전역 `Tx`·`Lock`은 JVM 단위라 fork끼리 섞이지 않고, consumer group은 브로커가 달라 fork끼리 나누지 않는다.
 - 컨텍스트 캐시는 1개 그대로라 한 JVM 안의 전역 상태와 group 공유 조건은 바뀌지 않았다.
+
+### 리뷰 반영 (범위 조정 2)
+- `resilientpos-multi-review`: Claude 81/100, Codex는 점수 없이 지적만, Gemini는 CLI가 없어 미실행이다. 두 리뷰어가 함께 짚은 것은 닫은 임시 포트의 경쟁과, 인수 조건 2의 CI 적중 실측을 머지 전에 할 수 없다는 것이다. 둘 다 범위 조정 2로 반영했다.
+- Claude만 짚은 REST Docs 스니펫 누락은 실측으로 확인했다. 고치기 전에는 `clean` 뒤 캐시가 적중한 빌드에 `build/generated-snippets`가 없었다. output을 선언한 뒤에는 `./gradlew test --rerun`이 스니펫 디렉터리 73개를 만들고, `clean` 뒤 `./gradlew test`가 `FROM-CACHE`일 때도 73개가 그대로 되살아났다.
+- 리뷰 반영 뒤 `./gradlew test --rerun` 전체가 통과했다(901개, 실패 0, wall 223초. 부하가 큰 머신이라 시간은 비교에 쓰지 않는다).
+- 이 PR에서 고치지 않고 보고만 하는 것: build job에 `timeout-minutes`가 없어 fork가 멈추면 기본 360분까지 돈다. `README.md`의 "테스트는 이 파일과 무관하게"는 테스트가 `docker/prometheus`를 읽으므로 맞지 않는다.
