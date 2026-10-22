@@ -130,15 +130,20 @@ python3 scripts/check_pr.py --base origin/main
 머지 직전 재실행 습관은 그대로 유지한다.
 
 ### PR 워크플로
-`.github/workflows/pr-checks.yml`이 main으로 향하는 PR에서 두 단계를 순서대로 돈다.
+`.github/workflows/pr-checks.yml`이 main으로 향하는 PR에서 두 job을 함께 돌린다. main push에서는 Gradle build만 돈다.
 
-| 단계 | 하는 일 | 실패하면 |
+| job | 하는 일 | 실패하면 |
 |---|---|---|
-| Gradle build | `./gradlew build`. 통합 테스트가 Testcontainers로 실제 PostgreSQL을 띄운다 | 다음 단계를 돌지 않는다 |
+| Gradle build | `./gradlew build`. 통합 테스트가 Testcontainers로 PostgreSQL·Redis·Kafka를 띄운다 | PR에 실패로 표시된다 |
 | Flyway version gate | `check_pr.py --base origin/(기준) --migrations-only` | 버전 중복을 머지 전에 막는다 |
 
 워크플로는 버전 중복만 본다. spec 첫 커밋 판정은 머지 결과 위에서 의미가 달라지므로 로컬 검사가 계속 담당한다.
-빌드를 앞에 두는 이유는 컴파일도 안 되는 변경에 대해 나머지 게이트를 돌릴 이유가 없기 때문이다.
+Flyway gate는 빌드 산출물을 쓰지 않으므로 빌드를 기다리지 않는다. 빌드가 실패해도 버전 중복 결과는 따로 나온다.
+
+검사 시간을 줄이는 장치는 둘이다([ci-build-time](../spec/2026-10-22-ci-build-time.md)).
+- test는 fork 2개로 나눠 돈다(`build.gradle.kts`의 `maxParallelForks`). fork마다 컨테이너를 따로 띄워 DB와 consumer group을 같이 쓰지 않는다. 고정값이라 CI에서 깨진 테스트를 로컬에서 같은 fork 수로 다시 돌릴 수 있다.
+- `gradle.properties`가 Gradle build cache를 켠다. setup-gradle은 main push job에서만 캐시를 저장하고 PR은 main의 마지막 캐시를 읽기만 한다. 그래서 입력이 main과 같은 task만 `FROM-CACHE`로 건너뛴다. 문서만 고친 PR은 compile과 test를 건너뛰고(test 입력인 runbook과 알림 규칙은 빼고), 소스를 고친 PR은 다시 돈다. PR을 같은 커밋으로 다시 돌려도 PR 실행은 캐시를 저장하지 않으므로 처음 실행과 같다.
+- test도 캐시하므로 입력에 없는 변화(태그가 움직이는 컨테이너 이미지)는 test를 건너뛴 실행에서 잡지 못한다. 테스트가 classpath 밖 파일을 읽으면 `build.gradle.kts`의 Test `inputs`에 더한다.
 
 ### rebase와 force-push
 - 개발 브랜치를 base 위로 rebase 하는 것은 허용한다. rebase 뒤에도 spec 첫 커밋이 base 이후 첫 커밋이어야 하며,
