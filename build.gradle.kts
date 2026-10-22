@@ -96,4 +96,6 @@ tasks.withType<Test> {
     // AlertRulesTest·ObservabilityConfigurationTest가 알림 규칙과 runbook을 읽는다. 입력으로 두지 않으면 규칙만 고쳤을 때 테스트가 up-to-date로 건너뛰어진다.
     inputs.dir("docker/prometheus").withPropertyName("alertRules").withPathSensitivity(PathSensitivity.RELATIVE)
     inputs.file("docs/wiki/runbook.md").withPropertyName("runbook").withPathSensitivity(PathSensitivity.RELATIVE)
+    // REST Docs 스니펫. output으로 두지 않으면 test가 build cache에서 올 때 스니펫이 되살아나지 않는다.
+    outputs.dir(layout.buildDirectory.dir("generated-snippets")).withPropertyName("restDocsSnippets")
 }
