@@ -47,7 +47,7 @@
 
 **5. 폐기 기록은 새 표 `t_dead_letter_dismissal`(V020)이다.** 컬럼은 `id`(UUID v7), `dlt_topic`, `dlt_partition`, `dlt_offset`, `dlt_timestamp`, `operator_subject`, `reason`, `BaseEntity` 공통 컬럼이다. 폐기 시각은 `created_at`이다. unique `ux_dead_letter_dismissal_source(dlt_topic, dlt_partition, dlt_offset, dlt_timestamp)`다. 재투입 표에 행을 넣지 않는 이유는 그 표의 넣은 자리(`target_partition`·`target_offset`)가 not null이고, "기록이 있으면 넣은 메시지가 브로커에 ack된 것이다"라는 #107 불변식이 깨지기 때문이다.
 
-**6. 규칙(사용자 결정).** 15개가 된다.
+**6. 규칙(사용자 결정).** 이 PR로 15개가 되고, main에 먼저 들어온 #102의 `InboundStoreRateLimited`와 합쳐 16개다.
 
 | 규칙 | 조건 | for | severity |
 |---|---|---|---|
@@ -133,7 +133,7 @@
 6. 빈 사유·500자 초과·NUL 문자가 든 사유는 `400 INVALID_DISMISS_REASON`이고 DLT를 읽지 않는다. 설정에 없는 토픽·없는 partition·음수 offset은 `400 INVALID_DEAD_LETTER_POSITION`, 없는 offset은 `404 DEAD_LETTER_NOT_FOUND`, 브로커에 닿지 못하면 `503`이다. 모두 기록하지 않는다. `sub`가 틀리면 500이고 DLT를 읽지 않는다.
 7. 지금 코드가 읽지 못하는 메시지도 폐기할 수 있다. 재투입한 레코드를 폐기해도, 폐기한 레코드를 재투입해도 둘 다 기록되고 gauge는 그 레코드를 한 번만 뺀다.
 8. V020 뒤 `t_dead_letter_dismissal`이 있고 `(dlt_topic, dlt_partition, dlt_offset, dlt_timestamp)`가 unique다.
-9. `docker/prometheus/alerts.yaml`이 15개 규칙을 담고 promtool 검사를 통과한다. promtool 시나리오가 다음을 보인다. 나이가 임계값을 넘은 지 5분 뒤 울린다. 한 pod 재기동(`NaN` 구간)이면 풀렸다가 첫 갱신 뒤 5분에 다시 울린다. 여러 pod면 한 pod의 재기동에 끊기지 않는다. 미처리 DLT가 0보다 큰 동안 울리고 0이 되면 바로 풀린다. pod 사이는 `max`로 묶는다. 다른 pod가 세고 있으면 갱신이 멈춘 pod의 옛 값은 5분 뒤 빠지고, 모든 pod가 세지 못하면 마지막 값으로 유지한다. DLT 전송 실패 알림이 24시간 붙잡지 않는다. 갱신 작업이 한 번도 성공하지 못하면 생존 규칙이 울린다.
+9. `docker/prometheus/alerts.yaml`이 16개 규칙(#102의 규칙 포함)을 담고 promtool 검사를 통과한다. promtool 시나리오가 다음을 보인다. 나이가 임계값을 넘은 지 5분 뒤 울린다. 한 pod 재기동(`NaN` 구간)이면 풀렸다가 첫 갱신 뒤 5분에 다시 울린다. 여러 pod면 한 pod의 재기동에 끊기지 않는다. 미처리 DLT가 0보다 큰 동안 울리고 0이 되면 바로 풀린다. pod 사이는 `max`로 묶는다. 다른 pod가 세고 있으면 갱신이 멈춘 pod의 옛 값은 5분 뒤 빠지고, 모든 pod가 세지 못하면 마지막 값으로 유지한다. DLT 전송 실패 알림이 24시간 붙잡지 않는다. 갱신 작업이 한 번도 성공하지 못하면 생존 규칙이 울린다.
 10. 규칙이 쓰는 metric 이름이 앱의 `/actuator/prometheus`에 있다(예외 목록 밖).
 11. REST Docs 스니펫이 폐기 endpoint의 요청·응답 필드와 400·404 예, 목록의 `dismissal` 필드를 문서화한다.
 12. `docker compose -f docker/docker-compose.yaml --profile app --profile obs up -d --build`에서 다음을 확인하고 결과 절에 남긴다. 규칙 15개가 실린다. DLT를 일으키면 `KafkaDeadLetter`가 firing이 되고, 그 레코드의 폐기 행을 넣으면(compose에서는 `/admin`을 부를 수 없어 SQL로 넣는다) 다음 갱신 뒤 풀린다. 결과 불명 시도의 `created_at`을 2시간 전으로 옮기면 `UnknownPaymentResolutionStuck`이 5분 뒤 firing이 되고, 앱을 재기동하면 풀렸다가 다시 울린다.
@@ -197,6 +197,7 @@ create table t_dead_letter_dismissal (
 겹침 확인(2026-10-22, origin/main `8221d79`):
 - 열린 draft PR #102(feature/inbound-rate-limit): `docs/wiki/observability.md`(7~15행 근처 항목 추가와 "점주 세션 저장소" 항목 수정)와 `DeadLetterControllerTest.kt`(클래스 annotation 한 줄)를 고친다. 이 PR은 observability의 다른 항목(알림 규칙·Kafka 소비·운영자·결과 불명·주기 작업·아직 없는 것)을 고치고, 폐기 Controller 테스트를 같은 파일에 더해 #102의 annotation을 rebase 때 그대로 받는다. #102가 `inbound_rate_limited_total` 알림을 `alerts.yaml`에 더하면 규칙 수가 겹치므로 늦게 머지되는 쪽이 `AlertRulesTest`의 규칙 수를 맞춘다.
 - 다시 확인(2026-10-22, origin/main `8221d79` 그대로): #102가 ready가 됐고 규칙 `InboundStoreRateLimited`를 더해 `AlertRulesTest`를 14에서 15로 바꿨다. 이 PR도 같은 줄을 같은 글자로 바꿔 git은 충돌 없이 합치지만 실제 규칙은 16개가 된다. 나중에 머지되는 쪽이 `AlertRulesTest`의 규칙 수와 관측성 wiki의 "rule 15개"를 16으로 고치고 promtool·runbook 앵커 대조를 다시 돌린다. #102와 겹치는 그 밖의 경로(`alerts.test.yaml`·`runbook.md`·`observability.md`·`architecture.md`·`README.md`·`DeadLetterControllerTest.kt`)는 서로 다른 절·항목이다.
+- push 직전 확인(2026-10-22 06:0x UTC): #102가 main에 머지됐다(`dbaa09e`). origin/main 위로 rebase했고 spec 첫 커밋은 그대로 첫 커밋이다. 줄 단위 충돌은 `observability.md` 두 곳이었다(#102가 고친 "노출 범위"·"점주 세션 저장소" 항목의 이웃 줄). main 쪽 줄 위에 이 PR의 문장을 다시 적용했다. 나머지 겹친 경로(`alerts.yaml`·`alerts.test.yaml`·`runbook.md`·`architecture.md`·`README.md`·`DeadLetterControllerTest.kt`)는 자동으로 합쳐졌다. 규칙이 16개가 되어 `AlertRulesTest`와 관측성 wiki의 규칙 수를 16으로 고쳤다.
 - 열린 draft PR #94(refactor/modulith-2-1-2-resubmit): `docs/wiki/domain-model.md` §4.3의 재전송 항목을 고친다. 이 PR은 §4.3의 DLT 재투입 항목과 §4.7 사례를 고친다.
 - 진행 중인 #77(perf/k6-capacity-measurement, push 전): `docs/wiki/observability.md` 17행 근처("결제 대조 case" 항목)와 `docs/wiki/domain-model.md`를 고친다. 이 PR은 "결제 대조 case" 항목을 고치지 않는다. 개수 gauge를 남기므로 그 항목의 "미해소 건수는 위 pending gauge로 본다"가 그대로 맞다.
 - 예정된 #103(SLO·시작값 알림)은 `alerts.yaml`을 고친다. 점주 이메일 작업(#92)이 새 마이그레이션을 더할 수 있어 push 전에 V020 번호 충돌을 확인한다.
@@ -237,7 +238,7 @@ multi-review(Claude 84점, Codex 72점 "주의 병합", Gemini는 CLI가 없어 
   - 03:19:58 두 DLT 레코드(`order.paid.DLT` partition 0 offset 0·1)의 폐기 행을 SQL로 넣었다(compose에서는 IdP가 없어 `/admin`을 부를 수 없다). 03:20:52 미처리가 0이 되고 `KafkaDeadLetter`가 풀렸다.
   - 03:20:58 app 컨테이너를 재시작했다(03:21:09 기동). 03:21:23 나이가 `NaN`이 되어 두 결제 알림이 풀렸고, 03:22:23 확정 작업의 첫 주기(기동 1분 뒤)에서 나이 11,254초·90,454초로 다시 pending, 03:27:27 다시 firing이었다. 2시간·24시간을 처음부터 세지 않았다.
   - 정리: 시험 행 둘을 지우고 `t_dead_letter_dismissal`과 V020 이력 행을 지워 공유 DB를 019로 돌렸다(뒤에 V020 주석을 고쳐 checksum이 바뀌기 때문이다). `order.paid.DLT` offset 1의 시험 메시지는 남아 있다. 범위 조정 1(마지막 성공 시각과 멈춘 인스턴스 제외)은 실측 뒤에 바꾼 것이라 promtool로만 확인했다.
-- 인수 1·3~11·13: TDD 검증 기록의 테스트가 통과했다. `./gradlew test` 전체는 127개 클래스, 832개 테스트, 실패·오류·건너뜀 0이었다(2026-10-22 03:06~03:10 UTC, `80336c9` 위). 범위 조정을 반영한 뒤 다시 돌려 127개 클래스, 837개 테스트, 실패·오류·건너뜀 0이다(05:58~06:04 UTC, `52b1ae5` 위). 공유 compose 스택을 쓰는 #77 측정과 시간을 맞춰 돌렸다.
+- 인수 1·3~11·13: TDD 검증 기록의 테스트가 통과했다. `./gradlew test` 전체는 127개 클래스, 832개 테스트, 실패·오류·건너뜀 0이었다(2026-10-22 03:06~03:10 UTC, `80336c9` 위). 범위 조정을 반영한 뒤 다시 돌려 127개 클래스, 837개 테스트, 실패·오류·건너뜀 0이다(05:58~06:04 UTC, `52b1ae5` 위). 공유 compose 스택을 쓰는 #77 측정과 시간을 맞춰 돌렸다. #102 머지 뒤 rebase하고 규칙 수를 16으로 고친 트리에서 다시 돌려 131개 클래스, 887개 테스트, 실패·오류·건너뜀 0이다(06:06~06:13 UTC). promtool은 `SUCCESS: 16 rules found`, 시나리오 전부 통과다.
 - 인수 9: promtool `SUCCESS: 15 rules found`, 시나리오 전부 통과(`AlertRulesTest`).
 - `python3 scripts/check_pr.py --base origin/main --worktree`: PASS. 스키마 대조 기록 경고는 code-reviewer 재대조 뒤 해소했다.
 - 인수 2(실행 계획, 2026-10-22): compose와 무관한 PostgreSQL 18(`postgres:18-alpine`) 컨테이너에 V001~V019를 적용하고 승인 시도 20만 건(`APPROVED`·`DECLINED`)과 `UNKNOWN` 50건(20건은 넘김)을 넣어 `analyze`했다. Hibernate가 렌더하는 모양(`kind`·`status` 리터럴, `deleted_at is null`)으로 prepare해 `plan_cache_mode = force_generic_plan`에서 보면 두 조회 모두 `Index Scan using ix_payment_attempt_unknown_authorization`이다. 넘기지 않은 쪽은 `Limit`이 인덱스 순서로 첫 행을 받고(넘긴 행 20개를 Filter로 거름), 넘긴 쪽은 `UNKNOWN` 50행만 읽어 `min`을 낸다(shared hit 3).
