@@ -1,10 +1,11 @@
 package com.resilientpos.platform
 
 import com.resilientpos.PostgresIntegrationTest
-import java.time.Duration
+import com.resilientpos.awaitUntil
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
+import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
@@ -140,25 +141,26 @@ class LockIntegrationTest(
     }
 
     @Test
-    fun `잠금이 풀리면 기다리던 요청이 다음 재시도를 기다리지 않고 바로 얻는다`() {
+    fun `해제하면 지운 키를 해제 알림 채널로 보내고 앱이 그 채널을 구독하고 있다`() {
         val key = "test:lock:${UUID.randomUUID()}"
-        val holder = checkNotNull(distributedLock.tryAcquire(key))
-        val executor = Executors.newSingleThreadExecutor()
+        val received = LinkedBlockingQueue<String>()
+        val connection = checkNotNull(redis.connectionFactory).connection
 
         try {
-            val acquiredAt = executor.submit<Long> {
-                val token = checkNotNull(distributedLock.tryAcquire(key))
-                System.nanoTime().also { distributedLock.release(key, token) }
-            }
-            // 기다리는 쪽의 재시도 간격이 상한(100ms)까지 늘게 둔다. 알림 없이 간격으로만 깨면 해제 뒤 0~100ms를 더 기다린다.
-            Thread.sleep(500)
-            val releasedAt = System.nanoTime()
-            distributedLock.release(key, holder)
+            connection.subscribe({ message, _ -> received.add(String(message.body, Charsets.UTF_8)) }, RedisDistributedLock.RELEASED_CHANNEL.toByteArray())
+            // PUBLISH는 받은 구독자 수를 돌려준다. 이 테스트의 구독과 앱의 LockReleaseListener가 받아야 한다.
+            awaitUntil("앱과 테스트가 해제 알림 채널을 구독한다") { checkNotNull(redis.convertAndSend(RedisDistributedLock.RELEASED_CHANNEL, PROBE)) >= 2 }
 
-            val delay = Duration.ofNanos(acquiredAt.get(5, TimeUnit.SECONDS) - releasedAt)
-            assertTrue(delay < Duration.ofMillis(30), "해제 뒤 ${delay.toMillis()}ms 만에 얻었다")
+            distributedLock.release(key, checkNotNull(distributedLock.tryAcquire(key)))
+
+            assertEquals(key, generateSequence { received.poll(5, TimeUnit.SECONDS) }.first { it != PROBE })
         } finally {
-            executor.shutdownNow()
+            connection.close()
         }
+    }
+
+    private companion object {
+        /** 구독을 확인하려고 보내는 메시지. 앱은 이 키를 기다리는 요청이 없어 아무것도 하지 않는다. */
+        const val PROBE = "test:lock:probe"
     }
 }

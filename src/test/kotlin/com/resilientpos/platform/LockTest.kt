@@ -3,15 +3,18 @@ package com.resilientpos.platform
 import com.resilientpos.foundation.UuidV7IdentifierGenerator
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry
 import java.time.Duration
+import java.util.concurrent.Executors
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 import org.mockito.ArgumentMatchers.any
 import org.mockito.ArgumentMatchers.anyString
 import org.mockito.BDDMockito.given
 import org.mockito.Mockito.atMost
 import org.mockito.Mockito.mock
+import org.mockito.Mockito.mockingDetails
 import org.mockito.Mockito.verify
 import org.springframework.data.redis.RedisConnectionFailureException
 import org.springframework.data.redis.core.StringRedisTemplate
@@ -113,6 +116,34 @@ class LockTest {
 
         // 10ms 고정 간격이면 대기 한도(1.5초)까지 약 150번이다. 100ms까지 늘면 약 20번이다.
         verify(values, atMost(40)).setIfAbsent(anyString(), anyString(), any(Duration::class.java))
+    }
+
+    @Test
+    fun `해제 알림을 받으면 재시도 간격을 기다리지 않고 바로 다시 시도한다`() {
+        @Suppress("UNCHECKED_CAST") // mock(ValueOperations::class.java)는 타입 인자를 모른다. 이 테스트는 String 키·값만 쓴다.
+        val values = mock(ValueOperations::class.java) as ValueOperations<String, String>
+        given(values.setIfAbsent(anyString(), anyString(), any(Duration::class.java))).willReturn(false)
+        val redis = mock(StringRedisTemplate::class.java)
+        given(redis.opsForValue()).willReturn(values)
+        val lock = lock(redis)
+        val key = "order:create-lock:terminal:client-order"
+        val executor = Executors.newSingleThreadExecutor()
+
+        try {
+            executor.submit { lock.tryAcquire(key) }
+            Thread.sleep(600) // 재시도 간격이 상한(100ms, 지터로 50~100ms)까지 늘게 둔다
+            val before = mockingDetails(values).invocations.size
+            repeat(10) {
+                lock.onReleased(key)
+                Thread.sleep(10)
+            }
+            val retried = mockingDetails(values).invocations.size - before
+
+            // 간격으로만 다시 시도하면 이 100ms 동안 많아야 두 번이다.
+            assertTrue(retried >= 5, "알림 열 번에 다시 시도한 횟수: $retried")
+        } finally {
+            executor.shutdownNow()
+        }
     }
 
     @Test
