@@ -9,6 +9,7 @@ import java.util.Currency
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 import kotlin.time.measureTime
@@ -139,5 +140,11 @@ class FakePaymentGatewayTest {
         assertIs<AuthorizationOutcome.Unknown>(queried)
         assertTrue(authorizing.inWholeMilliseconds in 200..<800, "승인이 ${authorizing}만에 답했다")
         assertTrue(querying.inWholeMilliseconds in 200..<800, "조회가 ${querying}만에 답했다")
+    }
+
+    @Test
+    fun `지연이 음수이거나 deadline이 양수가 아니면 만들지 않는다`() {
+        assertFailsWith<IllegalArgumentException> { FakePaymentGateway(latency = Duration.ofMillis(-1)) }
+        assertFailsWith<IllegalArgumentException> { FakePaymentGateway(deadline = Duration.ZERO) }
     }
 }

@@ -28,6 +28,12 @@ class FakePaymentGateway(
     @Value("\${resilientpos.payment.fake-gateway.deadline}") private val deadline: Duration = Duration.ofSeconds(3),
 ) : PaymentGateway {
 
+    init {
+        // 음수 지연은 Thread.sleep이 던지고, 0 이하 deadline은 모든 호출을 결과 불명으로 만든다. 설정 오류라 기동에서 막는다.
+        require(!latency.isNegative) { "resilientpos.payment.fake-gateway.latency는 음수일 수 없다: $latency" }
+        require(deadline > Duration.ZERO) { "resilientpos.payment.fake-gateway.deadline은 양수여야 한다: $deadline" }
+    }
+
     override fun authorize(request: AuthorizationRequest): AuthorizationOutcome = respond { answer(request) }
 
     /** 승인 요청이 결과를 모른 채 끝난 뒤 provider에 다시 묻는 경로다. 끝자리가 갈래를 정하고 나머지는 승인 요청과 같은 답이다. */
@@ -54,7 +60,7 @@ class FakePaymentGateway(
     private fun answer(request: AuthorizationRequest): AuthorizationOutcome =
         when (lastMinorDigit(request)) {
             DECLINE_DIGIT -> AuthorizationOutcome.Declined(reference(request))
-            // 결과를 확인하지 못한 상황을 흉내 낸다. 실제로 기다리지는 않는다 — 테스트를 느리게 할 뿐이다.
+            // 결과를 확인하지 못한 상황을 금액으로 흉내 낸다. deadline까지 기다리지는 않는다 — 테스트를 느리게 할 뿐이다.
             UNKNOWN_THEN_APPROVED_DIGIT, UNKNOWN_THEN_DECLINED_DIGIT, STAYS_UNKNOWN_DIGIT, UNKNOWN_THEN_OVERSTATED_DIGIT ->
                 AuthorizationOutcome.Unknown
             OVERSTATED_DIGIT -> AuthorizationOutcome.Approved(reference(request), oneMinorUnitMore(request))
