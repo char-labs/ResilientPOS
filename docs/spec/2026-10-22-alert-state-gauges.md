@@ -1,4 +1,4 @@
-# PR spec: 결과 불명 결제의 나이와 미처리 DLT 수로 알림을 상태에 맞춘다
+# PR spec: 결과 불명 결제의 경과 시간과 미처리 DLT 수로 알림을 상태에 맞춘다
 
 ## 목적
 알림 셋이 실제 상태와 어긋난다(이슈 #104, #105, [observability-alerts-tracing](2026-10-21-observability-alerts-tracing.md) 범위 조정 10·11).
@@ -6,21 +6,21 @@
 - `KafkaDeadLetter`는 DLT counter의 증가를 보고 `keep_firing_for: 24h`로 하루 붙잡는다. DLT 메시지는 지워지지 않는데도 처리하지 않은 메시지가 24시간 뒤에는 정상처럼 보인다. 재투입을 끝내도 24시간 동안 울려 사람이 silence로 꺼야 한다.
 
 기대 결과:
-- 두 결제 규칙은 DB에서 계산한 가장 오래된 행의 나이로 판단한다. 재기동해도 첫 갱신 뒤 5분이면 다시 울린다.
+- 두 결제 규칙은 DB에서 계산한 가장 오래된 행의 경과 시간으로 판단한다. 재기동해도 첫 갱신 뒤 5분이면 다시 울린다.
 - `KafkaDeadLetter`는 재투입도 폐기도 하지 않은 DLT 메시지가 있는 동안 울리고, 처리하면 다음 갱신에 풀린다. silence가 필요 없다.
 - 재투입하지 않을 메시지(예: `PAYMENT_APPROVAL_MISMATCH`)는 플랫폼 운영자가 사유와 함께 폐기를 표시한다.
 
 ## 범위
-소유 모듈은 `payment`(나이 gauge)와 `platform`(미처리 DLT gauge, 폐기 표시 API와 기록, 알림 규칙)이다. `reconciliation` 코드는 바꾸지 않는다.
+소유 모듈은 `payment`(경과 시간 gauge)와 `platform`(미처리 DLT gauge, 폐기 표시 API와 기록, 알림 규칙)이다. `reconciliation` 코드는 바꾸지 않는다.
 
 ### 결정
 **1. 한 PR로 낸다(사용자 결정).** 두 이슈가 같은 규칙 파일, promtool 시나리오, runbook을 고친다.
 
-**2. 결과 불명 나이 gauge 둘은 `payment`가 낸다(사용자 결정).** `UnknownPaymentResolver`가 주기마다 개수를 센 직후 같은 자리에서 센다.
-- `payment.attempt.resolution.oldest`(Prometheus `payment_attempt_resolution_oldest_seconds`): reconciliation으로 넘기지 않은(`reconciliation_requested_at is null`) `UNKNOWN` 승인 시도 가운데 가장 오래된 것의 나이다(시도 생성 시각 `created_at`부터, 초). V013 partial 인덱스 `ix_payment_attempt_unknown_authorization (id)`를 `id` 순으로 읽어 첫 행의 `created_at`을 쓴다. `id`가 UUID v7이라 `id` 순서가 생성 순서다.
-- `payment.attempt.reconciliation.pending.oldest`(`payment_attempt_reconciliation_pending_oldest_seconds`): 넘긴 `UNKNOWN` 승인 시도 가운데 가장 이른 넘긴 시각(`min(reconciliation_requested_at)`)부터의 나이다. 같은 partial 인덱스로 `UNKNOWN` 행만 읽는다. 지금 넘긴 시도 수를 세는 조회와 범위가 같다.
+**2. 결과 불명 경과 시간 gauge 둘은 `payment`가 낸다(사용자 결정).** `UnknownPaymentResolver`가 주기마다 개수를 센 직후 같은 자리에서 센다.
+- `payment.attempt.resolution.oldest`(Prometheus `payment_attempt_resolution_oldest_seconds`): reconciliation으로 넘기지 않은(`reconciliation_requested_at is null`) `UNKNOWN` 승인 시도 가운데 가장 오래된 것의 경과 시간이다(시도 생성 시각 `created_at`부터, 초). V013 partial 인덱스 `ix_payment_attempt_unknown_authorization (id)`를 `id` 순으로 읽어 첫 행의 `created_at`을 쓴다. `id`가 UUID v7이라 `id` 순서가 생성 순서다.
+- `payment.attempt.reconciliation.pending.oldest`(`payment_attempt_reconciliation_pending_oldest_seconds`): 넘긴 `UNKNOWN` 승인 시도 가운데 가장 이른 넘긴 시각(`min(reconciliation_requested_at)`)부터의 경과 시간이다. 같은 partial 인덱스로 `UNKNOWN` 행만 읽는다. 지금 넘긴 시도 수를 세는 조회와 범위가 같다.
 - 대상이 없으면 0이다. 첫 갱신 전에는 `NaN`이다. 선례 `event_publication_incomplete_oldest_seconds`와 같고, `max`가 `NaN`을 빼고 계산해 여러 pod면 다른 pod의 값이 남는다(사용자 결정). 세기가 던지면 지금 개수처럼 마지막 성공값이 남고, 작업 실패는 `UnknownPaymentResolverNotSucceeding`이 잡는다.
-- 넘긴 쪽을 `reconciliation`의 case 나이(`MANUAL_REVIEW` case의 `opened_at`)로 내지 않는다. `reconciliation`에 주기 작업을 새로 두고 `(status, opened_at)` 인덱스(마이그레이션)를 더해야 한다. 지금 인덱스 `(store_id, status, id)`는 매장을 가리지 않는 조회에 쓰지 못한다. 또 case 열기가 실패해 `payment.reconciliation-requested.DLT`에 간 건을 보지 못한다. `payment`의 넘긴 시각은 그 건까지 담고, 지금 규칙이 보는 pending gauge와 뜻이 같다.
+- 넘긴 쪽을 `reconciliation`의 case 경과 시간(`MANUAL_REVIEW` case의 `opened_at`)로 내지 않는다. `reconciliation`에 주기 작업을 새로 두고 `(status, opened_at)` 인덱스(마이그레이션)를 더해야 한다. 지금 인덱스 `(store_id, status, id)`는 매장을 가리지 않는 조회에 쓰지 못한다. 또 case 열기가 실패해 `payment.reconciliation-requested.DLT`에 간 건을 보지 못한다. `payment`의 넘긴 시각은 그 건까지 담고, 지금 규칙이 보는 pending gauge와 뜻이 같다.
 - "`UNKNOWN`이 된 시각" 컬럼은 두지 않는다. 정상 흐름에서는 승인 요청 한 번(수 초) 안에 `REQUESTED`가 `UNKNOWN`이 되므로 `created_at`과 거의 같다. 확정 작업의 한도도 시간이 아니라 조회 횟수(60회)다. 대가로 `payment.attempt-created`가 DLT에 머물다 늦게 재투입된 시도는 `created_at`이 오래되어, 넘기기 전에 2시간 알림이 울릴 수 있다(한계).
 - 개수 gauge `payment_attempt_unknown`·`payment_attempt_reconciliation_pending`은 남긴다(사용자 결정). 규칙에서는 빠지고 runbook의 진단(몇 건인지)에 쓴다.
 
@@ -58,12 +58,12 @@
 | KafkaDeadLetterMetricNotSucceeding(새 규칙) | 기동한 지 5분이 지난 인스턴스에서 10분 동안 미처리 DLT 갱신 작업의 `SUCCESS`가 늘지 않음 | 10m | warning |
 
 - 임계값 2시간과 24시간은 유지한다. 2시간은 조회 상한 60회(약 1시간)에 여유를 둔 값이고, 24시간은 점주 해소를 기다리는 시작값이다. 바꿀 근거가 없다.
-- 재기동: 나이 gauge는 첫 갱신 전 `NaN`이라 `max`에서 빠진다. pod가 여럿이면 알림이 끊기지 않는다. pod가 하나면 풀렸다가 첫 갱신 뒤 5분이면 다시 울린다. 지금처럼 2시간·24시간을 처음부터 세지 않는다. promtool 시나리오로 두 경우를 보인다.
+- 재기동: 경과 시간 gauge는 첫 갱신 전 `NaN`이라 `max`에서 빠진다. pod가 여럿이면 알림이 끊기지 않는다. pod가 하나면 풀렸다가 첫 갱신 뒤 5분이면 다시 울린다. 지금처럼 2시간·24시간을 처음부터 세지 않는다. promtool 시나리오로 두 경우를 보인다.
 - `KafkaDeadLetter`는 `reason` label을 잃는다. 원인은 counter `event_kafka_dead_letter_total{topic, reason}`과 목록 API의 `exception`으로 본다(runbook). 첫 DLT series를 잡던 `unless … last_over_time(…)` 절도 필요 없어져 지운다.
 - `KafkaDeadLetterPublishFailed`: DLT 전송이 다시 되면 메시지는 DLT로 가서 `KafkaDeadLetter`가 잡는다. 다시 처리해 성공하면 잃은 메시지가 없다. 계속 실패하면 counter 증가가 이어진다. 하루 붙잡을 이유가 없어졌다.
 - 생존 규칙은 `EventPublicationResubmitterNotSucceeding`과 같은 모양이다. 처음부터 한 번도 성공하지 못한 경우(운영 ACL에 DLT Describe가 빠짐 등)도 잡는다. 그대로 두면 gauge가 계속 `NaN`이라 critical 알림이 신호 없이 죽어 있다. severity는 warning이다. 한 인스턴스의 실패는 다른 인스턴스가 세므로 DLT 알림을 막지 않고, 모든 인스턴스가 실패하는 것은 브로커·DB 전체 장애라 다른 신호가 함께 나온다(범위 조정 2).
 
-**7. runbook.** 공통 절의 silence 항목은 "DLT 알림은 상태 알림이라 재투입이나 폐기로 풀린다"로 바꾼다. `KafkaDeadLetter` 절에 폐기 절차와 원인(`reason`)을 보는 곳을 적는다. 두 결제 절의 재기동 한계 줄을 지우고 나이의 기준 시각을 적는다. 새 생존 규칙 절을 더한다.
+**7. runbook.** 공통 절의 silence 항목은 "DLT 알림은 상태 알림이라 재투입이나 폐기로 풀린다"로 바꾼다. `KafkaDeadLetter` 절에 폐기 절차와 원인(`reason`)을 보는 곳을 적는다. 두 결제 절의 재기동 한계 줄을 지우고 경과 시간의 기준 시각을 적는다. 새 생존 규칙 절을 더한다.
 
 ### Kafka·Spring Kafka 공식 문서와 소스 대조
 - kafka-clients 4.2.2(Boot 4.1.1이 고른 버전) `Admin` javadoc: `create`가 돌려주는 인스턴스는 thread-safe다. `listOffsets`(파티션마다 `OffsetSpec` 하나를 담은 맵)가 파티션의 earliest·latest·시각 기준 offset을 돌려준다. 같은 파티션의 earliest와 latest는 한 요청에 담을 수 없어 두 번 부른다.
@@ -85,7 +85,7 @@
 - 일괄 폐기. 운영자가 단건을 반복 호출한다(재투입과 같다).
 - 폐기 취소와 기록 변경.
 - 폐기 counter, gauge의 `reason`·`partition` label.
-- `reconciliation`의 case 나이 gauge와 그 인덱스. 결정 2.
+- `reconciliation`의 case 경과 시간 gauge와 그 인덱스. 결정 2.
 - "`UNKNOWN`이 된 시각" 컬럼. 결정 2.
 - 재투입·폐기 기록의 보존 기간(#107 제외 그대로).
 - DLT 토픽을 다시 만든 뒤의 정확한 계산. 한계 절.
@@ -97,7 +97,7 @@
 - DLT에 머물다 늦게 재투입된 결제 시도는 `created_at`부터 재므로 2시간 알림이 넘기기 전에 울릴 수 있다. 넘기면(최대 약 1시간) 풀린다.
 - pod가 하나면 재기동할 때 결제 두 알림이 풀렸다가 약 6분 뒤 다시 울린다.
 - 미처리 DLT gauge는 갱신이 실패하는 동안 마지막 값에 멈춘다. 다른 인스턴스가 세고 있으면 규칙이 5분 뒤부터 그 값을 보지 않고, 멈춤은 생존 규칙이 20분 안팎에 알린다. 모든 인스턴스가 세지 못하는 동안에는 새 DLT에 울지 못한다.
-- 결과 불명 나이 gauge는 그 처리를 하지 않았다(사용자 결정). 한 인스턴스의 확정 작업만 멈추면 그 인스턴스의 나이가 마지막 값에 멈춰 `max`로 warning 알림을 붙잡을 수 있다. runbook이 `max by (instance)`로 보고 `UnknownPaymentResolverNotSucceeding`이 가리키는 인스턴스를 고치게 한다.
+- 결과 불명 경과 시간 gauge는 그 처리를 하지 않았다(사용자 결정). 한 인스턴스의 확정 작업만 멈추면 그 인스턴스의 경과 시간이 마지막 값에 멈춰 `max`로 warning 알림을 붙잡을 수 있다. runbook이 `max by (instance)`로 보고 `UnknownPaymentResolverNotSucceeding`이 가리키는 인스턴스를 고치게 한다.
 - 미처리 수의 두 조회(재투입 수, 재투입 없는 폐기 수)는 같은 시점을 읽지 않는다. 폐기한 레코드를 재투입하는 커밋이 두 조회 사이에 끼면 한 갱신 동안 겹친 레코드 수만큼 많게 세어 `KafkaDeadLetter`가 1분쯤 잘못 울 수 있다. 적게 세지는 않는다(기록을 지우지 않는다). 다음 갱신에 맞는다.
 - 설정된 DLT 토픽 하나라도 조회에 실패하면(없거나 권한 없음) 그 갱신 전체가 실패해 모든 토픽의 값이 멈춘다. 생존 규칙이 알린다.
 - pod가 하나면 재기동하는 동안 `KafkaDeadLetter`도 잠깐 풀렸다가 기동 직후 첫 갱신에서 다시 운다.
@@ -125,15 +125,15 @@
 - README.md
 
 ## 인수 조건
-1. `payment_attempt_resolution_oldest_seconds`는 넘기지 않은 `UNKNOWN` 승인 시도 가운데 가장 오래된 것의 `created_at`부터의 나이이고, 넘긴 시도와 결말 난 시도는 보지 않는다. `payment_attempt_reconciliation_pending_oldest_seconds`는 넘긴 `UNKNOWN` 시도의 가장 이른 `reconciliation_requested_at`부터의 나이다. 대상이 없으면 둘 다 0이고 첫 갱신 전에는 `NaN`이다.
-2. 두 나이 조회의 실행 계획이 `ix_payment_attempt_unknown_authorization`을 쓴다.
+1. `payment_attempt_resolution_oldest_seconds`는 넘기지 않은 `UNKNOWN` 승인 시도 가운데 가장 오래된 것의 `created_at`부터의 경과 시간이고, 넘긴 시도와 결말 난 시도는 보지 않는다. `payment_attempt_reconciliation_pending_oldest_seconds`는 넘긴 `UNKNOWN` 시도의 가장 이른 `reconciliation_requested_at`부터의 경과 시간이다. 대상이 없으면 둘 다 0이고 첫 갱신 전에는 `NaN`이다.
+2. 두 경과 시간 조회의 실행 계획이 `ix_payment_attempt_unknown_authorization`을 쓴다.
 3. `event_kafka_dead_letter_unhandled{topic}`은 설정된 토픽마다 DLT 레코드 수에서 재투입·폐기된 레코드 수(둘 다 있으면 한 번)를 뺀 값이다. 첫 갱신 전에는 `NaN`이고, 갱신이 실패하면 마지막 값을 유지하고 작업은 실패로 끝난다. 마지막 성공 시각 `event_kafka_dead_letter_unhandled_refreshed_seconds`는 첫 갱신 전 0이고 성공할 때만 바뀐다.
 4. DLT 레코드를 폐기하면 `200`과 응답 필드가 오고, `t_dead_letter_dismissal`에 행 하나와 사유가 남으며, 감사 INFO 한 줄이 남고 그 줄에 사유가 없다. 그 토픽의 미처리 gauge가 다음 갱신에 1 줄고, 목록 항목의 `dismissal`이 채워진다.
 5. 같은 레코드를 다시 폐기하면 처음 기록이 `200`이고 행과 감사 줄이 늘지 않는다. 동시 요청이 unique에 걸리면 이긴 쪽 기록을 `200`으로 돌려준다.
 6. 빈 사유·500자 초과·NUL 문자가 든 사유는 `400 INVALID_DISMISS_REASON`이고 DLT를 읽지 않는다. 설정에 없는 토픽·없는 partition·음수 offset은 `400 INVALID_DEAD_LETTER_POSITION`, 없는 offset은 `404 DEAD_LETTER_NOT_FOUND`, 브로커에 닿지 못하면 `503`이다. 모두 기록하지 않는다. `sub`가 틀리면 500이고 DLT를 읽지 않는다.
 7. 지금 코드가 읽지 못하는 메시지도 폐기할 수 있다. 재투입한 레코드를 폐기해도, 폐기한 레코드를 재투입해도 둘 다 기록되고 gauge는 그 레코드를 한 번만 뺀다.
 8. V020 뒤 `t_dead_letter_dismissal`이 있고 `(dlt_topic, dlt_partition, dlt_offset, dlt_timestamp)`가 unique다.
-9. `docker/prometheus/alerts.yaml`이 16개 규칙(#102의 규칙 포함)을 담고 promtool 검사를 통과한다. promtool 시나리오가 다음을 보인다. 나이가 임계값을 넘은 지 5분 뒤 울린다. 한 pod 재기동(`NaN` 구간)이면 풀렸다가 첫 갱신 뒤 5분에 다시 울린다. 여러 pod면 한 pod의 재기동에 끊기지 않는다. 미처리 DLT가 0보다 큰 동안 울리고 0이 되면 바로 풀린다. pod 사이는 `max`로 묶는다. 다른 pod가 세고 있으면 갱신이 멈춘 pod의 옛 값은 5분 뒤 빠지고, 모든 pod가 세지 못하면 마지막 값으로 유지한다. DLT 전송 실패 알림이 24시간 붙잡지 않는다. 갱신 작업이 한 번도 성공하지 못하면 생존 규칙이 울린다.
+9. `docker/prometheus/alerts.yaml`이 16개 규칙(#102의 규칙 포함)을 담고 promtool 검사를 통과한다. promtool 시나리오가 다음을 보인다. 경과 시간이 임계값을 넘은 지 5분 뒤 울린다. 한 pod 재기동(`NaN` 구간)이면 풀렸다가 첫 갱신 뒤 5분에 다시 울린다. 여러 pod면 한 pod의 재기동에 끊기지 않는다. 미처리 DLT가 0보다 큰 동안 울리고 0이 되면 바로 풀린다. pod 사이는 `max`로 묶는다. 다른 pod가 세고 있으면 갱신이 멈춘 pod의 옛 값은 5분 뒤 빠지고, 모든 pod가 세지 못하면 마지막 값으로 유지한다. DLT 전송 실패 알림이 24시간 붙잡지 않는다. 갱신 작업이 한 번도 성공하지 못하면 생존 규칙이 울린다.
 10. 규칙이 쓰는 metric 이름이 앱의 `/actuator/prometheus`에 있다(예외 목록 밖).
 11. REST Docs 스니펫이 폐기 endpoint의 요청·응답 필드와 400·404 예, 목록의 `dismissal` 필드를 문서화한다.
 12. `docker compose -f docker/docker-compose.yaml --profile app --profile obs up -d --build`에서 다음을 확인하고 결과 절에 남긴다. 규칙 15개가 실린다. DLT를 일으키면 `KafkaDeadLetter`가 firing이 되고, 그 레코드의 폐기 행을 넣으면(compose에서는 `/admin`을 부를 수 없어 SQL로 넣는다) 다음 갱신 뒤 풀린다. 결과 불명 시도의 `created_at`을 2시간 전으로 옮기면 `UnknownPaymentResolutionStuck`이 5분 뒤 firing이 되고, 앱을 재기동하면 풀렸다가 다시 울린다.
@@ -182,14 +182,14 @@ create table t_dead_letter_dismissal (
 
 ## Wiki 영향
 - [runbook](../wiki/runbook.md): 결정 7.
-- [관측성](../wiki/observability.md): 알림 규칙 항목(14개에서 15개, DLT 두 규칙의 `keep_firing_for` 문장), Kafka 소비 항목의 첫 DLT 처리 문장, 운영자 항목의 폐기와 미처리 gauge, 결과 불명 항목의 나이 gauge와 규칙 조건, 주기 작업 생존 항목의 새 작업, "아직 없는 것"의 #104·#105 두 줄을 지운다.
+- [관측성](../wiki/observability.md): 알림 규칙 항목(14개에서 15개, DLT 두 규칙의 `keep_firing_for` 문장), Kafka 소비 항목의 첫 DLT 처리 문장, 운영자 항목의 폐기와 미처리 gauge, 결과 불명 항목의 경과 시간 gauge와 규칙 조건, 주기 작업 생존 항목의 새 작업, "아직 없는 것"의 #104·#105 두 줄을 지운다.
 - [도메인 모델](../wiki/domain-model.md): §4.3 "DLT 재투입"에 폐기 단계, §4.7 사례에 `t_dead_letter_dismissal`. 용어집에 새 단어 "폐기(dismissal)"가 있는지 보고 없으면 더한다.
 - [이벤트 계약](../wiki/event-contract.md) 5절: "규칙 `KafkaDeadLetter`가 10분 전에 없던 series를 따로 잡는다"를 미처리 gauge 규칙으로 바꾼다. 8절에 재투입하지 않을 메시지는 폐기한다는 한 줄.
 - [엔티티 맵](../wiki/entity-map.md)과 [wiki 인덱스](../wiki/README.md)의 엔티티 수: `t_dead_letter_dismissal`.
 - [아키텍처](../wiki/architecture.md) 모듈 표의 `platform` 책임: "DLT 재투입 API와 기록"에 폐기를 더한다.
 - README: `/admin/**` 문장의 "(DLT 재투입)"에 폐기를 더한다.
 - Modulith·Kafka 키워드(볼트): PR 전에 그 문서의 갱신 규칙대로 미처리 DLT 계산과 폐기 항목을 고친다. 볼트의 현재 상태 문서는 머지 뒤 고친다.
-- 요구사항 변화: 시스템 설계 7절의 alert → runbook 연결과 "payment_reconciliation_age_seconds"(넘긴 시도의 나이)를 채운다. 플랫폼 운영자 행위에 폐기가 더해지고 감사는 재투입과 같은 기준이다. 업무 정합성 요구는 그대로다.
+- 요구사항 변화: 시스템 설계 7절의 alert → runbook 연결과 "payment_reconciliation_age_seconds"(넘긴 시도의 경과 시간)을 채운다. 플랫폼 운영자 행위에 폐기가 더해지고 감사는 재투입과 같은 기준이다. 업무 정합성 요구는 그대로다.
 
 ## 분할 계획
 한 개발 컨텍스트(알림을 실제 상태에 맞추기)다. 폐기 표시는 미처리 DLT gauge가 맞으려면 필요해서 함께 담는다(사용자 결정). `PAYMENT_APPROVAL_MISMATCH` 메시지는 설계상 재투입하지 않고 DLT에 남는 case 자리라([도메인 모델 §4.3](../wiki/domain-model.md#43-이벤트-전달과-저장-형식), `KafkaConfiguration` KDoc), 폐기 없이는 상태 알림이 꺼지지 않는다.
@@ -206,38 +206,39 @@ create table t_dead_letter_dismissal (
 
 ## 범위 조정
 multi-review(Claude 84점, Codex 72점 "주의 병합", Gemini는 CLI가 없어 미실행)와 스키마 대조(code-reviewer) 뒤 아래를 바꾼다.
-1. **갱신이 멈춘 인스턴스의 옛 값이 알림을 붙잡지 않게 한다(두 리뷰, 사용자 결정).** 실패하면 마지막 값을 유지하는 결정과 `max`가 만나면, 한 인스턴스만 계속 실패할 때 그 옛 값이 처리 뒤에도 `KafkaDeadLetter`를 붙잡았다. 마지막 성공 시각 gauge를 더하고 규칙이 5분 안에 센 인스턴스만 보게 했다(결정 3·6). 모든 인스턴스가 세지 못하면 마지막 값으로 유지해 앞의 결정(브로커 장애 때 알림을 풀지 않는다)을 지킨다. 인스턴스를 자동 재시작하는 방법은 버렸다. 브로커 전체 장애 때 모든 pod가 재시작되고, 앱은 브로커 없이 뜨지 않아(`spring.kafka.admin.fail-fast`) 재시작만 되풀이한다. 결과 불명 나이 알림(warning)에는 적용하지 않고 runbook에 대처를 적었다(한계).
+1. **갱신이 멈춘 인스턴스의 옛 값이 알림을 붙잡지 않게 한다(두 리뷰, 사용자 결정).** 실패하면 마지막 값을 유지하는 결정과 `max`가 만나면, 한 인스턴스만 계속 실패할 때 그 옛 값이 처리 뒤에도 `KafkaDeadLetter`를 붙잡았다. 마지막 성공 시각 gauge를 더하고 규칙이 5분 안에 센 인스턴스만 보게 했다(결정 3·6). 모든 인스턴스가 세지 못하면 마지막 값으로 유지해 앞의 결정(브로커 장애 때 알림을 풀지 않는다)을 지킨다. 인스턴스를 자동 재시작하는 방법은 버렸다. 브로커 전체 장애 때 모든 pod가 재시작되고, 앱은 브로커 없이 뜨지 않아(`spring.kafka.admin.fail-fast`) 재시작만 되풀이한다. 결과 불명 경과 시간 알림(warning)에는 적용하지 않고 runbook에 대처를 적었다(한계).
 2. **생존 규칙은 warning으로 둔다(Claude는 critical을 제안).** 1의 규칙으로 한 인스턴스의 실패는 DLT 알림을 막지 않는다. 모든 인스턴스가 실패하면 브로커·DB 전체 장애라 다른 신호가 함께 나온다.
 3. **질문 8과 runbook의 롤링 배포 문장을 고친다(세 리뷰).** 이전 버전 pod에는 미처리 gauge가 아예 없어 폐기한 레코드를 미처리로 세는 pod가 없다. 첫 배포 직후의 기존 DLT와 배포 순서(앱 먼저, 규칙 나중)를 한계에 적었다.
 4. **V020 머리 주석 6행을 고친다(스키마 대조, Claude).** soft delete된 행이 있으면 "기록한 뒤"가 아니라 기록하지 못하고 500이다. 머지 뒤에는 checksum 때문에 고칠 수 없다.
-5. **promtool 시나리오를 보강한다(Codex, Claude).** `for: 5m` 경계를 정확히 고정하는 평가(9분, 39분), 두 pod 값이 다를 때 큰 쪽을 내는 평가, 1의 두 시나리오(멈춘 pod의 옛 값은 5분 뒤 빠짐, 모두 멈추면 유지)를 더하고 주석의 분을 바로잡았다. `ReconciliationPendingUnresolved`의 summary를 "reconciliation으로 넘긴 결과 불명 결제가 24시간 넘게 해소되지 않았다"로 바꿨다. case 열기가 실패한 시도도 이 나이에 들기 때문이다.
-6. **runbook과 wiki 세부를 고친다(Claude).** 재투입했는데 기록이 남지 않은 경우(`DEAD_LETTER_REDRIVE_UNRECORDED`)의 대처, 나이 알림에서 멈춘 인스턴스를 찾는 법, 도메인 모델의 엔티티 수·목록 항목·gauge 나열, 엔티티 맵의 마이그레이션 목록.
+5. **promtool 시나리오를 보강한다(Codex, Claude).** `for: 5m` 경계를 정확히 고정하는 평가(9분, 39분), 두 pod 값이 다를 때 큰 쪽을 내는 평가, 1의 두 시나리오(멈춘 pod의 옛 값은 5분 뒤 빠짐, 모두 멈추면 유지)를 더하고 주석의 분을 바로잡았다. `ReconciliationPendingUnresolved`의 summary를 "reconciliation으로 넘긴 결과 불명 결제가 24시간 넘게 해소되지 않았다"로 바꿨다. case 열기가 실패한 시도도 이 경과 시간에 들기 때문이다.
+6. **runbook과 wiki 세부를 고친다(Claude).** 재투입했는데 기록이 남지 않은 경우(`DEAD_LETTER_REDRIVE_UNRECORDED`)의 대처, 경과 시간 알림에서 멈춘 인스턴스를 찾는 법, 도메인 모델의 엔티티 수·목록 항목·gauge 나열, 엔티티 맵의 마이그레이션 목록.
 7. **테스트를 보강한다(Codex, Claude).** 실제 DB에서 같은 레코드를 동시에 폐기하는 경합, 폐기의 503에서 기록하지 않음, API 폐기 뒤 gauge 감소, 다른 partition·범위 밖 기록을 빼지 않음, 갱신 실패 때 값 유지의 변이 시험. 증가분 테스트는 스케줄러가 도는 빈 대신 새 인스턴스로 센다(스케줄 실행과 겹치면 값이 덮인다).
-- **받지 않은 것.** 합집합의 두 조회를 한 문장으로 합치기(드물고 1분이면 맞는다, 한계에 적음). offset distinct 집계(DLT 토픽 재생성 한계와 같은 범주). 갱신 주기를 설정 키로 열기(운영 설정을 늘리지 않고 테스트는 새 인스턴스로 피한다). 토픽별 실패 격리(한계에 적음). `KafkaDeadLetter`의 짧은 `keep_firing_for`(한 pod 재기동, 한계에 적음). `DLT_SUFFIX` 중복 정리(기존 두 곳과 같은 모양이라 이 PR 밖). 나이가 음수일 때 0으로 자르기, earliest·latest 동시 호출(효과가 작다).
+8. **문서의 "나이"를 "경과 시간"으로 바꾼다(사용자 결정).** "나이"는 운영 모니터링의 영어 age를 그대로 옮긴 말이라 어색하다. 수명(살 수 있는 전체 기간)과 생명주기(상태 단계)는 뜻이 달라 쓰지 않는다. 살아 있는 문서(runbook·관측성·도메인 모델 wiki, 알림 규칙 주석과 promtool 시나리오 이름, 이 spec)와 코드 주석·gauge 설명·테스트 이름을 바꾸고, #76이 쓴 발행 기록 설명도 함께 통일했다. 도메인 모델 용어집에 `oldest_seconds`(경과 시간) 행을 더했다. metric 이름은 영어 `…_oldest_seconds` 그대로다. 머지된 옛 spec은 기록이라 고치지 않는다.
+- **받지 않은 것.** 합집합의 두 조회를 한 문장으로 합치기(드물고 1분이면 맞는다, 한계에 적음). offset distinct 집계(DLT 토픽 재생성 한계와 같은 범주). 갱신 주기를 설정 키로 열기(운영 설정을 늘리지 않고 테스트는 새 인스턴스로 피한다). 토픽별 실패 격리(한계에 적음). `KafkaDeadLetter`의 짧은 `keep_firing_for`(한 pod 재기동, 한계에 적음). `DLT_SUFFIX` 중복 정리(기존 두 곳과 같은 모양이라 이 PR 밖). 경과 시간이 음수일 때 0으로 자르기, earliest·latest 동시 호출(효과가 작다).
 
 ## TDD 검증 기록
-업무 동작(나이 gauge, 미처리 gauge, 폐기 API)은 TDD로 한다. 규칙 파일은 promtool 시나리오로 먼저 실패를 보고 고친다. 개발 전 테스트 의도이고 실행 뒤 채운다.
+업무 동작(경과 시간 gauge, 미처리 gauge, 폐기 API)은 TDD로 한다. 규칙 파일은 promtool 시나리오로 먼저 실패를 보고 고친다. 개발 전 테스트 의도이고 실행 뒤 채운다.
 
 | 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
 |---|---|---|---|
-| 인수 1: `UnknownPaymentResolverIntegrationTest`의 `넘기지 않은 가장 오래된 UNKNOWN 승인 시도의 나이를 gauge로 낸다`, `넘긴 시도는 첫 gauge에서 빠지고 pending gauge는 넘긴 시각부터 잰다`, `첫 갱신 전 나이 gauge는 NaN이다`, `대상이 없으면 나이 gauge는 0이다`, `나이를 세다 던지면 나이 gauge는 마지막 성공값으로 남는다`, `나이 조회는 kind와 status를 리터럴로 렌더한다`(tdd-driver) | port·adapter·NaN gauge 등록까지 두고 갱신 코드 없이 `./gradlew test --tests 'com.resilientpos.payment.internal.application.UnknownPaymentResolverIntegrationTest'`. 18개 중 4개 실패(`Expected 259200.024 … actual NaN`, `Expected 518400.01 … actual NaN`, `expected 0.0 but was NaN`, 던짐 기대에 정상 종료) | 같은 명령. 18개 통과 | `./gradlew test --tests 'com.resilientpos.payment.*' --tests 'com.resilientpos.ModuleStructureTest' --tests 'com.resilientpos.TransactionDeclarationTest' --tests 'com.resilientpos.ConstraintTranslationTest'`. 27개 클래스 179개 통과 |
+| 인수 1: `UnknownPaymentResolverIntegrationTest`의 `넘기지 않은 가장 오래된 UNKNOWN 승인 시도의 경과 시간을 gauge로 낸다`, `넘긴 시도는 첫 gauge에서 빠지고 pending gauge는 넘긴 시각부터 잰다`, `첫 갱신 전 경과 시간 gauge는 NaN이다`, `대상이 없으면 경과 시간 gauge는 0이다`, `경과 시간을 세다 던지면 경과 시간 gauge는 마지막 성공값으로 남는다`, `경과 시간 조회는 kind와 status를 리터럴로 렌더한다`(tdd-driver) | port·adapter·NaN gauge 등록까지 두고 갱신 코드 없이 `./gradlew test --tests 'com.resilientpos.payment.internal.application.UnknownPaymentResolverIntegrationTest'`. 18개 중 4개 실패(`Expected 259200.024 … actual NaN`, `Expected 518400.01 … actual NaN`, `expected 0.0 but was NaN`, 던짐 기대에 정상 종료) | 같은 명령. 18개 통과 | `./gradlew test --tests 'com.resilientpos.payment.*' --tests 'com.resilientpos.ModuleStructureTest' --tests 'com.resilientpos.TransactionDeclarationTest' --tests 'com.resilientpos.ConstraintTranslationTest'`. 27개 클래스 179개 통과 |
 | 인수 3·7: `UnhandledDeadLetterMetricsIntegrationTest`의 `DLT 레코드는 재투입이나 폐기 기록이 있으면 하나씩 빠지고 둘 다 있어도 한 번만 빠진다`(실제 브로커·DB, 증가분 +3 → +2 → +1 → +0), `첫 갱신 전에는 설정된 토픽마다 NaN이다`, `갱신이 실패하면 예외를 던지고 마지막 성공값을 유지한다`(두 번째 갱신의 DB 조회가 던짐), `브로커에 닿지 못하면 상한 안에 Kafka 예외를 던지고 값은 NaN이다`(`localhost:1`, 8초 안)(tdd-driver) | gauge 등록과 빈 `countUnhandled`만 두고 `./gradlew test --tests 'com.resilientpos.platform.deadletter.UnhandledDeadLetterMetrics*' --tests 'com.resilientpos.platform.ObservabilityConfigurationTest'`. 8개 중 3개 실패(기준값이 NaN, `미처리 수는 하나 이상이다: NaN`, `TimeoutException` 기대에 정상 종료). 처음에는 증가분 테스트가 `assertEquals`의 NaN 대 NaN으로 통과해 기준값이 NaN이 아니라는 단언을 더했다 | 같은 명령. 8개 통과. 합집합 대신 두 수를 그냥 더하게(`not exists`를 항상 참으로) 바꾸면 증가분 테스트가 마지막 단계에서 실패했고 되돌렸다 | `./gradlew test --tests 'com.resilientpos.platform.*'`와 SchemaMigration·구조 테스트 5종. 234개 통과. 그 뒤 리뷰에서 테스트 대역만을 위한 `fun interface`를 지우고(대역은 `DeadLetterHandledQueries`를 상속한 익명 객체) `DeadLetterRange`를 자기 파일로 옮겼다. `UnhandledDeadLetterMetricsIntegrationTest`·`ObservabilityConfigurationTest`·`AlertRulesTest` 10개 통과 |
 | 인수 4~8: `DeadLetterDismissIntegrationTest` 7개(폐기 200·행 하나·사유 trim·감사 줄 하나에 사유 없음·목록 `dismissal`, 같은 레코드 재요청은 같은 응답·행과 감사 줄 그대로, 읽지 못하는 메시지(JSON 아님)도 폐기, 재투입한 레코드를 폐기해도 두 기록이 남고 목록에 `redrive`와 `dismissal`이 함께, 폐기하지 않은 레코드는 `dismissal` null, 레코드 시각이 다른 옛 기록은 목록에 붙지 않음, 없는 offset 404·잘못된 사유 400이고 기록 없음), `DeadLetterDismisserTest` 7개(500자 통과·공백 제거 저장·감사 줄에 사유 없음, 사유 400이면 reader·repository·EntityManager 무호출, 위치 400이면 기록 조회 없음, 404, 기존 기록이면 persist 없이 처음 기록, unique 위반이면 이긴 기록·감사 줄 없음, 다른 제약 위반은 그대로), `SchemaMigrationTest`의 `V020 뒤 DLT 폐기 기록은 DLT 레코드의 좌표와 레코드 시각 하나에 한 행만 들어간다`와 적용 버전·표 목록(tdd-driver) | 엔티티·repository·V020·DTO와 `TODO()` 본문의 서비스, 매핑 없는 Controller만 두고 `./gradlew test --tests 'com.resilientpos.platform.deadletter.*' --tests 'com.resilientpos.SchemaMigrationTest'`. 70개 중 17개 실패(Controller·통합은 `Status expected 200 but was 404`와 `NOT_FOUND`, 단위는 `NotImplementedError`와 예외 미발생, 목록 키에 `dismissal` 없음). V020을 선언으로 먼저 넣어 `SchemaMigrationTest`는 RED에서 이미 통과했다 | 같은 명령. 70개 통과. 기존 폐기 기록 확인 한 줄을 지우면 단위 2개(기존 기록, unique 위반)가 실패하고 통합 재요청은 unique 경로가 같은 200을 돌려줘 통과했다(확인은 불필요한 INSERT와 롤백을 막는다). 되돌렸다 | `./gradlew test --tests 'com.resilientpos.platform.*'`와 SchemaMigration·구조 테스트 5종. 230개 중 1개 실패(`ObservabilityConfigurationTest`의 이름 대조, 미처리 DLT gauge가 아직 없다. 다음 행이 GREEN으로 만든다) |
-| 인수 9: `alerts.test.yaml`의 새 시나리오 8개(미처리 DLT가 있는 동안 울리고 처리하면 풀림, pod 사이 max와 첫 갱신 전 NaN, DLT 전송 실패를 하루 붙잡지 않음, 갱신 작업이 한 번도 성공하지 못함, 나이 2시간 초과, 여러 pod 재기동, 나이 24시간 초과, 한 pod 재기동) | 시나리오만 바꾸고 옛 규칙으로 `docker run --rm -v "$PWD/docker/prometheus:/rules:ro" --entrypoint promtool prom/prometheus:v3.15.0 test rules /rules/alerts.test.yaml`. 미처리 DLT·나이·생존 시나리오가 `got:[]`, DLT 전송 실패는 20분에도 firing(`keep_firing_for: 24h`) | 규칙을 바꾼 뒤 `promtool check config`와 같은 명령. `SUCCESS: 15 rules found`, 시나리오 전부 통과. 첫 실행에서 DLT 시나리오의 `a+bxn`이 n+1개라 16분에도 1이었고 시나리오 시각을 고쳤다 | `./gradlew test --tests 'com.resilientpos.platform.AlertRulesTest'`(promtool 검사·시나리오와 runbook 앵커 대조) 통과 |
+| 인수 9: `alerts.test.yaml`의 새 시나리오 8개(미처리 DLT가 있는 동안 울리고 처리하면 풀림, pod 사이 max와 첫 갱신 전 NaN, DLT 전송 실패를 하루 붙잡지 않음, 갱신 작업이 한 번도 성공하지 못함, 경과 시간 2시간 초과, 여러 pod 재기동, 경과 시간 24시간 초과, 한 pod 재기동) | 시나리오만 바꾸고 옛 규칙으로 `docker run --rm -v "$PWD/docker/prometheus:/rules:ro" --entrypoint promtool prom/prometheus:v3.15.0 test rules /rules/alerts.test.yaml`. 미처리 DLT·경과 시간·생존 시나리오가 `got:[]`, DLT 전송 실패는 20분에도 firing(`keep_firing_for: 24h`) | 규칙을 바꾼 뒤 `promtool check config`와 같은 명령. `SUCCESS: 15 rules found`, 시나리오 전부 통과. 첫 실행에서 DLT 시나리오의 `a+bxn`이 n+1개라 16분에도 1이었고 시나리오 시각을 고쳤다 | `./gradlew test --tests 'com.resilientpos.platform.AlertRulesTest'`(promtool 검사·시나리오와 runbook 앵커 대조) 통과 |
 | 인수 10: `ObservabilityConfigurationTest`의 `알림 규칙이 쓰는 metric 이름이 모두 나간다`와 Kafka metric 테스트의 토픽별 `event_kafka_dead_letter_unhandled` 단언 | 폐기 표시 단계의 회귀에서 `없는 이름`에 `event_kafka_dead_letter_unhandled`가 나와 실패했다(규칙만 바뀐 상태). 미처리 DLT gauge의 껍데기가 gauge를 등록한 뒤에는 통과해 그 단계의 RED로는 재현하지 못했다 | 미처리 DLT gauge 구현 뒤 같은 테스트 통과. 갱신 작업이 기동 직후 돌아 `tasks_scheduled_execution_seconds_count`를 예외 목록에서 뺐다 | 위와 같다 |
 | 인수 11: `DeadLetterControllerTest`의 `폐기는 200과 폐기한 운영자 시각을 돌려주고 토큰의 sub를 운영자로 넘긴다`, `폐기 사유가 규칙에 어긋나면 400 INVALID_DISMISS_REASON이고 본문에 사유가 없으면 빈 사유로 넘긴다`, `폐기할 offset에 레코드가 없으면 404 DEAD_LETTER_NOT_FOUND다`, sub 500 테스트에 폐기 endpoint, 목록의 `dismissal` 필드 | 위 인수 4~8 행의 RED에 포함(매핑 없음, `Status expected 200 but was 404`) | 위 GREEN에 포함. `build/generated-snippets`에 `dead-letters-dismiss`·`-dismiss-invalid-reason`·`-dismiss-not-found`가 생기고 `dead-letters-list`에 `dismissal`·`dismissal.operator`·`dismissal.dismissedAt`이 문서화됐다 | 위와 같다 |
 | 범위 조정 1(앱): `UnhandledDeadLetterMetricsIntegrationTest`의 `마지막 성공 시각은 첫 갱신 전 0이고 성공하면 그 갱신의 시각이며 실패하면 그대로다`(조작 가능한 Clock), `ObservabilityConfigurationTest`의 이름 대조(tdd-driver) | 생성자에 `Clock`만 더해 컴파일한 뒤 `./gradlew test --tests 'com.resilientpos.platform.deadletter.UnhandledDeadLetterMetricsIntegrationTest' --tests 'com.resilientpos.platform.ObservabilityConfigurationTest'`. 9개 중 2개 실패(`MeterNotFoundException`, `없는 이름: [event_kafka_dead_letter_unhandled_refreshed_seconds]`) | `./gradlew test --tests 'com.resilientpos.platform.deadletter.*' --tests 'com.resilientpos.platform.ObservabilityConfigurationTest' --tests 'com.resilientpos.platform.AlertRulesTest'` 통과 | `./gradlew test --tests 'com.resilientpos.platform.*'`와 SchemaMigration·구조 테스트 5종. 239개 통과 |
 | 범위 조정 1(규칙): `alerts.test.yaml`의 `다른 pod가 세고 있으면 갱신이 멈춘 pod의 옛 값은 DLT 알림을 붙잡지 않는다`, `모든 pod가 세지 못하면 마지막 값으로 DLT 알림을 유지한다` | 시나리오만 더하고 옛 규칙으로 docker promtool. 첫 시나리오가 11분에 `got` firing으로 실패, 둘째는 통과(옛 규칙도 max라 유지) | 규칙을 바꾼 뒤 같은 명령. `SUCCESS: 15 rules found`, 시나리오 전부 통과. 마지막 성공 시각 series가 없는 기존 DLT 시나리오는 "모두 세지 못함" 쪽으로 계속 통과한다 | `AlertRulesTest` 통과(위 행의 회귀에 포함) |
-| 범위 조정 5: `for: 5m` 경계(9분·39분 평가), pod 값이 다를 때 큰 쪽(10분 평가), summary 변경 | 경계 평가는 규칙 사본의 `for`를 6m으로 바꾸면 `넘기지 않은 결과 불명의 나이가 2시간을 넘으면 5분 뒤 울린다`가 9분에서 실패한다(변이 확인, 저장소 파일은 그대로) | docker promtool 통과 | 위와 같다 |
+| 범위 조정 5: `for: 5m` 경계(9분·39분 평가), pod 값이 다를 때 큰 쪽(10분 평가), summary 변경 | 경계 평가는 규칙 사본의 `for`를 6m으로 바꾸면 `넘기지 않은 결과 불명의 경과 시간이 2시간을 넘으면 5분 뒤 울린다`가 9분에서 실패한다(변이 확인, 저장소 파일은 그대로) | docker promtool 통과 | 위와 같다 |
 | 범위 조정 7: `UnhandledDeadLetterMetricsIntegrationTest`의 `다른 partition이나 범위 밖 offset이나 다른 DLT 토픽의 기록 행은 미처리 수에서 빼지 않는다`, 증가분 테스트를 새 인스턴스로; `DeadLetterDismissIntegrationTest`의 `API로 폐기하면 그 토픽의 미처리 수가 다음 갱신에 하나 준다`, `기록 확인이 커밋 전인 같은 레코드의 기록을 못 보고 저장하면 unique 위반을 번역해 이긴 기록을 200으로 돌려주고 행은 하나이며 감사 줄을 남기지 않는다`(JDBC 트랜잭션과 `pg_blocking_pids`로 실제 경합); `DeadLetterDismisserTest`의 `DLT를 읽다 브로커에 닿지 못하면 기록하지 않고 DependencyUnavailableException을 그대로 던진다`(tdd-driver) | 모두 처음부터 통과(characterization). 갱신 시작 직후 모든 토픽 값을 NaN으로 쓰게 잠깐 깨면 `갱신이 실패하면 예외를 던지고 마지막 성공값을 유지한다`가 `expected 1.0 but was NaN`으로 실패했고 되돌렸다. 범위 밖 기록과 실제 DB 경합 테스트는 운영 코드를 지워 보는 확인을 하지 않았다 | `./gradlew test --tests 'com.resilientpos.platform.deadletter.*'` 통과 | 위 범위 조정 1(앱) 행의 회귀에 포함 |
 
 ## 결과
 - 인수 12(compose, 2026-10-22 UTC). 공유 스택(#77 측정용)이라 #77 세션과 맞춰 03:13~03:28에 썼다. lgtm에는 데이터 볼륨이 없어 다시 만들면 #77의 기록이 사라지므로 lgtm·alloy는 건드리지 않았다. app만 이 브랜치로 다시 빌드하고(`--profile app up -d --build --no-deps app`), 같은 compose 네트워크에 `prom/prometheus:v3.15.0`(이 worktree의 `alerts.yaml`, app을 15초마다 scrape, 평가 15초)을 따로 띄워 `/api/v1/rules`·`/api/v1/alerts`를 15초마다 기록했다.
-  - 03:13:33 Flyway가 019에서 V020을 적용했고 03:13:37 기동했다. 규칙 15개가 모두 `health=ok`로 실렸다. `event_kafka_dead_letter_unhandled`가 다섯 토픽에 나왔고(`order.paid`는 #76 실측이 남긴 DLT 1건), 나이 gauge 둘은 첫 갱신 전이라 `NaN`이었다. `KafkaDeadLetter`(`order.paid`)는 처음부터 firing이었다.
+  - 03:13:33 Flyway가 019에서 V020을 적용했고 03:13:37 기동했다. 규칙 15개가 모두 `health=ok`로 실렸다. `event_kafka_dead_letter_unhandled`가 다섯 토픽에 나왔고(`order.paid`는 #76 실측이 남긴 DLT 1건), 경과 시간 gauge 둘은 첫 갱신 전이라 `NaN`이었다. `KafkaDeadLetter`(`order.paid`)는 처음부터 firing이었다.
   - 03:14:33 결과 불명 시도 둘을 SQL로 넣었다(넘기지 않은 것은 3시간 전 생성, 넘긴 것은 25시간 전 넘김, 금액 끝자리 4라 조회해도 불명). 03:14:38 `order.paid`에 JSON이 아닌 메시지를 넣어 03:14:39 `DLT로 보냄 … reason=error`가 남았다.
-  - 03:14:49 나이 10,803초·90,003초로 `UnknownPaymentResolutionStuck`·`ReconciliationPendingUnresolved`가 pending, 03:19:52 둘 다 firing(5분)이었다. 그때 미처리 DLT는 2건이었다.
+  - 03:14:49 경과 시간 10,803초·90,003초로 `UnknownPaymentResolutionStuck`·`ReconciliationPendingUnresolved`가 pending, 03:19:52 둘 다 firing(5분)이었다. 그때 미처리 DLT는 2건이었다.
   - 03:19:58 두 DLT 레코드(`order.paid.DLT` partition 0 offset 0·1)의 폐기 행을 SQL로 넣었다(compose에서는 IdP가 없어 `/admin`을 부를 수 없다). 03:20:52 미처리가 0이 되고 `KafkaDeadLetter`가 풀렸다.
-  - 03:20:58 app 컨테이너를 재시작했다(03:21:09 기동). 03:21:23 나이가 `NaN`이 되어 두 결제 알림이 풀렸고, 03:22:23 확정 작업의 첫 주기(기동 1분 뒤)에서 나이 11,254초·90,454초로 다시 pending, 03:27:27 다시 firing이었다. 2시간·24시간을 처음부터 세지 않았다.
+  - 03:20:58 app 컨테이너를 재시작했다(03:21:09 기동). 03:21:23 경과 시간이 `NaN`이 되어 두 결제 알림이 풀렸고, 03:22:23 확정 작업의 첫 주기(기동 1분 뒤)에서 경과 시간 11,254초·90,454초로 다시 pending, 03:27:27 다시 firing이었다. 2시간·24시간을 처음부터 세지 않았다.
   - 정리: 시험 행 둘을 지우고 `t_dead_letter_dismissal`과 V020 이력 행을 지워 공유 DB를 019로 돌렸다(뒤에 V020 주석을 고쳐 checksum이 바뀌기 때문이다). `order.paid.DLT` offset 1의 시험 메시지는 남아 있다. 범위 조정 1(마지막 성공 시각과 멈춘 인스턴스 제외)은 실측 뒤에 바꾼 것이라 promtool로만 확인했다.
 - 인수 1·3~11·13: TDD 검증 기록의 테스트가 통과했다. `./gradlew test` 전체는 127개 클래스, 832개 테스트, 실패·오류·건너뜀 0이었다(2026-10-22 03:06~03:10 UTC, `80336c9` 위). 범위 조정을 반영한 뒤 다시 돌려 127개 클래스, 837개 테스트, 실패·오류·건너뜀 0이다(05:58~06:04 UTC, `52b1ae5` 위). 공유 compose 스택을 쓰는 #77 측정과 시간을 맞춰 돌렸다. #102 머지 뒤 rebase하고 규칙 수를 16으로 고친 트리에서 다시 돌려 131개 클래스, 887개 테스트, 실패·오류·건너뜀 0이다(06:06~06:13 UTC). promtool은 `SUCCESS: 16 rules found`, 시나리오 전부 통과다.
 - 인수 9: promtool `SUCCESS: 15 rules found`, 시나리오 전부 통과(`AlertRulesTest`).
