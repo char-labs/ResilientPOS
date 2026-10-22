@@ -38,25 +38,19 @@ groups:
           runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#eventpublicationmetricstale
 
       - alert: KafkaDeadLetter
-        # 둘째 줄은 10분 전까지 1시간 동안 없던 series다. 도메인 reason은 처음 DLT로 보낼 때 생겨 첫 값을 increase()가 0으로 본다.
-        # range 조회라 scrape 실패로 생긴 stale marker를 "없던 series"로 보지 않는다.
-        expr: |
-          sum by (topic, reason) (increase(event_kafka_dead_letter_total{application="ResilientPOS"}[10m])) > 0
-          or
-          sum by (topic, reason) (
-            event_kafka_dead_letter_total{application="ResilientPOS"}
-            unless on (instance, topic, reason) last_over_time(event_kafka_dead_letter_total{application="ResilientPOS"}[1h] offset 10m)
-          ) > 0
-        # DLT 메시지는 지워지지 않는다. 재투입과 업무 상태를 확인한 뒤 사람이 silence로 끈다.
-        keep_firing_for: 24h
+        # 재투입도 폐기도 하지 않은 DLT 메시지 수다. 처리하면 다음 갱신(1분)에 0이 되어 풀린다. 원인(reason)은 runbook에서 counter로 본다.
+        # 모든 인스턴스가 같은 DLT와 DB를 세므로 max로 묶는다. 첫 갱신 전 NaN은 max에서 빠진다.
+        expr: max by (topic) (event_kafka_dead_letter_unhandled{application="ResilientPOS"}) > 0
         labels:
           severity: critical
         annotations:
-          summary: "{{ $labels.topic }} 메시지가 DLT로 갔다(reason={{ $labels.reason }})"
+          summary: "{{ $labels.topic }}의 DLT에 처리하지 않은 메시지가 {{ $value }}건 있다"
           runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#kafkadeadletter
 
       - alert: KafkaDeadLetterPublishFailed
-        # 기동 때 0으로 등록하지만 첫 scrape 전에 오른 값을 놓치지 않게 KafkaDeadLetter와 같은 모양으로 둔다.
+        # 둘째 줄은 10분 전까지 1시간 동안 없던 series다. 기동 때 0으로 등록하지만 첫 scrape 전에 오른 값을 놓치지 않으려는 것이다.
+        # range 조회라 scrape 실패로 생긴 stale marker를 "없던 series"로 보지 않는다.
+        # 전송이 다시 되면 메시지는 DLT로 가서 KafkaDeadLetter가 잡으므로 증가가 멈춘 뒤 붙잡지 않는다.
         expr: |
           sum by (topic) (increase(event_kafka_dead_letter_failed_total{application="ResilientPOS"}[10m])) > 0
           or
@@ -64,7 +58,6 @@ groups:
             event_kafka_dead_letter_failed_total{application="ResilientPOS"}
             unless on (instance, topic) last_over_time(event_kafka_dead_letter_failed_total{application="ResilientPOS"}[1h] offset 10m)
           ) > 0
-        keep_firing_for: 24h
         labels:
           severity: critical
         annotations:
@@ -108,10 +101,24 @@ groups:
           summary: "{{ $labels.instance }}의 결과 불명 결제 확정 작업이 20분 넘게 성공하지 못했다"
           runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#unknownpaymentresolvernotsucceeding
 
+      - alert: KafkaDeadLetterMetricNotSucceeding
+        # 미처리 DLT gauge는 갱신이 실패하면 마지막 값에 멈추고, 한 번도 성공하지 못하면 NaN이라 KafkaDeadLetter가 울 수 없다.
+        expr: |
+          process_uptime_seconds{application="ResilientPOS"} > 300
+          unless on (instance)
+          increase(tasks_scheduled_execution_seconds_count{application="ResilientPOS", code_function="countUnhandled", outcome="SUCCESS"}[10m]) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }}의 미처리 DLT 갱신 작업이 20분 넘게 성공하지 못했다"
+          runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#kafkadeadlettermetricnotsucceeding
+
       - alert: UnknownPaymentResolutionStuck
+        # 나이는 넘기지 않은 가장 오래된 결과 불명 시도의 생성 시각부터다. DB에서 다시 세므로 재기동해도 첫 갱신 뒤 5분이면 다시 운다.
         # 정상이면 한 건은 조회 상한(약 1시간) 안에 확정되거나 reconciliation으로 넘어간다.
-        expr: max(payment_attempt_unknown{application="ResilientPOS"}) - max(payment_attempt_reconciliation_pending{application="ResilientPOS"}) > 0
-        for: 2h
+        expr: max(payment_attempt_resolution_oldest_seconds{application="ResilientPOS"}) > 7200
+        for: 5m
         labels:
           severity: warning
         annotations:
@@ -119,8 +126,9 @@ groups:
           runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#unknownpaymentresolutionstuck
 
       - alert: ReconciliationPendingUnresolved
-        expr: max(payment_attempt_reconciliation_pending{application="ResilientPOS"}) > 0
-        for: 24h
+        # 나이는 넘긴 결과 불명 시도 가운데 가장 이른 넘긴 시각부터다. case 열기가 실패해 DLT에 간 시도도 여기 든다.
+        expr: max(payment_attempt_reconciliation_pending_oldest_seconds{application="ResilientPOS"}) > 86400
+        for: 5m
         labels:
           severity: warning
         annotations:

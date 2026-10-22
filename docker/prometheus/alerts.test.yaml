@@ -92,92 +92,61 @@ tests:
               summary: "stuck 인스턴스가 발행 기록을 5분 넘게 세지 못했다"
               runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#eventpublicationmetricstale
 
-  - name: 기동할 때 0으로 등록한 reason은 증가로, 처음 생긴 도메인 reason은 새 series로 잡는다
+  - name: 처리하지 않은 DLT가 있는 동안 울리고 처리하면 다음 평가에 풀린다
     interval: 1m
     input_series:
-      - series: event_kafka_dead_letter_total{application="ResilientPOS", topic="order.paid", reason="error", instance="a"}
-        values: 0x30
-      - series: event_kafka_dead_letter_total{application="ResilientPOS", topic="payment.approved", reason="error", instance="a"}
-        values: 0x9 1x20
-      - series: event_kafka_dead_letter_total{application="ResilientPOS", topic="payment.approved", reason="PAYMENT_APPROVAL_MISMATCH", instance="a"}
-        values: _x5 1x25
+      # 첫 갱신 전에는 NaN이다. 6분에 DLT가 하나 생기고 17분에 재투입이나 폐기로 처리된다.
+      - series: event_kafka_dead_letter_unhandled{application="ResilientPOS", topic="order.paid", instance="a"}
+        values: NaN 0x4 1x10 0x10
+      - series: event_kafka_dead_letter_unhandled{application="ResilientPOS", topic="payment.approved", instance="a"}
+        values: NaN 0x25
     alert_rule_test:
-      - eval_time: 3m
+      - eval_time: 4m
         alertname: KafkaDeadLetter
         exp_alerts: []
-      - eval_time: 7m
+      - eval_time: 6m
+        alertname: KafkaDeadLetter
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              topic: order.paid
+            exp_annotations:
+              summary: "order.paid의 DLT에 처리하지 않은 메시지가 1건 있다"
+              runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#kafkadeadletter
+      # 늘지 않아도 남아 있는 동안은 계속 울린다.
+      - eval_time: 14m
+        alertname: KafkaDeadLetter
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              topic: order.paid
+            exp_annotations:
+              summary: "order.paid의 DLT에 처리하지 않은 메시지가 1건 있다"
+              runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#kafkadeadletter
+      - eval_time: 17m
+        alertname: KafkaDeadLetter
+        exp_alerts: []
+
+  - name: 미처리 DLT는 pod 사이를 max로 묶고 첫 갱신 전 NaN은 빠진다
+    interval: 1m
+    input_series:
+      - series: event_kafka_dead_letter_unhandled{application="ResilientPOS", topic="payment.approved", instance="a"}
+        values: 2x20
+      # 막 뜬 pod다. 첫 갱신 전 NaN이 값이 있는 pod의 알림을 끊지 않는다.
+      - series: event_kafka_dead_letter_unhandled{application="ResilientPOS", topic="payment.approved", instance="b"}
+        values: _x5 NaN NaN 2x13
+    alert_rule_test:
+      - eval_time: 6m
         alertname: KafkaDeadLetter
         exp_alerts:
           - exp_labels:
               severity: critical
               topic: payment.approved
-              reason: PAYMENT_APPROVAL_MISMATCH
             exp_annotations:
-              summary: "payment.approved 메시지가 DLT로 갔다(reason=PAYMENT_APPROVAL_MISMATCH)"
+              summary: "payment.approved의 DLT에 처리하지 않은 메시지가 2건 있다"
               runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#kafkadeadletter
-      - eval_time: 12m
-        alertname: KafkaDeadLetter
-        exp_alerts:
-          - exp_labels:
-              severity: critical
-              topic: payment.approved
-              reason: PAYMENT_APPROVAL_MISMATCH
-            exp_annotations:
-              summary: "payment.approved 메시지가 DLT로 갔다(reason=PAYMENT_APPROVAL_MISMATCH)"
-              runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#kafkadeadletter
-          - exp_labels:
-              severity: critical
-              topic: payment.approved
-              reason: error
-            exp_annotations:
-              summary: "payment.approved 메시지가 DLT로 갔다(reason=error)"
-              runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#kafkadeadletter
-      # 늘지 않아도 keep_firing_for로 24시간 유지한다. 사람이 재투입을 확인한 뒤 silence로 끈다.
-      - eval_time: 28m
-        alertname: KafkaDeadLetter
-        exp_alerts:
-          - exp_labels:
-              severity: critical
-              topic: payment.approved
-              reason: PAYMENT_APPROVAL_MISMATCH
-            exp_annotations:
-              summary: "payment.approved 메시지가 DLT로 갔다(reason=PAYMENT_APPROVAL_MISMATCH)"
-              runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#kafkadeadletter
-          - exp_labels:
-              severity: critical
-              topic: payment.approved
-              reason: error
-            exp_annotations:
-              summary: "payment.approved 메시지가 DLT로 갔다(reason=error)"
-              runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#kafkadeadletter
-      - eval_time: 25h
-        alertname: KafkaDeadLetter
-        exp_alerts: []
 
-  - name: scrape가 한 번 실패해도 옛 DLT를 다시 울리지 않는다
-    interval: 1m
-    input_series:
-      # 10분에 DLT가 나 24시간 붙잡은 뒤, 1512분에 scrape가 한 번 실패한다(stale marker). 10분 뒤 offset 지점이 그 자리다.
-      - series: event_kafka_dead_letter_total{application="ResilientPOS", topic="order.paid", reason="error", instance="a"}
-        values: 0x10 3x1500 stale 3x30
-    alert_rule_test:
-      - eval_time: 1522m
-        alertname: KafkaDeadLetter
-        exp_alerts: []
-
-  - name: 재기동으로 다시 생긴 0인 series는 울리지 않는다
-    interval: 1m
-    input_series:
-      - series: event_kafka_dead_letter_total{application="ResilientPOS", topic="order.paid", reason="error", instance="old"}
-        values: 0x10
-      - series: event_kafka_dead_letter_total{application="ResilientPOS", topic="order.paid", reason="error", instance="new"}
-        values: _x12 0x20
-    alert_rule_test:
-      - eval_time: 15m
-        alertname: KafkaDeadLetter
-        exp_alerts: []
-
-  - name: DLT 전송 실패는 첫 scrape 전에 오른 값도 잡는다
+  - name: DLT 전송 실패는 첫 scrape 전에 오른 값도 잡고 멈추면 하루 붙잡지 않는다
     interval: 1m
     input_series:
       - series: event_kafka_dead_letter_failed_total{application="ResilientPOS", topic="order.paid", instance="a"}
@@ -194,6 +163,10 @@ tests:
             exp_annotations:
               summary: "payment.approved 메시지를 DLT로 보내지 못해 같은 메시지를 다시 처리하고 있다"
               runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#kafkadeadletterpublishfailed
+      # 전송이 다시 되면 메시지는 DLT로 가서 KafkaDeadLetter가 잡는다. 증가가 멈추면 감지 창(10분) 뒤 풀린다.
+      - eval_time: 20m
+        alertname: KafkaDeadLetterPublishFailed
+        exp_alerts: []
 
   - name: consumer lag는 점이 있는 토픽 이름으로 한 번만 울린다
     interval: 1m
@@ -268,23 +241,48 @@ tests:
               summary: "a의 결과 불명 결제 확정 작업이 20분 넘게 성공하지 못했다"
               runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#unknownpaymentresolvernotsucceeding
 
-  - name: 넘기지 않은 결과 불명이 2시간 이어지면 울린다
+  - name: 미처리 DLT 갱신 작업이 한 번도 성공하지 못하면 울린다
+    interval: 1m
+    input_series:
+      - series: process_uptime_seconds{application="ResilientPOS", instance="denied"}
+        values: 0+60x40
+      - series: process_uptime_seconds{application="ResilientPOS", instance="healthy"}
+        values: 0+60x40
+      # 기동하자마자 돌고 1분마다 성공한다.
+      - series: tasks_scheduled_execution_seconds_count{application="ResilientPOS", instance="healthy", code_function="countUnhandled", code_namespace="com.resilientpos.platform.deadletter.UnhandledDeadLetterMetrics", outcome="SUCCESS", exception="none", error="none"}
+        values: 1+1x40
+      # 운영 ACL에 DLT Describe가 빠진 인스턴스다. 매번 실패해 SUCCESS series가 없다.
+      - series: tasks_scheduled_execution_seconds_count{application="ResilientPOS", instance="denied", code_function="countUnhandled", code_namespace="com.resilientpos.platform.deadletter.UnhandledDeadLetterMetrics", outcome="ERROR", exception="TopicAuthorizationException", error="TopicAuthorizationException"}
+        values: 1+1x40
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: KafkaDeadLetterMetricNotSucceeding
+        exp_alerts: []
+      - eval_time: 17m
+        alertname: KafkaDeadLetterMetricNotSucceeding
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              application: ResilientPOS
+              instance: denied
+            exp_annotations:
+              summary: "denied의 미처리 DLT 갱신 작업이 20분 넘게 성공하지 못했다"
+              runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#kafkadeadlettermetricnotsucceeding
+
+  - name: 넘기지 않은 결과 불명의 나이가 2시간을 넘으면 5분 뒤 울린다
     # 샘플 간격이 lookback(5분)보다 길면 series가 중간에 비어 for가 다시 센다. 실제 scrape 간격(15초)에 가깝게 1분으로 둔다.
     interval: 1m
     input_series:
-      - series: payment_attempt_unknown{application="ResilientPOS", instance="a"}
-        values: 3x140
-      - series: payment_attempt_unknown{application="ResilientPOS", instance="b"}
-        values: 3x140
-      - series: payment_attempt_reconciliation_pending{application="ResilientPOS", instance="a"}
-        values: 1x140
-      - series: payment_attempt_reconciliation_pending{application="ResilientPOS", instance="b"}
-        values: 1x140
+      # 4분에 7240초가 되어 2시간을 넘는다. 모든 인스턴스가 같은 DB를 세므로 b도 같은 값이다.
+      - series: payment_attempt_resolution_oldest_seconds{application="ResilientPOS", instance="a"}
+        values: 7000+60x20
+      - series: payment_attempt_resolution_oldest_seconds{application="ResilientPOS", instance="b"}
+        values: 7000+60x20
     alert_rule_test:
-      - eval_time: 110m
+      - eval_time: 8m
         alertname: UnknownPaymentResolutionStuck
         exp_alerts: []
-      - eval_time: 130m
+      - eval_time: 10m
         alertname: UnknownPaymentResolutionStuck
         exp_alerts:
           - exp_labels:
@@ -293,21 +291,71 @@ tests:
               summary: "넘기지 않은 결과 불명 결제가 2시간 넘게 남아 있다"
               runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#unknownpaymentresolutionstuck
 
-  - name: 모든 결과 불명이 넘어간 상태는 확정 지연으로 울리지 않고 24시간 뒤 해소 지연으로 울린다
+  - name: 여러 pod면 한 pod가 재기동해도 결과 불명 알림이 끊기지 않는다
     interval: 1m
     input_series:
-      - series: payment_attempt_unknown{application="ResilientPOS", instance="a"}
-        values: 1x1530
-      - series: payment_attempt_reconciliation_pending{application="ResilientPOS", instance="a"}
-        values: 1x1530
+      - series: payment_attempt_resolution_oldest_seconds{application="ResilientPOS", instance="a"}
+        values: 9000+60x40
+      # b가 20분에 내려가고(stale) 새로 떠서 첫 갱신 전 NaN을 낸 뒤 나이를 다시 낸다.
+      - series: payment_attempt_resolution_oldest_seconds{application="ResilientPOS", instance="b"}
+        values: 9000+60x20 stale NaN NaN 10440+60x16
     alert_rule_test:
-      - eval_time: 3h
+      - eval_time: 22m
         alertname: UnknownPaymentResolutionStuck
-        exp_alerts: []
-      - eval_time: 23h
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "넘기지 않은 결과 불명 결제가 2시간 넘게 남아 있다"
+              runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#unknownpaymentresolutionstuck
+
+  - name: 넘긴 결과 불명의 나이가 24시간을 넘으면 5분 뒤 울린다
+    interval: 1m
+    input_series:
+      # 7분에 86420초가 되어 24시간을 넘는다.
+      - series: payment_attempt_reconciliation_pending_oldest_seconds{application="ResilientPOS", instance="a"}
+        values: 86000+60x20
+      # 넘기지 않은 쪽은 젊다. 해소 지연과 확정 지연은 따로 운다.
+      - series: payment_attempt_resolution_oldest_seconds{application="ResilientPOS", instance="a"}
+        values: 600+60x20
+    alert_rule_test:
+      - eval_time: 11m
         alertname: ReconciliationPendingUnresolved
         exp_alerts: []
-      - eval_time: 25h
+      - eval_time: 13m
+        alertname: ReconciliationPendingUnresolved
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "점주가 해소하지 않은 대조 case가 24시간 넘게 남아 있다"
+              runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#reconciliationpendingunresolved
+      - eval_time: 13m
+        alertname: UnknownPaymentResolutionStuck
+        exp_alerts: []
+
+  - name: 한 pod가 재기동하면 해소 지연 알림은 풀렸다가 첫 갱신 뒤 5분에 다시 울린다
+    interval: 1m
+    input_series:
+      # 30분에 내려가고(stale) 새 pod가 첫 갱신 전 2분 동안 NaN을 낸 뒤 DB에서 다시 센 나이를 낸다. 24시간을 처음부터 세지 않는다.
+      - series: payment_attempt_reconciliation_pending_oldest_seconds{application="ResilientPOS", instance="a"}
+        values: 90000+60x30 stale NaN NaN 92040+60x20
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: ReconciliationPendingUnresolved
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "점주가 해소하지 않은 대조 case가 24시간 넘게 남아 있다"
+              runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#reconciliationpendingunresolved
+      - eval_time: 33m
+        alertname: ReconciliationPendingUnresolved
+        exp_alerts: []
+      - eval_time: 38m
+        alertname: ReconciliationPendingUnresolved
+        exp_alerts: []
+      - eval_time: 40m
         alertname: ReconciliationPendingUnresolved
         exp_alerts:
           - exp_labels:
