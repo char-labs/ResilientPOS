@@ -23,6 +23,8 @@ export const options = {
     sales: {
       executor: 'constant-arrival-rate', rate: SALES_PER_SECOND, timeUnit: '1s', duration: DURATION,
       preAllocatedVUs: VUS, maxVUs: VUS,
+      // 폴링 한도(POLL_LIMIT_SECONDS)보다 길게 둔다. 기본값(30초)이면 승인이 늦은 판매의 폴링이 기록 전에 끊긴다.
+      gracefulStop: `${POLL_LIMIT_SECONDS + 20}s`,
     },
   },
   thresholds: {
