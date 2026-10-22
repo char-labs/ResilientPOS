@@ -140,10 +140,10 @@ python3 scripts/check_pr.py --base origin/main
 워크플로는 버전 중복만 본다. spec 첫 커밋 판정은 머지 결과 위에서 의미가 달라지므로 로컬 검사가 계속 담당한다.
 Flyway gate는 빌드 산출물을 쓰지 않으므로 빌드를 기다리지 않는다. 빌드가 실패해도 버전 중복 결과는 따로 나온다.
 
-검사 시간을 줄이는 장치는 둘이다([ci-build-time](../spec/2026-10-22-ci-build-time.md)).
-- test는 fork 2개로 나눠 돈다(`build.gradle.kts`의 `maxParallelForks`). fork마다 컨테이너를 따로 띄워 DB와 consumer group을 같이 쓰지 않는다. 고정값이라 CI에서 깨진 테스트를 로컬에서 같은 fork 수로 다시 돌릴 수 있다.
-- `gradle.properties`가 Gradle build cache를 켠다. setup-gradle은 main push job에서만 캐시를 저장하고 PR은 main의 마지막 캐시를 읽기만 한다. 그래서 입력이 main과 같은 task만 `FROM-CACHE`로 건너뛴다. 문서만 고친 PR은 compile과 test를 건너뛰고(test 입력인 runbook과 알림 규칙은 빼고), 소스를 고친 PR은 다시 돈다. PR을 같은 커밋으로 다시 돌려도 PR 실행은 캐시를 저장하지 않으므로 처음 실행과 같다.
-- test도 캐시하므로 입력에 없는 변화(태그가 움직이는 컨테이너 이미지)는 test를 건너뛴 실행에서 잡지 못한다. 테스트가 classpath 밖 파일을 읽으면 `build.gradle.kts`의 Test `inputs`에 더한다.
+Flyway gate 병렬 외에 검사 시간을 줄이는 장치가 둘 있다([ci-build-time](../spec/2026-10-22-ci-build-time.md)).
+- test는 fork 2개로 나눠 돈다(`build.gradle.kts`의 `maxParallelForks`). fork마다 컨테이너를 따로 띄워 DB와 consumer group을 같이 쓰지 않는다. 고정값이라 로컬과 CI가 같은 fork 수로 돈다. 클래스를 fork에 나누는 순서는 환경마다 다를 수 있다.
+- `gradle.properties`가 Gradle build cache를 켠다. setup-gradle은 main push job에서만 캐시를 저장하고 PR은 main의 마지막 캐시를 읽기만 한다. 그래서 입력이 main과 같은 task만 `FROM-CACHE`로 건너뛴다. 문서만 고친 PR은 compile과 test를 건너뛰고, 소스를 고친 PR은 다시 돈다. runbook이나 알림 규칙(`docker/prometheus`)은 test 입력이라 고치면 test 전체가 다시 돈다. PR을 같은 커밋으로 다시 돌려도 PR 실행은 캐시를 저장하지 않으므로 처음 실행과 같다.
+- test도 캐시하므로 입력에 없는 변화(태그가 움직이는 컨테이너 이미지, 간헐적 실패)는 test를 건너뛴 실행에서 잡지 못한다. 의심되면 `./gradlew test --rerun`으로 다시 돌린다. 테스트가 classpath 밖 파일을 읽으면 `build.gradle.kts`의 Test `inputs`에, `build` 아래에 파일을 남기면 `outputs`에 더한다. output으로 두지 않은 파일은 test가 캐시에서 올 때 생기지 않는다.
 
 ### rebase와 force-push
 - 개발 브랜치를 base 위로 rebase 하는 것은 허용한다. rebase 뒤에도 spec 첫 커밋이 base 이후 첫 커밋이어야 하며,
