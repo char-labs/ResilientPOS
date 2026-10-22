@@ -33,7 +33,7 @@ tests:
   - name: 가장 오래된 미완료 발행 기록이 1시간을 넘으면 울리고 끝나면 풀린다
     interval: 1m
     input_series:
-      # 재전송 중이라 failed 개수가 0과 1을 오가도 나이는 계속 는다. b는 정상 인스턴스다.
+      # 재전송 중이라 failed 개수가 0과 1을 오가도 경과 시간은 계속 는다. b는 정상 인스턴스다.
       - series: event_publication_incomplete_oldest_seconds{application="ResilientPOS", instance="a"}
         values: 0+60x70 0x10
       - series: event_publication_incomplete_oldest_seconds{application="ResilientPOS", instance="b"}
@@ -54,7 +54,7 @@ tests:
         alertname: EventPublicationOverdue
         exp_alerts: []
 
-  - name: 세지 못한 인스턴스의 NaN은 나이 알림을 붙잡지 않는다
+  - name: 세지 못한 인스턴스의 NaN은 경과 시간 알림을 붙잡지 않는다
     interval: 1m
     input_series:
       - series: event_publication_incomplete_oldest_seconds{application="ResilientPOS", instance="a"}
@@ -329,7 +329,7 @@ tests:
               summary: "denied의 미처리 DLT 갱신 작업이 20분 넘게 성공하지 못했다"
               runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#kafkadeadlettermetricnotsucceeding
 
-  - name: 넘기지 않은 결과 불명의 나이가 2시간을 넘으면 5분 뒤 울린다
+  - name: 넘기지 않은 결과 불명의 경과 시간이 2시간을 넘으면 5분 뒤 울린다
     # 샘플 간격이 lookback(5분)보다 길면 series가 중간에 비어 for가 다시 센다. 실제 scrape 간격(15초)에 가깝게 1분으로 둔다.
     interval: 1m
     input_series:
@@ -357,7 +357,7 @@ tests:
     input_series:
       - series: payment_attempt_resolution_oldest_seconds{application="ResilientPOS", instance="a"}
         values: 9000+60x40
-      # b가 21분에 내려가고(stale) 새로 떠서 첫 갱신 전 NaN을 낸 뒤 나이를 다시 낸다.
+      # b가 21분에 내려가고(stale) 새로 떠서 첫 갱신 전 NaN을 낸 뒤 경과 시간을 다시 낸다.
       - series: payment_attempt_resolution_oldest_seconds{application="ResilientPOS", instance="b"}
         values: 9000+60x20 stale NaN NaN 10440+60x16
     alert_rule_test:
@@ -370,7 +370,7 @@ tests:
               summary: "넘기지 않은 결과 불명 결제가 2시간 넘게 남아 있다"
               runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#unknownpaymentresolutionstuck
 
-  - name: 넘긴 결과 불명의 나이가 24시간을 넘으면 5분 뒤 울린다
+  - name: 넘긴 결과 불명의 경과 시간이 24시간을 넘으면 5분 뒤 울린다
     interval: 1m
     input_series:
       # 7분에 86420초가 되어 24시간을 넘는다.
@@ -398,7 +398,7 @@ tests:
   - name: 한 pod가 재기동하면 해소 지연 알림은 풀렸다가 첫 갱신 뒤 5분에 다시 울린다
     interval: 1m
     input_series:
-      # 31분에 내려가고(stale) 새 pod가 첫 갱신 전 2분 동안 NaN을 낸 뒤 34분부터 DB에서 다시 센 나이를 낸다. 24시간을 처음부터 세지 않는다.
+      # 31분에 내려가고(stale) 새 pod가 첫 갱신 전 2분 동안 NaN을 낸 뒤 34분부터 DB에서 다시 센 경과 시간을 낸다. 24시간을 처음부터 세지 않는다.
       - series: payment_attempt_reconciliation_pending_oldest_seconds{application="ResilientPOS", instance="a"}
         values: 90000+60x30 stale NaN NaN 92040+60x20
     alert_rule_test:

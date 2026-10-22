@@ -102,7 +102,7 @@ class UnknownPaymentResolverIntegrationTest(
     fun cleanUp() {
         statistics.isStatisticsEnabled = statisticsWereEnabled
         jdbcTemplate.update("delete from t_payment_attempt where id = ?", cancellationId)
-        // 나이 gauge 테스트가 직접 넣은 작은 id의 행은 다음 실행과 겹치지 않게 지운다.
+        // 경과 시간 gauge 테스트가 직접 넣은 작은 id의 행은 다음 실행과 겹치지 않게 지운다.
         jdbcTemplate.update("delete from t_payment_attempt where id::text like '00000000-0000-7000-8000-%'")
         // 계속 불명으로 남는 시도는 다른 테스트의 작업이 다시 집지 않게 닫아 둔다.
         created.forEach { jdbcTemplate.update("update t_payment_attempt set status = 'DECLINED' where id = ? and status = 'UNKNOWN'", it.value) }
@@ -333,7 +333,7 @@ class UnknownPaymentResolverIntegrationTest(
 
     /**
      * 가장 오래된 행은 `id` 오름차순 첫 행이라 다른 테스트가 남긴 행보다 앞서도록 아주 작은 id를 쓴다.
-     * 시각은 JDBC로 아주 오래전으로 옮겨 두고 기대 나이는 [clock] 기준으로 비교한다.
+     * 시각은 JDBC로 아주 오래전으로 옮겨 두고 기대 경과 시간은 [clock] 기준으로 비교한다.
      */
     private fun lowId(n: Int) = UUID.fromString("00000000-0000-7000-8000-%012d".format(n))
 
@@ -358,7 +358,7 @@ class UnknownPaymentResolverIntegrationTest(
     private fun pendingOldestGauge() = meterRegistry.get("payment.attempt.reconciliation.pending.oldest").gauge().value()
 
     @Test
-    fun `넘기지 않은 가장 오래된 UNKNOWN 승인 시도의 나이를 gauge로 낸다`() {
+    fun `넘기지 않은 가장 오래된 UNKNOWN 승인 시도의 경과 시간을 gauge로 낸다`() {
         val now = clock.instant()
         // 결말 난 시도는 더 오래됐고 id도 앞서지만 무시한다.
         insertAttempt(lowId(1), "DECLINED", now.minus(Duration.ofDays(20)), null)
@@ -387,7 +387,7 @@ class UnknownPaymentResolverIntegrationTest(
     }
 
     @Test
-    fun `첫 갱신 전 나이 gauge는 NaN이다`() {
+    fun `첫 갱신 전 경과 시간 gauge는 NaN이다`() {
         val registry = SimpleMeterRegistry()
 
         UnknownPaymentResolver(repository, paymentManagement, registry, clock)
@@ -398,7 +398,7 @@ class UnknownPaymentResolverIntegrationTest(
     }
 
     @Test
-    fun `대상이 없으면 나이 gauge는 0이다`() {
+    fun `대상이 없으면 경과 시간 gauge는 0이다`() {
         val registry = SimpleMeterRegistry()
         val noTarget = object : PaymentAttemptRepository by repository {
             override fun oldestUnreconciledUnknownAuthorizationCreatedAt(): Instant? = null
@@ -412,7 +412,7 @@ class UnknownPaymentResolverIntegrationTest(
     }
 
     @Test
-    fun `나이를 세다 던지면 나이 gauge는 마지막 성공값으로 남는다`() {
+    fun `경과 시간을 세다 던지면 경과 시간 gauge는 마지막 성공값으로 남는다`() {
         val registry = SimpleMeterRegistry()
         val at = clock.instant().minus(Duration.ofDays(2))
         var fail = false
@@ -432,7 +432,7 @@ class UnknownPaymentResolverIntegrationTest(
     }
 
     @Test
-    fun `나이 조회는 kind와 status를 리터럴로 렌더한다`() {
+    fun `경과 시간 조회는 kind와 status를 리터럴로 렌더한다`() {
         statistics.clear()
 
         repository.oldestUnreconciledUnknownAuthorizationCreatedAt()

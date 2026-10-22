@@ -17,7 +17,7 @@ groups:
           runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#resilientposmetricsabsent
 
       - alert: EventPublicationOverdue
-        # 나이는 상태가 FAILED와 RESUBMITTED를 오가도 계속 는다. failed 개수는 재전송 중인 행을 세지 않아 브로커 장애 중에도 0이 될 수 있다.
+        # 경과 시간은 상태가 FAILED와 RESUBMITTED를 오가도 계속 는다. failed 개수는 재전송 중인 행을 세지 않아 브로커 장애 중에도 0이 될 수 있다.
         # shortcut: 1시간은 처음 wiki가 정한 "failed가 한 시간 이어지면"을 옮긴 시작값이다. 부하테스트 뒤 조정한다.
         expr: max(event_publication_incomplete_oldest_seconds{application="ResilientPOS"}) > 3600
         for: 5m
@@ -126,7 +126,7 @@ groups:
           runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#kafkadeadlettermetricnotsucceeding
 
       - alert: UnknownPaymentResolutionStuck
-        # 나이는 넘기지 않은 가장 오래된 결과 불명 시도의 생성 시각부터다. DB에서 다시 세므로 재기동해도 첫 갱신 뒤 5분이면 다시 운다.
+        # 경과 시간은 넘기지 않은 가장 오래된 결과 불명 시도의 생성 시각부터다. DB에서 다시 세므로 재기동해도 첫 갱신 뒤 5분이면 다시 운다.
         # 정상이면 한 건은 조회 상한(약 1시간) 안에 확정되거나 reconciliation으로 넘어간다.
         expr: max(payment_attempt_resolution_oldest_seconds{application="ResilientPOS"}) > 7200
         for: 5m
@@ -137,7 +137,7 @@ groups:
           runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#unknownpaymentresolutionstuck
 
       - alert: ReconciliationPendingUnresolved
-        # 나이는 넘긴 결과 불명 시도 가운데 가장 이른 넘긴 시각부터다. case 열기가 실패해 DLT에 간 시도도 여기 든다.
+        # 경과 시간은 넘긴 결과 불명 시도 가운데 가장 이른 넘긴 시각부터다. case 열기가 실패해 DLT에 간 시도도 여기 든다.
         expr: max(payment_attempt_reconciliation_pending_oldest_seconds{application="ResilientPOS"}) > 86400
         for: 5m
         labels:
