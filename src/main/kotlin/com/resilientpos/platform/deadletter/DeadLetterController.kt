@@ -12,12 +12,13 @@ import org.springframework.web.bind.annotation.RestController
 
 /**
  * 플랫폼 운영자의 DLT endpoint. `/admin` 아래는 `AdminSecurityFilterChain`이 운영자 토큰과 권한으로 지킨다. principal은 검증된 토큰이고 운영자는 그 `sub`다.
- * 목록을 읽으면 감사 INFO 한 줄을 남긴다(여러 매장의 주문 ID·금액을 읽는 운영 행위다). 재투입의 감사 로그는 [DeadLetterRedriver]가 남긴다.
+ * 목록을 읽으면 감사 INFO 한 줄을 남긴다(여러 매장의 주문 ID·금액을 읽는 운영 행위다). 재투입과 폐기의 감사 로그는 [DeadLetterRedriver]·[DeadLetterDismisser]가 남긴다.
  */
 @RestController
 class DeadLetterController(
     private val reader: DeadLetterReader,
     private val redriver: DeadLetterRedriver,
+    private val dismisser: DeadLetterDismisser,
 ) {
 
     @GetMapping("/admin/v1/dead-letters")
@@ -42,6 +43,15 @@ class DeadLetterController(
         @RequestBody request: DeadLetterRedriveRequest,
         @AuthenticationPrincipal operator: Jwt,
     ): DeadLetterRedriveResponse = redriver.redrive(topic, partition, offset, request.reason.orEmpty(), operator.subjectOrFail())
+
+    @PostMapping("/admin/v1/dead-letters/{topic}/{partition}/{offset}/dismiss")
+    fun dismiss(
+        @PathVariable topic: String,
+        @PathVariable partition: Int,
+        @PathVariable offset: Long,
+        @RequestBody request: DeadLetterDismissRequest,
+        @AuthenticationPrincipal operator: Jwt,
+    ): DeadLetterDismissResponse = dismisser.dismiss(topic, partition, offset, request.reason.orEmpty(), operator.subjectOrFail())
 
     /**
      * resource server는 `sub`를 검사하지 않는다. 없거나 1~255자(OIDC Core, `operator_subject varchar(255)`)가 아니거나 제어 문자를 담은 `sub`는 IdP 설정 오류라

@@ -47,7 +47,7 @@ import org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPat
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
 
 /**
- * DLT 목록·재투입 API 웹 슬라이스. reader와 redriver는 [MockitoBean]으로 대체하고 HTTP 매핑·직렬화·인증·오류 변환·문서 계약만 검사한다.
+ * DLT 목록·재투입·폐기 API 웹 슬라이스. reader·redriver·dismisser는 [MockitoBean]으로 대체하고 HTTP 매핑·직렬화·인증·오류 변환·문서 계약만 검사한다.
  * 운영자 인증은 `jwt()`로 넣는다. 토큰 검증 자체(issuer·audience·서명·만료)는 `AdminSecurityIntegrationTest`가 실제 decoder로 본다.
  */
 @WebMvcTest(DeadLetterController::class)
@@ -63,6 +63,9 @@ class DeadLetterControllerTest(
 
     @MockitoBean
     private lateinit var redriver: DeadLetterRedriver
+
+    @MockitoBean
+    private lateinit var dismisser: DeadLetterDismisser
 
     /** 슬라이스가 싣는 단말 인증 인터셉터의 의존성이다. 이 API는 단말을 쓰지 않는다. */
     @MockitoBean
@@ -84,11 +87,13 @@ class DeadLetterControllerTest(
                     value = """{"schemaVersion":1,"orderId":"$ORDER_ID"}""", originalTopic = "order.paid", originalPartition = 0, originalOffset = 42,
                     exception = "com.resilientpos.foundation.DomainException", exceptionMessage = "Listener failed; 이미 처리된 주문입니다",
                     schemaVersion = 1, redrive = DeadLetterRedriveSummary(partition = 0, offset = 87, operator = OPERATOR, redrivenAt = REDRIVEN_AT),
+                    dismissal = null,
                 ),
                 DeadLetterResponse(
                     partition = 0, offset = 13, timestamp = Instant.parse("2026-10-21T01:00:05Z"), key = null,
                     value = "not-json", originalTopic = null, originalPartition = null, originalOffset = null,
                     exception = null, exceptionMessage = null, schemaVersion = null, redrive = null,
+                    dismissal = DeadLetterDismissalSummary(operator = OPERATOR, dismissedAt = DISMISSED_AT),
                 ),
             ),
         )
@@ -112,6 +117,9 @@ class DeadLetterControllerTest(
             .andExpect(jsonPath("$.data[0].redrive.offset").value(87))
             .andExpect(jsonPath("$.data[0].redrive.operator").value(OPERATOR))
             .andExpect(jsonPath("$.data[0].redrive.redrivenAt").value("2026-10-21T02:00:00.123456Z"))
+            .andExpect(jsonPath("$.data[0].dismissal").value(null))
+            .andExpect(jsonPath("$.data[1].dismissal.operator").value(OPERATOR))
+            .andExpect(jsonPath("$.data[1].dismissal.dismissedAt").value("2026-10-21T03:00:00.123456Z"))
             .andExpect(jsonPath("$.data[1].key").value(null))
             .andExpect(jsonPath("$.data[1].originalTopic").value(null))
             .andExpect(jsonPath("$.data[1].originalPartition").value(null))
@@ -149,6 +157,9 @@ class DeadLetterControllerTest(
                         fieldWithPath("data[].redrive.offset").type(JsonFieldType.NUMBER).description("원 토픽에 넣은 offset. 넣은 메시지가 다시 DLT로 오면 새 DLT 레코드의 originalOffset과 같다"),
                         fieldWithPath("data[].redrive.operator").type(JsonFieldType.STRING).description("재투입한 운영자(토큰의 sub)"),
                         fieldWithPath("data[].redrive.redrivenAt").type(JsonFieldType.STRING).description("재투입 시각(ISO-8601 UTC)"),
+                        fieldWithPath("data[].dismissal").type(JsonFieldType.OBJECT).optional().description("이 레코드의 폐기 기록. 폐기하지 않았으면 null. 재투입 기록과 함께 있을 수 있다"),
+                        fieldWithPath("data[].dismissal.operator").type(JsonFieldType.STRING).description("폐기한 운영자(토큰의 sub)"),
+                        fieldWithPath("data[].dismissal.dismissedAt").type(JsonFieldType.STRING).description("폐기 시각(ISO-8601 UTC)"),
                         fieldWithPath("error").type(JsonFieldType.NULL).description("성공 응답에서는 null"),
                     ),
                 ),
@@ -232,7 +243,7 @@ class DeadLetterControllerTest(
 
     /** resource server는 `sub`를 검사하지 않는다. 틀린 `sub`가 감사 줄에 들어가거나 255자 컬럼에 막혀 보낸 뒤 커밋에서 실패하지 않게 협력자를 부르기 전에 막는다. */
     @Test
-    fun `토큰의 sub가 없거나 비었거나 256자이거나 제어 문자를 담으면 목록과 재투입 모두 500이고 reader와 redriver를 부르지 않는다`() {
+    fun `토큰의 sub가 없거나 비었거나 256자이거나 제어 문자를 담으면 목록과 재투입과 폐기 모두 500이고 reader redriver dismisser를 부르지 않는다`() {
         val subjects = mapOf<String, Consumer<Jwt.Builder>>(
             "sub 없음" to Consumer { token -> token.claims { it.remove(JwtClaimNames.SUB) } },
             "빈 sub" to Consumer { it.subject("") },
@@ -244,9 +255,10 @@ class DeadLetterControllerTest(
             val principal = jwt().jwt(claims).authorities(SimpleGrantedAuthority(AdminSecurityFilterChain.OPERATOR_AUTHORITY))
             assertEquals(500, list(listRequest().with(principal)).andReturn().response.status, "목록 $case")
             assertEquals(500, mockMvc.perform(redriveRequest(principal = principal)).andReturn().response.status, "재투입 $case")
+            assertEquals(500, mockMvc.perform(dismissRequest(principal = principal)).andReturn().response.status, "폐기 $case")
         }
 
-        verifyNoInteractions(reader, redriver)
+        verifyNoInteractions(reader, redriver, dismisser)
     }
 
     @Test
@@ -358,18 +370,90 @@ class DeadLetterControllerTest(
             )
     }
 
+    private fun dismissRequest(body: String = """{"reason":"$DISMISS_REASON"}""", principal: RequestPostProcessor = operator): MockHttpServletRequestBuilder =
+        post("/admin/v1/dead-letters/{topic}/{partition}/{offset}/dismiss", TOPIC, 0, 12)
+            .contentType(MediaType.APPLICATION_JSON)
+            .content(body)
+            .with(principal)
+
+    @Test
+    fun `폐기는 200과 폐기한 운영자 시각을 돌려주고 토큰의 sub를 운영자로 넘긴다`() {
+        given(dismisser.dismiss(TOPIC, 0, 12, DISMISS_REASON, OPERATOR))
+            .willReturn(DeadLetterDismissResponse(TOPIC, 0, 12, OPERATOR, DISMISSED_AT))
+
+        mockMvc.perform(dismissRequest())
+            .andExpect(status().isOk)
+            .andExpect(jsonPath("$.result").value("SUCCESS"))
+            .andExpect(jsonPath("$.data.dltTopic").value(TOPIC))
+            .andExpect(jsonPath("$.data.dltPartition").value(0))
+            .andExpect(jsonPath("$.data.dltOffset").value(12))
+            .andExpect(jsonPath("$.data.operator").value(OPERATOR))
+            .andExpect(jsonPath("$.data.dismissedAt").value("2026-10-21T03:00:00.123456Z"))
+            .andExpect(jsonPath("$.error").value(null))
+            .andDo(
+                document(
+                    "dead-letters-dismiss",
+                    pathParameters(
+                        parameterWithName("topic").description("폐기할 DLT 토픽. 설정된 토픽 이름 + `.DLT`만 받는다(예: `order.paid.DLT`). 아니면 400 INVALID_DEAD_LETTER_POSITION"),
+                        parameterWithName("partition").description("DLT의 partition. 그 토픽에 없으면 400 INVALID_DEAD_LETTER_POSITION"),
+                        parameterWithName("offset").description("DLT의 offset. 음수면 400 INVALID_DEAD_LETTER_POSITION, 그 자리에 레코드가 없으면 404 DEAD_LETTER_NOT_FOUND"),
+                    ),
+                    requestFields(
+                        fieldWithPath("reason").type(JsonFieldType.STRING).description("폐기 사유. 앞뒤 공백을 지운 뒤 1~500자, NUL 문자 금지. DB 기록에만 남고 로그에는 남지 않는다. 같은 좌표를 다시 요청하면 처음 사유가 유지된다"),
+                    ),
+                    responseFields(
+                        fieldWithPath("result").type(JsonFieldType.STRING).description("SUCCESS 또는 FAIL"),
+                        fieldWithPath("data.dltTopic").type(JsonFieldType.STRING).description("폐기한 DLT 토픽"),
+                        fieldWithPath("data.dltPartition").type(JsonFieldType.NUMBER).description("폐기한 DLT partition"),
+                        fieldWithPath("data.dltOffset").type(JsonFieldType.NUMBER).description("폐기한 DLT offset"),
+                        fieldWithPath("data.operator").type(JsonFieldType.STRING).description("폐기한 운영자(토큰의 sub)"),
+                        fieldWithPath("data.dismissedAt").type(JsonFieldType.STRING).description("폐기 시각(ISO-8601 UTC). 같은 좌표를 다시 요청하면 처음 기록을 그대로 돌려준다. 브로커에는 아무것도 보내지 않고 읽기 검사도 하지 않는다"),
+                        fieldWithPath("error").type(JsonFieldType.NULL).description("성공 응답에서는 null"),
+                    ),
+                ),
+            )
+    }
+
+    @Test
+    fun `폐기 사유가 규칙에 어긋나면 400 INVALID_DISMISS_REASON이고 본문에 사유가 없으면 빈 사유로 넘긴다`() {
+        val invalid = DomainException("INVALID_DISMISS_REASON", "사유는 앞뒤 공백을 지운 뒤 1~500자이고 NUL 문자가 없어야 합니다.", DomainErrorKind.INVALID)
+        given(dismisser.dismiss(TOPIC, 0, 12, "   ", OPERATOR)).willThrow(invalid)
+        given(dismisser.dismiss(TOPIC, 0, 12, "", OPERATOR)).willThrow(invalid)
+
+        mockMvc.perform(dismissRequest("""{"reason":"   "}"""))
+            .andExpect(status().isBadRequest)
+            .andExpect(jsonPath("$.error.errorCode").value("INVALID_DISMISS_REASON"))
+            .andDo(document("dead-letters-dismiss-invalid-reason", responseFields(failFields("INVALID_DISMISS_REASON. 사유가 없거나, 앞뒤 공백을 지운 뒤 비었거나 500자를 넘거나, NUL 문자가 있다. DLT를 읽지도 기록하지도 않는다"))))
+        mockMvc.perform(dismissRequest("{}"))
+            .andExpect(status().isBadRequest)
+            .andExpect(jsonPath("$.error.errorCode").value("INVALID_DISMISS_REASON"))
+    }
+
+    @Test
+    fun `폐기할 offset에 레코드가 없으면 404 DEAD_LETTER_NOT_FOUND다`() {
+        given(dismisser.dismiss(TOPIC, 0, 12, DISMISS_REASON, OPERATOR))
+            .willThrow(DomainException(DeadLetterRedriver.DEAD_LETTER_NOT_FOUND, "그 offset에 DLT 레코드가 없습니다.", DomainErrorKind.NOT_FOUND))
+
+        mockMvc.perform(dismissRequest())
+            .andExpect(status().isNotFound)
+            .andExpect(jsonPath("$.error.errorCode").value("DEAD_LETTER_NOT_FOUND"))
+            .andDo(document("dead-letters-dismiss-not-found", responseFields(failFields("DEAD_LETTER_NOT_FOUND. 그 DLT partition의 offset에 레코드가 없다(log 끝 이상이거나 시작보다 앞). 기록하지 않는다"))))
+    }
+
     companion object {
         private const val TOPIC = "order.paid.DLT"
         private const val ORDER_ID = "018f6b1a-0000-7000-8000-0000000000e1"
         private const val INVALID_POSITION = "INVALID_DEAD_LETTER_POSITION"
         private const val OPERATOR = "operator-subject-1"
         private const val REASON = "원인 수정 후 재투입"
+        private const val DISMISS_REASON = "재투입하지 않는 메시지"
         private val REDRIVEN_AT: Instant = Instant.parse("2026-10-21T02:00:00.123456Z")
+        private val DISMISSED_AT: Instant = Instant.parse("2026-10-21T03:00:00.123456Z")
 
         /** 판단에 쓰이지 않는 목록 항목. 헤더 없이 CLI로 넣은 레코드 모양이다. */
         private fun bareItem(offset: Long) = DeadLetterResponse(
             partition = 0, offset = offset, timestamp = Instant.parse("2026-10-21T01:00:00Z"), key = null, value = "{}",
-            originalTopic = null, originalPartition = null, originalOffset = null, exception = null, exceptionMessage = null, schemaVersion = null, redrive = null,
+            originalTopic = null, originalPartition = null, originalOffset = null, exception = null, exceptionMessage = null, schemaVersion = null, redrive = null, dismissal = null,
         )
 
         private fun failFields(errorCodeDescription: String): List<FieldDescriptor> = listOf(
