@@ -12,7 +12,6 @@ import kotlin.test.Test
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
-import kotlin.time.Duration.Companion.seconds
 import kotlin.time.measureTime
 import org.junit.jupiter.api.extension.ExtendWith
 import org.springframework.beans.factory.annotation.Autowired
@@ -61,7 +60,7 @@ class RedisTerminalRateLimiterOutageIntegrationTest(
             // 끊긴 연결에 명령을 받아 두면(Lettuce 기본값) 첫 호출부터 timeout 1초를 다 기다린다.
             val elapsed = measureTime { repeat(3) { limiter.acquire(terminal) } }
 
-            assertTrue(elapsed < 1.seconds, "세 번 통과에 $elapsed 걸렸다")
+            assertTrue(elapsed < 500.milliseconds, "세 번 통과에 $elapsed 걸렸다")
         }
     }
 
