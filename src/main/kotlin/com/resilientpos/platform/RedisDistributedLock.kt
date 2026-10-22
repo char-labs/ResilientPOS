@@ -4,6 +4,7 @@ import com.resilientpos.foundation.IdentifierGenerator
 import io.micrometer.core.instrument.MeterRegistry
 import java.time.Duration
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.ThreadLocalRandom
 import java.util.concurrent.TimeUnit
@@ -30,8 +31,8 @@ import org.springframework.stereotype.Component
  * 대기 한도는 다시 시도하기를 멈추는 시각이다. 마지막 SET이 Redis 명령 timeout(`spring.data.redis.timeout`)까지 걸리면 그만큼 더 늦게 돌아온다.
  *
  * 기다리는 요청은 해제 알림으로 깨어 바로 다시 시도한다. 해제 스크립트가 지운 키를 [RELEASED_CHANNEL]로 PUBLISH하고(왕복은 한 번 그대로),
- * [LockReleaseListener]가 받아 [onReleased]를 부른다. 알림은 놓칠 수 있다(대기 등록 전의 해제, TTL 만료, 구독이 끊긴 동안).
- * 그때는 재시도 간격이 지나 다시 시도한다.
+ * [LockReleaseListener]가 받아 [onReleased]를 부른다. 알림 하나는 그 pod에서 가장 먼저 기다린 요청 하나만 깨운다.
+ * 알림은 놓칠 수 있다(대기 등록 전의 해제, TTL 만료, 구독이 끊긴 동안, 깨운 요청이 막 포기한 때). 그때는 재시도 간격이 지나 다시 시도한다.
  */
 @Component
 class RedisDistributedLock(
@@ -43,8 +44,8 @@ class RedisDistributedLock(
     /** 얻은 잠금의 토큰별 얻은 시각(nanoTime). [release]가 꺼내 지운다. `Lock`이 `finally`에서 늘 풀므로 쌓이지 않는다. */
     private val acquiredAt = ConcurrentHashMap<String, Long>()
 
-    /** 키마다 해제를 기다리는 요청. 기다림이 끝나면 각자 빠지므로 크기는 지금 기다리는 요청 수로 묶인다. */
-    private val waiters = ConcurrentHashMap<String, MutableSet<CountDownLatch>>()
+    /** 키마다 해제를 기다리는 요청(먼저 온 순서). 기다림이 끝나면 각자 빠지므로 크기는 지금 기다리는 요청 수로 묶인다. */
+    private val waiters = ConcurrentHashMap<String, ConcurrentLinkedQueue<CountDownLatch>>()
 
     override fun tryAcquire(key: String): String? {
         val started = System.nanoTime()
@@ -80,9 +81,12 @@ class RedisDistributedLock(
         if (released == 0L) log.warn { "잠금이 풀기 전에 만료됐다(블록이 TTL ${TTL.toSeconds()}초를 넘김) key=$key" }
     }
 
-    /** 해제 알림을 받은 키를 기다리는 요청을 모두 깨운다. 깨어난 요청은 바로 SET하고, 하나만 얻는다. */
+    /**
+     * 해제 알림을 받은 키를 가장 먼저 기다린 요청 하나만 깨운다. 모두 깨우면 해제마다 기다리는 수만큼 SET이 몰려,
+     * 같은 키 20개 동시에서 SET이 고정 간격 스핀보다도 많았다(용량 기준 wiki).
+     */
     fun onReleased(key: String) {
-        waiters.remove(key)?.forEach(CountDownLatch::countDown)
+        waiters.computeIfPresent(key) { _, queue -> queue.apply { poll()?.countDown() }.ifEmpty { null } }
     }
 
     /** 얻기까지 걸린 시간을 남기고 지금 시각을 돌려준다. */
@@ -123,11 +127,11 @@ class RedisDistributedLock(
     /** 해제 알림이 오거나 [timeoutNanos]가 지날 때까지 기다린다. */
     private fun awaitRelease(key: String, timeoutNanos: Long) {
         val released = CountDownLatch(1)
-        waiters.compute(key) { _, latches -> (latches ?: ConcurrentHashMap.newKeySet()).apply { add(released) } }
+        waiters.compute(key) { _, queue -> (queue ?: ConcurrentLinkedQueue()).apply { add(released) } }
         try {
             released.await(timeoutNanos, TimeUnit.NANOSECONDS)
         } finally {
-            waiters.computeIfPresent(key) { _, latches -> latches.apply { remove(released) }.ifEmpty { null } }
+            waiters.computeIfPresent(key) { _, queue -> queue.apply { remove(released) }.ifEmpty { null } }
         }
     }
 
