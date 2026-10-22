@@ -26,8 +26,8 @@ import org.springframework.stereotype.Component
  * 모든 인스턴스가 같은 DB를 세므로 알림은 `max`로 모은다.
  * 조회가 실패한 인스턴스는 개수를 내리고 `event.publication.incomplete.refreshed`(마지막 성공 시각, epoch 초)를 멈춘다.
  * 낡은 개수가 `max`에 섞여 조치된 알림을 붙잡지 않게 하려는 것이다. 신선도는 인스턴스별로(또는 `min`으로) 본다.
- * 같은 갱신에서 완료되지 않은 기록 가운데 가장 오래된 것의 나이(발행 시각부터, 초)를 `event.publication.incomplete.oldest`로 낸다.
- * 재전송 중인 행은 위 개수에 잡히지 않아 브로커 장애 중에도 개수가 0일 수 있으므로 알림은 나이로 건다. 없으면 0, 첫 갱신 전과 조회가 실패하면 `NaN`이다.
+ * 같은 갱신에서 완료되지 않은 기록 가운데 가장 오래된 것의 경과 시간(발행 시각부터, 초)를 `event.publication.incomplete.oldest`로 낸다.
+ * 재전송 중인 행은 위 개수에 잡히지 않아 브로커 장애 중에도 개수가 0일 수 있으므로 알림은 경과 시간으로 건다. 없으면 0, 첫 갱신 전과 조회가 실패하면 `NaN`이다.
  *
  * 갱신은 Spring의 공용 스케줄러가 아니라 전용 스레드 하나에서 돈다. 공용 스케줄러는 스레드가 하나라 느린 조회가
  * Modulith Moments의 시간 이벤트 발행까지 붙잡는다. `@EnableScheduling`이나 Moments 설정과도 무관하게 돈다.
@@ -84,7 +84,7 @@ class EventPublicationMetrics(
 
     private val lastRefreshed = AtomicLong(0)
 
-    /** 가장 오래된 미완료 기록의 나이(초). `NaN`은 `max`에서 빠져 낡은 값이 알림을 붙잡지 않는다. */
+    /** 가장 오래된 미완료 기록의 경과 시간(초). `NaN`은 `max`에서 빠져 낡은 값이 알림을 붙잡지 않는다. */
     @Volatile
     private var oldestSeconds = Double.NaN
 
@@ -97,7 +97,7 @@ class EventPublicationMetrics(
             .strongReference(true)
             .register(registry)
         Gauge.builder("event.publication.incomplete.oldest", this) { it.oldestSeconds }
-            .description("완료되지 않은 가장 오래된 이벤트 발행 기록의 나이")
+            .description("완료되지 않은 가장 오래된 이벤트 발행 기록의 경과 시간")
             .baseUnit("seconds")
             .register(registry)
     }

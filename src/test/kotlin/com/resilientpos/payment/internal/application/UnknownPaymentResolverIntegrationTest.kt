@@ -8,6 +8,7 @@ import com.resilientpos.order.OrderFixtures
 import com.resilientpos.order.createAndRequestCheckout
 import com.resilientpos.payment.PaymentAttemptStatus
 import com.resilientpos.payment.PaymentId
+import com.resilientpos.payment.PaymentManagement
 import com.resilientpos.payment.internal.adapter.gateway.FakePaymentGateway
 import com.resilientpos.payment.internal.domain.AuthorizationOutcome
 import com.resilientpos.payment.internal.domain.AuthorizationRequest
@@ -15,7 +16,11 @@ import com.resilientpos.payment.internal.domain.PaymentAttemptRepository
 import com.resilientpos.payment.internal.domain.PaymentGateway
 import com.resilientpos.platform.DistributedLock
 import io.micrometer.core.instrument.MeterRegistry
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry
 import jakarta.persistence.EntityManagerFactory
+import java.time.Clock
+import java.time.Duration
+import java.time.Instant
 import java.util.UUID
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CopyOnWriteArraySet
@@ -26,6 +31,7 @@ import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 import org.hibernate.SessionFactory
@@ -51,6 +57,8 @@ class UnknownPaymentResolverIntegrationTest(
     @Autowired private val scheduledTasks: ObjectProvider<ScheduledTaskHolder>,
     @Autowired private val repository: PaymentAttemptRepository,
     @Autowired private val meterRegistry: MeterRegistry,
+    @Autowired private val paymentManagement: PaymentManagement,
+    @Autowired private val clock: Clock,
     @Autowired entityManagerFactory: EntityManagerFactory,
 ) : PostgresIntegrationTest() {
 
@@ -94,6 +102,8 @@ class UnknownPaymentResolverIntegrationTest(
     fun cleanUp() {
         statistics.isStatisticsEnabled = statisticsWereEnabled
         jdbcTemplate.update("delete from t_payment_attempt where id = ?", cancellationId)
+        // 경과 시간 gauge 테스트가 직접 넣은 작은 id의 행은 다음 실행과 겹치지 않게 지운다.
+        jdbcTemplate.update("delete from t_payment_attempt where id::text like '00000000-0000-7000-8000-%'")
         // 계속 불명으로 남는 시도는 다른 테스트의 작업이 다시 집지 않게 닫아 둔다.
         created.forEach { jdbcTemplate.update("update t_payment_attempt set status = 'DECLINED' where id = ? and status = 'UNKNOWN'", it.value) }
         // 커서가 이 테스트의 행 사이에 남지 않게 한 바퀴를 돌려 끝에 닿게 한다(닫은 행은 조회되지 않는다).
@@ -319,6 +329,122 @@ class UnknownPaymentResolverIntegrationTest(
         assertEquals(1, jdbcTemplate.queryForObject("select count(*) from t_payment_attempt where id = ? and reconciliation_requested_at is not null", Long::class.java, handedOverInCycle.value))
         assertTrue(pendingCount() > pendingBefore)
         assertEquals(pendingCount().toDouble(), meterRegistry.get("payment.attempt.reconciliation.pending").gauge().value())
+    }
+
+    /**
+     * 가장 오래된 행은 `id` 오름차순 첫 행이라 다른 테스트가 남긴 행보다 앞서도록 아주 작은 id를 쓴다.
+     * 시각은 JDBC로 아주 오래전으로 옮겨 두고 기대 경과 시간은 [clock] 기준으로 비교한다.
+     */
+    private fun lowId(n: Int) = UUID.fromString("00000000-0000-7000-8000-%012d".format(n))
+
+    private fun insertAttempt(id: UUID, status: String, createdAt: Instant, requestedAt: Instant?) {
+        jdbcTemplate.update(
+            """
+            insert into t_payment_attempt
+                (id, order_id, store_id, terminal_id, checkout_no, kind, amount, currency, status,
+                 provider_reference, reconciliation_requested_at, created_at, updated_at)
+            values (?, ?, ?, ?, 1, 'AUTHORIZATION', 4004, 'KRW', ?, null, ?, ?, now())
+            """.trimIndent(),
+            id, UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), status,
+            requestedAt?.let { java.sql.Timestamp.from(it) }, java.sql.Timestamp.from(createdAt),
+        )
+        created += PaymentId(id)
+    }
+
+    private fun ageSeconds(since: Instant) = Duration.between(since, clock.instant()).toMillis() / 1000.0
+
+    private fun oldestGauge() = meterRegistry.get("payment.attempt.resolution.oldest").gauge().value()
+
+    private fun pendingOldestGauge() = meterRegistry.get("payment.attempt.reconciliation.pending.oldest").gauge().value()
+
+    @Test
+    fun `넘기지 않은 가장 오래된 UNKNOWN 승인 시도의 경과 시간을 gauge로 낸다`() {
+        val now = clock.instant()
+        // 결말 난 시도는 더 오래됐고 id도 앞서지만 무시한다.
+        insertAttempt(lowId(1), "DECLINED", now.minus(Duration.ofDays(20)), null)
+        val oldestUnknownAt = now.minus(Duration.ofDays(3))
+        insertAttempt(lowId(2), "UNKNOWN", oldestUnknownAt, null)
+
+        resolver.resolveUnknown()
+
+        assertEquals(ageSeconds(oldestUnknownAt), oldestGauge(), 5.0)
+    }
+
+    @Test
+    fun `넘긴 시도는 첫 gauge에서 빠지고 pending gauge는 넘긴 시각부터 잰다`() {
+        val now = clock.instant()
+        val requestedAt = now.minus(Duration.ofDays(5))
+        insertAttempt(lowId(3), "UNKNOWN", now.minus(Duration.ofDays(9)), requestedAt)
+        // 넘긴 시각이 더 이른 다른 시도가 있으면 그것이 min이다. 가장 이른 값이 이 테스트의 것이 되게 더 이르게 둔다.
+        val earliestRequestedAt = now.minus(Duration.ofDays(6))
+        insertAttempt(lowId(4), "UNKNOWN", now.minus(Duration.ofDays(7)), earliestRequestedAt)
+
+        resolver.resolveUnknown()
+
+        assertEquals(ageSeconds(earliestRequestedAt), pendingOldestGauge(), 5.0)
+        // 넘긴 시도의 생성 시각(9일, 7일 전)은 첫 gauge에 쓰이지 않는다.
+        assertTrue(oldestGauge() < Duration.ofDays(6).seconds.toDouble(), "넘긴 시도가 첫 gauge에 섞였다: ${oldestGauge()}")
+    }
+
+    @Test
+    fun `첫 갱신 전 경과 시간 gauge는 NaN이다`() {
+        val registry = SimpleMeterRegistry()
+
+        UnknownPaymentResolver(repository, paymentManagement, registry, clock)
+
+        assertTrue(registry.get("payment.attempt.resolution.oldest").gauge().value().isNaN())
+        assertTrue(registry.get("payment.attempt.reconciliation.pending.oldest").gauge().value().isNaN())
+        assertEquals("seconds", registry.get("payment.attempt.resolution.oldest").gauge().id.baseUnit)
+    }
+
+    @Test
+    fun `대상이 없으면 경과 시간 gauge는 0이다`() {
+        val registry = SimpleMeterRegistry()
+        val noTarget = object : PaymentAttemptRepository by repository {
+            override fun oldestUnreconciledUnknownAuthorizationCreatedAt(): Instant? = null
+            override fun oldestReconciliationRequestedAt(): Instant? = null
+        }
+
+        UnknownPaymentResolver(noTarget, paymentManagement, registry, clock).resolveUnknown()
+
+        assertEquals(0.0, registry.get("payment.attempt.resolution.oldest").gauge().value())
+        assertEquals(0.0, registry.get("payment.attempt.reconciliation.pending.oldest").gauge().value())
+    }
+
+    @Test
+    fun `경과 시간을 세다 던지면 경과 시간 gauge는 마지막 성공값으로 남는다`() {
+        val registry = SimpleMeterRegistry()
+        val at = clock.instant().minus(Duration.ofDays(2))
+        var fail = false
+        val flaky = object : PaymentAttemptRepository by repository {
+            override fun oldestUnreconciledUnknownAuthorizationCreatedAt(): Instant? = if (fail) error("조회 실패") else at
+            override fun oldestReconciliationRequestedAt(): Instant? = at
+        }
+        val flakyResolver = UnknownPaymentResolver(flaky, paymentManagement, registry, clock)
+        flakyResolver.resolveUnknown()
+        val last = registry.get("payment.attempt.resolution.oldest").gauge().value()
+        assertNotEquals(0.0, last)
+
+        fail = true
+        assertFailsWith<IllegalStateException> { flakyResolver.resolveUnknown() }
+
+        assertEquals(last, registry.get("payment.attempt.resolution.oldest").gauge().value())
+    }
+
+    @Test
+    fun `경과 시간 조회는 kind와 status를 리터럴로 렌더한다`() {
+        statistics.clear()
+
+        repository.oldestUnreconciledUnknownAuthorizationCreatedAt()
+        repository.oldestReconciliationRequestedAt()
+
+        val queries: Array<String> = statistics.queries
+        val rendered: List<String> = queries.filter { "PaymentAttemptEntity" in it }
+        assertEquals(2, rendered.size, "$rendered")
+        rendered.forEach {
+            assertTrue("PaymentAttemptStatus.UNKNOWN" in it && "PaymentAttemptKind.AUTHORIZATION" in it, "리터럴이 없다: $it")
+            assertTrue("?" !in it && ":" !in it, "바인드 파라미터가 있다: $it")
+        }
     }
 
     @Test

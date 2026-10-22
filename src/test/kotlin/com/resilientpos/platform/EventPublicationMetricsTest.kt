@@ -231,11 +231,11 @@ class EventPublicationMetricsTest(
     }
 
     /**
-     * 재전송 중인 행은 `failed`에도 `stale`에도 잡히지 않아 개수가 0일 수 있다. 나이는 상태와 관계없이 가장 오래된 미완료 행을 본다.
+     * 재전송 중인 행은 `failed`에도 `stale`에도 잡히지 않아 개수가 0일 수 있다. 경과 시간은 상태와 관계없이 가장 오래된 미완료 행을 본다.
      * 다른 테스트가 남긴 미완료 행도 세어지므로 아래쪽만 고정하고, 위쪽은 완료된 더 오래된 행이 빠졌는지만 본다.
      */
     @Test
-    fun `가장 오래된 미완료 기록의 나이를 내고 조회가 실패하면 NaN이다`() {
+    fun `가장 오래된 미완료 기록의 경과 시간을 내고 조회가 실패하면 NaN이다`() {
         val flaky = FlakyDataSource(dataSource)
         val own = SimpleMeterRegistry()
         val subject = EventPublicationMetrics(flaky, Clock.systemUTC(), own, Duration.ofMinutes(5))
@@ -247,15 +247,15 @@ class EventPublicationMetricsTest(
         val oldest = own.get("event.publication.incomplete.oldest").gauge()
 
         assertTrue(own.incomplete(a).gauges().isEmpty(), "재전송 중인 행이 개수에 잡혔다")
-        assertTrue(oldest.value() in 7_200.0..10_800.0, "나이: ${oldest.value()}")
+        assertTrue(oldest.value() in 7_200.0..10_800.0, "경과 시간: ${oldest.value()}")
 
         flaky.failing = true
         subject.refresh()
-        assertTrue(oldest.value().isNaN(), "조회가 실패했는데 나이가 남아 있다: ${oldest.value()}")
+        assertTrue(oldest.value().isNaN(), "조회가 실패했는데 경과 시간이 남아 있다: ${oldest.value()}")
 
         flaky.failing = false
         subject.refresh()
-        assertTrue(oldest.value() >= 7_200.0, "나이: ${oldest.value()}")
+        assertTrue(oldest.value() >= 7_200.0, "경과 시간: ${oldest.value()}")
     }
 
     @Test

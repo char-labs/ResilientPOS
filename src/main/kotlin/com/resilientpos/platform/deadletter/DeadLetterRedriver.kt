@@ -61,11 +61,7 @@ class DeadLetterRedriver(
 
     /** [operator]는 운영자 토큰의 `sub`다. 같은 레코드의 기록이 커밋에서 겹치면 여기서 가려야 하므로 바깥 트랜잭션 안에서 부르지 않는다. */
     fun redrive(topic: String, partition: Int, offset: Long, reason: String, operator: String): DeadLetterRedriveResponse {
-        val trimmedReason = reason.trim()
-        // NUL은 PostgreSQL varchar에 들어가지 못해 커밋에서 500이 된다(대조 case note와 같다).
-        if (trimmedReason.isEmpty() || trimmedReason.length > MAX_REASON_LENGTH || NUL in trimmedReason) {
-            throw DomainException(INVALID_REDRIVE_REASON, "사유는 앞뒤 공백을 지운 뒤 1~${MAX_REASON_LENGTH}자이고 NUL 문자가 없어야 합니다.")
-        }
+        val trimmedReason = trimmedReasonOrThrow(reason, INVALID_REDRIVE_REASON)
         val record = reader.readRecord(topic, partition, offset)
             ?: throw DomainException(DEAD_LETTER_NOT_FOUND, "그 offset에 DLT 레코드가 없습니다.", DomainErrorKind.NOT_FOUND)
         val dltTimestamp = Instant.ofEpochMilli(record.timestamp())
@@ -144,9 +140,6 @@ class DeadLetterRedriver(
         const val DEAD_LETTER_NOT_READABLE = "DEAD_LETTER_NOT_READABLE"
         private const val SOURCE_CONSTRAINT = "ux_dead_letter_redrive_source"
 
-        /** 컬럼 `t_dead_letter_redrive.reason varchar(500)`을 따라간다. 컬럼을 바꾸면 함께 바꾼다. */
-        private const val MAX_REASON_LENGTH = 500
-        private const val NUL = '\u0000'
         private val SEND_TIMEOUT: Duration = Duration.ofSeconds(10)
         private val log by logger()
     }

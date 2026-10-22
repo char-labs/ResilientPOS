@@ -46,7 +46,7 @@ flowchart LR
     RES["EventPublicationResubmitter<br/>1분 주기"] -.->|"브로커로 못 보낸 기록 재전송"| EPR
 ```
 
-1. 단말이 `/v1/**`를 Bearer 토큰으로 부르면 `terminal` 모듈의 interceptor가 토큰을 단말 credential과 대조합니다. 점주 경로 `/owner/**`는 세션 쿠키로, 플랫폼 운영자 경로 `/admin/**`(DLT 재투입)는 사내 IdP가 발급한 Bearer 토큰으로 인증합니다.
+1. 단말이 `/v1/**`를 Bearer 토큰으로 부르면 `terminal` 모듈의 interceptor가 토큰을 단말 credential과 대조합니다. 점주 경로 `/owner/**`는 세션 쿠키로, 플랫폼 운영자 경로 `/admin/**`(DLT 재투입·폐기 표시)는 사내 IdP가 발급한 Bearer 토큰으로 인증합니다.
 2. Controller는 요청을 Command로 바꾸기만 합니다. Command Facade가 트랜잭션을 열고, 행을 잠가 읽고, aggregate 전이를 부르고, 저장하고, 이벤트를 발행합니다.
 3. 업무 행과 이벤트 발행 기록(Spring Modulith Event Publication Registry)이 한 커밋에 들어갑니다. 그래서 "상태는 바뀌었는데 이벤트가 사라짐"이 생기지 않습니다.
 4. 커밋 뒤 Modulith가 이벤트를 Kafka로 보냅니다. 보내지 못한 기록은 주기 작업이 1분마다 다시 보냅니다.

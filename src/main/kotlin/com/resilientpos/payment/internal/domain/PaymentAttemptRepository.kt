@@ -2,6 +2,7 @@ package com.resilientpos.payment.internal.domain
 
 import com.resilientpos.payment.PaymentId
 import com.resilientpos.store.StoreId
+import java.time.Instant
 import java.util.UUID
 
 /**
@@ -36,6 +37,15 @@ interface PaymentAttemptRepository {
 
     /** reconciliation case로 넘긴 뒤 아직 결과를 모르는 승인 시도(kind=AUTHORIZATION, status=UNKNOWN, 넘긴 시각 있음)의 수. */
     fun countReconciliationPendingAuthorizations(): Long
+
+    /**
+     * reconciliation으로 넘기지 않은 결과 불명 승인 시도(kind=AUTHORIZATION, status=UNKNOWN, 넘긴 시각 없음) 가운데
+     * 가장 오래된 것(`id` 오름차순 첫 행)의 생성 시각. 없으면 `null`.
+     */
+    fun oldestUnreconciledUnknownAuthorizationCreatedAt(): Instant?
+
+    /** reconciliation으로 넘긴 뒤 아직 결과를 모르는 승인 시도(kind=AUTHORIZATION, status=UNKNOWN) 가운데 가장 이른 넘긴 시각. 없으면 `null`. */
+    fun oldestReconciliationRequestedAt(): Instant?
 
     /**
      * 시도 행을 잠그고 읽는다. 결과를 적용하는 전이가 같은 시도에서 겹치지 않게 한다. 트랜잭션 안에서만 부른다.

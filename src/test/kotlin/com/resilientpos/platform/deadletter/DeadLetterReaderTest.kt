@@ -37,6 +37,7 @@ class DeadLetterReaderTest {
         },
         JsonMapper.builder().build(),
         mock(DeadLetterRedriveJpaRepository::class.java),
+        mock(DeadLetterDismissalJpaRepository::class.java),
         listOf("order.paid"),
     )
 

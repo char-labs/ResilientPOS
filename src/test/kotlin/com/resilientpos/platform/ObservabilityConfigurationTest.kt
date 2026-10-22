@@ -58,7 +58,7 @@ class ObservabilityConfigurationTest(
         val consumerMetric = body.lines().firstOrNull { it.startsWith("kafka_consumer_") && !it.startsWith("#") }
         assertNotNull(consumerMetric, "Kafka consumer metric이 없다")
         assertContains(consumerMetric, """application="ResilientPOS"""")
-        // DLT로 간 적이 없어도 0으로 나가야 increase()가 첫 증가를 잡는다. 알림 규칙이 쓰는 이름과 태그를 고정한다.
+        // runbook이 원인을 가르는 데 쓰는 이름과 태그를 고정한다.
         listOf("order.payment-requested", "payment.attempt-created", "payment.approved", "order.paid", "payment.reconciliation-requested").forEach { topic ->
             val deadLetter = body.lines().firstOrNull { it.startsWith("event_kafka_dead_letter_total{") && it.contains("""topic="$topic"""") }
             assertNotNull(deadLetter, "$topic 의 event_kafka_dead_letter_total이 없다")
@@ -68,6 +68,10 @@ class ObservabilityConfigurationTest(
                 body.lines().firstOrNull { it.startsWith("event_kafka_dead_letter_failed_total{") && it.contains("""topic="$topic"""") },
                 "$topic 의 event_kafka_dead_letter_failed_total이 없다",
             )
+            // 알림이 보는 미처리 수는 첫 갱신 전 NaN이어도 토픽마다 나간다.
+            val unhandled = body.lines().firstOrNull { it.startsWith("event_kafka_dead_letter_unhandled{") && it.contains("""topic="$topic"""") }
+            assertNotNull(unhandled, "$topic 의 event_kafka_dead_letter_unhandled가 없다")
+            assertContains(unhandled, """application="ResilientPOS"""")
         }
     }
 
@@ -103,7 +107,6 @@ class ObservabilityConfigurationTest(
         /** 처음 일어날 때 생겨 기동 직후에는 없는 이름과 그 이유. 규칙에서 빠지면 위 테스트가 이 목록도 고치라고 실패한다. */
         private val CREATED_ON_FIRST_EVENT = mapOf(
             "lock_fail_open_total" to "처음 fail-open될 때 생긴다. platform이 업무 모듈의 키를 모른다",
-            "tasks_scheduled_execution_seconds_count" to "테스트는 주기 작업을 하루 뒤로 미뤄 첫 실행 전이다",
             "kafka_consumer_fetch_manager_records_lag" to "Kafka 클라이언트가 파티션의 첫 fetch 뒤 만들고 Micrometer KafkaMetrics가 60초마다 새 metric을 묶는다",
         )
     }
