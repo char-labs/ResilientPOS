@@ -30,7 +30,7 @@ class AlertRulesTest {
             .withStartupCheckStrategy(OneShotStartupCheckStrategy().withTimeout(Duration.ofMinutes(2)))
             .use { container ->
                 container.start()
-                assertContains(container.logs, "SUCCESS: 15 rules found")
+                assertContains(container.logs, "SUCCESS: 16 rules found")
             }
     }
 
