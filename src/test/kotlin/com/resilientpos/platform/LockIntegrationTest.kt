@@ -1,6 +1,7 @@
 package com.resilientpos.platform
 
 import com.resilientpos.PostgresIntegrationTest
+import java.time.Duration
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
@@ -136,5 +137,28 @@ class LockIntegrationTest(
 
         assertTrue(heldAfterForeignRelease)
         assertFalse(redis.hasKey(key))
+    }
+
+    @Test
+    fun `잠금이 풀리면 기다리던 요청이 다음 재시도를 기다리지 않고 바로 얻는다`() {
+        val key = "test:lock:${UUID.randomUUID()}"
+        val holder = checkNotNull(distributedLock.tryAcquire(key))
+        val executor = Executors.newSingleThreadExecutor()
+
+        try {
+            val acquiredAt = executor.submit<Long> {
+                val token = checkNotNull(distributedLock.tryAcquire(key))
+                System.nanoTime().also { distributedLock.release(key, token) }
+            }
+            // 기다리는 쪽의 재시도 간격이 상한(100ms)까지 늘게 둔다. 알림 없이 간격으로만 깨면 해제 뒤 0~100ms를 더 기다린다.
+            Thread.sleep(500)
+            val releasedAt = System.nanoTime()
+            distributedLock.release(key, holder)
+
+            val delay = Duration.ofNanos(acquiredAt.get(5, TimeUnit.SECONDS) - releasedAt)
+            assertTrue(delay < Duration.ofMillis(30), "해제 뒤 ${delay.toMillis()}ms 만에 얻었다")
+        } finally {
+            executor.shutdownNow()
+        }
     }
 }

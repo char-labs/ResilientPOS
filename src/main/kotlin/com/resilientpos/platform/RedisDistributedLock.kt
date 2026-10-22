@@ -4,6 +4,8 @@ import com.resilientpos.foundation.IdentifierGenerator
 import io.micrometer.core.instrument.MeterRegistry
 import java.time.Duration
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.ThreadLocalRandom
 import java.util.concurrent.TimeUnit
 import org.springframework.dao.DataAccessException
 import org.springframework.data.redis.core.StringRedisTemplate
@@ -26,6 +28,10 @@ import org.springframework.stereotype.Component
  * 시간을 남긴다. 대기 한도·TTL을 정하고 Redisson이 필요해지는지 보는 근거다(용량 기준 wiki).
  *
  * 대기 한도는 다시 시도하기를 멈추는 시각이다. 마지막 SET이 Redis 명령 timeout(`spring.data.redis.timeout`)까지 걸리면 그만큼 더 늦게 돌아온다.
+ *
+ * 기다리는 요청은 해제 알림으로 깨어 바로 다시 시도한다. 해제 스크립트가 지운 키를 [RELEASED_CHANNEL]로 PUBLISH하고(왕복은 한 번 그대로),
+ * [LockReleaseListener]가 받아 [onReleased]를 부른다. 알림은 놓칠 수 있다(대기 등록 전의 해제, TTL 만료, 구독이 끊긴 동안).
+ * 그때는 재시도 간격이 지나 다시 시도한다.
  */
 @Component
 class RedisDistributedLock(
@@ -36,6 +42,9 @@ class RedisDistributedLock(
 
     /** 얻은 잠금의 토큰별 얻은 시각(nanoTime). [release]가 꺼내 지운다. `Lock`이 `finally`에서 늘 풀므로 쌓이지 않는다. */
     private val acquiredAt = ConcurrentHashMap<String, Long>()
+
+    /** 키마다 해제를 기다리는 요청. 기다림이 끝나면 각자 빠지므로 크기는 지금 기다리는 요청 수로 묶인다. */
+    private val waiters = ConcurrentHashMap<String, MutableSet<CountDownLatch>>()
 
     override fun tryAcquire(key: String): String? {
         val started = System.nanoTime()
@@ -62,13 +71,18 @@ class RedisDistributedLock(
             meterRegistry.timer(HELD_METRIC, "lock", lockName(key)).record(System.nanoTime() - it, TimeUnit.NANOSECONDS)
         }
         val released = try {
-            redis.execute(RELEASE, listOf(key), token)
+            redis.execute(RELEASE, listOf(key), token, RELEASED_CHANNEL)
         } catch (e: DataAccessException) {
             return releaseFailed(key, e)
         } catch (e: IllegalStateException) {
             return releaseFailed(key, e)
         }
         if (released == 0L) log.warn { "잠금이 풀기 전에 만료됐다(블록이 TTL ${TTL.toSeconds()}초를 넘김) key=$key" }
+    }
+
+    /** 해제 알림을 받은 키를 기다리는 요청을 모두 깨운다. 깨어난 요청은 바로 SET하고, 하나만 얻는다. */
+    fun onReleased(key: String) {
+        waiters.remove(key)?.forEach(CountDownLatch::countDown)
     }
 
     /** 얻기까지 걸린 시간을 남기고 지금 시각을 돌려준다. */
@@ -91,18 +105,34 @@ class RedisDistributedLock(
     private fun releaseFailed(key: String, e: RuntimeException) =
         log.warn(e) { "잠금을 풀지 못했다. TTL ${TTL.toSeconds()}초 뒤 사라진다 key=$key" }
 
-    /** 얻으면 SET을 부른 횟수, 대기 한도 안에 얻지 못하면 null이다. */
+    /** 얻으면 SET을 부른 횟수, 대기 한도 안에 얻지 못하면 null이다. 마지막 SET은 대기 한도에 부른다. */
     private fun acquire(key: String, token: String): Int? {
         val deadline = System.nanoTime() + WAIT.toNanos()
         var attempts = 0
+        var interval = MIN_RETRY_INTERVAL.toNanos()
         while (true) {
             attempts++
             if (redis.opsForValue().setIfAbsent(key, token, TTL) == true) return attempts
-            if (System.nanoTime() + RETRY_INTERVAL.toNanos() > deadline) return null
-            // ponytail: 폴링이다. 대기가 흔해지면 Redis pub/sub로 해제를 알린다.
-            Thread.sleep(RETRY_INTERVAL.toMillis())
+            val remaining = deadline - System.nanoTime()
+            if (remaining <= 0) return null
+            awaitRelease(key, minOf(jittered(interval), remaining))
+            interval = minOf(interval * 2, MAX_RETRY_INTERVAL.toNanos())
         }
     }
+
+    /** 해제 알림이 오거나 [timeoutNanos]가 지날 때까지 기다린다. */
+    private fun awaitRelease(key: String, timeoutNanos: Long) {
+        val released = CountDownLatch(1)
+        waiters.compute(key) { _, latches -> (latches ?: ConcurrentHashMap.newKeySet()).apply { add(released) } }
+        try {
+            released.await(timeoutNanos, TimeUnit.NANOSECONDS)
+        } finally {
+            waiters.computeIfPresent(key) { _, latches -> latches.apply { remove(released) }.ifEmpty { null } }
+        }
+    }
+
+    /** 간격의 절반과 전체 사이(equal jitter). 같이 기다리는 요청들이 같은 순간에 SET하지 않게 흩는다. */
+    private fun jittered(interval: Long): Long = ThreadLocalRandom.current().nextLong(interval / 2, interval + 1)
 
     companion object {
         private val log by logger()
@@ -118,11 +148,18 @@ class RedisDistributedLock(
         /** 견딜 수 있는 부하에서 잰 보유 시간 p99.9(최대 0.5초)의 3배를 0.5초 단위로 올린 값이다(용량 기준 wiki). 행 잠금 대기(3초)보다 짧다. */
         private val WAIT: Duration = Duration.ofMillis(1500)
         private val TTL: Duration = Duration.ofSeconds(10)
-        /** 보유 시간 p50(1~7ms)보다 길면 기다린 쪽이 간격만큼 늦는다. 하한 10ms는 스핀이 Redis에 주는 부하를 묶는다(용량 기준 wiki). */
-        private val RETRY_INTERVAL: Duration = Duration.ofMillis(10)
+        /**
+         * 재시도 간격은 [MIN_RETRY_INTERVAL]에서 두 배씩 [MAX_RETRY_INTERVAL]까지 는다. 첫 간격은 보유 시간 p50(1~7ms)에 맞춰 짧은 대기를 빨리 끝내고,
+         * 상한은 같은 키를 여럿이 오래 기다릴 때 SET이 Redis 명령 지연을 늘리지 않게 묶는다(같은 키 20개 동시에서 10ms 고정 간격은 SET p99를 5배 넘게 올렸다, 용량 기준 wiki).
+         */
+        private val MIN_RETRY_INTERVAL: Duration = Duration.ofMillis(10)
+        private val MAX_RETRY_INTERVAL: Duration = Duration.ofMillis(100)
+
+        /** 해제 알림 채널. 메시지는 지운 키다. 키마다 채널을 두지 않아 구독을 늘리고 줄이는 왕복이 없고, 모든 pod가 모든 해제를 받는다. */
+        const val RELEASED_CHANNEL = "platform:lock-released"
 
         private val RELEASE: RedisScript<Long> = RedisScript.of(
-            "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
+            "if redis.call('get', KEYS[1]) == ARGV[1] then redis.call('del', KEYS[1]) redis.call('publish', ARGV[2], KEYS[1]) return 1 else return 0 end",
             Long::class.java,
         )
     }

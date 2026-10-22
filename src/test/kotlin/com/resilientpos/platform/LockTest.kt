@@ -10,7 +10,9 @@ import kotlin.test.assertNull
 import org.mockito.ArgumentMatchers.any
 import org.mockito.ArgumentMatchers.anyString
 import org.mockito.BDDMockito.given
+import org.mockito.Mockito.atMost
 import org.mockito.Mockito.mock
+import org.mockito.Mockito.verify
 import org.springframework.data.redis.RedisConnectionFailureException
 import org.springframework.data.redis.core.StringRedisTemplate
 import org.springframework.data.redis.core.ValueOperations
@@ -97,6 +99,20 @@ class LockTest {
 
         assertNull(lock(redis).tryAcquire("platform:event-publication:resubmit"))
         assertEquals(1.0, failOpenCount("platform:event-publication", "timeout"))
+    }
+
+    @Test
+    fun `오래 기다리면 재시도 간격이 늘어 대기 한도까지 SET을 마흔 번 넘게 보내지 않는다`() {
+        @Suppress("UNCHECKED_CAST") // mock(ValueOperations::class.java)는 타입 인자를 모른다. 이 테스트는 String 키·값만 쓴다.
+        val values = mock(ValueOperations::class.java) as ValueOperations<String, String>
+        given(values.setIfAbsent(anyString(), anyString(), any(Duration::class.java))).willReturn(false)
+        val redis = mock(StringRedisTemplate::class.java)
+        given(redis.opsForValue()).willReturn(values)
+
+        assertNull(lock(redis).tryAcquire("order:create-lock:terminal:client-order"))
+
+        // 10ms 고정 간격이면 대기 한도(1.5초)까지 약 150번이다. 100ms까지 늘면 약 20번이다.
+        verify(values, atMost(40)).setIfAbsent(anyString(), anyString(), any(Duration::class.java))
     }
 
     @Test
