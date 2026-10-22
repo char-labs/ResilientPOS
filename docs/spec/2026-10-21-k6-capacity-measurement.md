@@ -220,9 +220,10 @@ S1에서 HTTP 지연은 300 RPS까지 NFR 안이었지만, 이벤트 외부화�
 ## 분할 계획
 개발 컨텍스트는 "용량 실측과 그 결과로 정하는 값·구조" 하나다. 측정과 그 측정이 정하는 값·구조 변경을 한 PR에 둔다(사용자 결정). sync 항목 결과·수렴 시간·락 fail-open metric과 알림·runbook·trace는 #76, 단말·매장 token bucket은 #87에 둔다.
 
-겹침 확인(origin/main 8221d79, PR 생성 직전):
+겹침 확인(origin/main dbaa09e, PR 생성 직전):
 - #76(#106)·#91(#107)은 main에 머지됐고 이 브랜치는 그 위로 rebase했다.
-- #102(`feature/inbound-rate-limit`, 5a3ea7a)와 `PlatformConfiguration.kt`, `application.yaml`, `docs/wiki/observability.md`가 겹친다. 시험 병합(`git merge-tree`)에서 앞의 둘이 충돌한다. 둘 다 같은 자리에 서로 다른 빈(Lettuce 연결 옵션, 실행기 거절 처리기)과 설정(rate limit, 락 SLO bucket)을 더해서 생긴 충돌이라 둘 다 남긴다. 둘 다 `PlatformConfiguration`에 companion을 더하므로 하나로 합친다. 늦게 머지되는 쪽이 rebase한다.
+- #102(`feature/inbound-rate-limit`)가 dbaa09e로 main에 먼저 머지됐고 이 브랜치를 그 위로 rebase했다. `PlatformConfiguration.kt`(Lettuce 연결 옵션 빈과 실행기 거절 처리기 빈, companion은 하나로)와 `application.yaml`(`payment` 아래 `fake-gateway`, 그 뒤 `rate-limit`)의 충돌은 둘 다 남겨 풀었고 `docs/wiki/observability.md`는 자동으로 합쳐졌다. #102의 Lettuce 옵션(끊긴 동안 명령을 바로 거절)이 걸린 빌드로 해제 알림 구독을 compose에서 다시 확인했다. Redis 없이 21초에 기동했고, Redis를 띄우고 7초, 재시작 뒤 4초 안에 구독자가 1로 돌아왔다.
+- #108(`feature/alert-state-gauges`, ae2535b)과 `docs/wiki/domain-model.md`·`observability.md`·`README.md`, `UnknownPaymentResolver.kt`, `ObservabilityConfigurationTest.kt`가 겹치지만 시험 병합은 충돌 없이 끝난다.
 - draft #94(`refactor/modulith-2-1-2-resubmit`)는 `docs/wiki/domain-model.md`가 겹치고 시험 병합은 충돌 없이 끝난다.
 - 머지 직전에 다시 확인하고 먼저 머지된 쪽에 맞춰 rebase한다.
 
@@ -467,5 +468,5 @@ Redisson 기각 기준:
 #87 권장 상한: 단말 capacity 10·refill 2/s, 매장 capacity 40·refill 8/s. 하한·격리 조건은 성립하고 상한 조건은 성립하지 않는다(용량 기준 wiki의 "단말·매장 rate limit 권장값"). #102 세션에 근거와 함께 전했다.
 
 ### 실행 결과
-- `./gradlew test` 전체: a6d015f에서 818개 통과(06:21~06:25Z). 리뷰 반영 전 4d3d034에서는 첫 실행의 `UnknownPaymentResolverIntegrationTest`가 `TimeoutException`으로 한 번 실패했고 다시 돌려 810개가 통과했다.
+- `./gradlew test` 전체: origin/main dbaa09e(#102) 위로 rebase한 52962a2에서 868개 통과(06:29~06:33Z). rebase 전 a6d015f에서는 818개 통과. 리뷰 반영 전 4d3d034에서는 첫 실행의 `UnknownPaymentResolverIntegrationTest`가 `TimeoutException`으로 한 번 실패했고 다시 돌려 810개가 통과했다.
 - `python3 scripts/check_pr.py --base origin/main --worktree`: 개발 중 PASS. 제출 전 `--worktree` 없이도 PASS(일반 27개 파일).
