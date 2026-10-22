@@ -41,7 +41,7 @@
 
 ## KafkaDeadLetter
 
-- **뜻.** `원토픽.DLT`에 재투입도 폐기도 하지 않은 메시지가 있다(`event_kafka_dead_letter_unhandled{topic}`, `topic`은 원 토픽). consumer가 처리하지 못한 메시지라 그 주문의 다음 단계(결제 시도, `PAID` 전이, fulfillment, 대조 case)가 멈춰 있다. 메시지가 남아 있는 동안 계속 울리고, 모두 재투입하거나 폐기하면 다음 갱신(1분)에 풀린다. 원인은 DLT로 보낼 때의 `reason`으로 가른다(아래 먼저 볼 것 1).
+- **뜻.** `원토픽.DLT`에 재투입도 폐기도 하지 않은 메시지가 있다(`event_kafka_dead_letter_unhandled{topic}`, `topic`은 원 토픽). consumer가 처리하지 못한 메시지라 그 주문의 다음 단계(결제 시도, `PAID` 전이, fulfillment, 대조 case)가 멈춰 있다. 메시지가 남아 있는 동안 계속 울리고, 모두 재투입하거나 폐기하면 다음 갱신(1분)에 풀린다. 인스턴스마다 세어 `max`로 묶는데, 갱신이 실패한 인스턴스는 마지막 값을 유지한다. 5분 안에 센 인스턴스가 하나라도 있으면 그 값만 보므로 한 인스턴스가 멈춰도 그 옛 값이 알림을 붙잡지 않는다. 모든 인스턴스가 세지 못하면(브로커 장애) 마지막 값으로 유지한다. 원인은 DLT로 보낼 때의 `reason`으로 가른다(아래 먼저 볼 것 1).
   - 도메인 오류 코드(예: `PAYMENT_APPROVAL_MISMATCH`): 업무 불일치다. 불일치 승인은 다시 넣어도 같은 불일치라 재투입하지 않고, 사람이 확인한 뒤 폐기를 표시한다.
   - `UNSUPPORTED_EVENT_SCHEMA_VERSION`: 롤링 배포 중 옛 pod가 새 버전 메시지를 받았다. 배포가 끝난 뒤 그대로 재투입한다([이벤트 계약](event-contract.md) 5절).
   - `error`: 재시도를 모두 썼거나 재시도 목록 밖의 예외(버그, 변환 실패)다.
@@ -49,9 +49,9 @@
   1. `sum by (topic, reason) (increase(event_kafka_dead_letter_total[1d]))`로 어느 토픽에 어떤 `reason`이 쌓였는지 본다. counter는 재기동하면 0부터라 오래된 메시지는 목록 API의 `exception`·`exceptionMessage`로 본다.
   2. 목록 `GET /admin/v1/dead-letters?topic=원토픽.DLT&partition=…`에서 `redrive`와 `dismissal`이 모두 null인 항목이 처리하지 않은 메시지다. `key`가 `orderId`다.
   3. ERROR `DLT로 보냄 topic=… partition=… offset=… key=… reason=… exception=…`의 `trace_id`로 trace를 열어 실패한 consumer span과 예외를 본다.
-- **조치.** 원인을 고친 뒤 재투입한다. 재투입 전에 [이벤트 계약 8절](event-contract.md#8-dlt-재투입-전에-볼-것)을 확인하고, 절차는 [도메인 모델 §4.3](domain-model.md#43-이벤트-전달과-저장-형식)의 "DLT 재투입"을 따른다. 넣지 않기로 한 메시지(불일치 승인, 이미 다른 경로로 처리된 주문, 시험용 메시지)는 같은 절의 폐기 표시(`POST …/dismiss`)로 사유와 함께 남긴다. 둘 다 기록이 남고 이 알림이 풀린다.
+- **조치.** 원인을 고친 뒤 재투입한다. 재투입 전에 [이벤트 계약 8절](event-contract.md#8-dlt-재투입-전에-볼-것)을 확인하고, 절차는 [도메인 모델 §4.3](domain-model.md#43-이벤트-전달과-저장-형식)의 "DLT 재투입"을 따른다. 넣지 않기로 한 메시지(불일치 승인, 이미 다른 경로로 처리된 주문, 시험용 메시지)는 같은 절의 폐기 표시(`POST …/dismiss`)로 사유와 함께 남긴다. 둘 다 기록이 남고 이 알림이 풀린다. 재투입했는데 WARN `audit action=DEAD_LETTER_REDRIVE_UNRECORDED`가 남고 이 알림이 풀리지 않으면 재투입 기록이 없는 것이다. 다시 재투입하거나(한 번 더 보내지고 consumer가 멱등으로 견딘다) 그 `cause`를 사유에 적어 폐기한다.
 - **하지 말 것.** 원인을 고치기 전에 재투입하지 않는다. 같은 이유로 다시 DLT로 간다. 알림을 끄려고 폐기하지 않는다. 폐기는 "넣지 않는다"는 결정의 기록이다. DLT 토픽을 지우거나 보존 기간을 걸지 않는다.
-- **한계.** DLT 토픽을 다시 만들면(클러스터 이전·DR) offset이 0부터 다시 시작해 옛 재투입·폐기 기록이 같은 offset의 새 메시지를 처리된 것으로 센다. 그 뒤에는 목록 API로 미처리를 직접 확인한다. 롤링 배포 중 옛 버전 pod는 폐기 기록을 모르므로 폐기한 메시지 때문에 배포가 끝날 때까지 울 수 있다.
+- **한계.** DLT 토픽을 다시 만들면(클러스터 이전·DR) offset이 0부터 다시 시작해 옛 재투입·폐기 기록이 같은 offset의 새 메시지를 처리된 것으로 센다. 그 뒤에는 목록 API로 미처리를 직접 확인한다. 이 알림의 gauge를 처음 내는 배포 직후에는 재투입·폐기 기록이 없는 기존 DLT 메시지가 모두 미처리로 잡혀 바로 운다. 한 건씩 재투입하거나 폐기한다. 롤링 배포 중 옛 버전 pod에는 이 gauge와 폐기 endpoint가 없다. 옛 pod로 간 폐기 요청은 실패하므로 배포가 끝난 뒤 다시 보낸다. pod가 하나면 재기동하는 동안 잠깐 풀렸다가 기동 직후 첫 갱신에서 다시 운다. 같은 레코드가 폐기된 뒤 재투입되는 순간과 갱신이 겹치면 한 갱신(1분) 동안 1건 많게 셀 수 있다. 다음 갱신에 맞는다.
 
 ## KafkaDeadLetterPublishFailed
 
@@ -82,7 +82,7 @@
 
 ## KafkaDeadLetterMetricNotSucceeding
 
-- **뜻.** 그 인스턴스의 미처리 DLT 갱신 작업(`UnhandledDeadLetterMetrics.countUnhandled`)이 20분 안팎 동안 한 번도 성공하지 못했다. 갱신이 실패하는 동안 `event_kafka_dead_letter_unhandled`는 마지막 성공값에 멈추고, 기동한 뒤 한 번도 성공하지 못했으면 `NaN`이다. 모든 인스턴스가 이러면 [KafkaDeadLetter](#kafkadeadletter)가 새 DLT에 울지 못한다. 기동한 뒤 5분은 보지 않는다.
+- **뜻.** 그 인스턴스의 미처리 DLT 갱신 작업(`UnhandledDeadLetterMetrics.countUnhandled`)이 20분 안팎 동안 한 번도 성공하지 못했다. 갱신이 실패하는 동안 `event_kafka_dead_letter_unhandled`는 마지막 성공값에 멈추고 마지막 성공 시각(`event_kafka_dead_letter_unhandled_refreshed_seconds`)도 멈춘다. 기동한 뒤 한 번도 성공하지 못했으면 값은 `NaN`이다. 다른 인스턴스가 세고 있으면 [KafkaDeadLetter](#kafkadeadletter)는 멈춘 인스턴스의 값을 5분 뒤부터 보지 않으므로 알림은 맞게 동작한다. 모든 인스턴스가 이러면 마지막 값으로 유지되어 새 DLT에 울지 못한다. 기동한 뒤 5분은 보지 않는다. severity는 warning이다. 한 인스턴스의 실패는 DLT 알림을 막지 않고, 모든 인스턴스가 실패하는 것은 브로커·DB 전체 장애라 다른 신호가 함께 나온다.
 - **먼저 볼 것.** `tasks_scheduled_execution_seconds_count{code_function="countUnhandled"}`의 `outcome="ERROR"`와 `exception`, 스케줄러 ERROR 로그 `Unexpected error occurred in scheduled task`의 예외.
   - Kafka `TimeoutException`: 브로커에 닿지 못한다. 그동안 새 DLT도 재투입도 없어 마지막 값이 실제와 같다. 브로커를 되살린다.
   - `TopicAuthorizationException`·`ClusterAuthorizationException`: 앱 principal에 DLT 토픽의 Describe 권한이 없다(운영 Kafka ACL). `*.DLT`에 Read·Describe를 준다([platform-operator-dlt-redrive](../spec/2026-10-21-platform-operator-dlt-redrive.md) 결정 2의 배포 확인 항목).
@@ -93,7 +93,7 @@
 
 - **뜻.** reconciliation으로 넘기지 않은 결과 불명 승인 시도 가운데 가장 오래된 것이 만들어진 지 2시간이 넘었다(`payment_attempt_resolution_oldest_seconds`, 시도의 `created_at`부터). 정상이면 한 건은 조회 상한 60회(약 1시간) 안에 확정되거나 넘어간다. 작업이 멈췄거나, 조회나 확정이 건마다 실패하고 있다. 나이는 DB에서 다시 세므로 재기동해도 첫 갱신 뒤 5분이면 다시 운다. pod가 하나면 재기동하는 동안 잠깐 풀렸다가 다시 운다.
 - **먼저 볼 것.** [UnknownPaymentResolverNotSucceeding](#unknownpaymentresolvernotsucceeding)이 함께 울렸는지. `max(payment_attempt_unknown) - max(payment_attempt_reconciliation_pending)`로 몇 건인지. ERROR `결과 불명 결제 확정에 실패했다 paymentId=…`(건마다 실패), WARN `조회로도 결과를 확인하지 못했다 … queryCount=…`의 `queryCount`가 오르는지(조회는 돌고 있다). `payment.attempt-created.DLT`에 오래 머물다 늦게 재투입된 시도는 만들어진 지 오래라 바로 이 알림에 걸린다. 그 시도는 조회 상한(약 1시간) 안에 넘어가면 풀린다.
-- **조치.** 작업이나 건별 실패의 원인을 고친다. 결제 상태는 작업이 확정한다.
+- **조치.** 작업이나 건별 실패의 원인을 고친다. 결제 상태는 작업이 확정한다. 확정됐는데 풀리지 않으면 `max by (instance) (payment_attempt_resolution_oldest_seconds)`로 인스턴스별 값을 본다. 작업이 멈춘 인스턴스는 나이가 마지막 성공값에 멈춰 `max`를 붙잡는다. [UnknownPaymentResolverNotSucceeding](#unknownpaymentresolvernotsucceeding)이 가리키는 인스턴스를 고치거나 재시작한다. [ReconciliationPendingUnresolved](#reconciliationpendingunresolved)도 같다.
 - **하지 말 것.** `t_payment_attempt`의 상태를 DB에서 직접 고치지 않는다. 승인 이벤트가 나가지 않아 주문이 `PAID`가 되지 않는다.
 
 ## ReconciliationPendingUnresolved

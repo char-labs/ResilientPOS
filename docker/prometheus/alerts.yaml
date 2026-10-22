@@ -40,7 +40,18 @@ groups:
       - alert: KafkaDeadLetter
         # 재투입도 폐기도 하지 않은 DLT 메시지 수다. 처리하면 다음 갱신(1분)에 0이 되어 풀린다. 원인(reason)은 runbook에서 counter로 본다.
         # 모든 인스턴스가 같은 DLT와 DB를 세므로 max로 묶는다. 첫 갱신 전 NaN은 max에서 빠진다.
-        expr: max by (topic) (event_kafka_dead_letter_unhandled{application="ResilientPOS"}) > 0
+        # 갱신이 실패한 인스턴스는 마지막 값을 유지한다. 5분 안에 센 인스턴스가 있으면 그 값만 봐서 멈춘 인스턴스의 옛 값이 알림을 붙잡지 않게 하고,
+        # 모든 인스턴스가 세지 못하면(브로커 장애) 마지막 값으로 유지한다. 그동안은 새 DLT도 재투입·폐기도 일어날 수 없다.
+        expr: |
+          max by (topic) (
+            event_kafka_dead_letter_unhandled{application="ResilientPOS"}
+            and on (instance) (time() - event_kafka_dead_letter_unhandled_refreshed_seconds{application="ResilientPOS"} < 300)
+          ) > 0
+          or
+          (
+            max by (topic) (event_kafka_dead_letter_unhandled{application="ResilientPOS"}) > 0
+            unless on () (time() - event_kafka_dead_letter_unhandled_refreshed_seconds{application="ResilientPOS"} < 300)
+          )
         labels:
           severity: critical
         annotations:
@@ -132,7 +143,7 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: 점주가 해소하지 않은 대조 case가 24시간 넘게 남아 있다
+          summary: reconciliation으로 넘긴 결과 불명 결제가 24시간 넘게 해소되지 않았다
           runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#reconciliationpendingunresolved
 
       - alert: LockFailOpen

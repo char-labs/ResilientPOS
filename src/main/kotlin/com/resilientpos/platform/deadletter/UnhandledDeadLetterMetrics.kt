@@ -2,10 +2,12 @@ package com.resilientpos.platform.deadletter
 
 import io.micrometer.core.instrument.Gauge
 import io.micrometer.core.instrument.MeterRegistry
+import java.time.Clock
 import java.time.Duration
 import java.util.concurrent.ExecutionException
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException as JavaTimeoutException
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import org.apache.kafka.clients.admin.Admin
 import org.apache.kafka.clients.admin.DescribeTopicsOptions
@@ -35,6 +37,9 @@ import org.springframework.stereotype.Component
  * 실패하면(브로커·DB·권한) 예외를 그대로 던져 작업이 `outcome=ERROR`로 남게 하고 값은 마지막 성공값을 유지한다.
  * 브로커에 닿지 못하는 동안에는 새 DLT도 쌓이지 않고 재투입·폐기도 DLT를 읽어야 해서 일어나지 않아 실제 값이 변하지 않기 때문이다.
  *
+ * `event.kafka.dead-letter.unhandled.refreshed`는 마지막으로 갱신에 성공한 시각(epoch 초)이고 첫 갱신 전에는 0이다. 실패하면 바꾸지 않는다.
+ * 규칙은 5분 안에 센 인스턴스가 있으면 그 값만 보고 모두 세지 못하면 마지막 값을 쓴다. 한 인스턴스만 계속 실패해도 그 옛 값이 max로 알림을 붙잡지 않게 하려는 것이다.
+ *
  * 한계: 범위와 좌표만 본다. DLT 토픽을 다시 만들어 offset이 겹치면 옛 기록이 새 레코드를 처리된 것으로 셀 수 있다.
  */
 @Component
@@ -42,12 +47,18 @@ class UnhandledDeadLetterMetrics(
     kafkaAdmin: KafkaAdmin,
     registry: MeterRegistry,
     private val handled: DeadLetterHandledQueries,
+    private val clock: Clock,
     @Value("\${resilientpos.kafka.topics}") private val topics: List<String>,
 ) : DisposableBean {
     private val admin: Admin = Admin.create(kafkaAdmin.configurationProperties)
     private val values = topics.associateWith { AtomicReference(Double.NaN) }
 
+    private val lastRefreshed = AtomicLong(0)
+
     init {
+        Gauge.builder("event.kafka.dead-letter.unhandled.refreshed", lastRefreshed) { it.get().toDouble() }
+            .description("event.kafka.dead-letter.unhandled를 마지막으로 갱신한 시각(epoch 초)")
+            .baseUnit("seconds").strongReference(true).register(registry)
         values.forEach { (topic, value) ->
             Gauge.builder("event.kafka.dead-letter.unhandled", value) { it.get() }
                 .description("재투입도 폐기도 하지 않은 DLT 레코드 수")
@@ -68,6 +79,7 @@ class UnhandledDeadLetterMetrics(
                 .sumOf { maxOf(0L, it.until - it.from - (handledCounts[it.partition] ?: 0L)) }
         }
         unhandled.forEach { (topic, count) -> values.getValue(topic).set(count.toDouble()) }
+        lastRefreshed.set(clock.instant().epochSecond)
     }
 
     private fun describe(deadline: Long): List<TopicPartition> {
