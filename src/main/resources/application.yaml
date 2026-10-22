@@ -86,6 +86,14 @@ spring:
     execution:
       # 커밋 뒤 리스너(Modulith externalizer 포함)가 도는 applicationTaskExecutor로 요청의 trace를 넘긴다. 기본값 false면 Kafka 전송 span이 새 trace로 끊긴다.
       propagate-context: true
+      pool:
+        # 큐가 무제한이면 외부화가 밀릴 때(브로커 정지, 외부화 상한을 넘는 부하) 큐가 힙을 채운다. 작업 하나가 약 16KB라
+        # 최대 힙(805MB)의 25% 안인 12,000에서 자른다. 넘친 작업은 버리고 재전송 작업이 다시 보낸다(PlatformConfiguration).
+        # 힙은 compose mem_limit 1g × MaxRAMPercentage 75, 작업 크기는 trace 샘플링 1.0 기준이라 둘이 바뀌면 다시 잰다.
+        queue-capacity: 12000
+        # 큐에 상한을 두면 Boot는 큐가 찰 때 이 값까지 스레드를 늘린다(기본 무제한). 병목이 DB 커밋이라 늘려도 처리량이 늘지 않고
+        # HTTP와 커넥션을 다툰다(용량 기준 wiki). 코어(8)와 같게 둔다.
+        max-size: 8
     scheduling:
       pool:
         # 공용 스케줄러의 기본 스레드는 하나라 결과 불명 확정 작업이 길어지면 발행 기록 재전송과 Moments가 멈춘다. 실제 PG PR이 조회 타임아웃과 함께 다시 본다.
@@ -108,8 +116,9 @@ spring:
       # 기본값 latest면 consumer가 파티션을 받기 전에 들어온 메시지를 건너뛴다. 처음 뜬 group도 처음부터 읽는다.
       auto-offset-reset: earliest
       # 기본값 500이면 레코드 처리가 느려질 때(DB가 느리거나 provider 호출) 한 poll의 처리가 max.poll.interval.ms(300초)를
-      # 넘어 group에서 쫓겨나고 배치 전체가 다시 처리된다. 레코드 최대 처리 시간 × 이 값이 300초보다 충분히 작아야 한다.
-      max-poll-records: 50
+      # 넘어 group에서 쫓겨나고 배치 전체가 다시 처리된다. 레코드 최대 처리 시간 × 이 값이 300초의 절반 아래여야 한다.
+      # 승인 consumer의 최대는 provider deadline 3초 + provider 밖 처리 최대 0.7초(정상 부하 측정)라 3.7초 × 40 = 148초다(용량 기준 wiki).
+      max-poll-records: 40
     admin:
       # 기동할 때 브로커에 닿지 못하면 앱을 띄우지 않는다. 끄면 토픽 없이 떠서 consumer가 조용히 논다.
       fail-fast: true
@@ -156,6 +165,13 @@ resilientpos:
     # 조회 결과가 불명인 채로 이 횟수에 닿으면 시도를 reconciliation case로 넘기고 더 조회하지 않는다. 기본 간격에서 약 1시간이다.
     # 실제 PG를 근거로 삼지 못해 "결과 불명이 1시간 넘게 이어지면 사람이 본다"에 맞춘 값이다. 간격을 바꾸면 이 값이 뜻하는 시간도 바뀐다.
     unknown-query-limit: 60
+    fake-gateway:
+      # 가짜 provider가 승인·조회마다 기다리는 시간. 부하 측정(load-test/)이 느린 provider를 흉내 낼 때만 늘린다.
+      # 환경 변수는 RESILIENTPOS_PAYMENT_FAKEGATEWAY_LATENCY다. 실제 PG adapter가 생기면 함께 지운다.
+      latency: PT0S
+      # provider 호출 deadline(외부 연동 전략 §4.2 Toss 출발값 3초). 넘으면 결과 불명이고 결과 불명 확정 작업이 조회한다.
+      # 실제 PG adapter에서는 HTTP client의 timeout이 이 자리다.
+      deadline: PT3S
   rate-limit:
     # 인증된 /v1 요청의 단말·매장 token bucket(RedisTerminalRateLimiter). capacity는 쉬었다 온 단말이 바로 보낼 수 있는 요청 수,
     # refill-per-second는 그 뒤로 이어 보낼 수 있는 초당 요청 수다. 매장 값은 그 매장 단말 전부의 합에 걸린다.
@@ -211,6 +227,12 @@ management:
       percentiles-histogram:
         # 기본값은 _count·_sum·_max뿐이라 p95를 계산할 수 없다. bucket을 내보내 histogram_quantile로 구한다.
         http.server.requests: true
+        # Redis 명령 지연(Lettuce observation, db_operation별). spring.data.redis.timeout(1초)을 p99.9와 대조한다(용량 기준 wiki).
+        lettuce: true
+      slo:
+        # 락 대기·보유 시간의 bucket(용량 기준 wiki의 Redisson 조건). 기다린 획득의 수는 bucket이 아니라 outcome=waited로 센다.
+        distributed.lock.wait: 1ms,2ms,5ms,10ms,25ms,50ms,100ms,250ms,500ms,1s,2s,3s,5s
+        distributed.lock.held: 1ms,2ms,5ms,10ms,25ms,50ms,100ms,250ms,500ms,1s,2500ms,5s,10s
 
 logging:
   level:

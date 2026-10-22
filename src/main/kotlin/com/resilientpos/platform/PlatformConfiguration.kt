@@ -3,14 +3,18 @@ package com.resilientpos.platform
 import com.resilientpos.foundation.IdentifierGenerator
 import com.resilientpos.foundation.UuidV7IdentifierGenerator
 import io.lettuce.core.ClientOptions
+import io.micrometer.core.instrument.MeterRegistry
 import jakarta.servlet.http.HttpServletRequest
 import jakarta.servlet.http.HttpServletResponse
 import java.time.Clock
+import java.time.Duration
+import java.util.concurrent.atomic.AtomicLong
 import org.springframework.beans.factory.InitializingBean
 import org.springframework.beans.factory.ObjectProvider
 import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.boot.data.redis.autoconfigure.LettuceClientOptionsBuilderCustomizer
 import org.springframework.boot.security.autoconfigure.web.servlet.SecurityFilterProperties
+import org.springframework.boot.task.ThreadPoolTaskExecutorCustomizer
 import org.springframework.boot.web.servlet.FilterRegistrationBean
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
@@ -60,6 +64,30 @@ class PlatformConfiguration {
         it.disconnectedBehavior(ClientOptions.DisconnectedBehavior.REJECT_COMMANDS).requestQueueSize(REDIS_REQUEST_QUEUE_SIZE)
     }
 
+    /**
+     * 공용 실행기(`applicationTaskExecutor`)의 큐가 차면 작업을 던지지 않고 버린다. 그 실행기에서 도는 것은 Modulith 이벤트 외부화
+     * (`@ApplicationModuleListener`)이고, 버린 이벤트는 발행 기록이 미완료로 남아 [EventPublicationResubmitter]가 다시 보낸다.
+     * 기본 `AbortPolicy`도 유실은 없지만 커밋 뒤(afterCompletion)에 던져 Spring이 거절마다 ERROR 스택 트레이스를 남긴다.
+     * 브로커가 멈추면 요청 수만큼 쌓이므로 counter로 모두 세고 WARN은 [REJECTED_WARN_INTERVAL]마다 한 줄만 남긴다.
+     * 큐 상한은 `spring.task.execution.pool.queue-capacity`다.
+     *
+     * customizer라 Boot 빌더로 만드는 모든 `ThreadPoolTaskExecutor`에 걸린다. `@Async`나 비동기 반환 Controller는 버린 작업을 다시 보낼
+     * 곳이 없어(future가 끝나지 않는다) 이 실행기에 두지 않는다. 그런 사용처나 빌더로 만드는 다른 실행기가 생기면 이 정책을 다시 본다.
+     */
+    @Bean
+    fun discardRejectedTasks(meterRegistry: MeterRegistry) = ThreadPoolTaskExecutorCustomizer { executor ->
+        val rejected = meterRegistry.counter(TASK_REJECTED_METRIC)
+        val nextWarnAt = AtomicLong(System.nanoTime())
+        executor.setRejectedExecutionHandler { _, pool ->
+            rejected.increment()
+            val now = System.nanoTime()
+            val next = nextWarnAt.get()
+            if (now - next >= 0 && nextWarnAt.compareAndSet(next, now + REJECTED_WARN_INTERVAL.toNanos())) {
+                log.warn { "실행기 큐가 가득 차 작업을 버렸다 누적=${rejected.count().toLong()} queued=${pool.queue.size} active=${pool.activeCount}" }
+            }
+        }
+    }
+
     @Bean
     fun txInitializer(txRunner: TxRunner) = InitializingBean { Tx.initialize(txRunner) }
 
@@ -91,7 +119,12 @@ class PlatformConfiguration {
             order = securityFilter.order - 1
         }
 
-    private companion object {
-        const val REDIS_REQUEST_QUEUE_SIZE = 1_000
+    companion object {
+        private val log by logger()
+
+        const val TASK_REJECTED_METRIC = "task.execution.rejected"
+        private val REJECTED_WARN_INTERVAL = Duration.ofSeconds(10)
+
+        private const val REDIS_REQUEST_QUEUE_SIZE = 1_000
     }
 }

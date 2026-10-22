@@ -74,6 +74,10 @@ services:
       # gradlew와 src가 필요하므로 컨텍스트는 저장소 루트다. 제외 목록은 Dockerfile.dockerignore다.
       context: ..
       dockerfile: docker/Dockerfile
+    # 부하 측정(load-test/)에서 Spring 설정을 바꿔 띄울 때만 쓴다(예: SPRING_TASK_EXECUTION_POOL_QUEUECAPACITY=200). 파일이 없으면 무시한다.
+    env_file:
+      - path: ./measure.env
+        required: false
     # JVM 힙 비율(MaxRAMPercentage)의 기준이다. 없으면 Docker VM 전체 메모리를 기준으로 힙이 잡힌다.
     mem_limit: 1g
     depends_on:
@@ -95,6 +99,8 @@ services:
       LOGGING_STRUCTURED_FORMAT_CONSOLE: ecs
       # span을 Alloy(OTLP HTTP)로 보낸다. obs profile 없이 띄우면 보낼 곳이 없다.
       MANAGEMENT_OPENTELEMETRY_TRACING_EXPORT_OTLP_ENDPOINT: http://alloy:4318/v1/traces
+      # 느린 provider 측정(load-test/ S4)만 늘린다: FAKE_GATEWAY_LATENCY=PT1S docker compose ... up -d
+      RESILIENTPOS_PAYMENT_FAKEGATEWAY_LATENCY: ${FAKE_GATEWAY_LATENCY:-PT0S}
     ports:
       - "8080:8080"
 

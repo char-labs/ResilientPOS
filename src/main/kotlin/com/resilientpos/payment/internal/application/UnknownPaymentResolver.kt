@@ -19,7 +19,7 @@ import org.springframework.stereotype.Component
  * 결과를 모른 채 남은(`UNKNOWN`) 승인 시도를 주기적으로 provider에 다시 물어 확정한다. 한 건의 확정은 [PaymentManagement.resolveUnknown]이 한다.
  *
  * 모든 pod에서 돌고 [Lock]이 pod 사이를 줄 세운다. 락은 중복 조회를 줄이는 완화 수단이고 정합성은 Facade가 행을 잠근 뒤 `UNKNOWN`을 다시 확인하는 데서 나온다.
- * 락이 fail-open되거나 블록이 TTL을 넘겨 다른 pod가 겹쳐 들어와도(배치가 락 대기 한도(3초)를 넘기면 늦게 온 pod는 fail-open으로 함께 돈다) 조회는 읽기라 해가 없다.
+ * 락이 fail-open되거나 블록이 TTL을 넘겨 다른 pod가 겹쳐 들어와도(배치가 락 대기 한도(1.5초)를 넘기면 늦게 온 pod는 fail-open으로 함께 돈다) 조회는 읽기라 해가 없다.
  *
  * `Lock` KDoc은 블록 안에서 행 잠금을 기다리지 않도록 정하지만 여기는 예외다. 블록 안에서 `resolveUnknown`이 `UNKNOWN` 시도 행을 잠근다.
  * 그 행을 잠그는 다른 경로(`authorize`의 적용, `retryAuthorization`)는 이 락 키를 잡지 않아 락과 행 잠금이 서로를 기다리는 순환이 생기지 않는다.

@@ -1,9 +1,11 @@
 package com.resilientpos.platform
 
 import com.resilientpos.PostgresIntegrationTest
+import com.resilientpos.awaitUntil
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
+import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
@@ -136,5 +138,29 @@ class LockIntegrationTest(
 
         assertTrue(heldAfterForeignRelease)
         assertFalse(redis.hasKey(key))
+    }
+
+    @Test
+    fun `해제하면 지운 키를 해제 알림 채널로 보내고 앱이 그 채널을 구독하고 있다`() {
+        val key = "test:lock:${UUID.randomUUID()}"
+        val received = LinkedBlockingQueue<String>()
+        val connection = checkNotNull(redis.connectionFactory).connection
+
+        try {
+            connection.subscribe({ message, _ -> received.add(String(message.body, Charsets.UTF_8)) }, RedisDistributedLock.RELEASED_CHANNEL.toByteArray())
+            // PUBLISH는 받은 구독자 수를 돌려준다. 이 테스트의 구독과 앱의 LockReleaseListener가 받아야 한다.
+            awaitUntil("앱과 테스트가 해제 알림 채널을 구독한다") { checkNotNull(redis.convertAndSend(RedisDistributedLock.RELEASED_CHANNEL, PROBE)) >= 2 }
+
+            distributedLock.release(key, checkNotNull(distributedLock.tryAcquire(key)))
+
+            assertEquals(key, generateSequence { received.poll(5, TimeUnit.SECONDS) }.first { it != PROBE })
+        } finally {
+            connection.close()
+        }
+    }
+
+    private companion object {
+        /** 구독을 확인하려고 보내는 메시지. 앱은 이 키를 기다리는 요청이 없어 아무것도 하지 않는다. */
+        const val PROBE = "test:lock:probe"
     }
 }

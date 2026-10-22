@@ -1,0 +1,472 @@
+# PR spec: k6로 용량 상한을 재고 락·sync 배치·provider 호출의 값과 구조를 정한다
+
+## 목적
+용량에 걸린 값이 근거 없이 기본값이거나 상한이 없다(#77). 분산 락 시간(대기 3초, 50ms 스핀, TTL 10초, Redis 명령 타임아웃 1초)은 트래픽 근거가 없어 그대로 뒀고([shared-distributed-lock](2026-09-28-shared-distributed-lock.md) 시간 정책), sync 배치의 동시 실행에는 상한이 없다([sync-request-checkout](2026-09-30-sync-request-checkout.md) 제외 절). provider 승인 호출은 Kafka consumer 스레드에서 동기로 돌아 느린 provider가 파티션을 막고(`PaymentAttemptCreatedListener`), 이벤트 외부화가 도는 비동기 실행기의 큐는 무제한이다.
+
+이 PR은 k6로 대표 부하를 재고, 측정 전에 합의한 판정 규칙으로 값과 구조를 바꾼다. 결과는 원시 수치·환경·재현 명령과 함께 이 spec에 남긴다. #87(단말·매장 inbound rate limit)이 쓸 권장 상한 값도 이 PR의 산출물이다.
+
+기대 결과:
+- `load-test/`의 k6 스크립트 다섯 개로 누구나 같은 측정을 다시 돌릴 수 있다.
+- 락 대기·보유 시간을 metric으로 본다. fail-open 횟수와 sync 항목 결과·수렴 시간은 #76의 metric으로 본다.
+- 락 상수, Redis 타임아웃, Hikari 풀, sync 배치 상한, consumer 설정, 실행기 큐가 실측 근거를 가진 값이 된다.
+- provider 호출 구조를 규칙으로 고르고 바꾼다.
+- Redisson이 필요해지는 시점이 측정값과 지켜볼 metric 조건으로 wiki에 남는다.
+
+## 범위
+소유 모듈은 `platform`(락 시간 metric·실행기·Kafka 설정)과 `payment`(provider 호출·가짜 provider)다. `sync`는 판정 규칙이 배치 크기 상한이나 동시 실행 상한을 바꾸게 할 때만 바뀐다. 부하 스크립트는 저장소 루트 `load-test/`다.
+
+### 트래픽 가정
+원문 NFR([시스템 설계 §7](../references/02_System_Design.md#7-nfr-and-observability), [PRD 2.2](../references/01_Product_Planning_PRD.md))을 그대로 쓴다.
+- 단말 1,000대, 피크 500 RPS. 주문 p95 200ms 미만, PG를 뺀 결제 처리 p95 150ms 미만, 500 operation 배치 p95 2초 미만.
+- 재연결 뒤 60초 안에 단말-서버 주문 상태 99.99% 수렴(G-03).
+
+원문에 없는 값은 가정이다.
+- 매장 250곳, 매장당 단말 4대(카페·소형 F&B).
+- 동시 재연결: 단말의 10%(100대)가 30분 단절 뒤 500 op backlog를 한꺼번에 보낸다. 60초 안에 수렴하려면 약 833 op/s가 필요하다.
+- 부하 구성: 시연 단말(`static/terminal/index.html`)이 판매를 outbox에 쌓고 sync로 보내므로 요청의 80%는 판매 1건짜리 sync 배치(`CREATE_ORDER`와 `REQUEST_CHECKOUT` 2 op), 20%는 HTTP `POST /v1/orders`와 checkout 쌍이다. 80/20은 근거 없는 비율이다. 500 RPS에서 판매(=승인)는 초당 약 450건이다.
+- provider 지연: 실제 PG가 없어 [외부 연동 전략 §4.2](../references/04_External_Integration_Strategy.md)의 Toss 출발값(connect 1초, call deadline 3초, bulkhead 20)을 근거로 설계 p99 1초, deadline 3초로 둔다.
+
+### 측정 환경
+- 로컬 compose 한 대: `docker compose -f docker/docker-compose.yaml --profile app --profile obs up -d --build`. 앱 컨테이너 하나(`mem_limit: 1g`), Hikari 기본 풀 10, Kafka 파티션 3.
+- k6는 호스트에서 돌린다(v2.2.0). compose에 k6 서비스를 넣지 않는다.
+- 서버 지표는 Alloy가 모아 otel-lgtm의 Prometheus·Loki로 보낸 것을 Grafana(`localhost:3000`)에서 읽는다. k6 쪽 수치는 `--summary-export`의 JSON이고 gitignore된 `load-test/results/`에 둔다. 원시 수치는 이 spec의 결과 표에 옮긴다.
+- 수치는 운영 절대값이 아니라 같은 머신에서의 상대 비교다. 머신(Apple M3 Pro 11코어, RAM 36GB), OrbStack 자원(CPU 11, 메모리 16GiB), 커밋 SHA, 이미지 digest(`grafana/otel-lgtm:latest`, `grafana/alloy:latest`)를 결과에 남긴다.
+- compose 프로젝트 이름이 `resilientpos`로 고정이라 다른 worktree가 띄운 스택과 포트·볼륨을 함께 쓴다. 측정은 그 스택이 비었을 때 하고, 남의 스택을 내리거나 볼륨을 지우기 전에 사용자에게 확인한다.
+
+### k6 스크립트(`load-test/`)
+- 공용 setup: 점주 가입 → 로그인 → CSRF 토큰 → 매장 250곳 → 매장마다 단말 4대 등록 → 단말 토큰 1,000개. 점주 세션 쿠키는 `Secure`라 k6가 HTTP에서 자동으로 보내지 않으므로 `Cookie` 헤더로 직접 싣는다. 실행마다 새 이메일로 가입해 데이터가 겹치지 않는다.
+- 시나리오는 아래 다섯 개다. 실행 방법은 `load-test/README.md`에 적는다.
+
+| # | 시나리오 | 부하 | 읽는 값 | 정하는 것 |
+|---|---|---|---|---|
+| S1 | 기준 혼합 | 도착률 50 → 100 → 200 → 300 → 400 → 500 RPS, 단계마다 2분 | uri별 p95·오류율, `hikaricp_connections_pending`·`active`, `kafka_consumer_fetch_manager_records_lag_max`, `executor_queued_tasks`, 힙, 락·Lettuce 지표 | 인스턴스 포화 RPS(p95가 NFR 안이고 오류 0.1% 미만인 가장 높은 단계), Hikari 풀 |
+| S2 | 같은 키 주문 생성 경합 | S1 포화의 70%를 바탕에 두고 같은 `(terminalId, clientOrderId)`를 2·5·10·20 VU가 동시에 보낸다 | 락 대기 분포, 보유 시간, SET 호출 수, 409 수, fail-open WARN 줄 수, Lettuce p99 | 락 상수, Redis 타임아웃, Redisson 판정 |
+| S3 | sync 배치 동시 실행 | 단말 1·5·10·20·50·100대가 500 op 배치(판매 250건)를 동시에 보낸다. 100대에서는 배치 크기 100·250·500을 비교한다 | 배치 시간 p95, pending, 100대 전체가 확정될 때까지의 시간 | sync 동시 실행 상한, 권장 배치 크기, `MAX_OPERATIONS` |
+| S4 | 느린 provider | 판매 초당 50건 고정, 가짜 provider 지연 0·300ms·1초·3초, 각 3분 | `payment.attempt-created` group lag, checkout부터 `PAID`까지의 시간(k6가 결제 시도 조회 API로 확인), 메시지당 provider 밖 처리 시간 | provider 호출 구조, 파티션·concurrency, provider timeout, `max-poll-records` |
+| S5 | Kafka 정지 | S1 포화의 70%에서 `kafka`를 60초 멈췄다 다시 띄운다 | 실행기 큐 길이와 증가율, 힙, 요청 지연, `event_publication_incomplete`가 0으로 돌아오는 시간 | 실행기 큐 상한 |
+
+### metric
+같은 metric을 두 PR이 따로 만들지 않는다. #76(`feature/observability-alerts-tracing`, spec `docs/spec/2026-10-21-observability-alerts-tracing.md`)이 아래를 만들고 이 측정은 그것을 쓴다.
+- `sync_operation_total{status}`: 배치 항목 결과마다 오른다. GAP 수는 `status="GAP"`이다.
+- `sync_convergence_seconds`: 단말이 operation을 만든 시각(sync 항목의 선택 필드 `createdAt`)부터 서버가 처음 확정한 시각까지다. k6 스크립트는 항목마다 `createdAt`을 싣는다. 이 앱의 Jackson은 모르는 필드를 거절하지 않으므로 #76 머지 전에도 그대로 받는다.
+- `lock_fail_open_total{lock, reason}`: `reason`은 `timeout`과 `error`다. `lock`은 키의 앞 두 마디이고, 그 규칙("모듈:이름:식별자…")은 #76이 `Lock` KDoc에 적는다.
+
+이 PR이 더하는 것은 #76이 계획하지 않은 락 시간 두 개다. Redisson이 필요해지는 시점을 운영에서 지켜보려면 이 둘이 있어야 한다.
+- **`distributed_lock_wait_seconds{lock, outcome}`**(Timer): `tryAcquire`의 시작부터 끝까지 걸린 시간이다. `outcome`은 `acquired`(첫 SET에 얻음), `waited`(다시 시도해서 얻음), `timeout`, `error`다(`timeout`·`error`는 #76의 `reason`과 같은 값). 측정 빌드에는 `waited`가 없어 대기를 25ms bucket 위의 획득으로 셌다. 재시도 간격을 10ms로 줄인 뒤에는 bucket으로 첫 SET이 늦은 것과 기다린 것을 가를 수 없어 리뷰 뒤 `waited`를 더했다.
+- **`distributed_lock_held_seconds{lock}`**(Timer): 잠금을 얻은 뒤 해제할 때까지다. TTL과 watchdog 판단에 쓴다. 잠그지 못했으면 기록하지 않는다.
+- `lock` 태그는 #76이 만드는 키 앞 두 마디 함수를 그대로 쓴다. 태그 규칙을 둘로 만들지 않고, `Lock`의 호출 모양과 네 사용처는 바뀌지 않는다. 호출부가 이름을 넘기는 API는 #76이 기각했고 다시 볼 조건(키를 만드는 호출부가 다섯 곳을 넘거나 규칙 밖 키가 필요해질 때)도 그 spec에 있다.
+- 두 Timer는 `management.metrics.distribution.slo`의 고정 bucket(대기 1ms~5초, 보유 1ms~10초)을 내보낸다.
+- 순서: 같은 파일(`RedisDistributedLock.kt`)을 #76이 고치므로 이 Timer는 #76이 main에 머지된 뒤 그 위로 rebase해서 구현한다. 그동안 k6 스크립트, 가짜 provider 지연, 실행기 넘침 처리를 먼저 한다. 측정은 #76 머지 뒤 이 브랜치로 한다. #76이 늦어지면 두 브랜치를 로컬에서만 합친 빌드로 재고 그 커밋 SHA를 결과에 남긴 뒤, 머지 뒤 S2를 다시 돌려 같은 수치인지 확인한다. 합친 빌드는 push하지 않는다(스택 PR이 아니다).
+
+### 코드 변경(동작이 바뀌는 것은 TDD)
+- **가짜 provider 지연**: `FakePaymentGateway`가 `resilientpos.payment.fake-gateway.latency`(기본 `PT0S`)만큼 `authorize`·`query`에서 잠든다. 기본값 0이라 지금 동작은 그대로다. compose `app` 서비스 환경 변수 한 줄(`RESILIENTPOS_PAYMENT_FAKEGATEWAY_LATENCY`, 호스트의 `FAKE_GATEWAY_LATENCY`로 주고 기본 `PT0S`)로 켠다. Spring의 환경 변수 바인딩은 점을 밑줄로 바꾸고 하이픈을 지운다.
+- **실행기 큐 상한**: Modulith의 `EventExternalizerModuleListener.externalize`는 `@ApplicationModuleListener`(`@Async`)라 Boot의 `applicationTaskExecutor`(코어 8, 큐 무제한)에서 돈다. 큐에 상한(`spring.task.execution.pool.queue-capacity`와 `max-size`, 값은 S5)을 두고, 넘친 작업은 `ThreadPoolTaskExecutorCustomizer`가 건 거절 처리기가 버린다. 버릴 때 WARN 한 줄과 counter `task_execution_rejected_total`을 남긴다. Boot 4.1.1에는 거절 정책 설정이 없다. 기본 `AbortPolicy`여도 요청은 성공하고 유실도 없다. `@TransactionalEventListener`의 `AFTER_COMMIT`은 afterCompletion에서 돌고, Spring 7.0.9의 `TransactionSynchronizationUtils.invokeAfterCompletion`이 그 안의 `TaskRejectedException`을 잡아 ERROR 스택 트레이스(`TransactionSynchronization.afterCompletion threw exception`)로 남기기 때문이다. 브로커가 멈추면 거절마다 스택 트레이스가 쌓이므로 WARN 한 줄과 counter로 바꾼다. 버린 이벤트는 발행 기록이 미완료로 남아 `stale-after`(5분) 뒤 재전송 작업이 다시 보낸다.
+- **값 변경**: 아래 판정 규칙을 충족하는 값만 바꾼다. 바꾸지 않은 값도 규칙과 수치를 결과에 남긴다.
+- **provider 호출 구조**: 아래 규칙으로 고른 안을 이 spec에 범위 조정으로 먼저 적고 구현한다. Kafka consumer 설정을 바꾸면 Spring Kafka·Apache Kafka 공식 문서로 Best Practice를 대조해 근거를 이 spec에 남기고, 기본값은 sources jar나 기동 로그의 ConsumerConfig values로 확인한다. PR 전에 Modulith·Kafka 키워드(`docs/wiki/modulith-kafka-keywords.md`, 볼트)를 그 문서의 갱신 규칙대로 고친다.
+
+### 판정 규칙(측정 전에 정한다)
+| 대상 | 지금 값 | 바꾸는 조건과 새 값 |
+|---|---|---|
+| 락 재시도 간격 | 50ms | S2에서 기다린 요청의 추가 지연(대기 시간에서 앞 요청의 남은 보유 시간을 뺀 값)의 중앙값이 보유 시간 p50보다 크면 보유 시간 p50으로 줄인다. 하한 10ms |
+| 락 대기 한도 | 3초 | 보유 시간 p99.9 × 3 이상인 가장 작은 0.5초 단위 값. 3초를 넘기지 않는다(Hikari `connection-timeout`·행 잠금 대기와 같은 상한) |
+| 락 TTL | 10초 | 보유 시간 p99.9 × 10이 TTL보다 크면 그 값으로 올린다 |
+| `spring.data.redis.timeout` | 1초 | S1·S2에서 Lettuce 명령 p99.9 × 10이 1초를 넘으면 그 값으로 올린다. 세션·로그인 카운터(fail-closed)도 이 값을 쓰므로 내리지 않는다 |
+| Hikari `maximum-pool-size` | 10 | 목표 부하에서 `hikaricp_connections_pending`이 0보다 큰 상태가 1분 넘게 이어지고 PostgreSQL CPU에 여유(70% 미만)가 있으면 pending이 사라지는 가장 작은 값으로 올린다 |
+| sync `MAX_OPERATIONS` | 500 | S3에서 500 op 배치 p95가 2초를 넘으면 2초 안에 드는 가장 큰 100 단위 값으로 줄이고 단말 계약(배치 크기 상한)을 wiki에 고친다 |
+| sync 동시 실행 상한 | 없음 | S3에서 단말 100대 동시 재연결이 커넥션 대기 초과(Hikari `connection-timeout` 3초)로 배치를 실패시키거나 60초 안에 수렴하지 못하면, pending이 생기기 시작하는 동시 배치 수를 인스턴스별 상한으로 이 PR에서 구현한다. 거절 응답은 그때 범위 조정으로 정하고 #87의 429 규약과 맞춘다. 둘 다 아니면 상한을 두지 않고, 둘 조건과 측정값을 [용량 기준](../wiki/capacity.md)에 남긴다. #87은 같은 단말의 동시 sync 상한을 제외했다(행 잠금이 직렬화하고 rate가 간접 제한한다) |
+| 외부화 실행기 크기 | 플랫폼 스레드 코어 8 | 아래 범위 조정(S1 뒤)의 비교 실험으로 고른다. 목표 부하(200·300 RPS)에서 미완료 발행 기록 수가 부하 동안 늘지 않는(마지막 1분 기울기가 0 이하) 가장 작은 조합이 후보다. 플랫폼 스레드 후보와 가상 스레드 후보 중 300 RPS에서 sync p95, 미완료 증가, 힙 최대, PostgreSQL CPU가 더 나은 쪽을 고른다. 둘이 비슷하면(p95 차이 20% 안, 둘 다 미완료가 늘지 않음) 영향 범위가 작은 플랫폼 스레드를 고른다 |
+| 실행기 큐 | 무제한 | 외부화 실행기 크기를 정한 뒤 S5의 큐 증가율과 작업당 힙으로 힙 여유(최대 힙의 25%) 안의 가장 큰 값을 상한으로 둔다. 가상 스레드를 고르면 큐가 없으므로 동시 실행 상한(`spring.task.execution.simple.concurrency-limit`)과 거절(`reject-tasks-when-limit-reached`)로 같은 판단을 한다 |
+| `max-poll-records` | 50 | 레코드 최대 처리 시간(provider deadline 3초 + provider 밖 처리 p99) × 이 값이 `max.poll.interval.ms`(300초)의 절반을 넘으면 줄인다 |
+| provider 호출 구조 | consumer 스레드에서 동기 | 필요 동시 호출 수 = 승인 TPS(450) × 설계 p99(1초)다. S4로 Little의 법칙(처리량 = 동시성 ÷ 지연)과 메시지당 provider 밖 처리 시간을 확인한 뒤, 필요 동시 호출 수가 24 이하면 파티션·concurrency를 그 수로 늘리고 provider timeout(deadline 3초, 넘으면 `UNKNOWN`)을 더한다. 24를 넘으면 `PaymentAttemptCreatedListener`를 비동기 반환(Spring Kafka 4.1.1의 `CompletableFuture` 또는 `suspend`) listener로 바꾸고 in-flight 상한(bulkhead)을 둔다. 지금 가정으로는 450이라 비동기 반환이 될 가능성이 높다 |
+| provider timeout | 없음 | deadline 3초(외부 연동 전략 §4.2). 넘으면 결과 불명(`UNKNOWN`)이고 결과 불명 확정 작업이 조회한다 |
+
+### 범위 조정(S1 뒤): 외부화 실행기 크기
+S1에서 HTTP 지연은 300 RPS까지 NFR 안이었지만, 이벤트 외부화가 100 RPS부터 입력을 따라가지 못했다(수치는 결과 절).
+- 원인: Modulith `EventExternalizerModuleListener.externalize`는 `@ApplicationModuleListener`(`@Async`)라 Boot `applicationTaskExecutor`(코어 8, 큐 무제한)에서 돈다. `CompletableFuture`를 돌려주는 `@Async` 메서드도 실행기 스레드가 그 결과를 기다리므로, 작업 하나가 Kafka ack(producer record queue time 평균 약 8ms, `acks=-1`, `linger.ms=5`)와 발행 기록 완료 표시까지 약 24ms 스레드를 쥔다. 스레드 8개로 초당 약 330~470건이고, 판매 1건이 외부화 이벤트 넷(결제 요청, 시도 생성, 승인, 결제 완료)을 내므로 판매 초당 약 100건이 상한이다.
+- 그래서 실행기 큐 상한을 지금 처리량에 두면 평소 부하에서도 이벤트가 버려지고 재전송 주기(5분)만큼 결제가 늦어진다. 큐 상한보다 실행기 크기를 먼저 정한다(판정 규칙 표의 "외부화 실행기 크기").
+- 비교 실험(사용자 결정: 둘 다 재고 더 나은 쪽으로 간다). 모두 S1 부하 2분, 앱만 설정을 바꿔 다시 띄운다.
+  - 플랫폼 스레드: `spring.task.execution.pool.core-size` 32·64, `spring.datasource.hikari.maximum-pool-size` 10·20. 스레드가 늘면 발행 기록 완료 표시의 커넥션도 늘어 풀과 함께 잰다.
+  - 가상 스레드: `spring.threads.virtual.enabled=true`, Hikari 10·20. 이 설정은 `applicationTaskExecutor`뿐 아니라 Tomcat 요청 스레드, 스케줄러, Kafka listener container의 실행기도 가상 스레드로 바꾼다(Boot 4.1.1). 그래서 요청 동시성이 Tomcat 스레드 200개로 묶이지 않고 커넥션 풀에서만 줄 선다.
+  - 공통 지표: 미완료 발행 기록 수(`select count(*) from event_publication where completion_date is null`, 15초 간격), 실행기 큐(플랫폼 스레드일 때), uri p95, Hikari pending·timeout, 힙 최대, 앱·PostgreSQL CPU.
+- 한계: 운영에서는 pod 수로도 나눌 수 있다. 이 실험은 인스턴스 하나가 감당하는 양을 정한다.
+
+### 범위 조정(S1 뒤): provider 호출 구조
+판정 규칙의 계산: 필요 동시 호출 수 = 승인 TPS × 설계 p99(1초). 원문 피크(승인 초당 약 450건)면 450이다. S1에서 본 인스턴스 하나의 외부화 상한(판매 초당 약 100건)으로 낮춰 잡아도 100이라 24를 넘는다. 그래서 `PaymentAttemptCreatedListener`를 비동기 반환 listener로 바꾸기로 했고, 구현해 보고 아래 "범위 조정(구현 시도 뒤)"에서 보류했다. 아래 모양·in-flight 상한·`max-poll-records` 유지는 보류된 안의 설계이고(그때 값 50), 지금 값은 판정 규칙별 결론의 40이다.
+- 모양: `on`이 `CompletableFuture`를 돌려주고 `PaymentManagement.authorize`는 그대로 전용 실행기에서 돈다. provider 호출은 지금처럼 트랜잭션 밖이고 결과 적용만 짧은 트랜잭션이라, provider를 기다리는 동안 커넥션을 쥐지 않는다.
+- in-flight 상한: 컨테이너가 이미 정한다. 비동기 반환이면 한 poll 묶음의 ack가 다 끝날 때까지 consumer를 멈춘다(spring-kafka 4.1.1 `KafkaMessageListenerContainer`의 `doPauseConsumerIfNecessary`, 로그 "Pausing for incomplete async acks"). 그래서 consumer 하나당 `max-poll-records`(50)가 상한이고, 인스턴스 하나는 파티션 3 × 50 = 150이다. 전용 실행기(`ThreadPoolTaskExecutor`)를 그 크기로 두어 큐에서 기다리지 않게 한다. 외부 연동 전략 §4.2의 bulkhead 출발값 20은 필요 동시 호출 수보다 작아 쓰지 않는다.
+- deadline: provider 호출 3초. 넘으면 결과 불명(`UNKNOWN`)이고 결과 불명 확정 작업이 조회한다. 가짜 provider에 넣었고(`resilientpos.payment.fake-gateway.deadline`), 실제 PG adapter에서는 HTTP client timeout이 그 자리다. 묶음의 가장 느린 레코드가 다음 poll을 막는 시간도 이 deadline에 묶인다.
+- Kafka 공식 문서와 소스 대조:
+  - [Asynchronous `@KafkaListener` Return Types](https://docs.spring.io/spring-kafka/reference/kafka/receiving-messages/async-returns.html)(3.2부터, `CompletableFuture`·`Mono`·Kotlin `suspend`): AckMode가 자동으로 `MANUAL`이 되고 순서와 무관하게 커밋한다. 실패한 결과를 복구할지는 container error handler가 정한다. 늘 실패하는 레코드 N개와 `maxAttempts = n`이면 호출이 `N * (n + 2) - 1`번으로 blocking listener의 `N * (n + 1)`보다 많다. 같은 파티션의 부작용이 순서 없이 일어난다.
+  - spring-kafka 4.1.1 소스: 비동기 실패는 `handleAsyncFailure`가 `invokeErrorHandlerBySingleRecord`로 기존 `DefaultErrorHandler`(허용 목록 재시도, DB에 닿지 못할 때의 무한 대기, `DeadLetterPublishingRecoverer`)에 넘긴다. 이 경로는 GH-4465(무한 재전달)·GH-4504(seek 덮어쓰기) 수정이 들어간 코드다.
+  - ConsumerConfig 실제 값(측정 빌드 기동 로그): `max.poll.records=50`, `max.poll.interval.ms=300000`, `session.timeout.ms=45000`, `heartbeat.interval.ms=3000`, `enable.auto.commit=false`, `group.protocol=classic`. 멈춘 동안에도 컨테이너가 poll을 계속 불러 `max.poll.interval.ms`에 걸리지 않는다.
+- 치르는 것:
+  - 실패를 다시 시도할 때 provider 호출이 더 많다. provider가 `PaymentId`를 멱등 키로 받는다는 전제는 이미 있다(kafka-event-redelivery spec).
+  - 같은 파티션 안의 처리 순서가 깨진다. 이 consumer는 시도마다 독립이고 재배달에 멱등이라 순서에 기대지 않는다.
+  - DB에 닿지 못할 때의 무한 대기 백오프는 여전히 consumer 스레드에서 돈다. 그동안 그 consumer의 파티션은 멈춘다.
+  - 종료할 때 진행 중인 호출은 커밋되지 않은 offset으로 남아 다음 기동에서 다시 온다. 멱등이라 결과는 같다.
+- 보류된 안에서는 `max-poll-records`를 50으로 유지한다. 비동기 반환에서는 in-flight 상한이 되고, 판정 규칙의 계산(레코드 최대 처리 시간 × 이 값이 `max.poll.interval.ms`의 절반 아래)은 멈춘 동안에도 poll이 이어지므로 해당하지 않는다.
+- 가상 스레드 실험에서 이 consumer가 커넥션 획득 실패(`CannotCreateTransactionException`)로 재시도에 들어간 기록이 있다. 전용 실행기는 플랫폼 스레드다.
+
+### 범위 조정(구현 시도 뒤): 비동기 반환 listener를 보류한다
+비동기 반환 listener를 TDD로 구현해 RED(같은 poll 묶음의 뒤 시도가 느린 시도에 막혀 `REQUESTED`)와 GREEN을 확인했다. 그 과정에서 소스로 확인한 두 사실 때문에 이 PR에서는 들이지 않는다(사용자 결정). 구현은 되돌렸고 listener는 지금처럼 consumer 스레드에서 동기로 부른다.
+- 동시성은 한 poll 묶음 안에서만 생긴다. 컨테이너가 묶음의 ack가 다 끝날 때까지 다음 poll을 멈추므로, 뒤 poll로 들어오는 시도는 여전히 묶음의 가장 느린 호출(최대 deadline 3초)을 기다린다.
+- 실패한 레코드의 offset이 재시도·DLT보다 먼저 커밋된다. spring-kafka 4.1.1 `MessagingMessageListenerAdapter.asyncFailure`는 실패한 future를 받으면 `acknowledge`부터 하고 그 뒤에 `asyncRetryCallback`(컨테이너의 `failedRecords`)으로 넘긴다. 오류 처리기(재시도·DLT)는 그다음 consumer 루프의 `handleAsyncFailure`에서 돈다. 그 사이에 프로세스가 재시작하면 메시지는 DLT에도 없고 다시 오지도 않아 시도가 `REQUESTED`에 남는다. DB에 닿지 못할 때의 무한 대기 재시도 중 재시작이 대표 경우다. 이 listener가 지키는 복구 단서(호출이 실패하면 메시지가 재시도되거나 DLT에 남는다)와 어긋난다. 구현 중 기존 테스트 `어댑터가 모르는 예외를 던지면 재시도 없이 시도는 REQUESTED인 채 DLT로 간다`가 offset 커밋 직후 DLT를 읽어 실패한 것도 같은 순서 때문이었다.
+- 대신 provider deadline(3초)을 둬서 느린 provider가 파티션을 막는 시간을 메시지당 3초로 묶는다. 파티션 수는 3을 유지한다(판정 규칙의 "24 이하면 파티션" 갈래가 아니다).
+- 후속 후보(PR 본문에 적는다): 오래 `REQUESTED`에 머문 시도를 주기 작업이 다시 승인 요청하는 회수 경로(provider `PaymentId` 멱등 전제)를 먼저 두고, 그 위에서 비동기 반환 listener를 들인다. 실제 PG의 지연이 나오면 필요 동시 호출 수를 다시 계산한다.
+
+### 범위 조정(3차 측정 뒤): 락 대기를 해제 알림과 지터 백오프로 바꾼다
+재시도 간격을 10ms로 줄인 최종 빌드로 S2를 다시 재자 Redisson 기각 기준 2를 어겼다(결과 절 3차 측정). 같은 키 20개 동시에서 SET p99가 18.8ms로 앞뒤 바탕 실행(2.3·3.3ms)의 5배를 넘었고, SET은 바탕의 약 5배, 대기 초과 fail-open은 16건이었다. 규칙(기준을 하나라도 어기면 이 PR에서 pub/sub 대기)에 따라 해제를 알려 기다리는 쪽을 깨우고, 알림을 놓칠 때를 위해 재시도 간격을 지터 백오프로 바꾼다(사용자 결정: 둘 다 진행).
+- 알림: 해제 Lua 스크립트가 토큰을 확인해 지운 뒤 같은 스크립트에서 채널 `platform:lock-released`로 키를 PUBLISH한다. Redis 왕복은 그대로 한 번이다. 모든 pod가 이 채널 하나를 구독하고(Spring Data Redis `RedisMessageListenerContainer`, Lettuce), 알림 하나가 그 pod 대기열의 맨 앞 하나를 깨운다(4차 측정 뒤, 모두 깨우면 SET이 몰렸다). 간격이 끝나 다시 시도한 요청과 깨어났지만 SET을 빼앗긴 요청은 줄 뒤에 다시 서므로 먼저 온 순서는 보장하지 않는다. 키마다 채널을 두지 않아 구독을 늘리고 줄이는 왕복이 없다.
+- 지터 백오프: 깨어난 요청은 바로 SET한다. 알림을 놓치는 경우(첫 SET 실패와 대기 등록 사이의 해제, TTL 만료, 구독이 끊긴 동안)에는 기다림이 간격으로 끝나 다시 시도한다. 간격은 10ms에서 두 배씩 100ms까지 늘고, 매번 그 절반과 전체 사이의 값을 고른다(equal jitter). 대기 한도 1.5초는 그대로다.
+- 구독 시작: 컨테이너는 기동이 끝난 뒤(`ApplicationReadyEvent`) 시작한다. Spring Data Redis 4.1.1 `RedisMessageListenerContainer.start`는 구독이 2초 안에 되지 않으면 던지므로, 기동 단계에서 시작하면 Redis 없이 앱이 뜨지 않는다. 4.1.1 컨테이너는 첫 구독에서 연결하지 못하면 스스로 다시 시도하지 않으므로(4차 측정에서 확인), 실패하면 WARN을 남기고 5초 뒤 다시 구독한다. 구독 실패에 대한 컨테이너의 자체 재시도는 끈다(`FixedBackOff(0, 0)`). 그 재시도가 이 재구독의 `stop`과 겹치면 끝나지 않는 future를 기다리며 멈추기 때문이다(재리뷰). 구독은 복구 스레드 하나에서만 하고, 첫 구독도 그 스레드에서 해 readiness를 늦추지 않는다. 구독한 뒤 끊긴 연결은 Lettuce가 되살린다. 구독이 없는 동안 락은 지터 백오프로만 기다린다.
+- 알림 처리 실행기: 받은 메시지는 기다리는 요청을 깨우기만 하므로 수신 스레드에서 바로 처리한다(`SyncTaskExecutor`). 기본값 `SimpleAsyncTaskExecutor`는 메시지마다 스레드를 만든다.
+- 치르는 것: 모든 해제가 모든 pod에 방송된다(해제 수 × pod 수의 메시지). pod마다 구독 연결이 하나 더 생긴다. Redisson은 들이지 않는다. 남은 기준(대기 빈도, 보유 시간)은 충족했고 watchdog·fencing이 필요한 사용처가 없다.
+- 판정: 결과 절의 4차·5차 측정과 아래 Redisson 기각 기준 2의 결론이다.
+
+### Redisson 재검토
+측정 전에 정한 기각 기준은 셋이다. 셋을 모두 만족하면 Redisson을 들이지 않고 스핀을 유지한다. 하나라도 어기면 그 항목에 맞는 변경(pub/sub 대기 또는 TTL 갱신)을 이 PR에서 한다.
+1. S1에서 대기가 획득의 1% 미만이다.
+2. S2에서 스핀 SET이 Redis 명령 p99를 10% 넘게 늘리지 않는다.
+3. 보유 시간 p99.9가 TTL의 1/10 미만이라 watchdog이 필요 없다.
+
+**Redisson이 필요해지는 시점.** 기각하더라도 다시 볼 조건을 측정값과 함께 [용량 기준](../wiki/capacity.md) wiki에 남긴다. 측정 전 분석은 아래와 같고, 임계값은 결과로 채운다.
+- **대기가 흔해질 때(pub/sub 대기).** Redisson `RLock`은 해제를 pub/sub 채널로 알려 기다리는 쪽을 깨운다. 측정 전 스핀(간격 50ms)은 기다리는 요청 하나가 초당 SET 20번을 보내고, 대기마다 평균 간격의 절반(약 25ms)을 더 기다리며, 순서를 보장하지 않아 경합이 이어지면 대기 한도까지 밀리는 요청이 생긴다. 지켜볼 조건은 업무 락(`order:create-lock`, `payment:checkout-lock`)의 대기 비율이 장애 밖에서 1% 이상으로 이어지거나 `outcome="timeout"`이 생기는 것이다.
+- **블록이 TTL을 넘길 수 있을 때(watchdog).** Redisson은 잡은 인스턴스가 살아 있는 동안 기본 30초(`lockWatchdogTimeout`)짜리 잠금을 늘린다. 지금 락 블록은 외부 호출 없는 짧은 트랜잭션이라 해당하지 않는다. 지켜볼 조건은 `distributed_lock_held_seconds` p99.9가 TTL의 1/10 이상이 되거나, WARN "잠금이 풀기 전에 만료됐다"가 생기거나, provider 호출이나 배치처럼 길이가 들쭉날쭉한 일을 감싸는 새 사용처가 생기는 것이다. Redisson 없이 자체 Lua `PEXPIRE` 갱신으로도 풀 수 있다.
+- **락이 정합성의 마지막 방어선이 될 때.** 지금은 fail-open이고 DB 제약이 정본이다. DB가 막지 못하는 외부 자원을 지켜야 하는 사용처가 생기면 fencing token(`RFencedLock`)과 복제 확인(`checkLockSyncedSlaves`)이 필요하다. 다만 fencing은 자원 쪽 검사가 있어야 의미가 있어 Redisson만으로는 끝나지 않는다.
+- **다른 분산 도구가 필요할 때.** pod를 가로지르는 동시 실행 상한(`RSemaphore`·`RPermitExpirableSemaphore`)이나 전역 token bucket(`RRateLimiter`)이 필요해지면 그때 Bucket4j(Lettuce)와 Redisson을 비교한다. #87이 인스턴스별이 아니라 전역 상한을 고르면 이 조건에 든다. Redisson을 그쪽에 들이면 락 이전 비용도 작아진다.
+- **들일 때 치르는 것.**
+  - Lettuce 옆에 클라이언트와 커넥션 풀이 하나 더 생긴다.
+  - 기본값(`timeout` 3초, `retryAttempts` 4, `retryDelay` 1~2초 jitter)이면 Redis 장애 때 명령 하나가 실패하기까지 수 초에서 십수 초가 걸린다. 그동안 fail-open이 그만큼 늦어지므로 값을 지금의 1초 기준에 맞춰야 한다.
+  - Redisson 예외는 `DataAccessException`이 아니라 fail-open이 잡는 예외 목록을 다시 정해야 한다.
+  - 키 형식이 문자열 `SET`에서 hash로 바뀐다. 롤링 배포 중에는 옛 pod와 새 pod가 서로를 막지 못하고 `WRONGTYPE` 오류로 둘 다 fail-open한다. 그동안 DB 제약이 막는다.
+
+### #87 권장 상한
+#87(`feature/inbound-rate-limit`, spec `docs/spec/2026-10-21-inbound-rate-limit.md`)은 단말·매장 token bucket을 `resilientpos.rate-limit.{terminal,store}.capacity`와 `refill-per-second`로 받는다. 대상 endpoint 다섯 개가 bucket 하나를 쓰고 sync 요청은 항목 수와 무관하게 1이다. 권장 값도 이 네 값으로 낸다.
+- 출발값: 단말 refill은 피크 평균 0.5 RPS(500 RPS ÷ 1,000대)의 4배인 초당 2, 매장 refill은 단말 4대분인 초당 8이다. capacity는 #87 결정 6의 조건으로 정한다. 단말 capacity는 재연결 직후 보낼 sync 요청 수(backlog ÷ 배치 크기)와 그동안의 실시간 요청 수의 합 이상이고, 매장 capacity는 매장 단말 수 × 단말 capacity 이상이다.
+- 검증: 오작동 단말 몇 대가 상한 속도로 보내는 동안 정상 단말의 p95가 NFR 안인지, 상한 합계가 인스턴스 포화 RPS의 70% 안인지 k6로 본다. 넘으면 값을 낮추고 이유를 결과에 적는다. #87 limiter가 아직 main에 없으므로 상한 속도로 보내는 부하를 k6가 직접 만들어 흉내 낸다.
+- 결과 값과 근거는 이 spec의 결과 절과 [용량 기준](../wiki/capacity.md)에 남긴다. #87 이슈에 위치를 코멘트로 남긴다.
+
+**계약**: HTTP 응답 모양, 이벤트, 오류 code, 스키마는 바뀌지 않는다. 바뀌는 것은 metric 추가, 값 변경, provider 호출 구조, 실행기의 넘침 처리다. sync 배치 크기 상한이 줄면 단말 계약이 바뀌므로 그때 wiki와 결과에 적는다.
+
+**실패와 복구**: 실행기가 버린 이벤트는 발행 기록 재전송이 `stale-after`(5분) 뒤 다시 보낸다. provider timeout은 `UNKNOWN`이고 결과 불명 확정 작업이 조회한다. 락 metric 기록이 실패해도 락 동작은 바뀌지 않는다(Micrometer 기록은 던지지 않는다).
+
+**관측성**: 락 시간 Timer 둘과 실행기 거절 counter. [관측성](../wiki/observability.md)에 이름·태그·쓰는 법을 적는다.
+
+## 제외
+- **sync 항목 결과 counter, sync 수렴 시간, 락 fail-open counter.** #76이 만든다. 이 PR은 쓰기만 한다. 수렴 시간은 k6도 단말 쪽에서 잰다(배치의 모든 항목이 확정될 때까지).
+- #76의 나머지(알림 규칙, runbook, trace, 재전송 작업 생존 metric). #76의 시작값 임계(LockFailOpen 10분 등)는 그 spec이 "부하테스트 뒤 다시 본다"고 했다. 이 PR은 측정값을 [용량 기준](../wiki/capacity.md)에 남기고 규칙 파일은 고치지 않는다.
+- 같은 단말의 동시 sync 상한. #87과 같은 이유로 두지 않는다.
+- 앱 여러 대로 재는 것. pod 사이 경합은 인스턴스 하나 안의 스레드 경합으로만 잰다. Redis 왕복 비용은 같아 락 판단에는 충분하다. 앱을 늘리면 compose와 Alloy 설정이 바뀌어 #76과 겹친다.
+- Kafka share group(KIP-932) 전환. Kafka 4.2에서 production-ready가 됐지만 브로커를 4.2.1 이상으로 올려야 하고 재시도·DLT가 전달 횟수 한도와 보관 방식으로 바뀌어 지금 DLT 기반 복구 설계를 다시 열어야 한다.
+- 실제 PG adapter와 그 HTTP client 설정(connect timeout, 서킷 브레이커). provider timeout은 이 PR이 정한 deadline을 가짜 provider와 호출 구조에 반영하는 데까지다.
+- 운영 절대 용량 산정. 로컬 한 대의 상대 비교다.
+- **락 대기열의 순서와 구독 관측.** 알림이 깨우는 대기열은 먼저 온 순서를 지키지 않는다(다시 시도한 요청이 줄 뒤로 간다). 한 번의 `tryAcquire` 동안 자리를 지키는 대기열(Redisson `RFairLock`과 비슷한 모양)과 그 위의 S2 재측정, 구독 상태 metric, 오래 이어지는 재구독 WARN의 빈도 조정은 후속 후보다.
+- **비동기 반환 listener.** 실패한 레코드의 offset이 재시도·DLT보다 먼저 커밋되어 보류했다(범위 조정). 오래 `REQUESTED`인 시도를 다시 승인 요청하는 회수 경로를 먼저 두는 후속 작업 후보다.
+- **버린 작업의 진행 중 목록 항목.** Modulith 2.1.1 `DefaultEventPublicationRegistry`는 발행 기록을 저장할 때 JVM의 진행 중 목록(`PublicationsInProgress`, 이벤트 객체의 동일성이 키)에 넣고 완료·실패 표시 때 뺀다. 실행기가 버린 작업은 둘 다 불리지 않고, 재전송은 DB에서 다시 읽은 새 객체로 등록하므로 원래 항목은 재기동까지 남는다. 기본 `AbortPolicy`도 같고 큐 무제한일 때보다 힙 증가는 훨씬 작다. 버림이 오래 이어지면 그만큼 힙이 는다. Modulith에 해제 경로를 묻는 것은 후속 후보다.
+- **`event_publication`의 크기.** 완료 모드 `update`와 7일 보관이면 운영 피크에서 수억 행이 되고, 측정 이틀(약 200만 행·1.5GB)에도 autovacuum이 부하 중 되풀이됐다. 완료 모드(`delete`·`archive`)나 보관 기간을 바꾸는 것은 이벤트 전달 결정(outbox-mode-comparison)과 함께 다시 볼 일이라 이 PR에서 바꾸지 않는다.
+- **외부화 한 건의 커밋 수 줄이기.** 외부화 상한의 원인(처리 중·완료 표시를 따로 커밋)은 Modulith 동작이라 이 PR에서 고치지 않는다.
+- **단말 sync timeout과 배치 시간.** 시연 단말은 sync를 5초에 끊는데 동시 재연결에서는 배치가 그보다 오래 걸린다(S3). 단말 쪽 timeout·배치 크기 규약은 단말 계약 작업에서 정한다.
+- **trace 비용.** 샘플링 1.0을 끄고 켜서 비교하지 않았다. 측정은 trace가 켜진 빌드로 했고, tail sampling 판단(#76 spec)은 그 비교가 필요하다.
+- **rate limit 상한 조건.** 권장값으로는 하한과 상한이 함께 성립하지 않는다(고장 단말이 capacity만큼 한꺼번에 커넥션을 쥔다). 단말별 동시 요청 상한(#101)의 일이다.
+
+## 관련 문서
+없음
+
+## 변경 경로
+- load-test/**
+- .gitignore
+- docker/docker-compose.yaml
+- src/main/kotlin/com/resilientpos/platform/**
+- src/main/kotlin/com/resilientpos/payment/internal/application/**
+- src/main/kotlin/com/resilientpos/payment/internal/adapter/gateway/FakePaymentGateway.kt
+- src/main/kotlin/com/resilientpos/sync/internal/application/SyncCommandFacade.kt
+- src/main/resources/application.yaml
+- src/test/kotlin/com/resilientpos/platform/**
+- src/test/kotlin/com/resilientpos/payment/**
+- src/test/kotlin/com/resilientpos/sync/**
+- docs/wiki/capacity.md
+- docs/wiki/README.md
+- docs/wiki/observability.md
+- docs/wiki/domain-model.md
+- docs/wiki/architecture.md
+- docs/spec/2026-10-21-k6-capacity-measurement.md
+
+## 인수 조건
+1. `load-test/`에 공용 setup과 시나리오 S1~S5 스크립트, 실행 방법을 적은 `load-test/README.md`가 있다. README의 명령으로 compose 스택 위에서 각 시나리오가 끝까지 돌고 summary JSON이 `load-test/results/`에 남는다. 이 디렉터리는 git이 추적하지 않는다.
+2. `Lock` 블록이 잠금을 얻으면 `distributed_lock_wait_seconds{lock, outcome}`과 `distributed_lock_held_seconds{lock}`이 하나씩 기록된다. 첫 SET에 얻으면 `outcome="acquired"`, 다시 시도해서 얻으면 `outcome="waited"`다(리뷰 뒤 범위 조정). 기다리는 요청은 해제 알림을 받으면 바로 다시 시도하고(알림 하나에 그 pod 대기열의 맨 앞 하나), 알림을 놓치면 10ms에서 100ms까지 늘어나는 지터 간격으로 다시 시도한다. Redis 없이 뜬 앱도 Redis가 돌아오면 구독한다(3차·4차 측정 뒤 범위 조정). 대기 한도를 넘기면 `outcome="timeout"`, Redis 오류면 `outcome="error"`가 기록되고 보유 시간은 기록되지 않는다. `lock` 태그는 #76의 `lock_fail_open_total`과 같은 값(키 앞 두 마디)이고 키의 식별자는 태그에 없다. `Lock`의 호출 모양과 키 값은 바뀌지 않는다.
+3. k6 sync 배치가 항목마다 `createdAt`을 싣고, 측정 빌드에서 #76의 `sync_operation_total`·`sync_convergence_seconds`·`lock_fail_open_total`이 결과 표의 근거로 쓰인다.
+4. `resilientpos.payment.fake-gateway.latency`를 주면 가짜 provider의 `authorize`·`query`가 그만큼 늦게 답하고, 주지 않으면 지금처럼 바로 답한다.
+5. 공용 실행기의 큐가 차면 넘친 작업을 던지지 않고 버리고, `task_execution_rejected_total`이 오르고 WARN이 10초에 한 줄 남는다(리뷰 뒤 범위 조정). counter는 거절이 없어도 0으로 나간다. 버린 외부화 이벤트의 발행 기록이 미완료로 남았다가 재전송으로 끝나는 것은 S5에서 `event_publication_incomplete`로 본다.
+6. 결과 절에 S1~S5의 원시 수치, 환경, 재현 명령이 있다. 판정 규칙 표의 항목마다 바꿨는지와 근거 수치가 있다.
+7. provider 호출 구조의 판정(규칙의 계산, 비동기 반환을 보류한 소스 근거와 사용자 결정)이 이 spec에 범위 조정으로 있고, 가짜 provider가 deadline(3초)을 넘기면 결과 불명으로 답한다. S4가 지금 구조의 승인 처리량(파티션 수 ÷ provider 지연)을 수치로 보인다. 바꾼 consumer 설정마다 공식 문서 근거와 ConsumerConfig 실제 값이 있다.
+8. Redisson 기각 기준 세 개의 판정과 수치가 결과에 있고, [용량 기준](../wiki/capacity.md)에 "Redisson이 필요해지는 시점"이 지켜볼 metric 조건(PromQL)과 측정 임계값으로 있다.
+9. #87 권장 상한(단말·매장 RPS, burst, sync 동시 실행 상한)과 검증 수치가 결과와 [용량 기준](../wiki/capacity.md)에 있다.
+10. `./gradlew test` 전체와 `python3 scripts/check_pr.py --base origin/main`이 통과한다.
+
+## 검증
+- 개발 중: `python3 scripts/check_pr.py --base origin/main --worktree`. 제출 전: `--worktree` 없이 한 번 더.
+- `./gradlew test`(Docker 필요). 좁힐 때는 `./gradlew test --tests 'com.resilientpos.platform.*Lock*'`처럼 실행한다.
+- 측정: `load-test/README.md`의 명령. 시나리오마다 Grafana에서 읽은 PromQL을 결과 표에 함께 적는다.
+- 정상 시나리오: 기본 설정에서 기존 테스트가 그대로 통과하고 새 metric이 `/actuator/prometheus`에 보인다.
+- 실패 시나리오: Redis가 없으면 `outcome="error"`가 오르고 블록은 실행된다. 실행기 큐가 차면 요청은 성공하고 거절 counter가 오른다. provider가 deadline을 넘기면 시도는 `UNKNOWN`이 된다.
+
+## Wiki 영향
+- [용량 기준](../wiki/capacity.md)(새 페이지): 트래픽 가정, 인스턴스 포화 RPS, 채택한 값과 근거 spec 링크, #87 권장 상한, Redisson이 필요해지는 시점, 다시 재는 방법. [wiki 인덱스](../wiki/README.md)에 진입점을 더한다.
+- [관측성](../wiki/observability.md): 새 metric 셋과 실행기 거절 counter, "아직 없는 것"에서 이 PR이 채운 항목을 걷어낸다.
+- [도메인 모델](../wiki/domain-model.md): "분산 락은 `Lock` 블록으로 건다"의 시간 값을 바꾸면 그 값, provider 호출 구조를 바꾸면 그 설명.
+- Modulith·Kafka 키워드(`docs/wiki/modulith-kafka-keywords.md`, 볼트): consumer 설정이나 listener 모양을 바꾸면 갱신 규칙대로 고친다. 볼트 파일이라 저장소 커밋이 없다.
+- 현재 상태(`docs/wiki/current-state.md`, 볼트): 바꾼 값과 구조를 볼트에서 고친다.
+
+## 분할 계획
+개발 컨텍스트는 "용량 실측과 그 결과로 정하는 값·구조" 하나다. 측정과 그 측정이 정하는 값·구조 변경을 한 PR에 둔다(사용자 결정). sync 항목 결과·수렴 시간·락 fail-open metric과 알림·runbook·trace는 #76, 단말·매장 token bucket은 #87에 둔다.
+
+겹침 확인(origin/main dbaa09e, PR 생성 직전):
+- #76(#106)·#91(#107)은 main에 머지됐고 이 브랜치는 그 위로 rebase했다.
+- #102(`feature/inbound-rate-limit`)가 dbaa09e로 main에 먼저 머지됐고 이 브랜치를 그 위로 rebase했다. `PlatformConfiguration.kt`(Lettuce 연결 옵션 빈과 실행기 거절 처리기 빈, companion은 하나로)와 `application.yaml`(`payment` 아래 `fake-gateway`, 그 뒤 `rate-limit`)의 충돌은 둘 다 남겨 풀었고 `docs/wiki/observability.md`는 자동으로 합쳐졌다. #102의 Lettuce 옵션(끊긴 동안 명령을 바로 거절)이 걸린 빌드로 해제 알림 구독을 compose에서 다시 확인했다. Redis 없이 21초에 기동했고, Redis를 띄우고 7초, 재시작 뒤 4초 안에 구독자가 1로 돌아왔다.
+- #108(`feature/alert-state-gauges`, ae2535b)과 `docs/wiki/domain-model.md`·`observability.md`·`README.md`, `UnknownPaymentResolver.kt`, `ObservabilityConfigurationTest.kt`가 겹치지만 시험 병합은 충돌 없이 끝난다.
+- draft #94(`refactor/modulith-2-1-2-resubmit`)는 `docs/wiki/domain-model.md`가 겹치고 시험 병합은 충돌 없이 끝난다.
+- 머지 직전에 다시 확인하고 먼저 머지된 쪽에 맞춰 rebase한다.
+
+## TDD 검증 기록
+동작이 바뀌는 것(락 시간 metric, 가짜 provider 지연, 실행기 넘침 처리, provider 호출 구조, 판정 규칙이 고르면 sync 동시 실행 상한)에 적용한다. k6 스크립트, 값만 바꾸는 설정, 문서는 적용하지 않는다. 값 변경은 기존 테스트의 회귀 실행으로 확인한다.
+
+| 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
+|---|---|---|---|
+| 인수 2, `LockTest`의 `잠그면 대기 시간과 보유 시간을 키 앞 두 마디로 하나씩 남긴다`·`잠그지 못하면 그 결과의 대기 시간만 남기고 보유 시간은 남기지 않는다` | `./gradlew test --tests 'com.resilientpos.platform.LockTest'`. #106 머지 뒤 rebase한 상태에서 Timer 없이 실행. 두 테스트가 `AssertionFailedError`(기대 1, 실제 0) | 같은 명령. `tryAcquire`가 결과마다 `distributed.lock.wait`을, `release`가 얻은 시각부터 `distributed.lock.held`를 남기게 한 뒤 8개 통과 | `./gradlew test --tests 'com.resilientpos.platform.LockIntegrationTest'` 5개 통과 |
+| 인수 4, `FakePaymentGatewayTest`의 `지연을 주면 승인과 조회가 그만큼 늦게 답한다` | `./gradlew test --tests 'com.resilientpos.payment.internal.adapter.gateway.FakePaymentGatewayTest'`. 생성자에 `latency`만 선언하고 쓰지 않은 채 실행. `AssertionFailedError`(승인이 176.875us만에 답했다) | 같은 명령. `authorize`·`query`가 `Thread.sleep(latency)` 뒤 답하게 하고, `query`의 기본 갈래가 `authorize`를 다시 불러 두 번 잠들지 않게 답 고르기를 `answer`로 뺀 뒤 14개 통과. 기본값(`PT0S`)의 기존 13개도 그대로 통과 | `PaymentAuthorizationIntegrationTest`와 함께 실행해 23개 통과(인자 없는 생성자를 쓰는 통합 테스트 픽스처 포함) |
+| 인수 5, `RejectedTaskDiscardTest`의 `큐가 차면 넘친 작업을 던지지 않고 버리고 센다` | `./gradlew test --tests 'com.resilientpos.platform.RejectedTaskDiscardTest'`. 아무것도 하지 않는 customizer만 빈으로 선언하고 실행. 셋째 `execute`가 `TaskRejectedException`(ExecutorService in active state did not accept task) | 같은 명령. customizer가 거절 처리기(counter 증가와 WARN)를 걸게 한 뒤 통과 | - |
+| 인수 5, `ObservabilityConfigurationTest`의 `prometheus 엔드포인트가 공용 실행기의 거절 수를 거절이 없어도 돌려준다` | characterization. Boot가 `applicationTaskExecutor`에 customizer를 거는지 고정한다. 처음부터 통과했고, `discardRejectedTasks`의 `@Bean`을 뗀 변이로 `AssertionFailedError`(task_execution_rejected_total이 없다)를 확인하고 되돌렸다 | `./gradlew test --tests 'com.resilientpos.platform.ObservabilityConfigurationTest'` 4개 통과 | - |
+| 인수 7, provider deadline: `FakePaymentGatewayTest`의 `지연이 deadline 이상이면 deadline에서 결과를 모른다고 답한다` | `./gradlew test --tests 'com.resilientpos.payment.internal.adapter.gateway.FakePaymentGatewayTest'`. 생성자에 `deadline`만 선언하고 쓰지 않은 채 실행. 800ms 뒤 승인으로 답해 `AssertionFailedError`(Unknown이 아님) | 같은 명령. 지연이 deadline 이상이면 deadline만큼 기다린 뒤 `Unknown`으로 답하게 한 뒤 15개 통과 | - |
+| 인수 2(3차 측정 뒤), `LockTest`의 `오래 기다리면 재시도 간격이 늘어 대기 한도까지 SET을 마흔 번 넘게 보내지 않는다` | `./gradlew test --tests 'com.resilientpos.platform.LockTest'`. 10ms 고정 간격으로 실행. `MoreThanAllowedActualInvocations`(40번 이하 기대, 125번) | 같은 명령. 간격을 10ms에서 두 배씩 100ms까지 늘리고 equal jitter로 흩은 뒤 10개 통과 | `LockIntegrationTest` 5개 통과 |
+| 인수 2(3차 측정 뒤), `LockIntegrationTest`의 `잠금이 풀리면 기다리던 요청이 다음 재시도를 기다리지 않고 바로 얻는다` | `./gradlew test --tests 'com.resilientpos.platform.LockIntegrationTest'`. 백오프만 있는 상태로 세 번 실행. 두 번 `AssertionFailedError`(해제 뒤 70ms·57ms 만에 얻었다), 한 번은 통과(간격으로만 깨면 해제 뒤 0~100ms라 30ms 안에 들 수 있다) | 같은 명령. 해제 스크립트가 키를 PUBLISH하고 `LockReleaseListener`가 기다리는 요청을 깨우게 한 뒤 세 번 연속 6개 통과 | 알림이 하나만 깨우게 바꾼 뒤 같은 명령 6개 통과. 하나만 깨우는 것은 단위 테스트 없이 S2의 SET 수로 확인했다(5차 측정, 20 동시에서 요청당 5.1번). 재리뷰(Codex)에서 시간 기준이 알림 없이도 통과할 수 있다는 지적을 받아 아래 두 테스트로 바꿨다 |
+| 인수 2(재리뷰 뒤), `LockTest`의 `해제 알림을 받으면 재시도 간격을 기다리지 않고 바로 다시 시도한다` | `./gradlew test --tests 'com.resilientpos.platform.LockTest'`. `onReleased`를 비운 채 실행. `AssertionFailedError`(알림 열 번에 다시 시도한 횟수: 2) | 같은 명령. `onReleased`를 되돌린 뒤 11개 통과 | - |
+| 인수 2(재리뷰 뒤), `LockTest`의 `기다림이 끝나면 얻었든 포기했든 대기열에서 빠진다` | characterization. 기다림 뒤 대기열에서 빼는 줄을 지운 변이로 `AssertionFailedError`를 확인하고 되돌렸다 | `./gradlew test --tests 'com.resilientpos.platform.LockTest'` 12개 통과 | - |
+| 인수 2(재리뷰 뒤), `LockIntegrationTest`의 `해제하면 지운 키를 해제 알림 채널로 보내고 앱이 그 채널을 구독하고 있다` | characterization. 해제 스크립트에서 PUBLISH를 뺀 변이로 `NoSuchElementException`(받은 키가 없다)을 확인하고 되돌렸다 | `./gradlew test --tests 'com.resilientpos.platform.LockIntegrationTest'` 6개 통과 | - |
+| 인수 2(4차 측정 뒤), `LockReleaseListenerTest`의 `기동 때 Redis가 없어 구독하지 못하면 간격을 두고 다시 구독한다` | `./gradlew test --tests 'com.resilientpos.platform.LockReleaseListenerTest'`. 실패를 WARN으로만 남기는 코드로 실행. `AssertionFailedError`(20초 안에 충족되지 않았다: 구독을 다시 시도한다). compose에서 Redis 없이 띄운 앱이 Redis가 돌아온 뒤에도 구독자 0이던 것과 같다 | 같은 명령. 실패하면 컨테이너를 멈추고 5초 뒤 다시 시작하게 한 뒤 통과(6.4초) | `LockTest`·`LockIntegrationTest`와 함께 17개 통과 |
+| 인수 7, 비동기 반환 listener(보류): `PaymentAuthorizationHeadOfLineIntegrationTest`의 `같은 파티션에서 느린 provider 승인이 뒤 시도의 승인을 막지 않는다` | tdd-driver가 `./gradlew test --tests '…PaymentAuthorizationHeadOfLineIntegrationTest'`로 동기 listener에서 `AssertionFailedError`(20초 안에 충족되지 않았다: 느린 호출이 붙잡힌 채로 뒤 시도가 APPROVED가 된다. 현재: REQUESTED)를 확인했다. 승인 consumer를 멈추고 두 checkout을 쌓은 뒤 다시 켜서 두 시도를 같은 poll 묶음에 넣었다 | 같은 명령. 비동기 반환으로 통과. 회귀(`payment.*`, Kafka 재시도·전달, trace, `reconciliation.*`)에서 DLT 테스트가 offset 커밋 직후 DLT를 읽어 실패해 원인을 확인했다 | 범위 조정(구현 시도 뒤)으로 보류하고 구현·테스트를 되돌렸다 |
+| 인수 2(리뷰 뒤), `LockTest`의 `한 번이라도 다시 시도해서 얻으면 waited로 남긴다` | `./gradlew test --tests 'com.resilientpos.platform.LockTest'`. SET이 false 뒤 true를 돌려주게 하고 실행. `AssertionFailedError`(기대 1, 실제 0: `acquired`로 셌다) | 같은 명령. `acquire`가 SET 횟수를 돌려주고 한 번이 아니면 `waited`로 남기게 한 뒤 9개 통과. 대기 한도 직전에는 잠들지 않고 포기한다 | `./gradlew test --tests 'com.resilientpos.platform.LockIntegrationTest'` 5개 통과 |
+| 인수 4·7(리뷰 뒤), `FakePaymentGatewayTest`의 `지연이 음수이거나 deadline이 양수가 아니면 만들지 않는다` | `./gradlew test --tests 'com.resilientpos.payment.internal.adapter.gateway.FakePaymentGatewayTest'`. 검사 없이 실행. `AssertionFailedError`(IllegalArgumentException을 기대했는데 만들어졌다) | 같은 명령. 생성자 `init`에서 `require`로 막은 뒤 16개 통과 | - |
+| 인수 5(리뷰 뒤), `RejectedTaskDiscardTest`의 `연달아 넘쳐도 WARN은 간격마다 한 줄이고 counter는 모두 센다` | `./gradlew test --tests 'com.resilientpos.platform.RejectedTaskDiscardTest'`. 세 번 넘치게 하고 실행. `AssertionFailedError`(WARN 기대 1줄, 실제 3줄) | 같은 명령. 다음 WARN 시각을 `AtomicLong`으로 두고 10초 안의 거절은 세기만 한 뒤 2개 통과 | `ObservabilityConfigurationTest`와 함께 실행해 7개 통과 |
+
+## 결과
+### 측정 환경
+- 빌드: 로컬 브랜치 `measure/k6-local` 90db602. 이 브랜치 d8c7e05에 #76 브랜치 529a06d를 로컬에서만 합치고(push하지 않음), 아직 #76 머지 전이라 락 대기·보유 Timer를 측정 전용 커밋으로 넣었다. #76의 trace(샘플링 1.0, OTLP로 Alloy), Kafka observation, `propagate-context`가 켜진 상태다.
+- 머신: Apple M3 Pro 11코어, RAM 36GB(38654705664 bytes). OrbStack CPU 11, 메모리 16384MiB. Docker 29.4.0. 앱 JDK 25.0.4.1, `mem_limit: 1g`.
+- 이미지: `postgres:18-alpine`(d3e1620b530c), `redis:8-alpine`(3811787313eb), `apache/kafka:4.1.0`(bff074a5d005), `grafana/otel-lgtm:latest`(57b5ab1ca661), `grafana/alloy:latest`(9726bfba078d).
+- k6 v2.2.0(호스트). 서버 지표는 lgtm 안의 Prometheus(`http://localhost:9090` in container)를 실행의 끝 시각에 `[120s]` 창으로 질의했다. 컨테이너 CPU는 `docker stats` 15초 표본의 평균이다(100% = 1코어).
+- 다른 세션의 Gradle 테스트(Testcontainers)가 같은 CPU를 썼다. 각 세션이 알려 준 시각과 표본의 컨테이너 기록으로 겹침을 표시했다. 데이터는 실행마다 새 점주·매장 250곳·단말 1,000대로 넣고 DB를 비우지 않았다.
+
+### S1 기준 혼합(플랫폼 스레드 8, Hikari 10)
+재현: `for r in 50 100 200 300 400 500; do k6 run -e RATE=$r --summary-export load-test/results/s1-rate$r.json load-test/s1-baseline.js; done`(사이 45초). 07:17~07:34Z.
+
+| 실행 | 실제 req/s | 실패 | 미처리 iteration | sync p95/p99 | 생성 p95 | checkout p95 | Hikari 대기 max | 획득 max | timeout | 실행기 큐 max | 힙 max | 앱 CPU 평균 | PG CPU 평균 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| s1-rate50 | 57 | 0.00% | 0 | 136/361ms | 93ms | 59ms | 5 | 1.05s | 0 | 63 | 392MB | 79% | 37% |
+| s1-rate100 | 106 | 0.00% | 0 | 134/516ms | 96ms | 50ms | 35 | 0.71s | 0 | 1449 | 394MB | 152% | 57% |
+| s1-rate200 | 201 | 0.00% | 0 | 55/459ms | 34ms | 26ms | 52 | 1.07s | 0 | 11957 | 526MB | 130% | 69% |
+| s1-rate300 | 294 | 0.00% | 0 | 180/418ms | 127ms | 77ms | 99 | 1.07s | 0 | 29106 | 678MB | 194% | 98% |
+| s1-rate400 | 236 | 1.17% | 16314 | 4394/12557ms | 4935ms | 3384ms | 194 | 10.12s | 310 | 53249 | 785MB | 376% | 80% |
+| s1-rate500 | 24 | 35.90% | 51510 | 46638/50244ms | 42706ms | 35185ms | 183 | 7.34s | 774 | 53240 | 795MB | 562% | 3% |
+
+- 겹침: 50(07:17:12~07:18:45, #91 전체 테스트), 300(끝 23초), 400(07:29:11~07:30:29), 500(전 구간). 100·200은 겹침 없음.
+- 요청 지연은 300 RPS까지 NFR 안이다(생성 p95 127ms, 200ms 미만). 400에서 무너졌다(실제 236 req/s, 미처리 16,314, 커넥션 대기 초과 310건이 500 응답).
+- 이벤트 외부화가 먼저 막힌다. 실행기 큐가 부하 동안 줄곧 늘었다(15초 표본: 100 RPS 분당 약 1,000건, 200 분당 약 6,000건, 300 분당 약 16,000건). 실행기 스레드 8개가 내내 모두 바빴고 완료는 초당 300~470건이었다. 판매 1건이 외부화 이벤트 넷을 내므로 판매 초당 약 100건이 상한이다. 원인은 범위 조정(S1 뒤) 절에 있다.
+- 커넥션 풀은 평균으로는 막히지 않았다. 평균 획득 0.5ms(100)·0.8ms(200)·2.3ms(300), 평균 사용 1.8~2.6ms, 초당 획득 1,514~2,365회. 대기(pending)는 순간적으로 99까지 튀었다. PostgreSQL CPU는 300 RPS에서 평균 98%(11코어 중 약 1코어)다.
+- producer: record queue time 평균 7.6ms(200)·9.2ms(300), request latency 약 1ms, 전송 초당 360~391건, 요청당 레코드 약 6.2개.
+- 락(100~300 RPS): SET 수가 락 획득 수와 같아 스핀이 없었다(100 RPS SET 11,620, 획득 11,615). 25ms를 넘긴 획득은 0.1~0.4%이고 Redis 응답과 스레드 지연이다. 보유 p50은 2~4ms, p99.9는 `order:create-lock` 0.39~0.50초, `payment:checkout-lock` 0.06~0.10초, 최대 0.55초. fail-open 0건.
+- 400 RPS(겹침 있음)에서 `order:create-lock` 보유 p99.9가 10초, 최대 11.61초로 TTL(10초)을 넘겼다. 락 블록(새 트랜잭션) 안에서 커넥션을 기다렸기 때문이다.
+- Redis SET p99 1.8~2.9ms, p99.9 7.9~11.2ms(100~300 RPS).
+- sync 항목은 모두 `APPLIED`, GAP 0. 서버 수렴 시간 p95는 1초 bucket 안(실시간 판매라 생성 직후 확정)이다.
+
+### 외부화 실행기 크기 비교
+재현: 측정 빌드의 `docker/measure.env`에 설정을 넣고 앱만 다시 띄운 뒤 S1 50 RPS 1분으로 데우고, 잔여 작업(`PUBLISHED`·`PROCESSING`)이 50건 아래로 빠질 때마다 `k6 run -e RATE=200|300 load-test/s1-baseline.js`를 2분씩 돌렸다. `p64h20`은 플랫폼 스레드 코어 64·Hikari 20, `vh10`은 가상 스레드·Hikari 10이다. 08:04~09:47Z. 첫 `p64h20` 200 RPS는 예열 없이 돌아 버렸다.
+
+| 실행 | 실제 req/s | 실패 | 미처리 iteration | sync p95/p99 | 생성 p95 | checkout p95 | Hikari 대기 max | 획득 max | timeout | 실행기 큐 max | 힙 max | 앱 CPU 평균 | PG CPU 평균 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| s1-rate200 | 201 | 0.00% | 0 | 55/459ms | 34ms | 26ms | 52 | 1.07s | 0 | 11957 | 526MB | 130% | 69% |
+| p64h20-rate200 | 185 | 0.98% | 1901 | 2829/7706ms | 4055ms | 1201ms | 164 | 4.09s | 261 | 14462 | 622MB | 244% | 112% |
+| p32h20-rate200 | 195 | 0.00% | 0 | 133/445ms | 93ms | 57ms | 30 | 1.01s | 0 | 15401 | 457MB | 177% | 90% |
+| p32h10-rate200 | 201 | 0.00% | 94 | 174/2010ms | 158ms | 78ms | 32 | 2.90s | 0 | 15269 | 461MB | 147% | 71% |
+| vh20-rate200 | 175 | 0.68% | 732 | 2534/3972ms | 2238ms | 1365ms | 287 | 5.79s | 192 | nan | 569MB | 305% | 95% |
+| vh10-rate200 | 169 | 2.71% | 2460 | 1247/14836ms | 7535ms | 184ms | 290 | 13.02s | 244 | nan | 620MB | 232% | 81% |
+| s1-rate300 | 294 | 0.00% | 0 | 180/418ms | 127ms | 77ms | 99 | 1.07s | 0 | 29106 | 678MB | 194% | 98% |
+| p64h20-rate300 | 292 | 0.00% | 24 | 289/885ms | 235ms | 128ms | 101 | 1.68s | 0 | 26822 | 602MB | 174% | 92% |
+| p32h20-rate300 | 294 | 0.00% | 0 | 407/913ms | 307ms | 178ms | 132 | 1.26s | 0 | 28581 | 618MB | 164% | 102% |
+| p32h10-rate300 | 292 | 0.00% | 35 | 912/1388ms | 723ms | 454ms | 61 | 1.65s | 0 | 28432 | 697MB | 187% | 100% |
+| vh20-rate300 | 248 | 2.46% | 5128 | 2801/7332ms | 3282ms | 1213ms | 306 | 6.39s | 1059 | nan | 751MB | 261% | 104% |
+| vh10-rate300 | 240 | 1.80% | 5984 | 3388/4666ms | 2962ms | 1911ms | 452 | 3.88s | 742 | nan | 776MB | 214% | 97% |
+
+부하 동안 미완료 발행 기록의 증가(15초 표본, 실행 끝 1분의 기울기):
+
+| 실행 | 200 RPS | 300 RPS |
+|---|---|---|
+| p64h20 | +9,739/분 | +15,459/분 |
+| p32h20 | +8,209/분 | +15,794/분 |
+| p32h10 | +8,100/분 | +15,607/분 |
+| vh20 | +8,353/분 | +11,361/분 |
+| vh10 | +4,255/분 | +12,278/분 |
+
+- 겹침: p64h20 300, p32h20 200·300, p32h10 300(시작 때 다른 세션의 Testcontainers), vh10 300(끝 2분). p64h20 200, p32h10 200, vh20 200·300, vh10 200은 겹침 없음. 기본 설정(플랫폼 8, Hikari 10)은 S1의 200·300 줄이다.
+- 어느 조합도 미완료 증가를 막지 못했다. 실행기 스레드를 64개로 늘려도 완료는 초당 84~317건으로 8개 때(300~470건)보다 늘지 않았다. 늘어난 스레드는 커넥션을 두고 HTTP와 다투어 지연만 늘렸다(p64h20 200 RPS sync p95 2.8초, 대기 초과 261건).
+- 가상 스레드는 Tomcat 요청까지 동시성 상한이 사라져 커넥션 풀로 한꺼번에 몰렸다. 200 RPS에서 실패 0.68~2.71%, 대기 초과 192~244건이고, vh 쪽 증가가 낮게 보이는 것은 처리하지 못한 요청이 많아서다.
+- 원인은 DB 커밋이다. p32h10 300 RPS 중(08:31Z 무렵) `pg_stat_activity`를 1초 간격 15번 표본으로 본 활성 세션은 `LWLock:WALWrite` 22, `IO:WalSync` 15가 모두 `COMMIT`이었다. 외부화 한 건이 발행 기록을 처리 중·완료로 두 번 커밋하고(Modulith `JpaEventPublicationRepository`, 완료는 hash 인덱스 `event_publication_serialized_event_hash_idx`로 찾는다), 요청과 consumer 단계도 저마다 커밋한다. `event_publication`은 09시 무렵 966,683행·751MB였다(완료 모드 `update`, 보관 7일).
+- 판정: 규칙의 "미완료가 늘지 않는 가장 작은 조합"이 없다. 300 RPS에서 sync p95·실패·힙이 가장 나은 것은 기본 설정이므로 **실행기와 Hikari 풀을 바꾸지 않는다**. 가상 스레드는 채택하지 않는다. 외부화 처리량은 커밋 처리량에 묶여 있어 실행기 크기로 풀리지 않는다.
+
+### S4 느린 provider(변경 전: consumer 스레드에서 동기 호출)
+재현: 측정 빌드를 `FAKE_GATEWAY_LATENCY`에 지연(예: `PT1S`)을 주어 다시 띄우고 S1 50 RPS 30초로 데운 뒤 `k6 run -e SALES_PER_SECOND=20 -e DURATION=60s -e SAMPLE=0.2 -e VUS=300 -e STORES=100 load-test/s4-slow-provider.js`. 실행 사이에는 지연 0으로 다시 띄워 lag를 비웠다. 지연 0은 10:00Z, 1초·3초는 다음 날 00:01~00:06Z에 돌았다(그 사이 맥이 잠들어 0.3초 실행은 버렸다). 셋 다 측정 빌드 90db602(provider deadline 전이라 3초 지연도 그대로 기다린다)이고 폴링 수정(a426d1a, 00:16Z) 전이다.
+
+| provider 지연 | `payment.attempt-created` 처리(초당) | lag 최대 | 메시지당 처리 시간 | sync p95 |
+|---|---|---|---|---|
+| 0 | 20~30(입력만큼) | 0 | 평균 4.3ms(`spring_kafka_listener_seconds`) | 24ms |
+| 1초 | 2~3 | 2,398 | - | 27ms |
+| 3초 | 1 | 5,870 | - | 242ms |
+
+- 처리량이 파티션 3 ÷ provider 지연으로 묶인다(Little의 법칙). 지연 1초면 인스턴스 하나가 초당 3건만 승인한다. 단말 응답(sync)은 비동기 경로라 지연과 거의 무관하고, 승인만 뒤로 밀린다.
+- provider 밖 처리 시간이 4.3ms라 파티션 하나의 상한은 지연 0에서 약 230건/초다. 판정 규칙의 필요 동시 호출 수(450 또는 외부화 상한 기준 100)는 파티션 수로 맞출 수 없다.
+- 승인 시간 표본은 1초·3초에서 남지 않았다(시나리오 기본 `gracefulStop` 30초에 폴링이 끊김). 그 뒤 `gracefulStop`을 폴링 한도보다 길게 고쳤다. 처리량과 lag는 서버 metric이라 이 표의 근거로 충분하다.
+- 폴링이 부하에 더해졌다. 1초·3초 실행은 요청이 setup 포함 26,431~27,137건(실행 평균 초당 283건)으로 지연 0(2,205건)의 열 배를 넘는다. 판매 입력은 초당 20건을 다 냈고(`dropped_iterations` 없음, 끝난 iteration 978·979건, 나머지는 폴링 중 끊김) sync p95는 그 폴링 부하 위의 값이다.
+- 지연 0의 listener 처리 시간 최대(`spring_kafka_listener_seconds_max`)는 0.13초다.
+
+### 과부하 뒤 회복
+- 500 RPS 단계 뒤 07:41:47Z에 미완료 발행 기록이 50,784건이었다. `PUBLISHED` 33,925(실행기 큐에서 기다림), `FAILED` 15,847(07:31:23~07:36:09에 외부화 실패), `RESUBMITTED` 33, `PROCESSING` 8.
+- 실행기 큐는 부하가 끝난 뒤에도 잘 줄지 않았다(07:42~07:45Z에 약 50,600에서 47,900). 실행기가 초당 약 125건을 끝내도 완료된 이벤트가 consumer를 거쳐 다음 단계의 이벤트를 다시 넣는다. 판매 1건이 4단계라 순감은 처리량의 일부다.
+- 실행기 큐는 07:53:06Z에 비었고, 미완료 발행 기록은 07:53:09Z 표본에서 0건이었다(`FAILED` 포함). 500 RPS 단계가 끝난 07:34:29Z부터 약 19분이다. 재전송 작업은 1분에 최대 500건씩 다시 보내므로 `FAILED` 15,847건은 계산상 약 32분인데, 그보다 빨랐다. 이 차이의 원인은 확인하지 않았다.
+- 가상 스레드 실험이 남긴 `FAILED` 36,653건(다음 날 00:20:37Z)은 측정 빌드를 재전송 주기 `PT5S`(`docker/measure.env`의 `RESILIENTPOS_EVENTPUBLICATION_RESUBMITINTERVAL`)로 다시 띄운 뒤 00:33:16Z에 0이 됐다. 약 12분이다. 5초에 500건이면 계산상 약 6분인데 외부화 상한(초당 330~470건)에 묶였다.
+
+### 2차 측정(이 브랜치 빌드, 2026-10-22)
+빌드는 rebase 뒤의 이 브랜치 ced857b(main 8221d79 위, 락 Timer·provider deadline·`max-poll-records` 40 포함, 락 값과 실행기 큐는 바꾸기 전)이고, 공유 compose DB를 01:14Z에 비운 뒤 쟀다. 재현: `load-test/README.md`의 S1·S2·S3·S5 명령, 바탕 부하 `RATE=70`(외부화 상한 약 100 RPS의 70%).
+
+환경: 전날 10:50Z부터 다음 날 23:58Z까지 맥이 잠들어 측정이 멈췄다. 같은 데이터로 `event_publication`이 약 200만 행·1.5GB가 되어 부하 중 autovacuum이 되풀이됐다(00:42~01:07Z에 돈 2차 첫 실행은 버렸다). DB를 비운 뒤에도 호스트 load average가 30~51(다른 세션의 vitest·`syspolicyd` 등)이었고, 02:04:43~02:07:09Z에 VM이 멈췄다(`docker stats` 표본과 Prometheus 기록이 함께 끊김). 그래서 이날 수치는 같은 날 안의 비교로만 읽고, 판정은 흔들리지 않은 실행으로 했다.
+
+최종 S1(같은 날, 바탕 없음):
+
+| 실행 | 실제 req/s | 실패 | 미처리 iteration | sync p95/p99 | 생성 p95 | checkout p95 | Hikari 대기 max | 획득 max | timeout | 실행기 큐 max | 힙 max | 앱 CPU 평균 | PG CPU 평균 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| final-s1-rate50b | 57 | 0.76% | 0 | 3661/6846ms | 3251ms | 566ms | 57 | 3.80s | 65 | 689 | 416MB | 101% | 73% |
+| final-s1-rate100b | 96 | 0.00% | 0 | 832/2230ms | 613ms | 328ms | 65 | 3.80s | 0 | 4995 | 557MB | 160% | 74% |
+| final-s1-rate150 | 152 | 0.00% | 0 | 460/1183ms | 368ms | 161ms | 70 | 1.88s | 0 | 10601 | 583MB | 138% | 71% |
+| final-s1-rate200 | 195 | 0.09% | 679 | 2304/3672ms | 2165ms | 1450ms | 191 | 3.13s | 22 | 18983 | 716MB | 187% | 96% |
+| final-s1-rate300 | 253 | 0.57% | 4199 | 2597/5879ms | 2529ms | 1661ms | 200 | 3.71s | 214 | 27260 | 710MB | 218% | 101% |
+
+- 50·100은 #87 테스트(01:11~01:30Z)와 겹친 첫 실행을 버리고 다시 쟀다(02:43~02:49Z). 다시 잰 100의 시작 때도 다른 세션의 Testcontainers가 떠 있었다. 같은 설정의 전날 S1(200 RPS sync p95 55ms)보다 전반적으로 나쁘고 단계 사이 순서도 뒤집혀(50 RPS가 150 RPS보다 나쁨) 호스트 부하를 탄 것으로 본다.
+
+S2 같은 키 주문 생성 경합(바탕 70 RPS, 초당 2묶음):
+
+| 동시 수 | 경합 요청 p50/p95/max | 201/409 | 락 획득 시도·SET | 보유 p50/p99.9(`order:create-lock`) | fail-open | 바탕 sync p95 |
+|---|---|---|---|---|---|---|
+| 2 | 53/74/224ms | 482/0 | 8,849·9,091 | 3.9ms/0.25s | 0 | 85ms |
+| 5 | 143/3,292/7,675ms | 1,186/0 | - | 6.6ms/4.79s | timeout 11 | 2,883ms |
+| 10 | 209/2,892/7,220ms | 2,398/0 | - | 3.2ms/3.26s | timeout 30 | 2,082ms |
+| 20 | 208/564/1,211ms | 4,820/0 | 13,239·32,690 | 1.2ms/0.20s | 0 | 89ms |
+
+- 5·10은 바탕 지연까지 함께 튄 구간(01:50~01:56Z, 호스트 load average 51)이라 판정에서 뺐다. 2·20은 바탕이 정상이었다.
+- 같은 키의 겹친 요청은 모두 201과 같은 주문을 받았다(k6 check). 409는 없었다.
+- Redis SET p99: 2에서 3.56ms, 20에서 5.14ms. 스핀이 없는 실행끼리의 SET p99는 2.0(#87 시나리오 3)~5.3ms(최종 S1 300)였다.
+
+#87 시나리오 셋(바탕 70 RPS):
+
+| 시나리오 | 다른 단말 sync p95/p99 | pending 최대 | Hikari active 최대 | 커넥션 보유 최대 | 429(계산) |
+|---|---|---|---|---|---|
+| Retry-After 무시 단말, 초당 20 | 210/739ms | 0 | 9 | 0.9s | 89.6%(2,400 중 250 통과) |
+| 단말 하나가 같은 배치를 초마다 10개 동시 | 39/114ms | 14 | 10 | 0.9s | 79.2%(1,200 중 250 통과) |
+| 한 매장 4대 동시 재연결(단말마다 500 op) | 30/98ms(02:03:30~02:04:40Z) | 0 | - | 0.43s | 0 |
+
+- 셋째는 바탕 실행 뒤쪽이 VM 정지와 겹쳐(k6 전체로는 sync p95 3.3초, 실패 4.08%) 재연결부터 정지 전까지의 70초만 Prometheus로 읽었다. 재연결 자체는 1.5초에 끝났다.
+- 429 계산식: 시작 때 가득 찬 bucket에서 초당 rate로 T초 보내면 통과 = min(rate × T, capacity + refill × T). 값은 단말 capacity 10·refill 2/s.
+
+S3 sync 배치 동시 실행(판매 250건 = 500 op backlog, `createdAt` 30분 전):
+
+| 단말 수(배치 크기) | 수렴 p50/max | 배치 p95 | pending 최대 | 커넥션 대기 초과 | 실패 배치 |
+|---|---|---|---|---|---|
+| 1(500) | 1.51/1.51s | 1,506ms | - | 0 | 0 |
+| 5(500) | 2.02/2.08s | 2,067ms | - | 0 | 0 |
+| 10(500) | 3.79/3.82s | 3,811ms | - | 0 | 0 |
+| 20(500) | 9.36/9.57s | 9,531ms | 0 | 0 | 0 |
+| 50(500) | 11.99/12.37s | 12,258ms | 43 | 0 | 0 |
+| 100(500) | 38.54/39.85s | 39,591ms | 97(획득 최대 2.86s) | 0 | 0 |
+| 100(250) | 33.56/36.89s | 19,786ms | - | 0 | 0 |
+| 100(100) | 30.51/33.68s | 9,440ms | 97(획득 최대 1.48s) | 0 | 0 |
+
+- 시연 단말은 sync 요청을 5초에 끊는다(`static/terminal/index.html`의 `AbortSignal.timeout(5000)`). 동시 재연결에서는 배치 하나가 그보다 오래 걸려 단말이 같은 배치를 다시 보내게 된다. 판정 규칙 밖이라 후속 후보로 둔다.
+
+S5 Kafka 정지(바탕 70 RPS, 02:34:23~02:35:28Z 정지): 실행기 큐가 0에서 8,242건까지 쌓였고(15초에 약 950건) 부하가 끝난 뒤 02:41Z에 비었다. sync p95는 정지 동안에도 거의 그대로였다. 실행기 거절은 없었다(이 빌드는 큐 상한 전).
+
+### 3차 측정(최종 빌드, 2026-10-22)
+빌드는 이 브랜치 d51649e(락 대기 1.5초·간격 10ms·`waited`, 실행기 큐 12,000·버림, `max-poll-records` 40)다. DB는 2차 측정 데이터(발행 기록 약 110만 행) 위에서 쟀다. 03:31~04:15Z에 맥이 유휴 잠자기에 들어가 그 구간의 실행은 버렸고, 04:18Z부터 잠자기를 막고(`caffeinate -is`) 다시 쟀다. 다른 세션의 Testcontainers는 없었다.
+- ConsumerConfig(기동 로그): consumer 15개 모두 `max.poll.records = 40`, `max.poll.interval.ms = 300000`.
+
+S2 같은 키 주문 생성 경합(바탕 70 RPS, 같은 세션의 앞뒤 바탕 실행과 비교, `order:create-lock`):
+
+| 실행 | SET p99/p99.9 | SET 수 | 락 결과 acquired/waited/timeout | 기다린 획득의 대기 p50 | 보유 p50/max | 경합 요청 p50/p95/max | 201/409 | 바탕 sync p95 |
+|---|---|---|---|---|---|---|---|---|
+| 바탕 앞 | 2.3/5.7ms | 8,530 | 855/0/0 | - | 3.7ms/2.27s | - | - | 103ms |
+| 2 동시 | 3.8/18.4ms | 9,426 | 1,127/237/0 | 18ms | 3.5ms/0.90s | 14/169/790ms | 482/0 | 190ms |
+| 20 동시 | 18.8/96.7ms | 46,649 | 1,224/4,417/16 | 60ms | 1.5ms/1.35s | 64/673/2,632ms | 4,820/0 | 385ms |
+| 바탕 뒤 | 3.3/17.9ms | 8,998 | 897/0/0 | - | 4.4ms/2.05s | - | - | 431ms |
+
+- 20 동시에서 `order:create-lock` 대기 초과 fail-open이 16건이다. k6 검사(sync 응답 규약, 같은 키의 201이 하나 이상이고 모두 같은 주문)는 모두 통과했다.
+- 바탕 뒤 실행은 바탕 앞보다 sync p95가 4배라 환경이 나빠졌다(원인은 확인하지 않았다). 그래도 SET p99는 3.3ms로 20 동시(18.8ms)와 뚜렷이 갈린다.
+- 기준 2를 어겼다. 범위 조정(3차 측정 뒤)으로 이어진다.
+
+버림과 재전송 회복(큐 상한 200을 `docker/measure.env`의 `SPRING_TASK_EXECUTION_POOL_QUEUECAPACITY=200`으로 주고, 바탕 70 RPS 6분 중 Kafka를 04:32:40~04:33:41Z에 멈춤):
+- 부하가 끝난 04:37:16Z에 거절이 4,748건이고 미완료 발행 기록은 `PUBLISHED` 4,748건(버린 것)이었다. `stale-after`(5분) 뒤 `FAILED`가 되어 재전송이 다시 보냈고, 05:00:17Z에 미완료가 0건이 됐다(Kafka 재시작부터 약 27분). 측정 구간의 주문 22,682건이 모두 `PAID`다.
+- 재전송한 작업도 같은 실행기로 들어가 다시 넘쳤다. 회복 중 거절이 2,160건 늘어 6,908건이 됐고, 재전송 한 번(500건)이 큐(200)보다 커서 미완료가 분당 약 240건씩만 줄었다. 운영 값 12,000은 재전송 배치보다 커서 브로커가 돌아온 뒤에는 이렇게 넘치지 않는다. 큐 상한은 재전송 배치(500)보다 커야 한다.
+- 진행 중 목록: 회복 뒤 `jcmd 1 GC.class_histogram`의 `DefaultEventPublicationRegistry$PublicationsInProgress$Key`가 6,908개로 거절 수와 같았다(시작 전 0개). 버린 작업마다 항목 하나가 재기동까지 남는다는 소스 분석(제외 절)과 맞는다. 건당 크기는 재지 않았다.
+
+### 4차 측정(해제 알림이 모두 깨우는 빌드, 2026-10-22)
+빌드는 66626a5(해제 알림 + 지터 백오프, 알림 하나가 그 키를 기다리는 요청을 모두 깨움)다. 다른 세션의 Testcontainers는 없었지만 호스트 load average가 38~49였다.
+- Redis를 멈춘 채 앱을 다시 띄우자 19초 만에 health가 떴고 WARN(`잠금 해제 알림을 구독하지 못했다`)이 남았다. 그런데 Redis를 다시 띄우고 15초 뒤에도 구독자가 0이었다(`PUBSUB NUMSUB platform:lock-released`). Spring Data Redis 4.1.1 `Subscriber.initialize`는 첫 구독에서 연결하지 못하면 다시 시도를 예약하지 않고 실패로 끝낸다. 그래서 `LockReleaseListener`가 5초 뒤 다시 구독하게 고쳤다. Redis가 있을 때 띄우면 구독자는 1이다.
+
+| 실행 | SET p99/p99.9 | SET 수 | 락 결과 acquired/waited/timeout | 기다린 획득의 대기 p50 | 경합 요청 p50/p95/max | 201/409 | 바탕 sync p95 |
+|---|---|---|---|---|---|---|---|
+| 바탕 앞 | 1.5/8.3ms | 8,852 | 889/0/0 | - | - | - | 205ms |
+| 2 동시 | 2.0/33.1ms | 10,076 | 1,188/235/0 | 6.6ms | 12/731/3,729ms | 482/0 | 877ms |
+| 20 동시 | 38.0/314.5ms | 61,266 | 1,139/3,771/509 | 37ms | 54/7,842/11,550ms | 4,607/2 | 5,913ms |
+| 바탕 뒤 | 2.5/11.4ms | 8,248 | 871/0/0 | - | - | - | 710ms |
+
+- 20 동시에서 SET이 요청당 11.3번으로 3차(10ms 고정 간격, 8.2번)보다 많았다. 해제 하나가 그 키를 기다리는 요청을 모두 깨워, 해제마다 남은 대기 수만큼 SET이 몰렸기 때문이다(thundering herd). 대기 초과 fail-open 509건과 409 2건이 났다(fail-open이면 DB unique가 막아 409다). 바탕 실행도 3차보다 나빠 호스트 부하를 함께 탔다.
+- 그래서 알림 하나가 그 pod 대기열의 맨 앞 하나만 깨우게 고쳤다. Redisson `RedissonLock`도 해제 메시지마다 semaphore permit 하나만 풀어 대기자 하나를 깨운다.
+
+### 5차 측정(해제 알림이 하나만 깨우는 빌드, 2026-10-22)
+빌드는 d22b0f3(해제 알림이 pod마다 대기열 맨 앞 하나를 깨움, 기동 때 구독하지 못하면 5초 뒤 다시 구독)이다. 다른 세션의 Testcontainers는 없었고, 실행을 시작할 때 load average는 바탕 앞 20.6, 2 동시 15.3, 20 동시 12.7, 바탕 뒤 11.7이었다.
+
+| 실행 | SET p99/p99.9 | SET 수 | 락 결과 acquired/waited/timeout | 기다린 획득의 대기 p50 | 경합 요청 p50/p95/max | 201/409 | 바탕 sync p95 |
+|---|---|---|---|---|---|---|---|
+| 바탕 앞 | 1.8/11.4ms | 8,204 | 836/0/0 | - | - | - | 1,205ms(실패 0.59%) |
+| 2 동시 | 4.9/77.2ms | 8,353 | 1,134/213/1 | 9.7ms | 21/2,052/4,364ms | 480/0 | 2,587ms |
+| 20 동시 | 22.3/83.5ms | 30,728 | 1,282/4,534/170 | 24ms | 34/1,744/6,227ms | 4,808/4 | 1,200ms |
+| 바탕 뒤 | 1.0/3.0ms | 8,837 | 882/0/0 | - | - | - | 78ms |
+
+- 20 동시에서 SET은 요청당 5.1번으로 3차(10ms 고정 간격, 8.2번)와 4차(모두 깨움, 11.3번)보다 적다. 대기 초과 fail-open은 5,986건 중 170건(2.8%)이고 409가 4건이다.
+- 바탕 앞과 2 동시는 바탕 sync p95가 1.2초·2.6초로 흔들렸고 바탕 뒤는 78ms로 깨끗했다.
+- 앱이 떠 있는 동안 `docker compose restart redis` 뒤 7초 안에 구독자가 1로 돌아왔다. 구독한 뒤 끊긴 연결은 Lettuce가 다시 연결하며 구독을 되살린다.
+- 20 동시의 대기 초과 fail-open은 3차(10ms 고정 간격) 16건보다 많고 409도 0건에서 4건이 됐다. 같은 실행의 바탕 sync p95도 3차 385ms에서 1,200ms로 나빠 호스트 부하 차이가 섞였다. 깨어났지만 SET을 빼앗긴 요청이 줄 뒤로 가는 구조(순서 보장 없음)가 이 증가에 얼마나 닿는지는 가르지 못했다. 락이 막으려는 결과(늦은 같은 요청이 409 대신 앞 결과를 받음)에 직접 닿는 수치라 후속에서 순서를 지키는 대기열과 함께 다시 잰다.
+- 재리뷰 뒤 빌드(컨테이너 자체 재시도 끔)로 compose에서 다시 확인했다. Redis를 멈춘 채 띄우면 13초에 health가 뜨고 WARN 1건이 남았고, Redis를 띄우자 6초 안에, 앱이 떠 있는 동안 Redis를 재시작하자 2초 안에 구독자가 1로 돌아왔다. ERROR 로그는 없었다.
+
+### 판정 규칙별 결론
+| 대상 | 결론 | 근거 |
+|---|---|---|
+| 락 재시도 간격 | 50ms → 10ms에서 두 배씩 100ms까지(지터), 해제 알림이 오면 바로 | S2 2 동시에서 경합 요청 p50이 53ms인데 보유 p50은 3.9ms다. 늦은 쪽이 앞 요청이 끝난 뒤 약 49ms(간격 50ms)를 더 기다려 규칙의 "추가 지연 중앙값이 보유 p50보다 크다"를 충족해 첫 간격을 하한 10ms로 줄였다. 10ms 고정 간격이 기준 2를 어겨 범위 조정(3차 측정 뒤)으로 상한과 해제 알림을 더했다. 5차의 2 동시에서 기다린 획득의 대기 p50은 9.7ms다 |
+| 락 대기 한도 | 3초 → 1.5초 | 흔들리지 않은 실행의 보유 p99.9 최대 0.50초(전날 S1 200 RPS) × 3 = 1.5초. 보유 bucket이 250ms 다음 500ms라 p99.9는 보간값이고, `_max`는 0.55초다. p99.9가 0.5초를 조금만 넘어도 규칙상 2초가 되므로 이 선택은 측정 해상도 안에 있다. 주기 작업 락(`payment:unknown-resolve`, `platform:event-publication`)은 pod가 여럿이면 대기 한도를 넘기기 쉬워졌고, #76 LockFailOpen 규칙은 lock을 가르지 않아 여러 pod에서 상시 울릴 수 있다(#103 후보) |
+| 락 TTL | 10초 유지 | 보유 p99.9 × 10 = 5초 |
+| `spring.data.redis.timeout` | 1초 유지 | SET p99.9가 흔들리지 않은 실행(전날 S1 100~300) 8.3~11.2ms, 흔들린 2차 실행 14~29ms, 최대 52.6ms(최종 S1 50b)다. 최대 × 10 = 0.53초로 1초 아래 |
+| Hikari 풀 | 10 유지 | 규칙 조건(pending이 0보다 큰 상태가 1분 넘게 이어짐)이 S1 100~300 RPS에서 성립하지 않았다(1분 최소값의 최대가 0). PostgreSQL CPU 98%는 1코어를 100%로 잰 값이다(11코어 중 약 1코어). 20에서도 외부화 처리량이 늘지 않고 지연만 나빠졌다(실행기 비교). 병목은 커밋 |
+| `MAX_OPERATIONS` | 500 유지 | 규칙의 단독 500 op 배치 p95가 1.5초다. 동시 재연결 5대부터 2.07초로 NFR을 넘고, 100대에서는 배치를 100 op로 줄여도 9.4초라 배치 크기로는 들지 않는다. 동시 재연결의 배치 시간은 단말 sync 계약 후속(제외)이다 |
+| sync 동시 실행 상한 | 구현하지 않음 | 100대 동시 재연결이 대기 초과 없이 39.9초에 수렴. k6는 응답을 60초까지 기다리고 시연 단말은 5초에 끊으므로 실제 단말에는 이 판정이 성립하지 않는다(단말 sync timeout은 제외). 다시 볼 조건과 값은 용량 기준 wiki |
+| 외부화 실행기 크기 | 코어 8 유지, 가상 스레드 불채택 | 실행기 비교 |
+| 실행기 큐 | 무제한 → 12,000, 최대 스레드 8 | 작업당 힙 10~16KB(S1 큐·힙 기울기), 최대 힙 805MB의 25%(201MB) ÷ 16KB ≈ 12,500을 내림. S5의 65초 정지(8,242건)는 버리지 않는다. 최대 스레드를 두지 않으면 큐가 찰 때 Boot가 스레드를 무제한으로 늘린다 |
+| `max-poll-records` | 50 → 40 | 승인 consumer의 레코드 최대 3.7초(deadline 3초 + provider 밖 처리 최대 0.70초) × 40 = 148초. 0.70초는 S1 200·300 RPS 구간 모든 listener의 `spring_kafka_listener_seconds_max` 최대 0.695초다(S4 지연 0은 0.13초). 정상 부하의 최대이고 커넥션 대기·행 잠금(각 3초)이 겹치는 최악은 계산 밖이다. 공식 문서는 아래 |
+| provider 호출 구조 | 동기 유지, deadline 3초 | 범위 조정(구현 시도 뒤) |
+| provider timeout | 3초 | 외부 연동 전략 §4.2. 지금 자리는 가짜 provider 설정(`resilientpos.payment.fake-gateway.deadline`)이고, 실제 PG adapter를 붙이는 작업에서 provider 설정으로 옮긴다. `max-poll-records` 계산이 이 값에 기댄다 |
+| Redisson | 기각, 해제 알림은 직접 둠 | 아래 |
+
+Redisson 기각 기준:
+1. 충족. 기준 부하에서 SET 수와 락 획득 시도 수가 같아 스핀이 없었다(전날 S1 100 RPS 12,102 대 12,103, 200 RPS 20,441 대 20,441, 300 RPS 22,976 대 22,973). 25ms bucket 위로 잡힌 획득(0.1~0.4%)은 첫 SET이 늦은 것이다.
+2. 어겼다. 같은 키 20개 동시에서 SET p99가 바탕의 10배 넘게 올랐다. 2차(50ms 간격)는 2 동시 3.56ms 대 20 동시 5.14ms라 잡음 범위로 봤지만, 10ms 간격의 3차가 18.8ms(바탕 2.3·3.3ms)로 분명히 어겼다. 규칙대로 해제 알림(pub/sub) 대기를 넣었다(범위 조정). 그 뒤에도 p99는 4차 38.0ms, 5차 22.3ms로 바탕(1.0~2.5ms)보다 높다. 다만 p99는 SET 수와 함께 움직이지 않았다(2차 32,690건 5.1ms, 3차 46,649건 18.8ms, 4차 61,266건 38.0ms, 5차 30,728건 22.3ms). 같은 실행의 바탕 지연과 함께 흔들려, p99를 올린 것은 SET 양보다 같은 키 경합 요청 자체와 호스트 부하로 본다(확인하지 않았다). 대기 방식이 줄일 수 있는 SET 양은 해제 알림으로 요청당 5.1번까지 줄었다. 이 기준을 10% 해상도로 다시 판정하려면 호스트 부하가 없는 환경에서 재야 한다.
+3. 충족. 흔들리지 않은 실행의 보유 p99.9 최대 0.50초로 TTL의 1/10 아래다. 과부하에서 보유가 11.61초까지 늘어난 것은 락 블록 안의 커넥션 대기다.
+
+#87 권장 상한: 단말 capacity 10·refill 2/s, 매장 capacity 40·refill 8/s. 하한·격리 조건은 성립하고 상한 조건은 성립하지 않는다(용량 기준 wiki의 "단말·매장 rate limit 권장값"). #102 세션에 근거와 함께 전했다.
+
+### 실행 결과
+- `./gradlew test` 전체: origin/main dbaa09e(#102) 위로 rebase한 52962a2에서 868개 통과(06:29~06:33Z). rebase 전 a6d015f에서는 818개 통과. 리뷰 반영 전 4d3d034에서는 첫 실행의 `UnknownPaymentResolverIntegrationTest`가 `TimeoutException`으로 한 번 실패했고 다시 돌려 810개가 통과했다.
+- `python3 scripts/check_pr.py --base origin/main --worktree`: 개발 중 PASS. 제출 전 `--worktree` 없이도 PASS(일반 27개 파일).
