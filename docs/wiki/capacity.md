@@ -73,7 +73,7 @@
 
 | 조건 | 지켜볼 신호 | 기준 | 그때 할 일 |
 |---|---|---|---|
-| 대기가 흔해진다 | 업무 락(`order:create-lock`, `payment:checkout-lock`)에서 기다린 획득의 비율: `sum(rate(distributed_lock_wait_seconds_count{outcome="waited", lock=~"order:create-lock\|payment:checkout-lock"}[1h])) / sum(rate(distributed_lock_wait_seconds_count{outcome=~"acquired\|waited", lock=~"order:create-lock\|payment:checkout-lock"}[1h]))` | 장애 밖에서 1% 이상이 이어진다 | 순서를 보장하는 대기(Redisson `RFairLock`이나 자체 대기열)나 키별 채널을 본다. 지금 해제 알림은 pod마다 먼저 기다린 요청 하나를 깨운다(모두 깨우면 해제마다 SET이 몰렸다). pod 사이에는 순서를 보장하지 않아 경합이 이어지면 대기 한도까지 밀리는 요청이 생기고, 모든 해제가 모든 pod에 방송된다 |
+| 대기가 흔해진다 | 업무 락(`order:create-lock`, `payment:checkout-lock`)에서 기다린 획득의 비율: `sum(rate(distributed_lock_wait_seconds_count{outcome="waited", lock=~"order:create-lock\|payment:checkout-lock"}[1h])) / sum(rate(distributed_lock_wait_seconds_count{outcome=~"acquired\|waited", lock=~"order:create-lock\|payment:checkout-lock"}[1h]))` | 장애 밖에서 1% 이상이 이어진다 | 순서를 보장하는 대기(Redisson `RFairLock`이나 자체 대기열)나 키별 채널을 본다. 지금 해제 알림은 pod마다 대기열의 맨 앞 하나를 깨운다(모두 깨우면 해제마다 SET이 몰렸다). 다시 시도한 요청은 줄 뒤에 다시 서고 pod 사이에도 순서가 없어 경합이 이어지면 대기 한도까지 밀리는 요청이 생기고, 모든 해제가 모든 pod에 방송된다 |
 | 대기 한도를 넘긴다 | `sum by (lock) (increase(lock_fail_open_total{reason="timeout", lock=~"order:create-lock\|payment:checkout-lock"}[1h]))` | 장애 밖에서 0보다 크다 | 위와 같다. 주기 작업의 락(`payment:unknown-resolve`, `platform:event-publication`)은 pod가 여럿이면 매분 대기 초과가 정상이라 기준에서 뺀다 |
 | 블록이 TTL에 가까워진다 | `histogram_quantile(0.999, sum by (le, lock) (rate(distributed_lock_held_seconds_bucket{lock=~"order:create-lock\|payment:checkout-lock"}[1h])))`, WARN `잠금이 풀기 전에 만료됐다`. 보유 bucket이 250ms 다음 500ms라 그 사이의 p99.9는 보간값이고 `_max`와 함께 본다 | p99.9가 TTL(10초)의 1/10 이상이거나 WARN이 생긴다 | 잡은 쪽이 살아 있는 동안 TTL을 늘린다. Redisson watchdog(lease를 정하지 않고 잡으면 기본 30초 잠금을 계속 늘린다)이나 자체 Lua `PEXPIRE` 갱신 |
 | 길이가 들쭉날쭉한 일을 감싸는 사용처가 생긴다 | 새 `Lock.executeWithLock` 호출 | provider 호출·배치·파일 처리처럼 외부 시간에 묶인 일을 블록에 넣는다 | 위 watchdog 항목과 같다. 그 전에 블록 밖으로 뺄 수 없는지 먼저 본다(지금 규칙은 "락 블록은 외부 호출 없는 짧은 트랜잭션") |
@@ -88,7 +88,7 @@
 
 **측정 판정(2026-10-22).** Redisson은 들이지 않는다. 기각 기준 1·3은 충족했고 기준 2는 어겨서, 규칙대로 해제 알림(pub/sub) 대기를 Spring Data Redis로 직접 넣었다. Redisson의 나머지(watchdog, fencing)는 필요한 사용처가 없다.
 1. 기준 부하에서 실제 대기가 없었다. SET 수와 락 획득 시도 수가 같았다(100 RPS 12,102 대 12,103, 300 RPS 22,976 대 22,973).
-2. 같은 키 20개 동시(S2)에서 SET p99가 대기 방식과 무관하게 바탕의 10배 넘게 올랐다. 10ms 고정 간격은 18.8ms, 알림이 모두 깨우면 38.0ms, 하나만 깨우면 22.3ms였고 바탕은 1.0~2.5ms였다. SET 수는 하나만 깨울 때 요청당 5.1번으로 가장 적다(10ms 고정 간격 8.2번, 모두 깨움 11.3번). p99는 SET 수와 함께 움직이지 않아 경합 요청 자체와 호스트 부하 영향으로 본다. 20 동시에서 대기 초과 fail-open은 2.8%였고 DB unique가 409로 막았다. 2 동시에서 기다린 획득의 대기 p50은 7~10ms다.
+2. 같은 키 20개 동시(S2)에서 SET p99가 대기 방식과 무관하게 바탕의 10배 넘게 올랐다. 10ms 고정 간격은 18.8ms, 알림이 모두 깨우면 38.0ms, 하나만 깨우면 22.3ms였고 바탕은 1.0~2.5ms였다. SET 수는 하나만 깨울 때 요청당 5.1번으로 가장 적다(10ms 고정 간격 8.2번, 모두 깨움 11.3번). p99는 SET 수와 함께 움직이지 않아 경합 요청 자체와 호스트 부하 영향으로 본다. 20 동시에서 대기 초과 fail-open은 2.8%로 10ms 고정 간격(0.3%)보다 많았고 DB unique가 409로 막았다. 같은 실행의 바탕 지연이 더 나빠 호스트 부하가 섞였고, 순서를 지키는 대기열에서 다시 잴 일이다. 2 동시에서 기다린 획득의 대기 p50은 7~10ms다.
 3. 견딜 수 있는 부하의 보유 p99.9는 최대 0.5초로 TTL의 1/10(1초) 아래다. 과부하(400 RPS)에서는 락 블록 안의 커넥션 대기로 보유가 11초까지 늘었는데, 이것은 watchdog이 아니라 용량 문제다.
 
 **도입 이유가 되지 않는 것.**
