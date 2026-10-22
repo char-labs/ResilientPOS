@@ -1,9 +1,13 @@
 package com.resilientpos.platform
 
+import com.tngtech.archunit.core.domain.JavaCall.Predicates.target
+import com.tngtech.archunit.core.domain.JavaClass.Predicates.type
+import com.tngtech.archunit.core.domain.properties.HasOwner.Predicates.With.owner
 import com.tngtech.archunit.core.importer.ClassFileImporter
 import com.tngtech.archunit.core.importer.ImportOption
 import com.tngtech.archunit.lang.syntax.ArchRuleDefinition.classes
 import com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses
+import java.util.regex.Pattern
 import kotlin.test.Test
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
@@ -27,14 +31,16 @@ class RateLimitedExceptionTest {
     @Test
     fun `RateLimitedException은 handler 전에 판정하는 빈도 상한 limiter만 만든다`() {
         val production = ClassFileImporter().withImportOption(ImportOption.Predefined.DO_NOT_INCLUDE_TESTS).importPackages("com.resilientpos")
-        val constructor = arrayOf<Class<*>>(java.lang.Long.TYPE, String::class.java)
+        // 시그니처가 아니라 소유 타입으로 맞춘다. 기본값 인자를 더하면 Kotlin이 합성 생성자를 만들어 시그니처 규칙을 빠져나간다.
+        val construct = target(owner(type(RateLimitedException::class.java)))
 
-        noClasses().that().doNotHaveFullyQualifiedName(LIMITER)
-            .should().callConstructor(RateLimitedException::class.java, *constructor)
+        // limiter 안의 람다·companion 같은 중첩 클래스(`RedisTerminalRateLimiter$…`)도 limiter로 본다.
+        noClasses().that().haveNameNotMatching(Pattern.quote(LIMITER) + "(\\$.*)?")
+            .should().callConstructorWhere(construct)
             .check(production)
-        // 양성 대조. 생성자 시그니처가 바뀌면 위 규칙이 아무것도 맞추지 못한 채 통과하므로 여기서 실패하게 한다.
+        // 양성 대조. limiter의 이름이 바뀌면 위 규칙이 모든 생성을 금지한 채 이 규칙이 실패해 드러난다.
         classes().that().haveFullyQualifiedName(LIMITER)
-            .should().callConstructor(RateLimitedException::class.java, *constructor)
+            .should().callConstructorWhere(construct)
             .check(production)
     }
 
