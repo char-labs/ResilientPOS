@@ -15,16 +15,19 @@ import org.springframework.data.redis.listener.ChannelTopic
 import org.springframework.data.redis.listener.RedisMessageListenerContainer
 import org.springframework.scheduling.concurrent.CustomizableThreadFactory
 import org.springframework.stereotype.Component
+import org.springframework.util.backoff.FixedBackOff
 
 /**
  * 잠금 해제 알림([RedisDistributedLock.RELEASED_CHANNEL])을 구독해 [RedisDistributedLock]에서 기다리는 요청을 바로 깨운다.
  * 구독이 없어도 락은 재시도 간격으로 기다리므로 이 구독은 기다림을 줄일 뿐이다.
  *
- * 기동이 끝난 뒤에 구독한다. Spring Data Redis 4.1.1 `RedisMessageListenerContainer.start`는 구독이 2초 안에 되지 않으면 던져서,
- * 기동 단계에서 시작하면 Redis 없이 앱이 뜨지 않는다. 그 컨테이너는 첫 구독에서 연결하지 못하면 스스로 다시 시도하지 않으므로
- * (`Subscriber.initialize`가 첫 시도의 연결 실패를 그대로 돌려준다) 실패하면 WARN을 남기고 [RESUBSCRIBE_INTERVAL] 뒤 다시 구독한다.
- * 컨테이너가 연결 뒤의 실패를 다시 시도할 때도 [recovery]를 쓴다. 그 실행기가 `ScheduledExecutorService`가 아니면 부른 스레드를 재운다.
- * 받은 메시지는 기다리는 요청을 깨우기만 하므로 수신 스레드에서 바로 처리한다. 기본 실행기는 메시지마다 스레드를 만든다.
+ * 기동이 끝난 뒤 [recovery] 스레드에서 구독한다. Spring Data Redis 4.1.1 `RedisMessageListenerContainer.start`는 구독이 2초 안에 되지 않으면
+ * 던져서, 기동 단계에서 시작하면 Redis 없이 앱이 뜨지 않고 main에서 부르면 그만큼 readiness가 늦는다. 실패하면 WARN을 남기고
+ * [RESUBSCRIBE_INTERVAL] 뒤 다시 구독한다. 다시 시도하는 주체는 이 클래스 하나다. 컨테이너는 첫 시도의 연결 실패는 다시 시도하지 않고
+ * 구독 실패는 스스로 다시 시도하는데, 그 재시도가 이 클래스의 `stop`과 겹치면 끝나지 않는 future를 기다리며 멈춘다. 그래서 컨테이너의
+ * 재시도는 끈다. 구독한 뒤 끊긴 연결은 Lettuce가 다시 연결하며 구독을 되살린다.
+ * 받은 메시지는 기다리는 요청을 깨우기만 하므로 수신 스레드(Lettuce I/O)에서 바로 처리한다. 그 처리에서 막히는 일이나 Redis 호출을 하지 않는다.
+ * 기본 실행기는 메시지마다 스레드를 만든다.
  */
 @Component
 class LockReleaseListener(connectionFactory: RedisConnectionFactory, lock: RedisDistributedLock) :
@@ -39,6 +42,7 @@ class LockReleaseListener(connectionFactory: RedisConnectionFactory, lock: Redis
         setConnectionFactory(connectionFactory)
         setTaskExecutor(SyncTaskExecutor())
         setSubscriptionExecutor(recovery)
+        setRecoveryBackoff(FixedBackOff(0, 0))
         addMessageListener(
             MessageListener { message, _ -> lock.onReleased(String(message.body, Charsets.UTF_8)) },
             ChannelTopic(RedisDistributedLock.RELEASED_CHANNEL),
@@ -46,7 +50,7 @@ class LockReleaseListener(connectionFactory: RedisConnectionFactory, lock: Redis
         afterPropertiesSet()
     }
 
-    override fun onApplicationEvent(event: ApplicationReadyEvent) = subscribe()
+    override fun onApplicationEvent(event: ApplicationReadyEvent) = recovery.execute { subscribe() }
 
     private fun subscribe() {
         if (closed.get()) return
