@@ -25,9 +25,9 @@
 
 - **뜻.** 완료되지 않은 발행 기록 가운데 가장 오래된 것(`event_publication_incomplete_oldest_seconds`)이 1시간을 넘었다. 재전송 작업이 1분마다 다시 보내므로 브로커가 살아 있으면 저절로 나간다. 브로커 장애가 이어지거나, 영영 나가지 못하는 기록이 있다는 뜻이다. 경과 시간은 행이 `FAILED`와 `RESUBMITTED`를 오가도 계속 늘어서, `failed` 개수가 잠깐 0이 되어도 이 알림은 끊기지 않는다.
 - **먼저 볼 것.**
-  1. `max(event_publication_incomplete_oldest_seconds)`가 줄었다가 다시 오르면 새 기록은 나가고 있다. 계속 오르면 같은 기록이 막혀 있다. `max(event_publication_incomplete{status="failed"})`로 막힌 양을 본다.
+  1. `max(event_publication_incomplete_oldest_seconds{application="ResilientPOS"})`가 줄었다가 다시 오르면 새 기록은 나가고 있다. 계속 오르면 같은 기록이 막혀 있다. `max(event_publication_incomplete{application="ResilientPOS", status="failed"})`로 막힌 양을 본다.
   2. [EventPublicationResubmitterNotSucceeding](#eventpublicationresubmitternotsucceeding)이 함께 울렸으면 그 절부터 본다.
-  3. `max by (instance) (increase(event_publication_resubmit_selected_total[1m]))`가 500 가까이에서 줄지 않으면 오래된 행이 한 주기의 읽기 자리(500건)를 모두 차지하고 있다. 락이 정상이면 그 주기를 처음 잡은 인스턴스만 읽으므로 인스턴스별로 본다.
+  3. `max by (instance) (increase(event_publication_resubmit_selected_total{application="ResilientPOS"}[1m]))`가 500 가까이에서 줄지 않으면 오래된 행이 한 주기의 읽기 자리(500건)를 모두 차지하고 있다. 락이 정상이면 그 주기를 처음 잡은 인스턴스만 읽으므로 인스턴스별로 본다.
   4. ERROR 로그 `Listener … not found!`(리스너가 사라진 기록), `Unexpected error occurred in scheduled task`와 역직렬화 예외(역직렬화할 수 없는 기록).
   5. [도메인 모델 §4.3](domain-model.md#43-이벤트-전달과-저장-형식)의 "영영 나가지 못하는 기록" SQL로 `listener_id`·`event_type`별 개수와 `completion_attempts`를 본다.
 - **조치.** 브로커 장애면 브로커를 되살리고 기다린다. 영영 나가지 못하는 기록이면 §4.3의 조치(원인인 리스너·타입을 되살리거나, 버리기로 결정한 기록만 완료 처리)를 따른다.
@@ -46,7 +46,7 @@
   - `UNSUPPORTED_EVENT_SCHEMA_VERSION`: 롤링 배포 중 옛 pod가 새 버전 메시지를 받았다. 배포가 끝난 뒤 그대로 재투입한다([이벤트 계약](event-contract.md) 5절).
   - `error`: 재시도를 모두 썼거나 재시도 목록 밖의 예외(버그, 변환 실패)다.
 - **먼저 볼 것.**
-  1. `sum by (topic, reason) (increase(event_kafka_dead_letter_total[1d]))`로 어느 토픽에 어떤 `reason`이 쌓였는지 본다. counter는 재기동하면 0부터라 오래된 메시지는 목록 API의 `exception`·`exceptionMessage`로 본다.
+  1. `sum by (topic, reason) (increase(event_kafka_dead_letter_total{application="ResilientPOS"}[1d]))`로 어느 토픽에 어떤 `reason`이 쌓였는지 본다. counter는 재기동하면 0부터라 오래된 메시지는 목록 API의 `exception`·`exceptionMessage`로 본다.
   2. 목록 `GET /admin/v1/dead-letters?topic=원토픽.DLT&partition=…`에서 `redrive`와 `dismissal`이 모두 null인 항목이 처리하지 않은 메시지다. `key`가 `orderId`다.
   3. ERROR `DLT로 보냄 topic=… partition=… offset=… key=… reason=… exception=…`의 `trace_id`로 trace를 열어 실패한 consumer span과 예외를 본다.
 - **조치.** 원인을 고친 뒤 재투입한다. 재투입 전에 [이벤트 계약 8절](event-contract.md#8-dlt-재투입-전에-볼-것)을 확인하고, 절차는 [도메인 모델 §4.3](domain-model.md#43-이벤트-전달과-저장-형식)의 "DLT 재투입"을 따른다. 넣지 않기로 한 메시지(불일치 승인, 이미 다른 경로로 처리된 주문, 시험용 메시지)는 같은 절의 폐기 표시(`POST …/dismiss`)로 사유와 함께 남긴다. 둘 다 기록이 남고 이 알림이 풀린다. 재투입했는데 WARN `audit action=DEAD_LETTER_REDRIVE_UNRECORDED`가 남고 이 알림이 풀리지 않으면 재투입 기록이 없는 것이다. 다시 재투입하거나(한 번 더 보내지고 consumer가 멱등으로 견딘다) 그 `cause`를 사유에 적어 폐기한다.
@@ -69,21 +69,21 @@
 
 - **뜻.** 그 인스턴스의 재전송 작업(`EventPublicationResubmitter.resubmitAndPurge`)이 20분 안팎 동안 한 번도 끝까지 성공하지 못했다. 브로커로 보내지 못한 기록이 다시 나가지 않고 완료 기록도 지워지지 않는다. 기동한 뒤 5분은 보지 않는다.
 - **먼저 볼 것.**
-  1. `tasks_scheduled_execution_seconds_count{code_function="resubmitAndPurge"}`의 `outcome="ERROR"`가 늘면 실행이 던지고 있다. `exception` label이 예외 클래스다.
-  2. 아무 outcome도 늘지 않으면 실행이 걸려 있거나 스케줄러가 돌지 않는다. `tasks_scheduled_execution_active_seconds_max{code_function="resubmitAndPurge"}`가 크면 실행이 걸려 있다. 공용 스케줄러 스레드는 둘(`spring.task.scheduling.pool.size`)이라 결과 불명 확정 작업이 길어지면 함께 밀린다.
+  1. `tasks_scheduled_execution_seconds_count{application="ResilientPOS", code_function="resubmitAndPurge"}`의 `outcome="ERROR"`가 늘면 실행이 던지고 있다. `exception` label이 예외 클래스다.
+  2. 아무 outcome도 늘지 않으면 실행이 걸려 있거나 스케줄러가 돌지 않는다. `tasks_scheduled_execution_active_seconds_max{application="ResilientPOS", code_function="resubmitAndPurge"}`가 크면 실행이 걸려 있다. 공용 스케줄러 스레드는 둘(`spring.task.scheduling.pool.size`)이라 결과 불명 확정 작업이 길어지면 함께 밀린다.
   3. ERROR `Unexpected error occurred in scheduled task`와 역직렬화 예외면 역직렬화할 수 없는 기록이 실행을 끊는 것이다(spring-modulith#1904).
 - **조치.** [도메인 모델 §4.3](domain-model.md#43-이벤트-전달과-저장-형식)의 재전송 항목과 "영영 나가지 못하는 기록" 절차를 따른다. 락이 fail-open이어도 작업은 성공으로 끝난다. 이 알림의 원인이 아니다.
 
 ## UnknownPaymentResolverNotSucceeding
 
 - **뜻.** 그 인스턴스의 결과 불명 확정 작업(`UnknownPaymentResolver.resolveUnknown`)이 20분 안팎 동안 한 번도 성공하지 못했다. 결과 불명 결제가 확정되지 않고, 개수 gauge(`payment_attempt_unknown`·`payment_attempt_reconciliation_pending`)와 경과 시간 gauge(`payment_attempt_resolution_oldest_seconds`·`payment_attempt_reconciliation_pending_oldest_seconds`)가 마지막 성공값에 멈춘다. 모든 인스턴스가 멈추면 경과 시간이 늘지 않아 [UnknownPaymentResolutionStuck](#unknownpaymentresolutionstuck)이 늦게 울리거나 울리지 않는다. 한 건의 실패는 작업을 실패시키지 않는다(ERROR 로그만 남긴다). 실패는 대상 조회나 개수 세기가 던진 경우다.
-- **먼저 볼 것.** `tasks_scheduled_execution_seconds_count{code_function="resolveUnknown"}`의 `outcome="ERROR"`와 `exception`, 스케줄러 ERROR 로그, DB 상태.
+- **먼저 볼 것.** `tasks_scheduled_execution_seconds_count{application="ResilientPOS", code_function="resolveUnknown"}`의 `outcome="ERROR"`와 `exception`, 스케줄러 ERROR 로그, DB 상태.
 - **조치.** 원인(DB)을 고친다. 다음 주기(1분)에 성공하면 풀린다.
 
 ## KafkaDeadLetterMetricNotSucceeding
 
 - **뜻.** 그 인스턴스의 미처리 DLT 갱신 작업(`UnhandledDeadLetterMetrics.countUnhandled`)이 20분 안팎 동안 한 번도 성공하지 못했다. 갱신이 실패하는 동안 `event_kafka_dead_letter_unhandled`는 마지막 성공값에 멈추고 마지막 성공 시각(`event_kafka_dead_letter_unhandled_refreshed_seconds`)도 멈춘다. 기동한 뒤 한 번도 성공하지 못했으면 값은 `NaN`이다. 다른 인스턴스가 세고 있으면 [KafkaDeadLetter](#kafkadeadletter)는 멈춘 인스턴스의 값을 5분 뒤부터 보지 않으므로 알림은 맞게 동작한다. 모든 인스턴스가 이러면 마지막 값으로 유지되어 새 DLT에 울지 못한다. 기동한 뒤 5분은 보지 않는다. severity는 warning이다. 한 인스턴스의 실패는 DLT 알림을 막지 않고, 모든 인스턴스가 실패하는 것은 브로커·DB 전체 장애라 다른 신호가 함께 나온다.
-- **먼저 볼 것.** `tasks_scheduled_execution_seconds_count{code_function="countUnhandled"}`의 `outcome="ERROR"`와 `exception`, 스케줄러 ERROR 로그 `Unexpected error occurred in scheduled task`의 예외.
+- **먼저 볼 것.** `tasks_scheduled_execution_seconds_count{application="ResilientPOS", code_function="countUnhandled"}`의 `outcome="ERROR"`와 `exception`, 스케줄러 ERROR 로그 `Unexpected error occurred in scheduled task`의 예외.
   - Kafka `TimeoutException`: 브로커에 닿지 못한다. 그동안 새 DLT도 재투입도 없어 마지막 값이 실제와 같다. 브로커를 되살린다.
   - `TopicAuthorizationException`·`ClusterAuthorizationException`: 앱 principal에 DLT 토픽의 Describe 권한이 없다(운영 Kafka ACL). `*.DLT`에 Read·Describe를 준다([platform-operator-dlt-redrive](../spec/2026-10-21-platform-operator-dlt-redrive.md) 결정 2의 배포 확인 항목).
   - DB 예외: 재투입·폐기 기록을 세지 못한다. DB를 본다.
@@ -92,8 +92,8 @@
 ## UnknownPaymentResolutionStuck
 
 - **뜻.** reconciliation으로 넘기지 않은 결과 불명 승인 시도 가운데 가장 오래된 것이 만들어진 지 2시간이 넘었다(`payment_attempt_resolution_oldest_seconds`, 시도의 `created_at`부터). 정상이면 한 건은 조회 상한 60회(약 1시간) 안에 확정되거나 넘어간다. 작업이 멈췄거나, 조회나 확정이 건마다 실패하고 있다. 경과 시간은 DB에서 다시 세므로 재기동해도 첫 갱신 뒤 5분이면 다시 운다. pod가 하나면 재기동하는 동안 잠깐 풀렸다가 다시 운다.
-- **먼저 볼 것.** [UnknownPaymentResolverNotSucceeding](#unknownpaymentresolvernotsucceeding)이 함께 울렸는지. `max(payment_attempt_unknown) - max(payment_attempt_reconciliation_pending)`로 몇 건인지. ERROR `결과 불명 결제 확정에 실패했다 paymentId=…`(건마다 실패), WARN `조회로도 결과를 확인하지 못했다 … queryCount=…`의 `queryCount`가 오르는지(조회는 돌고 있다). `payment.attempt-created.DLT`에 오래 머물다 늦게 재투입된 시도는 만들어진 지 오래라 바로 이 알림에 걸린다. 그 시도는 조회 상한(약 1시간) 안에 넘어가면 풀린다.
-- **조치.** 작업이나 건별 실패의 원인을 고친다. 결제 상태는 작업이 확정한다. 확정됐는데 풀리지 않으면 `max by (instance) (payment_attempt_resolution_oldest_seconds)`로 인스턴스별 값을 본다. 작업이 멈춘 인스턴스는 경과 시간이 마지막 성공값에 멈춰 `max`를 붙잡는다. [UnknownPaymentResolverNotSucceeding](#unknownpaymentresolvernotsucceeding)이 가리키는 인스턴스를 고치거나 재시작한다. [ReconciliationPendingUnresolved](#reconciliationpendingunresolved)도 같다.
+- **먼저 볼 것.** [UnknownPaymentResolverNotSucceeding](#unknownpaymentresolvernotsucceeding)이 함께 울렸는지. `max(payment_attempt_unknown{application="ResilientPOS"}) - max(payment_attempt_reconciliation_pending{application="ResilientPOS"})`로 몇 건인지. ERROR `결과 불명 결제 확정에 실패했다 paymentId=…`(건마다 실패), WARN `조회로도 결과를 확인하지 못했다 … queryCount=…`의 `queryCount`가 오르는지(조회는 돌고 있다). `payment.attempt-created.DLT`에 오래 머물다 늦게 재투입된 시도는 만들어진 지 오래라 바로 이 알림에 걸린다. 그 시도는 조회 상한(약 1시간) 안에 넘어가면 풀린다.
+- **조치.** 작업이나 건별 실패의 원인을 고친다. 결제 상태는 작업이 확정한다. 확정됐는데 풀리지 않으면 `max by (instance) (payment_attempt_resolution_oldest_seconds{application="ResilientPOS"})`로 인스턴스별 값을 본다. 작업이 멈춘 인스턴스는 경과 시간이 마지막 성공값에 멈춰 `max`를 붙잡는다. [UnknownPaymentResolverNotSucceeding](#unknownpaymentresolvernotsucceeding)이 가리키는 인스턴스를 고치거나 재시작한다. [ReconciliationPendingUnresolved](#reconciliationpendingunresolved)도 같다.
 - **하지 말 것.** `t_payment_attempt`의 상태를 DB에서 직접 고치지 않는다. 승인 이벤트가 나가지 않아 주문이 `PAID`가 되지 않는다.
 
 ## ReconciliationPendingUnresolved
@@ -112,9 +112,9 @@
 ## LockFailOpen
 
 - **뜻.** 락(`platform.Lock`)이 잡지 못하고 그냥 진행하는 일이 10분 넘게 이어진다. 주기 작업 락(`platform:event-publication`, `payment:unknown-resolve`)의 대기 초과는 보지 않는다. pod가 여럿이면 늦은 pod가 앞 pod의 긴 블록(회복 중 재전송, PG 조회)을 기다리다 매분 대기 한도를 넘기는 것이 정상이다. 그 락의 Redis 오류는 본다. 정합성은 DB 제약이 지키므로 데이터는 깨지지 않는다. 대신 같은 요청이 겹치면 늦은 쪽이 앞 결과를 받지 못하고 경합 오류(409)로 끝나고, 주기 작업은 pod 사이에서 겹쳐 돈다. 한 번만 일어난 fail-open은 이 알림에 잡히지 않을 수 있다.
-  - `reason="error"`: Redis에 닿지 못한다. [OwnerSessionStoreUnavailable](#ownersessionstoreunavailable)도 함께 울릴 것이다.
+  - `reason="error"`: Redis에 닿지 못한다. 점주 요청이 이어지면 [OwnerSessionStoreUnavailable](#ownersessionstoreunavailable)도 함께 울 수 있다.
   - `reason="timeout"`: 누군가 같은 키를 대기 한도(1.5초) 넘게 쥐고 있다. `order:create-lock`·`payment:checkout-lock`이면 같은 주문의 요청이 몰리거나 락 블록 안에서 커넥션을 기다린다(#77의 400 RPS에서 보유가 11초까지 늘었다).
-- **먼저 볼 것.** WARN `잠금 없이 진행한다(Redis 오류) key=…`나 `잠금 없이 진행한다(대기 1500ms 초과) key=…`의 key. Redis 상태. 대기 초과면 `histogram_quantile(0.999, sum by (le, lock) (rate(distributed_lock_held_seconds_bucket[5m])))`로 보유 시간을 본다.
+- **먼저 볼 것.** WARN `잠금 없이 진행한다(Redis 오류) key=…`나 `잠금 없이 진행한다(대기 1500ms 초과) key=…`의 key. Redis 상태. 대기 초과면 `histogram_quantile(0.999, sum by (le, lock) (rate(distributed_lock_held_seconds_bucket{application="ResilientPOS"}[5m])))`로 보유 시간을 본다.
 - **조치.** Redis 장애면 Redis를 되살린다. timeout이면 긴 블록의 원인(DB 지연, 커넥션 대기)을 본다. 대기 한도·TTL과 Redisson을 다시 볼 조건은 [용량 기준](capacity.md#redisson이-필요해지는-시점)에 있다.
 
 ## SyncConflict
@@ -147,10 +147,10 @@
 
 - **뜻.** 단말 경로 하나(`uri` label)의 5분 p95가 원문 목표를 10분 넘게 넘는다. 목표는 주문 생성(`POST /v1/orders`) 200ms, checkout(`POST /v1/orders/{orderId}/checkout`) 150ms, sync(`POST /v1/terminals/{terminalId}/sync`) 2초다([시스템 설계 §7](../references/02_System_Design.md#7-nfr-and-observability)). checkout은 승인을 Kafka 뒤로 넘겨 PG를 부르지 않는다. sync의 2초는 가장 큰 배치(500 op)의 목표라, sync가 울면 bucket 보간 오차 안에서 배치 크기와 상관없이 요청의 5% 넘게 최악 목표보다 느리다(분위수는 bucket 안을 고르게 보간한 추정값이다). 429는 빼고 보고, 5분에 그 uri 요청이 20건 미만이면 판정하지 않는다. 5분보다 짧은 튐(단말 동시 재연결)에는 울지 않는다. 앞 단계가 실패하면 뒤 단계 uri는 요청이 없어 판정하지 않는다(주문 생성이 실패하는 동안 checkout). 근거는 [slo-alert-baseline](../spec/2026-10-23-slo-alert-baseline.md) 결정 2다.
 - **먼저 볼 것.**
-  1. 어느 pod인지 본다. `histogram_quantile(0.95, sum by (le, instance) (rate(http_server_requests_seconds_bucket{uri="울린 uri", method="POST", status!="429"}[5m])))`. 한 pod만 느리면 그 pod의 CPU·힙·GC를 본다.
-  2. 커넥션 대기. `max(hikaricp_connections_pending)`와 `max(hikaricp_connections_acquire_seconds_max)`. #77에서 무너진 단계(400 RPS)는 커넥션 대기가 먼저 쌓였다([용량 기준](capacity.md#인스턴스-하나의-용량)).
-  3. 부하. 인스턴스 하나의 용량은 단말 요청 전체의 혼합 RPS라 `sum(rate(http_server_requests_seconds_count{uri=~"/v1/.*", status!="429"}[5m]))`를 [용량 기준](capacity.md#인스턴스-하나의-용량)의 인스턴스 하나 용량 × pod 수와 견준다.
-  4. 느린 실패인지 본다. `sum by (status) (rate(http_server_requests_seconds_count{uri="울린 uri"}[5m]))`에 500이 있으면 커넥션 획득 대기(3초 뒤 실패)가 p95를 올리는 것일 수 있고 [HttpErrorBudgetBurn](#httperrorbudgetburn)도 함께 운다.
+  1. 어느 pod인지 본다. `histogram_quantile(0.95, sum by (le, instance) (rate(http_server_requests_seconds_bucket{application="ResilientPOS", uri="울린 uri", method="POST", status!="429"}[5m])))`. 한 pod만 느리면 그 pod의 CPU·힙·GC를 본다.
+  2. 커넥션 대기. `max(hikaricp_connections_pending{application="ResilientPOS"})`와 `max(hikaricp_connections_acquire_seconds_max{application="ResilientPOS"})`. #77에서 무너진 단계(400 RPS)는 커넥션 대기가 먼저 쌓였다([용량 기준](capacity.md#인스턴스-하나의-용량)).
+  3. 부하. 인스턴스 하나의 용량은 단말 요청 전체의 혼합 RPS라 `sum(rate(http_server_requests_seconds_count{application="ResilientPOS", uri=~"/v1/.*", status!="429"}[5m]))`를 [용량 기준](capacity.md#인스턴스-하나의-용량)의 인스턴스 하나 용량 × pod 수와 견준다.
+  4. 느린 실패인지 본다. `sum by (status) (rate(http_server_requests_seconds_count{application="ResilientPOS", uri="울린 uri"}[5m]))`에 500이 있으면 커넥션 획득 대기(3초 뒤 실패)가 p95를 올리는 것일 수 있고 [HttpErrorBudgetBurn](#httperrorbudgetburn)도 함께 운다.
   5. sync만 울면 큰 배치가 몰렸는지 본다. INFO `sync 배치 처리 terminalId=…`의 항목 수와 같은 시각의 단말 수.
   6. Tempo에서 그 uri의 느린 trace를 열어 긴 span(DB 문장, 커넥션 획득, 락 대기)을 찾는다. 락 대기는 `distributed_lock_wait_seconds`로도 본다.
 - **조치.** 부하가 용량을 넘으면 pod를 늘린다. 이벤트 외부화 상한은 DB 커밋에 묶여 pod를 늘려도 풀리지 않는다([용량 기준](capacity.md#인스턴스-하나의-용량)). DB 지연이면 DB를 본다. 배포 직후 시작됐으면 그 배포를 의심한다.
@@ -160,7 +160,7 @@
 
 - **뜻.** 단말 API(`/v1/**`)의 5xx가 오류 예산을 빠르게 쓰고 있다. SLO는 원문 "주문 API 가용성 99.9%"를 30일 예산으로 둔 것이다. 1시간과 5분 창이 모두 1.44%(예산의 2%를 1시간에 씀)를 넘거나, 6시간과 30분 창이 모두 0.6%(예산의 5%를 6시간에 씀)를 넘으면 운다(Google SRE Workbook "Alerting on SLOs"). 429(빈도 상한의 정상 거절)는 분모에서도 빼고, 409와 그 밖의 4xx는 실패로 세지 않는다. 긴 창(1시간·6시간)의 5xx가 3건보다 적으면 그 쌍을 판정하지 않는다(Workbook 저트래픽 절의 최소 실패 건수). 실패 2건까지는 울지 않고, 트래픽이 적은 영업 외 시간에도 3건 넘게 실패하고 비율이 배수를 넘으면 운다. 밤에 20건 가운데 3건이 실패해도 critical이 운다. 3에는 측정 근거가 없다. 서버가 끝낸 요청만 세므로 클라이언트가 먼저 끊은 요청과 ingress·LB의 5xx는 들지 않는다. 원인이 멈추면 짧은 창이 깨끗해질 때 풀린다. 큰 장애 뒤에는 30분 창 때문에 30분쯤 더 울 수 있다. 근거는 [slo-alert-baseline](../spec/2026-10-23-slo-alert-baseline.md) 결정 3·4이고, 실패 건수 하한은 [slo-alert-followups](../spec/2026-10-23-slo-alert-followups.md) 결정 9다.
 - **먼저 볼 것.**
-  1. `sum by (uri, status) (rate(http_server_requests_seconds_count{uri=~"/v1/.*", status=~"5.."}[5m]))`로 어느 경로의 어느 상태인지 본다. 어느 쌍이 울었는지는 창마다 실패율을 본다. `sum(rate(http_server_requests_seconds_count{uri=~"/v1/.*", status=~"5.."}[1h])) / sum(rate(http_server_requests_seconds_count{uri=~"/v1/.*", status!="429"}[1h]))`에서 `[1h]`를 `[5m]`·`[6h]`·`[30m]`으로 바꿔 1.44%(1시간·5분)와 0.6%(6시간·30분)에 견준다. 5분 창이 이미 깨끗한데 울고 있으면 30분 창이 빠지기를 기다리는 중이다.
+  1. `sum by (uri, status) (rate(http_server_requests_seconds_count{application="ResilientPOS", uri=~"/v1/.*", status=~"5.."}[5m]))`로 어느 경로의 어느 상태인지 본다. 어느 쌍이 울었는지는 창마다 실패율을 본다. `sum(rate(http_server_requests_seconds_count{application="ResilientPOS", uri=~"/v1/.*", status=~"5.."}[1h])) / sum(rate(http_server_requests_seconds_count{application="ResilientPOS", uri=~"/v1/.*", status!="429"}[1h]))`에서 `[1h]`를 `[5m]`·`[6h]`·`[30m]`으로 바꿔 1.44%(1시간·5분)와 0.6%(6시간·30분)에 견준다. 5분 창이 이미 깨끗한데 울고 있으면 30분 창이 빠지기를 기다리는 중이다.
   2. Loki에서 `{service_name="ResilientPOS", level="ERROR"} |= "errorCode=INTERNAL_ERROR"`의 예외를 본다. `Connection is not available, request timed out`이면 커넥션 풀이 비었다. #77에서 무너진 단계(400 RPS)의 500은 모두 이것이었다.
   3. 함께 운 알림. [HttpLatencyAboveTarget](#httplatencyabovetarget)이 함께 울면 과부하나 DB 지연일 가능성이 크다. 지연 없이 500만 나면 배포한 코드의 버그를 의심한다.
 - **조치.** 원인(과부하, DB, 배포)을 고친다. 배포 직후 시작됐으면 이전 버전으로 되돌린다. 과부하면 [HttpLatencyAboveTarget](#httplatencyabovetarget)의 조치를 따른다.
