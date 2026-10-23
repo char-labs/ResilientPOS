@@ -92,6 +92,7 @@
 
 ## 한계
 - 6시간에 167건(시간당 약 28건)보다 적은 트래픽에서는 요청이 전부 실패해도 오류율 알림이 울리지 않고, 시간당 70건보다 적으면 1시간 쌍이 판정하지 않는다. 지연 규칙도 5분에 20건 미만이면 판정하지 않는다. 그 시간대의 전체 장애는 `ResilientPosMetricsAbsent`(앱이 내려갔을 때)만 잡는다. 시간당 70~138건이면 같은 5분 안의 실패 2건으로 critical이 운다(결정 4).
+- 앞 단계가 실패하는 장애에서는 뒤 단계 uri의 요청이 사라져 하한 아래로 떨어지고, 그 uri의 지연은 판정하지 않는다. 주문 생성이 실패하면 checkout이 그렇다(compose 실측). 그때는 앞 단계의 지연·오류율 알림이 운다.
 - 서버가 끝낸 요청만 센다. 클라이언트가 먼저 끊은 요청(시연 단말은 sync를 5초에 끊는다), ingress·LB의 502·504, Tomcat 큐에서 거절된 요청은 오류율에 들지 않는다. 끝낸 요청이 느리면 지연 규칙이 덮는다. 나머지는 synthetic probe·edge 지표의 일이다(제외).
 - 인증에 실패한 단말 무리의 401은 빈도 상한(인증 뒤에 돈다)에 막히지 않고 빨리 끝나, 429처럼 지연 p95를 낮추고 오류율 분모를 키운다. edge의 요청 상한에 기댄다([관측성](../wiki/observability.md) 노출 범위 항목).
 - 재전송이 상한에 붙어 줄지 않는 막힘은 `EventPublicationOverdue`가 선택 건수 알림보다 약 35분 늦게 잡는다(결정 6).
@@ -141,6 +142,7 @@
 - 개발 컨텍스트는 "기준선으로 정하는 알림 규칙과 그 시작값 판정" 하나다. 운영 코드·metric 변경이 없다.
 - 따로 둔 것: 재연결 시각 수렴 metric, 시작값을 바꾸는 측정, 발송 경로(제외).
 - 겹침 확인(2026-10-23, origin/main 63b73bc): 열린 PR은 #94(`build.gradle.kts`, `docs/wiki/domain-model.md`, `EventPublicationResubmitter.kt`와 그 테스트, 그 spec)뿐이고 이 PR의 경로와 겹치지 않는다. 진행 중인 `feature/terminal-concurrency-limit`(#101)은 spec(e8cdf2e) 결정 7에서 알림을 두지 않기로 해 규칙 파일은 겹치지 않고, `observability.md`(단말 빈도 상한 항목)와 `capacity.md`가 이 PR과 다른 절에서 겹친다. 먼저 머지된 쪽 위로 rebase한다. 그 PR의 동시 요청 거절도 429라 이 PR의 오류율 정의(429 제외)와 맞는다. `fix/boot-4-1-2`는 `build.gradle.kts`라 겹치지 않는다.
+- rebase(2026-10-23, origin/main 0cb9b93): 그사이 #111(Boot 4.1.2)과 #94(Modulith 2.1.2)가 머지됐다. 두 PR은 이 PR의 경로를 건드리지 않아 충돌이 없었다. #94가 고친 `EventPublicationResubmitter`의 재전송 counter 이름, 배치 500건, 작업 이름(`resubmitAndPurge`), 락 키는 그대로라 결정 6과 생존 규칙의 전제가 바뀌지 않는다. 열린 PR은 없다.
 
 ## TDD 검증 기록
 업무 동작 변경이 아니라 알림 규칙 변경이다. 규칙은 promtool 시나리오를 먼저 두고 실패를 본 뒤 고친다.
@@ -153,4 +155,32 @@
 | `AlertRulesTest` 규칙 수 18(인수 조건 7) | `./gradlew test --tests 'com.resilientpos.platform.AlertRulesTest'` 2개 실패: `SUCCESS: 16 rules found` 단언, runbook에 없는 절 `httplatencyabovetarget`·`httperrorbudgetburn` | 단언을 18로, runbook 두 절 추가 뒤 `AlertRulesTest` 2개·`ObservabilityConfigurationTest` 5개 통과 | `./gradlew test` 전체 905개 통과(실패 0) |
 
 ## 결과
-개발 전 작성. 개발 후 실행 결과와 변경 이유를 추가한다.
+- 규칙: `HttpLatencyAboveTarget`(warning)과 `HttpErrorBudgetBurn`(critical)을 더해 규칙이 18개다. `LockFailOpen`은 (주기 작업 락, `timeout`) 쌍만 뺀다. 발행 지연·consumer lag 주석은 시작값 판정대로 바꿨다. 다른 시작값은 바꾸지 않았다(결정 7).
+- 넣지 않은 알림: 수렴 시간과 재전송 선택 건수(결정 6). 관측성 wiki의 "아직 없는 것"이 그 이유와 다시 볼 조건을 적는다.
+- 검증: promtool 시나리오가 `SUCCESS`이고, 규칙에 결함 42종을 하나씩 넣어 41종이 실패했다(TDD 검증 기록). origin/main 0cb9b93 위로 rebase한 뒤 `./gradlew test` 전체 905개가 통과했다(실패 0). `check_pr.py`가 `--worktree`로, 제출 전에는 `--worktree` 없이 통과했다.
+- 리뷰: `resilientpos-multi-review`를 Claude·Codex로 돌렸다(Gemini는 CLI가 없어 미실행). 막는 결함은 없었다. 반영한 것은 목표·하한·배수의 경계 시나리오, 창마다의 선택자 판별, `LockFailOpen`의 `unless` 식, 저트래픽 한계 문구, 재전송 제외 근거 정정(35분 차이), 서버 쪽 SLI와 401의 한계, runbook의 진단 조회와 Hikari 문장이다. 반영하지 않은 것은 셋이다. 진단 PromQL의 `application` 필터는 runbook 전체의 관례를 따랐다. 기존 `LockFailOpen` 절의 "함께 울 것이다" 문장은 이 PR이 쓴 줄이 아니다. summary의 `$value`는 시나리오가 값까지 맞춰야 해 넣지 않았다.
+
+### compose 실측(2026-10-23)
+- 환경: 공유 compose 스택(`name: resilientpos`)이다. 앱은 다른 worktree가 2026-10-22 15:30에 빌드한 이미지이고, HTTP metric과 label은 main과 같다. 그 이미지에 #108의 미처리 DLT 갱신 작업이 없어 `KafkaDeadLetterMetricNotSucceeding`이 내내 울었고, 이 실측과는 무관하다. lgtm의 Prometheus는 다른 worktree 경로의 규칙 파일을 싣고 있다. 그래서 lgtm을 다시 만들지 않고, 같은 네트워크(`resilientpos_default`)에 이 브랜치의 `alerts.yaml`(4c1a54c)을 싣는 `prom/prometheus:v3.15.0` 컨테이너를 따로 띄웠다. 그 컨테이너가 `app:8080`을 15초마다 scrape하고 15초마다 평가했다. 상태는 그 컨테이너 안에서 `/api/v1/alerts`로 읽었다.
+- 부하: `k6 run -e RATE=10 -e STORES=15 -e SYNC_VUS=40 -e HTTP_VUS=20 -e DURATION=55m load-test/s1-baseline.js`(k6 v2.2.0). sync 초당 8건, 생성과 checkout 초당 1건씩이다. 55분을 채우고 07:52:53Z에 끝나 그 뒤로는 트래픽이 없었다. 오류율 알림의 해소는 30분 창에서 마지막 실패가 빠지는 시각으로 정해져 영향이 없다.
+- 장애: PostgreSQL 컨테이너를 07:06:07Z에 멈추고 07:41:47Z에 다시 띄웠다. 공유 인프라라 사용자가 직접 실행했다. 다른 세션(#101, Boot 4.1.2)에 미리 확인했다. 정지 동안 커넥션 획득이 3초 뒤 실패해 단말 요청이 모두 500이었다(5분 p95 3.20초).
+- 호스트: load average가 12~167로 흔들렸다(다른 세션 작업과 이 브랜치의 `./gradlew test`). 장애 전 07:05Z의 5분 p95는 생성 1.06초, checkout 0.52초였다.
+
+| 시각(UTC) | 일 | 알림 |
+|---|---|---|
+| 06:57:49~06:58:04 | 오래 쉰 앱의 첫 요청 | 생성·checkout pending, 15초 뒤 풀림 |
+| 06:58:19~07:01:51 | 호스트 부하(5분 평균 load 76) | 생성·checkout pending, 10분이 차기 전에 풀림 |
+| 07:04:21 | 호스트 부하(load 167) | 생성·checkout pending |
+| 07:06:07 | PostgreSQL 정지 | |
+| 07:06:21 | 첫 평가 | `HttpErrorBudgetBurn` firing(정지 14초 뒤). sync pending |
+| 07:09:04 | 주문 생성이 실패해 checkout 요청이 없어짐(5분 20건 미만) | checkout pending 풀림 |
+| 07:14:23 | | 생성 firing(07:04:21 pending부터 10분. 시작은 호스트 부하였다) |
+| 07:16:24 | | sync firing(정지 뒤 pending부터 10분) |
+| 07:20:00 | | 실패율 1시간 60.3%, 5분 100%, 30분 60.3% |
+| 07:41:47 | PostgreSQL 재시작 | |
+| 07:42:28~07:45:31 | 재기동 직후 checkout | checkout pending 뒤 풀림 |
+| 07:47:03 | 5분 창이 깨끗해짐. 5분 p95 생성·checkout 88ms, sync 316ms | 지연 알림 모두 풀림(재시작 5분 16초 뒤) |
+| 08:12:02 | 30분 창에서 마지막 실패(07:41:47)가 빠짐 | `HttpErrorBudgetBurn` 풀림(재시작 30분 15초 뒤) |
+
+- 판정: 두 새 규칙이 실제 장애에서 firing하고 장애를 걷은 뒤 풀렸다(인수 조건 8). 지연 알림은 창 5분 뒤에, 오류율 알림은 30분 창(6시간 쌍) 뒤에 풀렸다. 결정 3의 "큰 장애 뒤에는 30분쯤 더 운다"와 같다.
+- 드러난 것: 장애가 없어도 호스트 부하만으로 생성·checkout이 여러 번 pending이 됐고, 그 가운데 10분을 채운 것은 없었다. 장애 전 마지막 pending(07:04:21)은 장애와 이어져 생성 firing이 정지 8분 뒤로 당겨졌다. 앞 단계가 실패하면 뒤 단계 uri가 판정에서 빠지는 것은 한계 절에 더했다.
