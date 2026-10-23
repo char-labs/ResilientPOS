@@ -7,6 +7,8 @@ import com.resilientpos.terminal.TerminalFixtures.TOKEN
 import com.resilientpos.terminal.TerminalId
 import com.resilientpos.terminal.TerminalManagement
 import com.resilientpos.terminal.internal.adapter.redis.RedisTerminalRateLimiter
+import com.resilientpos.terminal.internal.adapter.web.TerminalInFlightLimiter.Kind
+import java.util.concurrent.Callable
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -16,7 +18,9 @@ import org.junit.jupiter.api.extension.ExtendWith
 import org.mockito.BDDMockito.given
 import org.mockito.BDDMockito.willThrow
 import org.mockito.ArgumentMatchers.anyString
+import org.mockito.Mockito.inOrder
 import org.mockito.Mockito.never
+import org.mockito.Mockito.times
 import org.mockito.Mockito.verifyNoInteractions
 import org.mockito.Mockito.verify
 import org.springframework.boot.test.system.CapturedOutput
@@ -26,18 +30,22 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.ResultActionsDsl
 import org.springframework.test.web.servlet.get
+import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.asyncDispatch
+import org.springframework.test.web.servlet.result.MockMvcResultMatchers
 import org.springframework.web.bind.annotation.GetMapping
+import org.springframework.web.bind.annotation.PathVariable
 import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RestController
 
 /** 인터셉터의 헤더 해석을 테스트 전용 v1 Controller로 검사한다. 응답 변환은 실제 `ApiControllerAdvice`를 거친다. */
-@WebMvcTest(InterceptorTestController::class)
+@WebMvcTest(InterceptorTestController::class, InterceptorSyncTestController::class)
 @ExtendWith(OutputCaptureExtension::class)
-@MockitoBean(types = [TerminalManagement::class, RedisTerminalRateLimiter::class])
+@MockitoBean(types = [TerminalManagement::class, RedisTerminalRateLimiter::class, TerminalInFlightLimiter::class])
 class TerminalAuthenticationInterceptorTest(
     private val mockMvc: MockMvc,
     private val terminals: TerminalManagement,
     private val rateLimiter: RedisTerminalRateLimiter,
+    private val inFlight: TerminalInFlightLimiter,
 ) {
 
     private val terminal = AuthenticatedTerminal(TerminalId(UUID.randomUUID()), StoreId(UUID.randomUUID()))
@@ -47,8 +55,8 @@ class TerminalAuthenticationInterceptorTest(
         given(terminals.authenticate(TOKEN)).willReturn(terminal)
     }
 
-    private fun get(authorization: String): ResultActionsDsl =
-        mockMvc.get("/v1/test-interceptor") { header("Authorization", authorization) }
+    private fun get(authorization: String, path: String = "/v1/test-interceptor"): ResultActionsDsl =
+        mockMvc.get(path) { header("Authorization", authorization) }
 
     @Test
     fun `Bearer 스킴은 대소문자를 구분하지 않는다`() {
@@ -82,6 +90,7 @@ class TerminalAuthenticationInterceptorTest(
 
         verify(terminals, never()).authenticate(anyString())
         verifyNoInteractions(rateLimiter)
+        verifyNoInteractions(inFlight) // characterization: 인증 실패는 처음부터 자리를 잡지 않는다
     }
 
     @Test
@@ -92,6 +101,7 @@ class TerminalAuthenticationInterceptorTest(
         }
 
         verifyNoInteractions(rateLimiter)
+        verifyNoInteractions(inFlight)
     }
 
     @Test
@@ -116,6 +126,87 @@ class TerminalAuthenticationInterceptorTest(
         assertFalse(logged.contains(RateLimitedException::class.java.name), "예외 줄이 찍혔다")
         assertFalse(logged.contains(TOKEN), "토큰 값(Authorization 헤더 값)이 출력에 남았다")
     }
+
+    @Test
+    fun `성공 요청은 동시 상한 빈도 상한 Controller 순서로 지나고 끝나면 REQUEST 자리를 한 번 푼다`() {
+        InterceptorTestController.calls = 0
+
+        get("Bearer $TOKEN").andExpect { status { isOk() } }
+
+        inOrder(inFlight, rateLimiter).apply {
+            verify(inFlight).acquire(terminal, Kind.REQUEST)
+            verify(rateLimiter).acquire(terminal)
+        }
+        assertEquals(1, InterceptorTestController.calls)
+        verify(inFlight, times(1)).release(terminal, Kind.REQUEST)
+    }
+
+    @Test
+    fun `단말 sync 경로 패턴은 SYNC 묶음으로 자리를 잡고 푼다`() {
+        mockMvc.get("/v1/terminals/${terminal.terminalId.value}/sync") { header("Authorization", "Bearer $TOKEN") }
+            .andExpect { status { isOk() } }
+
+        verify(inFlight).acquire(terminal, Kind.SYNC)
+        verify(inFlight).release(terminal, Kind.SYNC)
+        verify(inFlight, never()).acquire(terminal, Kind.REQUEST)
+    }
+
+    @Test
+    fun `동시 상한이 거절하면 429와 Retry-After 1이고 Controller와 빈도 limiter와 release를 부르지 않는다`() {
+        willThrow(RateLimitedException(1, "kind=request")).given(inFlight).acquire(terminal, Kind.REQUEST)
+        InterceptorTestController.calls = 0
+
+        get("Bearer $TOKEN").andExpect {
+            status { isTooManyRequests() }
+            header { string("Retry-After", "1") }
+            jsonPath("$.error.errorCode") { value("RATE_LIMITED") }
+        }
+
+        assertEquals(0, InterceptorTestController.calls, "거절된 요청이 Controller에 닿았다")
+        verifyNoInteractions(rateLimiter)
+        verify(inFlight, never()).release(terminal, Kind.REQUEST)
+    }
+
+    @Test
+    fun `빈도 상한이 거절하면 잡은 자리를 푼다`() {
+        willThrow(RateLimitedException(2, "scope=terminal")).given(rateLimiter).acquire(terminal)
+
+        get("Bearer $TOKEN").andExpect { status { isTooManyRequests() } }
+
+        verify(inFlight).acquire(terminal, Kind.REQUEST)
+        verify(inFlight, times(1)).release(terminal, Kind.REQUEST)
+    }
+
+    @Test
+    fun `handler가 예외를 던져도 자리를 한 번 푼다`() {
+        runCatching { mockMvc.get("/v1/test-interceptor/fail") { header("Authorization", "Bearer $TOKEN") } }
+
+        verify(inFlight).acquire(terminal, Kind.REQUEST)
+        verify(inFlight, times(1)).release(terminal, Kind.REQUEST)
+    }
+
+    @Test
+    fun `비동기 dispatch는 자리를 다시 잡지 않고 마지막에 한 번 푼다`() {
+        val started = get("Bearer $TOKEN", "/v1/test-interceptor/async").andExpect { request { asyncStarted() } }.andReturn()
+        verify(inFlight, never()).release(terminal, Kind.REQUEST) // 비동기가 끝나기 전에는 자리를 쥐고 있다
+
+        mockMvc.perform(asyncDispatch(started)).andExpect(MockMvcResultMatchers.status().isOk)
+
+        verify(inFlight, times(1)).acquire(terminal, Kind.REQUEST)
+        verify(inFlight, times(1)).release(terminal, Kind.REQUEST)
+        verify(rateLimiter, times(2)).acquire(terminal) // 빈도 상한은 dispatch마다 다시 돈다
+    }
+
+    @Test
+    fun `비동기 dispatch에서 빈도 상한이 던져도 자리를 푼다`() {
+        val started = get("Bearer $TOKEN", "/v1/test-interceptor/async").andExpect { request { asyncStarted() } }.andReturn()
+        willThrow(RateLimitedException(1, "scope=terminal")).given(rateLimiter).acquire(terminal)
+
+        mockMvc.perform(asyncDispatch(started))
+
+        verify(inFlight, times(1)).acquire(terminal, Kind.REQUEST)
+        verify(inFlight, times(1)).release(terminal, Kind.REQUEST)
+    }
 }
 
 @RestController
@@ -127,10 +218,23 @@ class InterceptorTestController {
         return Sample("ok")
     }
 
+    @GetMapping("/fail")
+    fun fail(): Sample = throw IllegalStateException("handler 실패")
+
+    @GetMapping("/async")
+    fun async(): Callable<Sample> = Callable { Sample("async") }
+
     data class Sample(val value: String)
 
     companion object {
         @Volatile
         var calls = 0
     }
+}
+
+/** 진짜 `SyncController`는 이 슬라이스에 없다. 같은 매핑 패턴으로 SYNC 묶음 판별만 검사한다. */
+@RestController
+class InterceptorSyncTestController {
+    @GetMapping("/v1/terminals/{terminalId}/sync")
+    fun sync(@PathVariable terminalId: String) = InterceptorTestController.Sample("sync")
 }

@@ -6,6 +6,14 @@ import com.resilientpos.terminal.AuthenticatedTerminal
 import com.resilientpos.terminal.TerminalId
 import com.resilientpos.terminal.internal.adapter.redis.MutableClock
 import com.resilientpos.terminal.internal.adapter.web.TerminalInFlightLimiter.Kind
+import com.tngtech.archunit.core.domain.JavaCall.Predicates.target
+import com.tngtech.archunit.core.domain.JavaClass.Predicates.type
+import com.tngtech.archunit.core.domain.properties.HasName.Predicates.name
+import com.tngtech.archunit.core.domain.properties.HasOwner.Predicates.With.owner
+import com.tngtech.archunit.core.importer.ClassFileImporter
+import com.tngtech.archunit.core.importer.ImportOption
+import com.tngtech.archunit.lang.syntax.ArchRuleDefinition.classes
+import com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry
 import java.util.UUID
 import kotlin.test.Test
@@ -102,6 +110,23 @@ class TerminalInFlightLimiterTest {
         assertEquals(2, lines.size, lines.joinToString("\n"))
         assertContains(lines[0], "kind=sync")
         assertContains(lines[1], "kind=request")
+    }
+
+    /**
+     * 429·`RATE_LIMITED`는 handler 전의 거절이어야 단말이 같은 요청을 그대로 다시 보낼 수 있다. 그래서 동시 상한도 인증 인터셉터만 부른다.
+     * 양성 대조가 있어 `acquire`의 시그니처가 바뀌면 규칙이 비지 않고 실패한다.
+     */
+    @Test
+    fun `acquire는 인증 인터셉터만 부른다`() {
+        val production = ClassFileImporter().withImportOption(ImportOption.Predefined.DO_NOT_INCLUDE_TESTS).importPackages("com.resilientpos")
+        val acquire = target(name("acquire")).and(target(owner(type(TerminalInFlightLimiter::class.java))))
+
+        noClasses().that().doNotBelongToAnyOf(TerminalAuthenticationInterceptor::class.java)
+            .should().callMethodWhere(acquire)
+            .check(production)
+        classes().that().belongToAnyOf(TerminalAuthenticationInterceptor::class.java)
+            .should().callMethodWhere(acquire)
+            .check(production)
     }
 
     private companion object {
