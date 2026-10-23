@@ -89,7 +89,8 @@ allOpen {
 }
 
 tasks.withType<Test> {
-    useJUnitPlatform()
+    // Fixture Monkey는 jqwik의 API만 쓴다. jqwik 엔진은 `@Property` 테스트가 없는데도 실행 기록 파일을 만든다.
+    useJUnitPlatform { excludeEngines("jqwik") }
     // fork마다 PostgreSQL·Redis·Kafka 컨테이너를 따로 띄워 DB와 consumer group을 같이 쓰지 않는다. CI(4 vCPU)에서 2와 3을 재서 고른 고정값이다.
     // CPU 수에서 정하지 않는다. 로컬과 CI가 같은 fork 수로 돈다.
     maxParallelForks = 2
@@ -100,9 +101,9 @@ tasks.withType<Test> {
     outputs.dir(layout.buildDirectory.dir("generated-snippets")).withPropertyName("restDocsSnippets")
     // CI가 test를 job 여러 개로 나눌 때 쓴다(-PtestShard=1/2). 바깥 클래스 이름의 해시로 나눠 모든 클래스가 정확히 한 job에서 돈다. 없으면 전부 돈다.
     providers.gradleProperty("testShard").orNull?.let { shard ->
-        val (index, count) = shard.split("/").mapNotNull(String::toIntOrNull).takeIf { it.size == 2 }
+        val (index, count) = Regex("""(\d+)/(\d+)""").matchEntire(shard)?.destructured?.let { (i, c) -> i.toInt() to c.toInt() }
             ?: throw GradleException("testShard는 번호/개수 형식이어야 한다: $shard")
-        if (count < 1 || index !in 1..count) throw GradleException("testShard의 번호는 1부터 개수까지다: $shard")
+        if (index !in 1..count) throw GradleException("testShard의 번호는 1부터 개수까지다: $shard")
         exclude { !it.isDirectory && it.relativePath.pathString.removeSuffix(".class").substringBefore('$').hashCode().mod(count) != index - 1 }
     }
 }
