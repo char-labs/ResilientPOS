@@ -81,14 +81,14 @@ PR 검사(`.github/workflows/pr-checks.yml`) 한 번이 5분 넘게 걸린다. �
 - 다음은 합치지 않는다. 결제 gateway를 감싼 중첩 구성 9개(두 스레드를 맞물리는 gateway, 호출 순간 DB 자원을 검사하는 gateway, 첫 시도만 거절하는 gateway, 분산 락을 끈 구성)는 공용으로 바꾸면 테스트마다 동작을 갈아 끼우는 공유 상태가 되고, 앞 테스트가 남긴 Kafka 메시지를 비동기 consumer가 다음 테스트의 동작으로 처리할 수 있다. IdP stub은 JWK 장애 테스트가 같은 customizer를 켜고 끄는 다른 stub을 쓰고, IdP 장애 테스트는 stub이 없는 상태를 전제로 한다. Redis 장애 구성 셋과 스케줄 속성 구성 하나는 다른 설정 자체가 목적이다.
 
 **5. 테스트 코드를 더 정리한다(2026-10-23, 사용자 결정).** 범위 조정 4 뒤 중앙값이 3분 39초였다. 사용자가 다음을 이 PR에서 하자고 했다.
-- **`@Autowired`를 쓰지 않는다.** `junit-platform.properties`의 `spring.test.constructor.autowire.mode=all`로 테스트 생성자를 애너테이션 없이 주입하고, 테스트 코드의 `@Autowired`를 모두 지운다. `@LocalServerPort`·`@Value` 파라미터는 그대로다. 저장소 규칙(생성자 주입만, 필드 주입 금지)은 그대로다.
-- **Fixture는 Fixture Monkey로 만든다.** Fixture Monkey 인스턴스는 테스트 전체에 하나(`TestFixtureMonkey`)이고, 모듈별 Fixture(주문·결제·reconciliation·점주·매장·단말·sync)가 그것을 쓰고 서로의 기본값(매장, 통화 등)을 참조한다. 필드가 둘 이상이고 테스트가 값을 고르는 커맨드는 Fixture 팩토리로 만든다. 식별자 하나만 감싸는 커맨드(`PaymentCommand.Authorize(paymentId)` 등)는 그대로 둔다. 테스트 전략의 "단순 상수까지 fixture로 감싸지 않는다"를 따른다.
+- **`@Autowired`를 쓰지 않는다.** `junit-platform.properties`의 `spring.test.constructor.autowire.mode=all`로 테스트 생성자를 애너테이션 없이 주입하고, 테스트 코드의 `@Autowired`를 모두 지운다. `@LocalServerPort`·`@Value` 파라미터는 그대로다. 웹 슬라이스의 `@MockitoBean lateinit var` 필드도 클래스 수준 `@MockitoBean(types = …)`으로 바꾸고, 스텁·검증하는 mock만 생성자로 받는다(리뷰). 저장소 규칙(생성자 주입만, 필드 주입 금지)은 그대로다.
+- **Fixture는 Fixture Monkey로 만든다.** factory가 넘긴 값(중첩 null 포함)을 그대로 쓰는지는 생성자 결과와 비교하는 `FixtureFactoriesTest`로 고정한다(리뷰). 새 factory는 모든 필드를 넘겨받아 Fixture Monkey가 채우는 값이 없다. 사용자가 고른 도구로 모양을 맞추는 것이고 그만큼 분해·재조립 비용을 치른다. Fixture Monkey 인스턴스는 테스트 전체에 하나(`TestFixtureMonkey`)이고, 모듈별 Fixture(주문·결제·reconciliation·점주·매장·단말·sync)가 그것을 쓰고 서로의 기본값(매장, 통화 등)을 참조한다. 필드가 둘 이상이고 테스트가 값을 고르는 커맨드는 Fixture 팩토리로 만든다. 식별자 하나만 감싸는 커맨드(`PaymentCommand.Authorize(paymentId)` 등)는 그대로 둔다. 테스트 전략의 "단순 상수까지 fixture로 감싸지 않는다"를 따른다.
 - **결제 gateway를 감싼 구성 8개와 분산 락을 끈 구성 1개를 기반 구성으로 합친다(공용 Fake).** 범위 조정 4에서 합치지 않은 이유(테스트마다 동작을 갈아 끼우는 공유 상태)는 동작을 테스트의 키에 묶어 푼다.
   - `ScriptedPaymentGateway`(테스트 빈, `@Primary`)가 앱의 `FakePaymentGateway` 빈에 위임한다. 시도별 승인·조회 호출 수와 호출 순간 DB 자원(EntityManager·커넥션)이 묶여 있었는지는 늘 적는다.
-  - 테스트는 자기 금액이나 paymentId에만 동작을 건다. 던지기, 첫 시도 거절 뒤 승인, 같은 금액 재결제 승인, 조회 실패, 두 호출 맞물리기다. 다른 키의 호출(앞 테스트가 남긴 메시지)은 기본 동작을 탄다.
-  - 건 동작과 호출 기록은 테스트마다 끝나면 지운다(TestExecutionListener).
-  - 거절 사실 수집기(`PaymentEvent.Declined` listener)도 기반 구성에 둔다. paymentId로 센다.
-  - 분산 락은 기반 spy에 더한다. 락을 끄던 테스트는 자기 키에서만 잠금 없이 통과시킨다.
+  - 테스트는 자기 금액이나 paymentId에만 동작을 건다. 던지기, 첫 시도가 자리 잡은 뒤 그 시도가 아닌 같은 금액의 재결제 승인, 조회 실패, 두 호출 맞물리기다. 다른 키의 호출(앞 테스트가 남긴 메시지)은 기본 동작을 탄다. "그 금액의 첫 호출"처럼 순서에 기대는 상태는 두지 않는다. 같은 금액을 쓰는 다른 클래스의 늦은 호출이 먼저 와도 결과가 같아야 하기 때문이다(리뷰). 그래서 첫 시도 거절은 Fake가 거절하는 끝자리 1 금액으로 만든다.
+  - gateway에 건 동작과 호출 기록은 테스트마다 끝나면 지운다(TestExecutionListener).
+  - 거절 사실 수집기(`PaymentEvent.Declined` listener)도 기반 구성에 둔다. 지우지 않고 paymentId로 센다.
+  - 분산 락을 끄던 구성은 지운다. 그 테스트(`PaymentAttemptCreationConcurrencyIntegrationTest`)의 B는 락을 거치지 않고 repository로 넣어 락 유무가 결과에 관여하지 않는다. 자주 불리는 공유 spy에 스텁을 거는 동안 다른 스레드가 끼어드는 위험만 남아서 spy로 바꾸지 않는다(리뷰).
 - **spy 스텁은 그 테스트가 만든 ID에만 반응한다.** 같은 consumer group이라 앞 클래스가 남긴 메시지가 공유 컨텍스트에서 spy를 부를 수 있다. `ReconciliationOpenConcurrencyIntegrationTest`의 스텁을 paymentId로 거른다(리뷰).
 - **TRUNCATE로 테스트 클래스 사이를 격리한다(사용자 결정).** 참고 글의 방법이다. 테스트 클래스가 시작하기 전에 Flyway 이력 표를 뺀 모든 표를 한 문장으로 비운다(TestExecutionListener `beforeTestClass`). 클래스 안의 테스트끼리는 지금처럼 고유 ID로 격리한다. `@BeforeEach`에서 비우지 않는 것은 JUnit이 테스트 인스턴스를 먼저 만들어 필드 초기화가 넣은 행이 지워지기 때문이다.
 - **리뷰(Claude·Codex) 반영.**
