@@ -86,7 +86,7 @@ groups:
 
       - alert: KafkaConsumerLag
         # Kafka 클라이언트가 같은 토픽을 점이 밑줄로 바뀐 이름으로 한 번 더 내므로 점이 있는 이름만 본다.
-        # shortcut: 1000은 판별만 확인된 값이다(#77: 정상 부하 lag 0, provider 1초 지연에 1분 2,398). 실제 PG 지연 분포가 생기면 다시 본다.
+        # shortcut: 1000은 판별만 확인된 값이다(#77: 정상 부하 lag 0, provider 1초 지연에 1분 2,398). provider 지연을 바꾼 S4에서 정상 부하의 lag가 1000에 가까워지면 다시 본다.
         expr: max by (topic, partition) (kafka_consumer_fetch_manager_records_lag{application="ResilientPOS", topic=~".+[.].+"}) > 1000
         for: 10m
         labels:
@@ -182,7 +182,8 @@ groups:
           runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#syncconflict
 
       - alert: SyncGapPersistent
-        # shortcut: 창 5분과 30분은 근거 없는 시작값이다. 단말 재전송 주기가 정해지면 조정한다.
+        # 창 5분에는 단말 재전송(5초 주기)이 60번 들어가, 다음 재전송에 풀리는 gap과 계속 GAP을 내는 단말을 가른다.
+        # shortcut: for 30분은 근거 없는 시작값이다. GAP이 5분 넘게 이어지다 스스로 풀리는 경우가 보이면 그 길이로 다시 본다.
         expr: sum(increase(sync_operation_total{application="ResilientPOS", status="GAP"}[5m])) > 0
         for: 30m
         labels:
@@ -218,7 +219,7 @@ groups:
       - alert: HttpLatencyAboveTarget
         # 목표는 원문 NFR(시스템 설계 §7)이다. 생성 200ms, PG 제외 결제 처리 150ms(승인은 Kafka 뒤), sync는 가장 큰 배치(500 op)의 2초다.
         # 429는 처리 없이 빨리 끝나 p95를 낮추므로 뺀다. 5분에 20건(1 ÷ (1 − 0.95)) 미만이면 요청 하나가 p95를 정하므로 판정하지 않는다.
-        # for 10분은 창 5분에 #77의 가장 긴 정상 튐(단말 100대 동시 재연결 40초, 1분으로 올림)을 더한 6분보다 길다.
+        # for 10분은 창 5분에 가장 긴 정상 튐(단말 100대가 backlog 1,800 op로 동시 재연결해 71초, 2분으로 올림)을 더한 7분보다 길다. 그 측정에서 이 알림은 6분 pending 뒤 풀렸다.
         expr: |
           (
             histogram_quantile(0.95, sum by (le, uri) (rate(http_server_requests_seconds_bucket{application="ResilientPOS", method="POST", uri="/v1/orders", status!="429"}[5m]))) > 0.2
