@@ -50,15 +50,12 @@ import org.springframework.test.web.servlet.post
 @MockTerminalRateLimiter
 @WebMvcTest(OrderController::class)
 @AutoConfigureRestDocs
+@MockitoBean(types = [OrderCommandFacade::class, TerminalManagement::class])
 class OrderControllerTest(
     private val mockMvc: MockMvc,
+    private val facade: OrderCommandFacade,
+    private val terminals: TerminalManagement,
 ) {
-
-    @MockitoBean
-    private lateinit var facade: OrderCommandFacade
-
-    @MockitoBean
-    private lateinit var terminals: TerminalManagement
 
     @BeforeEach
     fun authenticate() {

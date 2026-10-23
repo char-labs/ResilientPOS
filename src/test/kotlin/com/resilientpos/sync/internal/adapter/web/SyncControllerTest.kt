@@ -57,16 +57,13 @@ import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
 @MockTerminalRateLimiter
 @WebMvcTest(SyncController::class)
 @AutoConfigureRestDocs
+@MockitoBean(types = [SyncCommandFacade::class, TerminalManagement::class])
 class SyncControllerTest(
     private val mockMvc: MockMvc,
     private val context: ApplicationContext,
+    private val facade: SyncCommandFacade,
+    private val terminals: TerminalManagement,
 ) {
-
-    @MockitoBean
-    private lateinit var facade: SyncCommandFacade
-
-    @MockitoBean
-    private lateinit var terminals: TerminalManagement
 
     @BeforeEach
     fun authenticate() {

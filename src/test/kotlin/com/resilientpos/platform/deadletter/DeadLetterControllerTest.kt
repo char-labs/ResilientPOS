@@ -53,23 +53,15 @@ import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
 @AutoConfigureRestDocs
 @ExtendWith(OutputCaptureExtension::class)
 @MockTerminalRateLimiter
+@MockitoBean(types = [DeadLetterReader::class, DeadLetterRedriver::class, DeadLetterDismisser::class, TerminalManagement::class])
 class DeadLetterControllerTest(
     private val mockMvc: MockMvc,
+    private val reader: DeadLetterReader,
+    private val redriver: DeadLetterRedriver,
+    private val dismisser: DeadLetterDismisser,
 ) {
 
-    @MockitoBean
-    private lateinit var reader: DeadLetterReader
-
-    @MockitoBean
-    private lateinit var redriver: DeadLetterRedriver
-
-    @MockitoBean
-    private lateinit var dismisser: DeadLetterDismisser
-
     /** 슬라이스가 싣는 단말 인증 인터셉터의 의존성이다. 이 API는 단말을 쓰지 않는다. */
-    @MockitoBean
-    private lateinit var terminals: TerminalManagement
-
     private val operator = jwt().jwt { it.subject(OPERATOR) }.authorities(SimpleGrantedAuthority(AdminSecurityFilterChain.OPERATOR_AUTHORITY))
 
     private fun list(request: MockHttpServletRequestBuilder = listRequest()): ResultActions = mockMvc.perform(request)

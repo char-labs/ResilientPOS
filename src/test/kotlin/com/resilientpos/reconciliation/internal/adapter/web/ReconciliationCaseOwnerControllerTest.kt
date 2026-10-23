@@ -14,6 +14,7 @@ import com.resilientpos.reconciliation.ReconciliationCaseStatus
 import com.resilientpos.reconciliation.ReconciliationCaseView
 import com.resilientpos.reconciliation.ReconciliationCommand
 import com.resilientpos.reconciliation.ReconciliationDecision
+import com.resilientpos.reconciliation.ReconciliationFixtures
 import com.resilientpos.reconciliation.ReconciliationManagement
 import com.resilientpos.reconciliation.ReconciliationQuery
 import com.resilientpos.reconciliation.ReconciliationQueryFacade
@@ -63,23 +64,15 @@ import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
 @MockTerminalRateLimiter
 @WebMvcTest(ReconciliationCaseOwnerController::class)
 @AutoConfigureRestDocs
+@MockitoBean(types = [ReconciliationManagement::class, ReconciliationQueryFacade::class, StoreManagement::class, TerminalManagement::class])
 class ReconciliationCaseOwnerControllerTest(
     private val mockMvc: MockMvc,
+    private val management: ReconciliationManagement,
+    private val queryFacade: ReconciliationQueryFacade,
+    private val stores: StoreManagement,
 ) {
 
-    @MockitoBean
-    private lateinit var management: ReconciliationManagement
-
-    @MockitoBean
-    private lateinit var queryFacade: ReconciliationQueryFacade
-
-    @MockitoBean
-    private lateinit var stores: StoreManagement
-
     /** 슬라이스가 싣는 단말 인증 인터셉터의 의존성이다. 이 API는 단말을 쓰지 않는다. */
-    @MockitoBean
-    private lateinit var terminals: TerminalManagement
-
     private val owner: RequestPostProcessor = authentication(UsernamePasswordAuthenticationToken.authenticated(OWNER_ID, null, emptyList()))
 
     private fun resolve(body: String, caseId: String = CASE_ID): ResultActions =
@@ -342,7 +335,7 @@ class ReconciliationCaseOwnerControllerTest(
         private const val NOTE = "PG 가맹점 화면에서 승인 확인"
         private val KRW: Currency = Currency.getInstance("KRW")
 
-        private val APPROVE = ReconciliationCommand.Resolve(
+        private val APPROVE = ReconciliationFixtures.resolve(
             caseId = ReconciliationCaseId(UUID.fromString(CASE_ID)),
             storeId = StoreId(UUID.fromString(STORE_ID)),
             ownerId = OwnerId(UUID.fromString(OWNER_ID)),

@@ -53,18 +53,13 @@ import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
 @MockTerminalRateLimiter
 @WebMvcTest(PaymentAttemptController::class)
 @AutoConfigureRestDocs
+@MockitoBean(types = [PaymentQueryFacade::class, PaymentManagement::class, TerminalManagement::class])
 class PaymentAttemptControllerTest(
     private val mockMvc: MockMvc,
+    private val queryFacade: PaymentQueryFacade,
+    private val management: PaymentManagement,
+    private val terminals: TerminalManagement,
 ) {
-
-    @MockitoBean
-    private lateinit var queryFacade: PaymentQueryFacade
-
-    @MockitoBean
-    private lateinit var management: PaymentManagement
-
-    @MockitoBean
-    private lateinit var terminals: TerminalManagement
 
     @BeforeEach
     fun authenticate() {

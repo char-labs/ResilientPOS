@@ -33,13 +33,12 @@ import org.springframework.web.bind.annotation.RestController
 /** 인터셉터의 헤더 해석을 테스트 전용 v1 Controller로 검사한다. 응답 변환은 실제 `ApiControllerAdvice`를 거친다. */
 @WebMvcTest(InterceptorTestController::class)
 @ExtendWith(OutputCaptureExtension::class)
-class TerminalAuthenticationInterceptorTest(private val mockMvc: MockMvc) {
-
-    @MockitoBean
-    private lateinit var terminals: TerminalManagement
-
-    @MockitoBean
-    private lateinit var rateLimiter: RedisTerminalRateLimiter
+@MockitoBean(types = [TerminalManagement::class, RedisTerminalRateLimiter::class])
+class TerminalAuthenticationInterceptorTest(
+    private val mockMvc: MockMvc,
+    private val terminals: TerminalManagement,
+    private val rateLimiter: RedisTerminalRateLimiter,
+) {
 
     private val terminal = AuthenticatedTerminal(TerminalId(UUID.randomUUID()), StoreId(UUID.randomUUID()))
 
