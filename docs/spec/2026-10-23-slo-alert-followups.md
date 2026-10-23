@@ -126,6 +126,7 @@
 - 패킷을 버리는 단절로 생긴 timeout은 서버 책임으로 잡힌다(결정 4).
 - 실패 3건이라는 하한, `SyncGapPersistent`의 `for: 30m`, probe의 `for: 1m`에는 측정 근거가 없다.
 - S3 변형은 로컬 한 대의 상대 측정이다(#77과 같은 전제). #117의 동시 상한 위에서 재고, pod가 하나라 재전송 겹침은 모두 429가 된다. pod가 여럿이면 다른 pod로 간 재전송은 겹친다.
+- 5xx series는 그 status·uri의 첫 실패 때 1로 생겨, `increase`가 첫 건의 일부를 놓칠 수 있다. 처음 나는 실패 묶음은 3건보다 조금 많아야 하한을 넘는다.
 
 ## 관련 문서
 없음
@@ -192,14 +193,78 @@ sync의 수렴 metric과 요청 계약은 업무 동작 변경이라 통합 테�
 
 | 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
 |---|---|---|---|
-| reconnectedAt이 수렴 시간의 기준점을 늦춘다(인수 조건 4) | 미실행 | 미실행 | 미실행 |
-| 형식이 틀린 reconnectedAt은 무시하고 invalid를 센다(인수 조건 4) | 미실행 | 미실행 | 미실행 |
-| REST Docs의 reconnectedAt 필드(인수 조건 4) | 미실행 | 미실행 | 미실행 |
-| 느린 소진 시나리오(인수 조건 2) | 미실행 | 미실행 | 미실행 |
-| probe 시나리오(인수 조건 3) | 미실행 | 미실행 | 미실행 |
-| G-03 시나리오(인수 조건 5) | 미실행 | 미실행 | 미실행 |
-| 오류율 실패 하한 시나리오(인수 조건 6) | 미실행 | 미실행 | 미실행 |
-| Alertmanager 라우팅과 규칙 수(인수 조건 1·11) | 미실행 | 미실행 | 미실행 |
+| reconnectedAt이 수렴 시간의 기준점을 늦춘다(인수 조건 4), `SyncCommandFacadeIntegrationTest`의 `reconnectedAt이 createdAt보다 늦으면 reconnectedAt부터 확정까지를 잰다` 외 2개 | `./gradlew test --tests 'com.resilientpos.sync.internal.application.SyncCommandFacadeIntegrationTest'`. 새 7개 가운데 이 동작 1개 실패(1,800초 전 createdAt부터 잼). `createdAt이 reconnectedAt보다 늦으면 createdAt부터 잰다`와 `createdAt이 없으면 기록하지 않는다`는 지금 동작을 고정하는 characterization이라 통과 | `./gradlew test --tests 'com.resilientpos.sync.*' --tests 'com.resilientpos.FixtureFactoriesTest'`. 100개 통과 | 리팩터링 없음. rebase 뒤 전체 `./gradlew test`는 결과 절 |
+| 형식이 틀린 reconnectedAt은 무시하고 invalid를 센다(인수 조건 4), 같은 클래스의 counter 테스트 4개 | 같은 명령. 4개 실패(`sync.reconnected-at.invalid` counter가 없음) | 같은 명령. 통과 | 리팩터링 없음 |
+| REST Docs의 reconnectedAt 필드(인수 조건 4), `SyncControllerTest`의 `createdAt이 있는 CREATE_ORDER와 REQUEST_CHECKOUT은 원문 문자열 그대로 Facade에 전달되고 요청 필드에 문서화된다` | `./gradlew test --tests 'com.resilientpos.sync.internal.adapter.web.SyncControllerTest'`. 12개 중 1개 실패(요청이 reconnectedAt을 Facade에 넘기지 않아 mock 기대와 다름) | 위 sync 명령. 통과, 스니펫 `sync-receive-batch-created-at`에 필드 추가 | 리팩터링 없음 |
+| 느린 소진 시나리오(인수 조건 2) | promtool `test rules /rules/alerts.test.yaml`(검증 절의 명령). 규칙이 없어 양성 3곳(3일, 3일 10분, 실패 3건) 실패. 음성 시나리오는 규칙이 없어도 통과하므로 아래 결함 주입으로 판별력을 본다 | 같은 명령. `SUCCESS` | 규칙에 결함을 하나씩 넣어(배수 0.9, 실패 수 하한 제거, 6시간 조건 제거, 기록의 분모에 429, 분자에 `/v1` 밖) 모두 실패를 확인. 처음 판별하지 못한 둘(분자 오염, 배수 0.9)은 0.09% 음성 시나리오를 "6시간 0.2%·3일 0.095%"로 바꿔 잡았다 |
+| probe 시나리오(인수 조건 3) | 같은 명령. 7분의 firing 기대 실패 | 같은 명령. `SUCCESS` | 결함 주입(`max_over_time`→`min_over_time`, `for` 제거) 모두 실패 확인 |
+| G-03 시나리오(인수 조건 5) | 같은 명령. 양성 5곳(30분, 85분, 0.15%, 0.065%, 3건) 실패 | 같은 명령. `SUCCESS` | 결함 주입(10초·300초 bucket, 예산 0.1%, 1시간 배수 13, 6시간 배수 5, 하한 제거, 30분 창 제거) 모두 실패 확인 |
+| 오류율 실패 하한 시나리오(인수 조건 6) | 같은 명령. 3곳 실패(1시간 2건이 울림, 시간당 18건의 3건이 울지 않음, 6시간 2건이 울림). 6시간 3건 시나리오는 옛 하한(167건)에서도 울어 통과 | 같은 명령. `SUCCESS` | 결함 주입(1시간·6시간 하한 제거) 모두 실패 확인 |
+| Alertmanager 라우팅과 규칙 수(인수 조건 1·11), `AlertRulesTest` | 실패를 먼저 보지 않았다. 설정과 규칙을 쓴 뒤 테스트를 고쳤다. 첫 실행에서 runbook에 새 절이 없어 `규칙의 runbook_url은 runbook의 같은 이름 절을 가리킨다`가 실패했다. amtool 판별력은 틀린 기대(`severity=warning`을 `page`로)가 exit 1로 끝나는 것으로 확인 | `./gradlew test --tests 'com.resilientpos.platform.AlertRulesTest' --tests 'com.resilientpos.platform.ObservabilityConfigurationTest'`. 8개 통과(`SUCCESS: 23 rules found`) | 리팩터링 없음 |
+| 시연 단말의 createdAt과 재연결 시각(인수 조건 7), 페이지 selftest | 헤드리스 Chrome으로 `index.html?selftest`. 제목이 "selftest 통과"가 아니고 콘솔에 `selftest 실패: createdAt`, `stampLink is not defined` | 같은 명령. 제목 "selftest 통과" | 리팩터링 없음 |
+| 규칙 metric 이름 검사의 `probe_success` 예외(결정 3 범위 조정), `ObservabilityConfigurationTest` | 실패를 먼저 보지 않았다. 앱이 내지 않는 이름이라 규칙을 더한 순간 실패하는 것이 확실해 예외를 함께 더했다 | 위 platform 명령. 통과 | 리팩터링 없음 |
 
 ## 결과
-개발 전 작성. 개발 후 실행 결과와 변경 이유, 시작값 판정 표, compose 실측과 S3 변형 결과를 추가한다.
+- 규칙: 기록 규칙 2개와 알림 3개를 더해 규칙이 23개(알림 21, 기록 2)다. 새 알림은 `HttpErrorBudgetSlowBurn`(warning), `HealthProbeFailing`(critical), `SyncConvergenceBudgetBurn`(warning)이다. burn rate 규칙의 하한은 긴 창의 실패 3건이다(결정 9). 판정이 바뀐 값은 규칙 주석도 고쳤다(결정 8).
+- 발송: `prom/alertmanager:v0.34.1`을 obs profile에 더했다. critical은 `page`, 그 밖은 `ticket`으로 간다. Alloy blackbox가 `/actuator/health`를 15초마다 부른다.
+- sync: 배치의 선택 필드 `reconnectedAt`과 counter `sync_reconnected_at_invalid_total`을 더했고, 수렴 시간을 `createdAt`과 `reconnectedAt` 가운데 늦은 쪽부터 잰다. 스키마와 sync 판정은 그대로다.
+- 시연 단말은 operation마다 `createdAt`을 싣고, 끊긴 뒤의 요청에 `reconnectedAt`을 실으며, sync 응답을 30초 기다린다. S3는 `TIMEOUT`을 받고 실패한 배치를 5초 뒤 다시 보낸다.
+- 범위 조정 넷은 모두 구현 전에 이 spec에 먼저 적었다. `ObservabilityConfigurationTest`의 앱 밖 metric 예외(결정 3), 시연 단말의 `createdAt`(결정 4), S3의 5초 재시도(결정 8), 규칙 주석 고치기(결정 8)다.
+- 검증: promtool 시나리오가 `SUCCESS`이고 결함 주입으로 판별력을 확인했다(TDD 검증 기록). origin/main d850d3f(#117) 위로 rebase한 뒤 `./gradlew test` 전체 934개가 통과했다(실패 0). 그 뒤 규칙 주석만 고치고 promtool 규칙 검사와 시나리오를 다시 돌렸다(`SUCCESS`).
+
+### compose 실측(2026-10-23)
+- 환경: 공유 스택(`name: resilientpos`)은 다른 worktree가 쓰고 있어 건드리지 않았다. d71e975에서 빌드한 앱과 obs profile을 별도 프로젝트(`docker compose -p rpos-slo`)로 띄웠고, 공유 스택과 겹치는 postgres·redis·kafka의 호스트 포트는 override 파일로 닫았다. PostgreSQL 정지도 이 격리 스택에서 했다.
+- 호스트: Apple M5 Pro, OrbStack, 앱 `mem_limit: 1g`, k6 v1.7.0. load average는 6~8이었다.
+
+발송과 probe(인수 조건 1·3). Alertmanager `/api/v2/alerts`의 `receivers`로 읽었다.
+
+| 시각(UTC) | 일 | 결과 |
+|---|---|---|
+| 11:13:53 | S3 1,800 op 뒤 | `SyncConvergenceBudgetBurn`(warning) firing, `ticket` 수신 |
+| 11:19:21 | PostgreSQL 정지 | 트래픽 없음 |
+| 11:20:53 | 평가 | `HealthProbeFailing` pending |
+| 11:21:53 | 평가 | `HealthProbeFailing`(critical) firing, `page` 수신. 정지 2분 32초 뒤 |
+| 11:22:04 | PostgreSQL 재시작 | |
+| 11:22:53 | 평가 | `HealthProbeFailing` 풀림, Alertmanager 목록에서 빠짐 |
+
+정지 동안 `ResilientPosMetricsAbsent`는 울지 않았다(앱은 metric을 계속 냈다). 트래픽이 없어 `HttpErrorBudgetBurn`도 울지 않았다. 트래픽 없는 장애를 probe만 잡는다는 결정 3의 전제와 맞다.
+
+S3 변형(인수 조건 8). 배치 50, timeout 30초, 단말 100대, `BACKLOG_SALES=250`(500 op)과 `900`(1,800 op)이다. 수렴과 응답 시간은 k6 값, 60초 비율과 p95는 서버 metric이다.
+
+| 항목 | 500 op | 1,800 op |
+|---|---|---|
+| 실행(UTC) | 11:06:17~11:06:42 | 11:12:04~11:13:16 |
+| 단말 수렴 최소·중앙·최대 | 19.7·21.7·22.1초 | 63.3·69.4·70.5초 |
+| sync 응답 p95·최대 | 3.87·4.73초 | 2.93·4.72초 |
+| 실패 배치·timeout·429·GAP | 모두 0(요청 1,128건 모두 성공) | 모두 0(요청 3,728건 모두 성공) |
+| 서버 sync 5분 p95 | 2.42초 | 2.98초 |
+| 커넥션 대기 최대·획득 최대·대기 초과 | 93·0.81초·0 | 95·0.81초·0 |
+| 60초 안에 확정된 항목 | 50,000개 모두(서버 최대 22.1초) | 180,000개 가운데 158,010개(87.8%) |
+| 형식 오류 counter 둘 | 0 | 0 |
+| `HttpLatencyAboveTarget` | 11:06:53 pending, 11:11:57 풀림(firing 없음) | 11:12:53 pending, 11:18:53 풀림(firing 없음) |
+| `SyncConvergenceBudgetBurn` | 울지 않음 | 11:13:53 firing |
+
+판정:
+- 결정 7(timeout 30초): 두 실행의 배치 최대가 4.7초로 환산값(약 4초)에 맞았고, 30초 안이라 timeout은 0이었다. 판정이 성립한다. 다만 "5초 timeout에 바로 걸린다"는 이번 측정에서 나타나지 않았다. 최대 4.73초라 5초였어도 끊긴 배치는 없었을 것이고, 여유가 0.3초뿐이라 커넥션 대기나 호스트 부하가 조금만 늘어도 끊긴다.
+- G-03(500 op): 모든 항목이 60초 안(최대 22.1초)에 확정됐고 `SyncConvergenceBudgetBurn`은 울지 않았다. 트래픽 가정(100대 × 500 op)에서 G-03을 지킨다.
+- 1,800 op는 G-03 판정에 쓰지 않는다(결정 8). 그래도 기록한다. 빈도 상한의 최악 backlog를 100대가 한꺼번에 가져오면 12.2%가 60초를 넘겨 G-03을 지키지 못하고, 이 규칙이 ticket으로 알린다. 처리량이 초당 약 2,550 op로 결정 8의 계산(약 1,250 op)보다 높아 소진은 계산(약 144초)의 절반인 70.5초였다.
+- 지연 `for` 10분(결정 8): 두 실행 모두 pending만 되고 풀렸다. 1,800 op의 pending은 6분(소진 71초와 창 5분)으로 계산(7.4분)보다 짧았다.
+
+### 시작값 판정
+이슈 #115가 든 값과 이 PR이 새로 둔 값이다. #112 판정 표에 있던 나머지 값은 그 표 그대로다.
+
+| 값 | 지금 | 판정 | 근거 | 다시 볼 조건 |
+|---|---|---|---|---|
+| `SyncGapPersistent` 창 5분 | 유지 | 근거 생김 | 단말 재전송 주기가 5초로 정해져(결정 7) 창에 재전송이 60번 들어간다. 다음 재전송에 풀리는 gap과 계속 GAP을 내는 단말을 가른다. 두 S3 변형에서 GAP 0 | 재전송 주기가 바뀔 때 |
+| `SyncGapPersistent` for 30분 | 유지 | 근거 없음 | 감지 지연이라 재전송 계약에서 답이 나오지 않는다 | GAP이 5분 넘게 이어지다 스스로 풀리는 경우가 시연 단말이나 k6에서 보일 때(그 길이로 정한다) |
+| `HttpLatencyAboveTarget` for 10분 | 유지 | 근거 생김 | 최악 backlog(100대 × 1,800 op)의 pending이 6분이었고 firing 없이 풀렸다 | 동시 재연결의 소진이 5분을 넘길 때, 단말 sync 계약(배치·timeout·재시도)이 바뀔 때 |
+| 작업 생존 3개, 창 10분 + for 10분 | 유지 | 근거 없음 | 측정이 스케줄러 멈춤을 다루지 않았다 | 결과 불명 조회 한 주기(`tasks_scheduled_execution_seconds{code_function="resolveUnknown"}`)가 5분에 가까워질 때. provider 지연을 주입한 로컬 실행으로 잴 수 있다(원래 조건은 실제 PG) |
+| `LockFailOpen` for 10분 | 유지 | 근거 없음 | #112 판정 그대로 | 업무 락의 대기 초과가 장애 밖에서 생길 때. 원래부터 로컬 S2로 볼 수 있는 조건이다 |
+| `OwnerSessionStoreUnavailable` 창 2분, for 5분 | 유지 | 근거 없음 | 측정이 점주 경로를 다루지 않았다 | 점주 화면이나 k6에 점주 요청 주기가 생길 때. 그 주기가 2분을 넘으면 장애 중에도 창이 비어 풀린다(원래 조건은 점주 트래픽 분포) |
+| `KafkaConsumerLag` 1000 | 유지 | 판별만 확인 | #112 판정 그대로 | provider 지연을 바꾼 S4에서 정상 부하의 lag가 1000에 가까워질 때. 그때 건수 대신 밀린 시간으로 보는 것을 함께 본다(원래 조건은 실제 PG 지연 분포) |
+| 오류 예산 기간 30일 | 확정 | 결정 10 | Workbook 기본값이고 배수가 30일에서 나왔다 | 가용성 목표나 예산 기간이 원문·사용자 결정으로 정해질 때 |
+| `HttpErrorBudgetSlowBurn` 3일·6시간, 배수 1 | 새 값 | 근거 있음 | Workbook ticket 권장값(결정 2) | 예산 기간이 바뀔 때 |
+| burn rate 하한 실패 3건 | 새 값 | 근거 없음 | 결정 9 | 저트래픽 실행(S1을 낮은 RATE로)에서 오탐이나 미탐이 보일 때 |
+| `HealthProbeFailing` 창 1분, for 1분 | 새 값 | 근거 없음 | 감지 지연으로 고른 값. 실측 탐지는 2분 32초 | G-06을 검토할 때(제외 절) |
+| `SyncConvergenceBudgetBurn` 두 쌍, 예산 0.01% | 새 값 | 근거 있음 | 원문 G-03과 Workbook 배수(결정 6). 500 op에서 울지 않고 가정 밖 1,800 op에서 울었다 | G-03의 트래픽 가정(동시 재연결 규모, backlog)이 바뀔 때 |
+| 단말 sync timeout 30초 | 새 값 | 근거 생김 | 배치 최대 4.7초에 timeout 0(결정 7) | 배치 시간이 단말 timeout에 가까워질 때 |
