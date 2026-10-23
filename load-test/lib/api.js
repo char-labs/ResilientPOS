@@ -93,12 +93,13 @@ export function enqueueSales(outbox, sales, createdAt) {
   }
 }
 
-export function flush(outbox, batchSize, tags) {
+// outbox.reconnectedAt이 있으면 배치에 싣는다(서버는 createdAt과 늦은 쪽부터 수렴 시간을 잰다). timeout 기본값은 k6 기본값이다.
+export function flush(outbox, batchSize, tags, timeout = '60s') {
   const operations = outbox.pending.slice(0, batchSize);
   const res = http.post(
     `${BASE_URL}/v1/terminals/${outbox.terminal.terminalId}/sync`,
-    JSON.stringify({ operations }),
-    { headers: terminalHeaders(outbox.terminal), tags: { name: 'sync', ...tags } },
+    JSON.stringify({ reconnectedAt: outbox.reconnectedAt, operations }),
+    { headers: terminalHeaders(outbox.terminal), tags: { name: 'sync', ...tags }, timeout },
   );
   if (!check(res, { 'sync 200': (r) => r.status === 200 })) return null;
   const data = res.json('data');

@@ -44,7 +44,7 @@ mkdir -p load-test/results
 
 바탕 부하는 외부화가 버티는 수준의 70%로 둔다. 2026-10-21 측정에서는 HTTP가 약 300 RPS까지 버텼지만 외부화가 약 100 RPS에서 막혀 70을 썼다([용량 기준](../docs/wiki/capacity.md)). 외부화 상한을 넘는 바탕 부하는 실행마다 잔여 작업을 쌓아 다음 실행을 오염시킨다.
 
-환경 변수: `BASE_URL`(기본 `http://localhost:8080`), `STORES`(매장 수, 매장마다 단말 4대, 기본 250), `RATE`(초당 요청), `DURATION`(기본 2분, S4는 3분), `SYNC_VUS`·`HTTP_VUS`(기본 300·100), `CONTENDERS`·`BURSTS_PER_SECOND`(S2), `TERMINAL_BURST`·`BURST_EVERY`·`BURST_SALES`(S1 고장 단말. `BURST_SALES=250`이면 첫 묶음에 500 op backlog를 쌓고 그 뒤로 같은 배치를 되풀이한다), `TERMINALS`·`BACKLOG_SALES`·`BATCH`(S3), `SALES_PER_SECOND`·`SAMPLE`·`VUS`(S4).
+환경 변수: `BASE_URL`(기본 `http://localhost:8080`), `STORES`(매장 수, 매장마다 단말 4대, 기본 250), `RATE`(초당 요청), `DURATION`(기본 2분, S4는 3분), `SYNC_VUS`·`HTTP_VUS`(기본 300·100), `CONTENDERS`·`BURSTS_PER_SECOND`(S2), `TERMINAL_BURST`·`BURST_EVERY`·`BURST_SALES`(S1 고장 단말. `BURST_SALES=250`이면 첫 묶음에 500 op backlog를 쌓고 그 뒤로 같은 배치를 되풀이한다), `TERMINALS`·`BACKLOG_SALES`·`BATCH`·`TIMEOUT`(S3, 요청마다 응답을 기다리는 시간, 기본 `60s`), `SALES_PER_SECOND`·`SAMPLE`·`VUS`(S4).
 
 `sync_gap_items`가 0이 아니거나 sync 응답 검사(`checks`의 항목 수, 확정 순번, CONFLICT·REJECTED)가 실패하면 스크립트가 단말 순번을 잘못 이은 것이라 그 실행은 버린다. `dropped_iterations`가 있으면 k6가 목표 도착률을 내지 못한 것이다. S1~S3에서는 앱이 포화한 것으로 읽는다(VU가 모두 응답을 기다린다). S4에서는 폴링하는 VU가 붙잡혀서도 생긴다.
 
