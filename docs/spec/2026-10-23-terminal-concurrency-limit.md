@@ -135,13 +135,17 @@ limiter와 인터셉터의 동작 변경에 적용한다. 명령은 모두 `./gr
 
 | 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
 |---|---|---|---|
-| 같은 단말·같은 묶음의 두 번째 자리는 429이고 푼 뒤에는 통과한다(인수 1·2) | 미실행 | 미실행 | 미실행 |
-| 묶음이 다르거나 단말이 다르면 통과한다(인수 3·4) | 미실행 | 미실행 | 미실행 |
-| 동시 거절은 빈도 limiter를 부르지 않고, 빈도 거절이면 자리를 푼다(인수 5) | 미실행 | 미실행 | 미실행 |
-| handler 예외 뒤에도, 다시 불린 `preHandle` 뒤에도 자리는 한 번 풀린다(인수 6·7) | 미실행 | 미실행 | 미실행 |
-| 인증 실패는 자리를 잡지 않는다(인수 8) | 미실행 | 미실행 | 미실행 |
-| 동시 거절의 counter·INFO 한 줄(인수 9) | 미실행 | 미실행 | 미실행 |
-| 실제 서버에서 같은 단말의 checkout 동시 요청 하나가 429(인수 11) | 미실행 | 미실행 | 미실행 |
+| `TerminalInFlightLimiterTest`: 같은 단말의 같은 묶음은 처리 중이면 다음 요청이 retryAfter 1초로 거절되고 푼 뒤에는 통과한다(인수 1·2) | `--tests '…web.TerminalInFlightLimiterTest'`. `acquire`·`release`가 빈 본문인 선언만 두고 실행해 `assertFailsWith`가 실패(예외가 나지 않음) | 같은 명령, 통과 | `--tests 'com.resilientpos.terminal.*'` 통과(로그 간격 헬퍼를 꺼낸 뒤 `RedisTerminalRateLimiter*Test` 포함) |
+| 같은 단말이어도 묶음이 다르면 서로 막지 않는다(인수 3) | 위 RED에서 함께 실패(두 묶음을 연달아 잡은 뒤 같은 묶음의 거절 기대가 빗나감) | 통과 | 위와 같음 |
+| 다른 단말은 같은 매장이어도 영향을 받지 않는다(인수 4) | 빈 구현도 통과한다. 거절 키를 단말로 좁히는지 보는 대조로 남긴다 | 통과 | 위와 같음 |
+| `TerminalAuthenticationInterceptorTest`: 성공 요청은 동시 상한 빈도 상한 Controller 순서로 지나고 끝나면 REQUEST 자리를 한 번 푼다, 단말 sync 경로 패턴은 SYNC 묶음으로 자리를 잡고 푼다(인수 1·2) | `--tests '…web.TerminalAuthenticationInterceptorTest'`(인터셉터 연결 전). 새 동작 7건이 모두 실패했다. 6건은 `WantedButNotInvoked`(`inFlight.acquire`가 불리지 않음)이고 1건은 아래 줄이다 | 같은 명령, 11건 통과 | `--tests 'com.resilientpos.terminal.*'` 통과, `./gradlew test` 전체 919건 통과 |
+| 동시 상한이 거절하면 429와 Retry-After 1이고 Controller와 빈도 limiter와 release를 부르지 않는다, 빈도 상한이 거절하면 잡은 자리를 푼다(인수 5) | 위 RED. 동시 거절 테스트는 429 대신 200이었다 | 통과 | 위와 같음 |
+| handler가 예외를 던져도 자리를 한 번 푼다, 비동기 dispatch는 자리를 다시 잡지 않고 마지막에 한 번 푼다, 비동기 dispatch에서 빈도 상한이 던져도 자리를 푼다(인수 6·7) | 위 RED(`WantedButNotInvoked`) | 통과 | 위와 같음 |
+| 형식이 토큰과 다른 값·모르는 토큰이면 limiter를 부르지 않는다(인수 8) | 기존 두 테스트에 `verifyNoInteractions(inFlight)`를 더했다. 처음부터 통과하는 characterization이다 | 통과 | 위와 같음 |
+| `TerminalInFlightLimiterTest`: acquire는 인증 인터셉터만 부른다(인수 10의 부르는 곳) | 구현 뒤에 더해 처음부터 통과했다. 양성 대조가 있어 인터셉터가 부르지 않으면 실패하는 규칙이다(실패 상태를 직접 보지는 않았다) | 통과 | 위와 같음 |
+| 거절마다 in_flight scope counter가 1 오르고 처음부터 0으로 있다, 같은 묶음의 거절 로그는 10초에 한 줄이고 건수와 직전 시각을 다음 줄에 적는다, 묶음이 다르면 거절 로그도 따로 남긴다(인수 9) | 위 RED에서 함께 실패(counter 0, 거절 로그 0줄) | 통과 | 위와 같음 |
+| `RateLimitedExceptionTest`: RateLimitedException은 handler 전에 판정하는 빈도·동시 상한 limiter만 만든다(인수 10의 만드는 곳) | limiter를 더한 뒤 허용 목록을 고치기 전 `--tests 'com.resilientpos.platform.RateLimitedExceptionTest'`가 실패(3개 중 1개, 새 limiter의 생성 호출) | 허용 목록에 새 limiter와 그 양성 대조를 더해 통과 | 위와 같음 |
+| `TerminalInFlightIntegrationTest`: 같은 단말의 checkout이 주문 행 잠금을 기다리는 동안 온 checkout은 429 RATE_LIMITED이고 잠금이 풀리면 앞 요청은 200이며 다음 checkout은 통과한다, 같은 단말의 sync가 watermark 행 잠금을 기다리는 동안 온 sync는 429이고 sync 밖 요청은 429가 아니며 잠금이 풀리면 앞 sync는 200이다(인수 1·3·11) | 구현 뒤에 써서 처음부터 통과했다(`--tests '…web.TerminalInFlightIntegrationTest'`, 2건). 판별력은 운영 코드를 잠깐 바꿔 확인하고 Edit로 되돌렸다. 인터셉터의 sync pattern을 틀리게 하면 sync 장면이 실패했다(sync 밖 요청이 429). `inFlight.acquire` 호출을 지우면 두 장면 모두 실패했다(429 대신 409. 겹친 요청이 3초 동안 잠금을 기다리다 대기 초과로 끝났다) | 같은 명령, 2건 통과 | `--tests 'com.resilientpos.terminal.*'` 123건 통과 |
 
 ## 결과
 개발 전 작성. 개발 후 실행 결과, k6 전후 수치, 변경 이유를 추가한다.
