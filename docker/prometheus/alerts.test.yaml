@@ -448,6 +448,37 @@ tests:
               summary: "order:create-lock 락이 10분 넘게 잠그지 못하고 진행한다(reason=error)"
               runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#lockfailopen
 
+  - name: 주기 작업 락의 대기 초과는 이어져도 울지 않고 Redis 오류와 업무 락의 대기 초과는 운다
+    interval: 1m
+    input_series:
+      # pod가 여럿이면 늦은 pod는 앞 pod의 긴 블록을 기다리다 매분 대기 한도(1.5초)를 넘긴다. 정상이다.
+      - series: lock_fail_open_total{application="ResilientPOS", lock="platform:event-publication", reason="timeout", instance="b"}
+        values: 1+1x30
+      - series: lock_fail_open_total{application="ResilientPOS", lock="payment:unknown-resolve", reason="timeout", instance="b"}
+        values: 1+1x30
+      - series: lock_fail_open_total{application="ResilientPOS", lock="payment:unknown-resolve", reason="error", instance="a"}
+        values: 1+1x30
+      - series: lock_fail_open_total{application="ResilientPOS", lock="payment:checkout-lock", reason="timeout", instance="a"}
+        values: 1+1x30
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: LockFailOpen
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              lock: payment:unknown-resolve
+              reason: error
+            exp_annotations:
+              summary: "payment:unknown-resolve 락이 10분 넘게 잠그지 못하고 진행한다(reason=error)"
+              runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#lockfailopen
+          - exp_labels:
+              severity: warning
+              lock: payment:checkout-lock
+              reason: timeout
+            exp_annotations:
+              summary: "payment:checkout-lock 락이 10분 넘게 잠그지 못하고 진행한다(reason=timeout)"
+              runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#lockfailopen
+
   - name: sync 충돌은 처음 생기자마자 울린다
     interval: 1m
     input_series:

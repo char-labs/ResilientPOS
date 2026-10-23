@@ -149,8 +149,14 @@ groups:
       - alert: LockFailOpen
         # 배포·재기동 중 한두 번은 넘기고 이어질 때만 본다. 이 counter는 처음 fail-open될 때 생겨 첫 증가는 세지 않는다.
         # Redis 장애 때는 주기 작업 둘이 pod마다 1분에 한 번 락을 잡아 2분 창이 끊기지 않는다.
-        # shortcut: 10분은 근거 없는 시작값이다. 부하테스트 뒤 락 시간과 함께 조정한다.
-        expr: sum by (lock, reason) (increase(lock_fail_open_total{application="ResilientPOS"}[2m])) > 0
+        # 주기 작업 락의 대기 초과는 보지 않는다. pod가 여럿이면 늦은 pod가 앞 pod의 긴 블록(회복 중 재전송, PG 조회)을 기다리다 매분 대기 한도(1.5초)를 넘기는 것이 정상이다.
+        # shortcut: 10분은 근거 없는 시작값이다(#103 판정). 업무 락의 대기 초과가 장애 밖에서 생기면 다시 본다.
+        expr: |
+          sum by (lock, reason) (
+            increase(lock_fail_open_total{application="ResilientPOS", lock!~"platform:event-publication|payment:unknown-resolve"}[2m])
+            or
+            increase(lock_fail_open_total{application="ResilientPOS", reason="error"}[2m])
+          ) > 0
         for: 10m
         labels:
           severity: warning
