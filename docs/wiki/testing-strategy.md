@@ -27,6 +27,14 @@ Repository 제외는 비즈니스 통합 테스트의 실제 persistence 사용�
 기본 명령은 `./gradlew test --tests 'com.resilientpos.대상테스트'`, 관련 변경을 마친 뒤 `./gradlew test`다.
 명세에 없는 다음 기능을 GREEN 단계에서 추가하지 않는다. 기존 동작을 고정하는 characterization 테스트가 바로 통과하면 그 사실을 남기고, 새 동작의 RED 증거와 구분한다.
 
+## 통합 테스트 컨텍스트
+통합 테스트는 `PostgresIntegrationTest`를 상속해 컨테이너(PostgreSQL·Redis·Kafka)와 Spring 컨텍스트를 같이 쓴다. 컨텍스트 캐시가 하나라(`src/test/resources/spring.properties`) 구성이 다른 클래스가 끼면 컨텍스트를 다시 띄우고, 한 번에 CI에서 2~4초가 든다([ci-build-time](../spec/2026-10-22-ci-build-time.md)).
+- 하위 클래스에서 `@MockitoBean`·`@MockitoSpyBean`을 새로 선언하지 않는다. 장애를 주입할 빈은 기반 클래스의 `@MockitoSpyBean(types = …)`에 더하고, 테스트는 그 빈을 주입받아 스텁한다. spy는 테스트마다 초기화된다.
+- MockMvc는 기반 클래스가 켠다.
+- 중첩 `@TestConfiguration`·`@Import`·속성으로 구성을 바꾸면 컨텍스트가 하나 더 뜬다. 다른 테스트에 무해한 구성이면 기반 클래스로 올린다. 테스트마다 동작을 갈아 끼워야 하는 구성(두 스레드를 맞물리는 gateway 등)은 따로 둔다. 비동기 consumer가 앞 테스트의 메시지를 다음 테스트의 동작으로 처리할 수 있기 때문이다.
+- `ContextConfigurationClassOrderer`(`src/test/resources/junit-platform.properties`)가 같은 구성의 클래스를 이어서 돌린다. 클래스 실행 순서는 이름순이 아니다.
+- 단말 API(`/v1`)를 기다림(`awaitUntil`) 안에서 부르지 않는다. 20ms마다 부르면 단말 rate limit에 걸린다. 기다리기는 DB 상태로 하고, API는 기다린 뒤에 부른다.
+
 ## Controller와 REST Docs
 - HTTP 상태·본문·필요한 헤더를 assertion으로 검증한 뒤 해당 요청/응답으로 `document(...)`를 수행한다.
 - request/response fields와 존재하는 path/query parameter를 명시한다. `relaxed*`나 무분별한 ignored 처리로 계약 불일치를 숨기지 않는다.
