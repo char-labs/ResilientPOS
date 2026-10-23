@@ -191,7 +191,7 @@ provider 응답이 끊기면 `t_payment_attempt.status`가 `UNKNOWN`으로 남�
 
 | 다시 오는 것 | 판정하는 표·제약 | 결과 |
 |---|---|---|
-| 같은 `(terminalId, clientOrderId)` 주문 생성 | `t_order` unique + `Lock` | 201, 같은 `orderId`. 내용이 다르면 `409 IDEMPOTENCY_CONFLICT`. 겹쳐서 이 요청이 늦으면 `409 CONCURRENT_REQUEST`이고, 다시 보내면 먼저 저장된 주문과 내용이 같을 때 같은 `orderId`(다르면 `409 IDEMPOTENCY_CONFLICT`) |
+| 같은 `(terminalId, clientOrderId)` 주문 생성 | `t_order` unique + `Lock` | 201, 같은 `orderId`. 내용이 다르면 `409 IDEMPOTENCY_CONFLICT`. 같은 단말의 요청이 같은 pod에 겹치면 뒤 요청은 `429 RATE_LIMITED`(`Retry-After: 1`, 동시 요청 상한)이고 그 뒤 다시 보낸다. 겹쳐서 이 요청이 늦으면 `409 CONCURRENT_REQUEST`이고, 다시 보내면 먼저 저장된 주문과 내용이 같을 때 같은 `orderId`(다르면 `409 IDEMPOTENCY_CONFLICT`) |
 | 같은 주문의 checkout | `t_order` 행 잠금 + 상태 | 200, 같은 회차·금액 |
 | 같은 `OrderPaymentRequested` 재배달 | `t_payment_attempt` 조회 + partial unique | 기존 시도를 돌려주고 이벤트를 다시 내지 않는다 |
 | 같은 `PaymentApproved`·`OrderPaid` 재배달 | 주문 상태 / `t_fulfillment` unique | 아무것도 하지 않는다 |
