@@ -18,7 +18,7 @@ groups:
 
       - alert: EventPublicationOverdue
         # 경과 시간은 상태가 FAILED와 RESUBMITTED를 오가도 계속 는다. failed 개수는 재전송 중인 행을 세지 않아 브로커 장애 중에도 0이 될 수 있다.
-        # shortcut: 1시간은 처음 wiki가 정한 "failed가 한 시간 이어지면"을 옮긴 시작값이다. 부하테스트 뒤 조정한다.
+        # 1시간은 #77 측정의 가장 긴 회복(Kafka 재시작부터 미완료 0까지 27분)보다 길어 정상 회복에는 울지 않는다.
         expr: max(event_publication_incomplete_oldest_seconds{application="ResilientPOS"}) > 3600
         for: 5m
         labels:
@@ -77,7 +77,7 @@ groups:
 
       - alert: KafkaConsumerLag
         # Kafka 클라이언트가 같은 토픽을 점이 밑줄로 바뀐 이름으로 한 번 더 내므로 점이 있는 이름만 본다.
-        # shortcut: 1000은 근거 없는 시작값이다. 부하테스트 뒤 조정한다.
+        # shortcut: 1000은 판별만 확인된 값이다(#77: 정상 부하 lag 0, provider 1초 지연에 1분 2,398). 실제 PG 지연 분포가 생기면 다시 본다.
         expr: max by (topic, partition) (kafka_consumer_fetch_manager_records_lag{application="ResilientPOS", topic=~".+[.].+"}) > 1000
         for: 10m
         labels:
