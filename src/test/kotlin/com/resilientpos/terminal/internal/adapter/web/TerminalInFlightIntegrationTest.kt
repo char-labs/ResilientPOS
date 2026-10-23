@@ -4,6 +4,7 @@ import com.resilientpos.PostgresIntegrationTest
 import com.resilientpos.awaitUntil
 import com.resilientpos.terminal.TerminalManagement
 import com.resilientpos.terminal.registerTerminal
+import io.micrometer.core.instrument.MeterRegistry
 import java.sql.Connection
 import java.util.UUID
 import java.util.concurrent.Callable
@@ -12,12 +13,15 @@ import java.util.concurrent.TimeUnit
 import javax.sql.DataSource
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import org.springframework.beans.factory.annotation.Qualifier
+import org.springframework.http.HttpMethod
 import org.springframework.http.MediaType
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.jdbc.core.queryForObject
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.get
 import org.springframework.test.web.servlet.post
+import org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerMapping
 import tools.jackson.databind.ObjectMapper
 
 /**
@@ -29,15 +33,35 @@ class TerminalInFlightIntegrationTest(
     private val jdbcTemplate: JdbcTemplate,
     private val dataSource: DataSource,
     private val objectMapper: ObjectMapper,
+    private val meterRegistry: MeterRegistry,
+    @Qualifier("requestMappingHandlerMapping") private val handlerMapping: RequestMappingHandlerMapping,
     terminals: TerminalManagement,
 ) : PostgresIntegrationTest() {
 
     private val terminal = terminals.registerTerminal()
 
+    private fun inFlightRejects() = meterRegistry.counter("inbound.rate.limited", "scope", "in_flight").count()
+
+    @Test
+    fun `v1의 GET pattern은 결제 시도 조회 하나로 고정되어 있다`() {
+        val patterns = handlerMapping.handlerMethods.keys
+            .filter { HttpMethod.GET.name() in it.methodsCondition.methods.map { m -> m.name } }
+            .flatMap { it.patternValues }
+            .filter { it.startsWith("/v1/") && !it.startsWith("/v1/test-interceptor") } // 같은 패키지의 인터셉터 테스트용 Controller는 제외한다
+            .toSet()
+
+        assertEquals(
+            setOf("/v1/orders/{orderId}/payment-attempts"),
+            patterns,
+            "새 /v1 GET은 행 잠금·Lock을 잡지 않는지 확인한 뒤 여기에 더한다(spec 결정 3)",
+        )
+    }
+
     @Test
     fun `같은 단말의 checkout이 주문 행 잠금을 기다리는 동안 온 checkout은 429 RATE_LIMITED이고 잠금이 풀리면 앞 요청은 200이며 다음 checkout은 통과한다`() {
         // 합계 9002원은 끝자리가 2라 FakePaymentGateway가 미확인으로 남겨 결제 반영 listener가 주문 행을 잡지 않는다.
         val orderId = createOrder()
+        val rejectsBefore = inFlightRejects()
         val executor = Executors.newSingleThreadExecutor()
         try {
             val first = RowLock("select id from t_order where id = ? for update", UUID.fromString(orderId)).use { lock ->
@@ -49,6 +73,7 @@ class TerminalInFlightIntegrationTest(
                     header { string("Retry-After", "1") }
                     jsonPath("$.error.errorCode") { value("RATE_LIMITED") }
                 }
+                assertEquals(rejectsBefore + 1, inFlightRejects(), "429가 동시 상한에서 오지 않았다")
                 // 결제 시도 조회(GET)는 자리를 잡지 않으므로 같은 단말의 checkout이 잠금을 기다리는 동안에도 동시 상한에 걸리지 않는다.
                 mockMvc.get("/v1/orders/$orderId/payment-attempts") { header("Authorization", terminal.bearer) }
                     .andExpect { status { isOk() } }
@@ -64,8 +89,9 @@ class TerminalInFlightIntegrationTest(
     }
 
     @Test
-    fun `같은 단말의 sync가 watermark 행 잠금을 기다리는 동안 온 sync는 429이고 sync 밖 요청은 429가 아니며 잠금이 풀리면 앞 sync는 200이다`() {
+    fun `같은 단말의 sync가 watermark 행 잠금을 기다리는 동안 온 sync는 429이고 sync 밖 쓰기 요청은 201이며 잠금이 풀리면 앞 sync는 200이다`() {
         sync(1).andExpect { status { isOk() } }
+        val rejectsBefore = inFlightRejects()
         val executor = Executors.newSingleThreadExecutor()
         try {
             val first = RowLock("select terminal_id from t_sync_watermark where terminal_id = ? for update", terminal.terminalId.value).use { lock ->
@@ -77,6 +103,7 @@ class TerminalInFlightIntegrationTest(
                     header { string("Retry-After", "1") }
                     jsonPath("$.error.errorCode") { value("RATE_LIMITED") }
                 }
+                assertEquals(rejectsBefore + 1, inFlightRejects(), "429가 동시 상한에서 오지 않았다")
                 createOrder() // sync 밖 쓰기 요청은 sync 묶음의 동시 상한에 걸리지 않고 201이다
                 lock.release()
                 pending

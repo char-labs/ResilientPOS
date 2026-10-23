@@ -101,6 +101,17 @@ class TerminalInFlightLimiterTest {
     }
 
     @Test
+    fun `시계가 뒤로 돌아가도 heldForMs는 0 아래로 찍히지 않는다`(output: CapturedOutput) {
+        val mark = output.all.length
+        limiter.acquire(terminal, Kind.SYNC)
+        clock.advanceSeconds(-5)
+
+        assertFailsWith<RateLimitedException> { limiter.acquire(terminal, Kind.SYNC) }
+
+        assertContains(output.rejectLines(mark).single(), "heldForMs=0 ")
+    }
+
+    @Test
     fun `묶음이 다르면 거절 로그도 따로 남긴다`(output: CapturedOutput) {
         val mark = output.all.length
         Kind.entries.forEach { limiter.acquire(terminal, it) }

@@ -23,6 +23,7 @@ import org.mockito.Mockito.never
 import org.mockito.Mockito.times
 import org.mockito.Mockito.verifyNoInteractions
 import org.mockito.Mockito.verify
+import org.springframework.http.HttpMethod
 import org.springframework.boot.test.system.CapturedOutput
 import org.springframework.boot.test.system.OutputCaptureExtension
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest
@@ -31,6 +32,7 @@ import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.ResultActionsDsl
 import org.springframework.test.web.servlet.get
 import org.springframework.test.web.servlet.post
+import org.springframework.test.web.servlet.request
 import org.springframework.test.web.servlet.put
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.asyncDispatch
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers
@@ -218,10 +220,37 @@ class TerminalAuthenticationInterceptorTest(
     }
 
     @Test
-    fun `GET은 자리를 잡지 않고 인증과 빈도 상한만 한다`() {
-        get("Bearer $TOKEN").andExpect { status { isOk() } }
+    fun `GET과 HEAD는 자리를 잡지 않고 인증과 빈도 상한만 한다`() {
+        for (method in listOf(HttpMethod.GET, HttpMethod.HEAD)) {
+            mockMvc.request(method, "/v1/test-interceptor") { header("Authorization", "Bearer $TOKEN") }
+                .andExpect { status { isOk() } }
+        }
 
         verifyNoInteractions(inFlight)
+        verify(rateLimiter, times(2)).acquire(terminal)
+    }
+
+    @Test
+    fun `첫 REQUEST dispatch는 속성이 미리 있어도 인증하고 실패하면 401이며 limiter를 부르지 않는다`() {
+        InterceptorTestController.calls = 0
+
+        mockMvc.post("/v1/test-interceptor") {
+            requestAttr(TerminalAuthenticationInterceptor.ATTRIBUTE, terminal)
+        }.andExpect { status { isUnauthorized() } }
+
+        assertEquals(0, InterceptorTestController.calls, "속성이 있다는 이유로 인증 없이 handler에 닿았다")
+        verifyNoInteractions(inFlight)
+        verifyNoInteractions(rateLimiter)
+    }
+
+    @Test
+    fun `첫 REQUEST dispatch는 속성이 미리 있어도 인증이 통과하면 자리를 잡는다`() {
+        mockMvc.post("/v1/test-interceptor") {
+            header("Authorization", "Bearer $TOKEN")
+            requestAttr(TerminalAuthenticationInterceptor.ATTRIBUTE, terminal)
+        }.andExpect { status { isOk() } }
+
+        verify(inFlight).acquire(terminal, Kind.REQUEST)
         verify(rateLimiter).acquire(terminal)
     }
 }

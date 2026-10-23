@@ -5,6 +5,7 @@ import com.resilientpos.terminal.AuthenticatedTerminal
 import com.resilientpos.terminal.TerminalManagement
 import com.resilientpos.terminal.internal.adapter.redis.RedisTerminalRateLimiter
 import com.resilientpos.terminal.internal.adapter.web.TerminalInFlightLimiter.Kind
+import jakarta.servlet.DispatcherType
 import jakarta.servlet.http.HttpServletRequest
 import jakarta.servlet.http.HttpServletResponse
 import org.springframework.http.HttpHeaders
@@ -26,6 +27,8 @@ import org.springframework.web.servlet.HandlerMapping
  *
  * 비동기 handler(`Callable`·`DeferredResult`·suspend)는 ASYNC dispatch에서 이 메서드를 다시 부른다. 그때는 앞 dispatch가 끝까지 통과해 [ATTRIBUTE]가 있으므로
  * 인증도 두 상한도 다시 하지 않고 통과하고, 자리는 마지막 `afterCompletion`이 한 번 푼다. handler가 이미 일한 뒤 401·429를 내면 "429면 처리되지 않았다"는 계약이 깨진다.
+ * 단락은 REQUEST가 아닌 dispatch에만 건다. 첫 REQUEST dispatch에 속성이 미리 있어도(필터가 넣는 등) 인증을 건너뛰면 안 되고,
+ * 나중에 forward가 생겨도 같은 요청이 자기 자리를 다시 잡다 429를 받지 않는다.
  * 한계: 비동기 handler에는 timeout이 있어야 한다(ASYNC dispatch가 오지 않으면 자리를 계속 쥔다). 비동기 timeout으로 자리가 풀려도 작업 스레드가 커넥션을 쥐고 있을 수 있다.
  * 지금 v1에는 그런 handler가 없다.
  */
@@ -37,7 +40,7 @@ class TerminalAuthenticationInterceptor(
 ) : HandlerInterceptor {
 
     override fun preHandle(request: HttpServletRequest, response: HttpServletResponse, handler: Any): Boolean {
-        if (request.getAttribute(ATTRIBUTE) != null) return true
+        if (request.dispatcherType != DispatcherType.REQUEST && request.getAttribute(ATTRIBUTE) != null) return true
         // 스킴은 대소문자를 구분하지 않는다(RFC 7235 2.1). 토큰 형식이 아니면 해시·DB 조회 없이 거른다.
         val token = request.getHeader(HttpHeaders.AUTHORIZATION)
             ?.takeIf { it.regionMatches(0, BEARER_PREFIX, 0, BEARER_PREFIX.length, ignoreCase = true) }
