@@ -1,7 +1,7 @@
 plugins {
     kotlin("jvm") version "2.4.10"
     kotlin("plugin.spring") version "2.4.10"
-    id("org.springframework.boot") version "4.1.1"
+    id("org.springframework.boot") version "4.1.2"
     id("io.spring.dependency-management") version "1.1.7"
     kotlin("plugin.jpa") version "2.4.10"
 }
@@ -19,15 +19,6 @@ java {
 repositories {
     mavenCentral()
 }
-
-// Boot 4.1.1 BOM의 취약한 전이 의존성을 올린다. Boot는 버전 올림을 릴리스 직전에 하므로 그때까지 덮어쓴다
-// (spring-projects/spring-boot#51476). 세 줄 모두 Boot 4.1.2 이상으로 올리는 PR에서 지운다.
-// tomcat-embed-core 11.0.24: CVE-2026-65905·65182·68525(11.0.25에서 수정)
-extra["tomcat.version"] = "11.0.26"
-// jackson-core·jackson-databind 3.1.5: CVE-2026-89425·89407·91777·91776·68497·83557·19032(3.1.7에서 수정)
-extra["jackson-bom.version"] = "3.1.7"
-// kafka-clients 4.2.1이 쓰는 lz4-java 1.10.1: CVE-2026-59949(1.11.1에서 수정, kafka-clients 4.2.2는 1.11.2)
-extra["kafka.version"] = "4.2.2"
 
 dependencies {
     implementation(platform("org.springframework.modulith:spring-modulith-bom:2.1.1"))
