@@ -55,11 +55,8 @@ class ReconciliationFlowIntegrationTest(
         created.forEach { jdbcTemplate.update("update t_payment_attempt set status = 'DECLINED' where order_id = ? and status = 'UNKNOWN'", it) }
     }
 
-    /** 기본 동작은 같은 금액의 재결제를 다시 결과 불명으로 만든다. 이 금액은 재결제(다른 paymentId)를 승인하게 건다. */
-    private fun checkoutOrder(unitPrice: String): UUID {
-        gateway.approveRetries(Money.of(unitPrice, OrderFixtures.krw))
-        return orderFacade.createAndRequestCheckout(OrderFixtures.createOrderCommand(lines = listOf(OrderFixtures.line(unitPrice)))).value.also { created += it }
-    }
+    private fun checkoutOrder(unitPrice: String): UUID =
+        orderFacade.createAndRequestCheckout(OrderFixtures.createOrderCommand(lines = listOf(OrderFixtures.line(unitPrice)))).value.also { created += it }
 
     private fun attempts(orderId: UUID): List<Map<String, Any?>> =
         jdbcTemplate.queryForList("select id, status from t_payment_attempt where order_id = ? order by id", orderId)
@@ -73,6 +70,8 @@ class ReconciliationFlowIntegrationTest(
         val orderId = checkoutOrder(unitPrice)
         awaitUntil("시도가 UNKNOWN이 된다. 현재: ${attempts(orderId)}") { attempts(orderId).singleOrNull()?.get("status") == "UNKNOWN" }
         val paymentId = PaymentId(attempts(orderId).single()["id"] as UUID)
+        // 기본 동작은 같은 금액의 재결제를 다시 결과 불명으로 만든다. 첫 시도가 아닌 이 금액의 승인(재결제)은 승인하게 건다.
+        gateway.approveRetriesOf(paymentId, Money.of(unitPrice, OrderFixtures.krw))
         repeat(queries) { paymentManagement.resolveUnknown(PaymentCommand.ResolveUnknown(paymentId)) }
         awaitUntil("case가 열린다") { caseId(paymentId) != null }
         return paymentId to checkNotNull(caseId(paymentId))

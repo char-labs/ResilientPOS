@@ -9,7 +9,6 @@ import com.resilientpos.payment.PaymentManagement
 import com.resilientpos.foundation.IdentifierGenerator
 import com.resilientpos.payment.internal.domain.PaymentAttempt
 import com.resilientpos.payment.internal.domain.PaymentAttemptRepository
-import com.resilientpos.platform.DistributedLock
 import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.TerminalId
 import java.time.Clock
@@ -20,8 +19,6 @@ import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
-import org.mockito.ArgumentMatchers.contains
-import org.mockito.Mockito.doReturn
 import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.transaction.support.TransactionOperations
@@ -37,7 +34,7 @@ import org.springframework.transaction.support.TransactionOperations
  *
  * A는 Facade로 직접 만든다. 주문 이벤트로 만들면 리스너가 세 번째 호출자로 끼어든다.
  *
- * 분산 락은 이 주문의 키에서만 잠금 없이 통과시킨다(기반 클래스의 spy). 이 테스트는 잠금이 통하지 않을 때(Redis 장애·대기 초과) DB 방어선만 보는 것이다.
+ * B는 락을 거치지 않고 repository로 직접 넣으므로 분산 락은 결과에 관여하지 않는다. 이 테스트는 잠금이 통하지 않을 때(Redis 장애·대기 초과) DB 방어선만 보는 것이다.
  */
 class PaymentAttemptCreationConcurrencyIntegrationTest(
     private val paymentManagement: PaymentManagement,
@@ -46,7 +43,6 @@ class PaymentAttemptCreationConcurrencyIntegrationTest(
     private val repository: PaymentAttemptRepository,
     private val identifierGenerator: IdentifierGenerator,
     private val clock: Clock,
-    private val distributedLock: DistributedLock,
 ) : PostgresIntegrationTest() {
 
     private fun attempts(orderId: UUID): List<Map<String, Any?>> = jdbcTemplate.queryForList(
@@ -57,7 +53,6 @@ class PaymentAttemptCreationConcurrencyIntegrationTest(
     @Test
     fun `같은 checkout의 생성이 겹쳐 앞 시도가 거절되어도 시도는 하나다`() {
         val orderId = UUID.randomUUID()
-        doReturn(null).`when`(distributedLock).tryAcquire(contains(orderId.toString()))
         // 4501원은 끝자리가 1이라 Fake가 거절한다.
         val command = PaymentFixtures.createAttemptCommand(
             orderId = orderId,

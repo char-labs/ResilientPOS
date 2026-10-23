@@ -34,7 +34,7 @@ import org.springframework.transaction.support.TransactionOperations
  * 거절된 결제를 같은 checkout 회차에서 다시 시도해 주문이 결제되기까지를 끝까지 태운다.
  *
  * [FakePaymentGateway]는 금액으로만 결말을 정해서 같은 회차(같은 금액)의 재결제가 늘 다시 거절된다.
- * 그래서 이 테스트는 공용 [ScriptedPaymentGateway]에 주문 금액마다 **처음 한 번은 거절하고 그다음은 승인하라고** 건다. 테스트마다 금액이 달라야 한다.
+ * 그래서 첫 시도는 Fake가 거절하는 끝자리 1 금액으로 만들고, 거절된 뒤 공용 [ScriptedPaymentGateway]에 **그 시도가 아닌 같은 금액의 승인(재결제)은 승인하라고** 건다.
  */
 class PaymentRetryIntegrationTest(
     private val orderFacade: OrderCommandFacade,
@@ -45,27 +45,26 @@ class PaymentRetryIntegrationTest(
     private val gateway: ScriptedPaymentGateway,
 ) : PostgresIntegrationTest() {
 
-    private fun checkoutOrder(unitPrice: String): UUID {
-        gateway.declineFirstThenApprove(Money.of(unitPrice, OrderFixtures.krw))
-        return orderFacade.createAndRequestCheckout(OrderFixtures.createOrderCommand(lines = listOf(OrderFixtures.line(unitPrice)))).value
-    }
+    private fun checkoutOrder(unitPrice: String): UUID =
+        orderFacade.createAndRequestCheckout(OrderFixtures.createOrderCommand(lines = listOf(OrderFixtures.line(unitPrice)))).value
 
     private fun attempts(orderId: UUID): List<Map<String, Any?>> = jdbcTemplate.queryForList(
         "select id, checkout_no, status from t_payment_attempt where order_id = ? order by id",
         orderId,
     )
 
-    private fun awaitDeclined(orderId: UUID): PaymentId {
+    /** 첫 시도가 거절될 때까지 기다리고, 그 뒤의 같은 금액 승인(재결제)은 승인되게 건다. */
+    private fun awaitDeclined(orderId: UUID, unitPrice: String): PaymentId {
         awaitUntil("첫 시도가 거절된다. 현재: ${attempts(orderId)}") {
             attempts(orderId).singleOrNull()?.get("status") == PaymentAttemptStatus.DECLINED.name
         }
-        return PaymentId(attempts(orderId).single()["id"] as UUID)
+        return PaymentId(attempts(orderId).single()["id"] as UUID).also { gateway.approveRetriesOf(it, Money.of(unitPrice, OrderFixtures.krw)) }
     }
 
     @Test
     fun `거절 뒤 같은 회차에서 다시 시도해 승인되면 주문이 PAID가 된다`() {
         val orderId = checkoutOrder("4701")
-        val declined = awaitDeclined(orderId)
+        val declined = awaitDeclined(orderId, "4701")
 
         val retried = paymentManagement.retryAuthorization(PaymentFixtures.retryAuthorizationCommand(declined, OrderFixtures.storeId))
 
@@ -80,8 +79,10 @@ class PaymentRetryIntegrationTest(
 
     @Test
     fun `같은 거절 시도에 재결제가 겹쳐도 새 시도는 하나다`() {
-        val orderId = checkoutOrder("4703")
-        val declined = awaitDeclined(orderId)
+        val orderId = checkoutOrder("4711")
+        val declined = awaitDeclined(orderId, "4711")
+        // 커맨드는 겹치게 하려는 두 호출 밖에서 만든다. 장벽과 호출 사이에 다른 일을 끼우지 않는다.
+        val command = PaymentFixtures.retryAuthorizationCommand(declined, OrderFixtures.storeId)
         val ready = CountDownLatch(2)
         val executor = Executors.newFixedThreadPool(2)
 
@@ -90,7 +91,7 @@ class PaymentRetryIntegrationTest(
                 executor.submit<PaymentCommand.RetryAuthorization.Result> {
                     ready.countDown()
                     ready.await(5, TimeUnit.SECONDS)
-                    paymentManagement.retryAuthorization(PaymentFixtures.retryAuthorizationCommand(declined, OrderFixtures.storeId))
+                    paymentManagement.retryAuthorization(command)
                 }
             }.map { it.get(15, TimeUnit.SECONDS) }
         } finally {
@@ -103,8 +104,8 @@ class PaymentRetryIntegrationTest(
 
     @Test
     fun `다른 매장의 재결제는 시도 행이 잠겨 있어도 기다리지 않고 PAYMENT_ATTEMPT_NOT_FOUND를 받는다`() {
-        val orderId = checkoutOrder("4707")
-        val declined = awaitDeclined(orderId)
+        val orderId = checkoutOrder("4721")
+        val declined = awaitDeclined(orderId, "4721")
         val lockHeld = CountDownLatch(1)
         val releaseLock = CountDownLatch(1)
         val executor = Executors.newFixedThreadPool(2)
@@ -141,8 +142,8 @@ class PaymentRetryIntegrationTest(
 
     @Test
     fun `트랜잭션 안에서 재결제를 요청해도 바깥 트랜잭션과 따로 커밋한다`() {
-        val orderId = checkoutOrder("4705")
-        val declined = awaitDeclined(orderId)
+        val orderId = checkoutOrder("4731")
+        val declined = awaitDeclined(orderId, "4731")
 
         // 바깥 트랜잭션을 멈추고 새 시도를 따로 커밋하므로, 바깥을 롤백해도 새 시도는 남는다.
         transactions.executeWithoutResult { outer ->

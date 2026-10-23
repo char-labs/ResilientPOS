@@ -10,9 +10,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
-import java.util.concurrent.atomic.AtomicReference
 import javax.sql.DataSource
 import org.springframework.transaction.support.TransactionSynchronizationManager
 
@@ -22,7 +20,8 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
  *
  * 시도별 승인·조회 호출 수, 조회 순서, 호출 순간 이 스레드에 DB 자원(EntityManager·커넥션)이 묶여 있었는지는 늘 적는다.
  * 트랜잭션 여부만 보면 빈 트랜잭션 스코프에 묶인 EntityManager를 놓친다.
- * 건 동작과 기록은 테스트가 끝날 때마다 지운다(`IntegrationTestIsolationListener`). 같은 금액을 다른 클래스가 써도 섞이지 않는다.
+ * 건 동작과 기록은 테스트가 끝날 때마다 지운다(`IntegrationTestIsolationListener`). 동작은 순서에 기대는 상태를 두지 않아,
+ * 같은 금액을 쓰는 다른 클래스의 늦은 호출이 먼저 와도 이 테스트의 결과가 바뀌지 않는다.
  */
 class ScriptedPaymentGateway(
     private val delegate: FakePaymentGateway,
@@ -58,24 +57,13 @@ class ScriptedPaymentGateway(
         authorizeScripts[amount] = { error("어댑터가 던졌다") }
     }
 
-    /** 이 금액의 첫 승인은 거절하고 그다음부터 승인한다. 조회는 결과를 모른다. 기본 동작은 같은 금액의 재결제를 늘 다시 거절한다. */
-    fun declineFirstThenApprove(amount: Money) {
-        val declined = AtomicBoolean()
+    /**
+     * 이 금액의 승인 가운데 [first]가 아닌 시도(재결제)를 승인한다. 기본 동작은 같은 금액의 재결제를 첫 시도와 같은 결말로 만든다.
+     * 첫 시도가 자리 잡은 뒤에 건다. "그 금액의 첫 호출"처럼 순서에 기대는 상태를 두지 않아서, 다른 클래스의 늦은 호출이 먼저 와도 결과가 같다.
+     */
+    fun approveRetriesOf(first: PaymentId, amount: Money) {
         authorizeScripts[amount] = { request ->
-            if (declined.compareAndSet(false, true)) {
-                AuthorizationOutcome.Declined("DECLINED-${request.paymentId.value}")
-            } else {
-                AuthorizationOutcome.Approved("APPROVED-${request.paymentId.value}", request.amount)
-            }
-        }
-        queryScripts[amount] = { AuthorizationOutcome.Unknown }
-    }
-
-    /** 이 금액의 첫 시도는 기본 동작이고, 다른 paymentId(재결제)는 승인한다. 기본 동작은 같은 금액을 다시 결과 불명으로 만든다. */
-    fun approveRetries(amount: Money) {
-        val first = AtomicReference<PaymentId>()
-        authorizeScripts[amount] = { request ->
-            if (first.compareAndSet(null, request.paymentId) || first.get() == request.paymentId) {
+            if (request.paymentId == first) {
                 delegate.authorize(request)
             } else {
                 AuthorizationOutcome.Approved("APPROVED-${request.paymentId.value}", request.amount)

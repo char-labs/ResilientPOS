@@ -2,7 +2,6 @@ package com.resilientpos
 
 import com.resilientpos.fulfillment.internal.application.FulfillmentCommandFacade
 import com.resilientpos.order.OrderCommandFacade
-import com.resilientpos.platform.DistributedLock
 import com.resilientpos.reconciliation.ReconciliationManagement
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection
@@ -46,7 +45,7 @@ import org.testcontainers.postgresql.PostgreSQLContainer
 )
 @AutoConfigureMockMvc
 @Import(IntegrationTestDoubles::class)
-@MockitoSpyBean(types = [FulfillmentCommandFacade::class, OrderCommandFacade::class, ReconciliationManagement::class, DistributedLock::class])
+@MockitoSpyBean(types = [FulfillmentCommandFacade::class, OrderCommandFacade::class, ReconciliationManagement::class])
 abstract class PostgresIntegrationTest {
 
     companion object {

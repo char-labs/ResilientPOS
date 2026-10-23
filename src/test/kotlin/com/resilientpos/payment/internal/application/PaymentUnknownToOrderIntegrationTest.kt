@@ -64,10 +64,10 @@ class PaymentUnknownToOrderIntegrationTest(
 
     @Test
     fun `조회로 거절된 시도를 재결제하면 새 시도가 승인되어 주문이 PAID가 된다`() {
-        // 기본 동작은 같은 금액의 재결제를 다시 결과 불명으로 만든다. 이 금액만 재결제를 승인하게 건다.
-        gateway.approveRetries(Money.of(RETRY_APPROVED_AMOUNT, OrderFixtures.krw))
         val orderId = checkoutOrder(RETRY_APPROVED_AMOUNT)
         val unknown = awaitFirstAttempt(orderId, "UNKNOWN")
+        // 기본 동작은 같은 금액의 재결제를 다시 결과 불명으로 만든다. 첫 시도가 아닌 이 금액의 승인(재결제)은 승인하게 건다.
+        gateway.approveRetriesOf(unknown, Money.of(RETRY_APPROVED_AMOUNT, OrderFixtures.krw))
 
         resolver.resolveUnknown()
 
