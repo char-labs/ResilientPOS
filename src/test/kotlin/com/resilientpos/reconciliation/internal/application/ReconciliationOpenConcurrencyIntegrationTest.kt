@@ -30,7 +30,6 @@ import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.context.ApplicationEventPublisher
 import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.jdbc.core.JdbcTemplate
-import org.springframework.test.context.bean.override.mockito.MockitoSpyBean
 import org.springframework.transaction.support.TransactionOperations
 
 /**
@@ -46,10 +45,9 @@ class ReconciliationOpenConcurrencyIntegrationTest(
     @Autowired private val repository: ReconciliationCaseRepository,
     @Autowired private val identifierGenerator: IdentifierGenerator,
     @Autowired private val eventPublisher: ApplicationEventPublisher,
+    // 테스트 기반 클래스가 spy로 둔다.
+    @Autowired private val management: ReconciliationManagement,
 ) : PostgresIntegrationTest() {
-
-    @MockitoSpyBean
-    private lateinit var management: ReconciliationManagement
 
     private fun openCommand(paymentId: PaymentId, orderId: UUID = UUID.randomUUID()) =
         ReconciliationFixtures.open().copy(paymentId = paymentId, orderId = orderId)

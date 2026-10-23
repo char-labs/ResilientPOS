@@ -31,7 +31,6 @@ import org.springframework.dao.TransientDataAccessResourceException
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.jdbc.core.queryForObject
 import org.springframework.kafka.core.KafkaTemplate
-import org.springframework.test.context.bean.override.mockito.MockitoSpyBean
 import java.sql.SQLException
 import org.hibernate.TransactionException as HibernateTransactionException
 import org.springframework.orm.jpa.JpaSystemException
@@ -49,13 +48,10 @@ class KafkaRetryIntegrationTest(
     @Autowired private val eventPublisher: ApplicationEventPublisher,
     @Autowired private val kafkaTemplate: KafkaTemplate<Any, Any>,
     @Autowired private val meterRegistry: MeterRegistry,
+    // 두 Facade는 테스트 기반 클래스가 spy로 둔다. orderFacade와 같은 빈이고, 실패를 주입하는 쪽을 이름으로 구분한다.
+    @Autowired private val fulfillmentFacade: FulfillmentCommandFacade,
+    @Autowired private val spiedOrderFacade: OrderCommandFacade,
 ) : PostgresIntegrationTest() {
-
-    @MockitoSpyBean
-    private lateinit var fulfillmentFacade: FulfillmentCommandFacade
-
-    @MockitoSpyBean
-    private lateinit var spiedOrderFacade: OrderCommandFacade
 
     /** 주문별로 남은 실패 횟수와 던질 예외. */
     private val failuresLeft = ConcurrentHashMap<UUID, AtomicInteger>()
