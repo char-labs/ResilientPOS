@@ -8,6 +8,31 @@ prometheus.scrape "app" {
   forward_to      = [prometheus.remote_write.lgtm.receiver]
 }
 
+// synthetic probe: health(DB 포함)를 15초마다 불러 probe_success를 같은 경로로 넣는다. 2xx만 성공이다.
+// HealthProbeFailing 규칙이 application label로 고르므로 앱 metric과 같은 값을 붙인다.
+prometheus.exporter.blackbox "health" {
+  config = "{ modules: { http_2xx: { prober: http } } }"
+  target {
+    name    = "app-health"
+    address = "http://app:8080/actuator/health"
+    module  = "http_2xx"
+  }
+}
+
+discovery.relabel "health" {
+  targets = prometheus.exporter.blackbox.health.targets
+  rule {
+    target_label = "application"
+    replacement  = "ResilientPOS"
+  }
+}
+
+prometheus.scrape "health" {
+  targets         = discovery.relabel.health.output
+  scrape_interval = "15s"
+  forward_to      = [prometheus.remote_write.lgtm.receiver]
+}
+
 prometheus.remote_write "lgtm" {
   endpoint {
     url = "http://lgtm:9090/api/v1/write"

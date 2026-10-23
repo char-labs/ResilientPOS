@@ -13,7 +13,8 @@ import org.testcontainers.utility.DockerImageName
 import org.testcontainers.utility.MountableFile
 
 /**
- * 알림 규칙(`docker/prometheus/alerts.yaml`)과 그것을 싣는 Prometheus 설정을 promtool로 검사하고 단위 테스트(`alerts.test.yaml`)를 돌린다. Docker가 필요하다.
+ * 알림 규칙(`docker/prometheus/alerts.yaml`)과 그것을 싣는 Prometheus 설정을 promtool로 검사하고 단위 테스트(`alerts.test.yaml`)를 돌린다.
+ * Alertmanager 라우팅(`docker/alertmanager/alertmanager.yaml`)은 compose와 같은 버전의 amtool로 검사한다. Docker가 필요하다.
  * 이미지는 실측 때(2026-10-21) 로컬 compose의 otel-lgtm v0.37.0 안 Prometheus와 같은 버전이다. compose는 `latest`라 이미지가 바뀌면 다시 맞춘다.
  * 규칙이 쓰는 metric 이름이 앱에 있는지는 `ObservabilityConfigurationTest`가 본다.
  */
@@ -30,7 +31,27 @@ class AlertRulesTest {
             .withStartupCheckStrategy(OneShotStartupCheckStrategy().withTimeout(Duration.ofMinutes(2)))
             .use { container ->
                 container.start()
-                assertContains(container.logs, "SUCCESS: 18 rules found")
+                assertContains(container.logs, "SUCCESS: 23 rules found")
+            }
+    }
+
+    /** critical은 page로, 나머지는 ticket으로 간다. `--verify.receivers`가 다르면 amtool이 0이 아닌 코드로 끝난다. */
+    @Test
+    fun `Alertmanager 설정은 critical을 page로, 그 밖을 ticket으로 보낸다`() {
+        val config = "/am/alertmanager.yaml"
+        GenericContainer(DockerImageName.parse(ALERTMANAGER_IMAGE))
+            .withCopyFileToContainer(MountableFile.forHostPath(ALERTMANAGER_DIR), "/am")
+            .withCreateContainerCmdModifier { it.withEntrypoint("/bin/sh") }
+            .withCommand(
+                "-c",
+                "amtool check-config $config" +
+                    " && amtool config routes test --config.file=$config --verify.receivers=page severity=critical" +
+                    " && amtool config routes test --config.file=$config --verify.receivers=ticket severity=warning",
+            )
+            .withStartupCheckStrategy(OneShotStartupCheckStrategy().withTimeout(Duration.ofMinutes(1)))
+            .use { container ->
+                container.start()
+                assertContains(container.logs, "SUCCESS")
             }
     }
 
@@ -48,7 +69,9 @@ class AlertRulesTest {
 
     companion object {
         private const val PROMETHEUS_IMAGE = "prom/prometheus:v3.15.0"
+        private const val ALERTMANAGER_IMAGE = "prom/alertmanager:v0.34.1"
         private const val RULES_DIR = "docker/prometheus"
+        private const val ALERTMANAGER_DIR = "docker/alertmanager"
         private const val RUNBOOK = "docs/wiki/runbook.md"
     }
 }

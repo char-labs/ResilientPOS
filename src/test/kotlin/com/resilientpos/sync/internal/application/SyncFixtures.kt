@@ -13,10 +13,12 @@ object SyncFixtures {
         terminalId: TerminalId,
         storeId: StoreId = OrderFixtures.storeId,
         operations: List<SyncCommand.ReceiveBatch.Operation>,
+        reconnectedAt: String? = null,
     ): SyncCommand.ReceiveBatch =
         TestFixtureMonkey.instance.giveMeKotlinBuilder<SyncCommand.ReceiveBatch>()
             .setExp(SyncCommand.ReceiveBatch::terminalId, terminalId)
             .setExp(SyncCommand.ReceiveBatch::storeId, storeId)
             .setExp(SyncCommand.ReceiveBatch::operations, operations)
+            .setExp(SyncCommand.ReceiveBatch::reconnectedAt, reconnectedAt)
             .sample()
 }

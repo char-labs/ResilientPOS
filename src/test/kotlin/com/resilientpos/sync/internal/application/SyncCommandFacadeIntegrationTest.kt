@@ -87,6 +87,9 @@ class SyncCommandFacadeIntegrationTest(
     private fun receive(vararg operations: SyncCommand.ReceiveBatch.Operation) =
         facade.receiveBatch(SyncFixtures.receiveBatchCommand(terminalId, OrderFixtures.storeId, operations.toList()))
 
+    private fun receiveReconnected(reconnectedAt: String?, vararg operations: SyncCommand.ReceiveBatch.Operation) =
+        facade.receiveBatch(SyncFixtures.receiveBatchCommand(terminalId, OrderFixtures.storeId, operations.toList(), reconnectedAt))
+
     private fun orderRows(): Long =
         checkNotNull(jdbcTemplate.queryForObject<Long>("select count(*) from t_order where terminal_id = ?", terminalId.value))
 
@@ -769,5 +772,75 @@ class SyncCommandFacadeIntegrationTest(
 
         assertEquals(2L, count)
         assertEquals(0.0, invalidCount() - beforeInvalid)
+    }
+
+    private fun reconnectedInvalidCount() =
+        checkNotNull(meterRegistry.find("sync.reconnected-at.invalid").counter()) { "sync.reconnected-at.invalid counter가 없다" }.count()
+
+    @Test
+    fun `reconnectedAt이 createdAt보다 늦으면 reconnectedAt부터 확정까지를 잰다`() {
+        val (count, seconds) = convergenceDelta {
+            receiveReconnected(secondsAgo(90), operation(1, createdAt = secondsAgo(1800)))
+        }
+
+        assertEquals(1L, count)
+        assertTrue(seconds in 90.0..120.0, "totalTime=$seconds")
+    }
+
+    @Test
+    fun `createdAt이 reconnectedAt보다 늦으면 createdAt부터 잰다`() {
+        val (count, seconds) = convergenceDelta {
+            receiveReconnected(secondsAgo(1800), operation(1, createdAt = secondsAgo(90)))
+        }
+
+        assertEquals(1L, count)
+        assertTrue(seconds in 90.0..120.0, "totalTime=$seconds")
+    }
+
+    @Test
+    fun `reconnectedAt이 있어도 createdAt이 없으면 기록하지 않는다`() {
+        val (count, _) = convergenceDelta { receiveReconnected(secondsAgo(90), operation(1)) }
+
+        assertEquals(0L, count)
+    }
+
+    @Test
+    fun `sync reconnected-at invalid counter는 기동 때 0으로 등록돼 있다`() {
+        assertNotNull(meterRegistry.find("sync.reconnected-at.invalid").counter())
+    }
+
+    @Test
+    fun `형식이 틀린 reconnectedAt은 항목을 정상 처리하고 createdAt부터 재며 배치당 한 번만 센다`() {
+        val beforeInvalid = reconnectedInvalidCount()
+
+        val (count, seconds) = convergenceDelta {
+            val result = receiveReconnected("어제", operation(1, createdAt = secondsAgo(90)), operation(2, createdAt = secondsAgo(90)))
+            assertEquals(listOf(SyncItemStatus.APPLIED, SyncItemStatus.APPLIED), result.items.map { it.status })
+        }
+
+        assertEquals(2L, count)
+        assertTrue(seconds in 180.0..240.0, "totalTime=$seconds")
+        assertEquals(1.0, reconnectedInvalidCount() - beforeInvalid)
+    }
+
+    @Test
+    fun `유효한 reconnectedAt과 reconnectedAt이 없는 배치는 invalid를 세지 않는다`() {
+        val beforeInvalid = reconnectedInvalidCount()
+
+        receiveReconnected(secondsAgo(90), operation(1))
+        receive(operation(2))
+
+        assertEquals(0.0, reconnectedInvalidCount() - beforeInvalid)
+    }
+
+    @Test
+    fun `상한을 넘어 거절된 배치는 reconnectedAt이 틀려도 invalid를 세지 않는다`() {
+        val beforeInvalid = reconnectedInvalidCount()
+
+        assertFailsWith<DomainException> {
+            receiveReconnected("어제", *Array(SyncCommandFacade.MAX_OPERATIONS + 1) { operation(it + 1L) })
+        }
+
+        assertEquals(0.0, reconnectedInvalidCount() - beforeInvalid)
     }
 }

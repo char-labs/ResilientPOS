@@ -46,6 +46,11 @@ class ObservabilityConfigurationTest(
         val refreshed = body.lines().firstOrNull { it.startsWith("event_publication_incomplete_refreshed_seconds{") }
         assertNotNull(refreshed, "event_publication_incomplete_refreshed_seconds가 없다")
         assertContains(refreshed, """application="ResilientPOS"""")
+        // SyncConvergenceBudgetBurn은 G-03 경계인 60초 bucket을 고른다. bucket이 바뀌면 분자가 비어 알림이 울지 않는다.
+        assertNotNull(
+            body.lines().firstOrNull { it.startsWith("sync_convergence_seconds_bucket{") && """le="60.0"""" in it },
+            "sync_convergence_seconds의 60초 bucket이 없다. 수렴 timer의 SLO bucket을 확인한다",
+        )
     }
 
     @Test
@@ -95,7 +100,8 @@ class ObservabilityConfigurationTest(
     fun `알림 규칙이 쓰는 metric 이름이 모두 나간다`() {
         mockMvc.get("/actuator/health").andExpect { status { isOk() } }
         val ruleMetrics = RULE_METRIC.findAll(Path.of("docker/prometheus/alerts.yaml").readText()).map { it.groupValues[1] }.toSet()
-        assertTrue(ruleMetrics.containsAll(CREATED_ON_FIRST_EVENT.keys), "규칙이 더 쓰지 않는 예외가 있다: ${CREATED_ON_FIRST_EVENT.keys - ruleMetrics}")
+        val exempt = CREATED_ON_FIRST_EVENT.keys + NOT_FROM_APP.keys
+        assertTrue(ruleMetrics.containsAll(exempt), "규칙이 더 쓰지 않는 예외가 있다: ${exempt - ruleMetrics}")
 
         var missing = emptySet<String>()
         awaitUntil("알림 규칙의 metric이 모두 나간다", { " 없는 이름: $missing" }) {
@@ -103,7 +109,7 @@ class ObservabilityConfigurationTest(
                 .filterNot { it.startsWith("#") || it.isBlank() }
                 .map { it.substringBefore('{').substringBefore(' ') }
                 .toSet()
-            missing = ruleMetrics - CREATED_ON_FIRST_EVENT.keys - exposed
+            missing = ruleMetrics - exempt - exposed
             missing.isEmpty()
         }
     }
@@ -115,6 +121,11 @@ class ObservabilityConfigurationTest(
         private val CREATED_ON_FIRST_EVENT = mapOf(
             "lock_fail_open_total" to "처음 fail-open될 때 생긴다. platform이 업무 모듈의 키를 모른다",
             "kafka_consumer_fetch_manager_records_lag" to "Kafka 클라이언트가 파티션의 첫 fetch 뒤 만들고 Micrometer KafkaMetrics가 60초마다 새 metric을 묶는다",
+        )
+
+        /** 앱이 아니라 수집 경로가 만드는 이름과 그 출처. */
+        private val NOT_FROM_APP = mapOf(
+            "probe_success" to "Alloy blackbox가 /actuator/health를 불러 만든다(docker/alloy/config.alloy)",
         )
     }
 }

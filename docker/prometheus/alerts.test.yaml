@@ -892,30 +892,32 @@ tests:
               summary: "단말 API(/v1)의 5xx가 오류 예산(가용성 99.9%)을 빠르게 쓰고 있다"
               runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#httperrorbudgetburn
 
-  - name: 1시간 창 요청이 70건보다 적으면 실패 한 건으로 울지 않는다
+  - name: 긴 창의 실패가 2건이면 비율이 배수를 넘어도 울지 않는다
     interval: 1m
     input_series:
-      # 분에 1.1건인 영업 외 시간에 62분째 요청 하나가 500이다. 1시간 창은 67건 중 1건(1.49%)이라 하한이 없으면 1.44%를 넘는다.
+      # 분에 2건이다. 62·63분의 실패 2건은 1시간 창 1.67%, 5분 창 20%라 하한이 없으면 1시간 쌍이 운다.
       - series: http_server_requests_seconds_count{application="ResilientPOS", method="POST", status="200", uri="/v1/terminals/{terminalId}/sync", instance="a"}
-        values: 0+1.1x65
+        values: 0+2x65
       - series: http_server_requests_seconds_count{application="ResilientPOS", method="POST", status="500", uri="/v1/terminals/{terminalId}/sync", instance="a"}
-        values: 0x62 1x2
-      # 429까지 세면 하한을 넘는다.
-      - series: http_server_requests_seconds_count{application="ResilientPOS", method="POST", status="429", uri="/v1/terminals/{terminalId}/sync", instance="a"}
-        values: 0+10x65
+        values: 0x61 1 2x3
+      # 실패로 세지 않는 409와 /v1 밖 500이다. 실패 수에 넣으면 3건을 넘는다.
+      - series: http_server_requests_seconds_count{application="ResilientPOS", method="POST", status="409", uri="/v1/orders", instance="a"}
+        values: 0x63 1x2
+      - series: http_server_requests_seconds_count{application="ResilientPOS", method="POST", status="500", uri="/owner/v1/login", instance="a"}
+        values: 0x63 1x2
     alert_rule_test:
       - eval_time: 65m
         alertname: HttpErrorBudgetBurn
         exp_alerts: []
 
-  - name: 1시간 창 요청이 70건을 넘으면 실패 두 건으로 1시간 쌍이 운다
+  - name: 실패가 3건이면 시간당 28건보다 적은 트래픽에서도 1시간 쌍이 운다
     interval: 1m
     input_series:
-      # 분에 1.25건, 1시간 창 77건 중 2건(2.6%)이다. 6시간 창은 167건이 안 돼 6시간 쌍은 판정하지 않는다.
+      # 분에 0.3건(시간당 18건)인 영업 외 시간에 62·63·64분의 요청이 500이다.
       - series: http_server_requests_seconds_count{application="ResilientPOS", method="POST", status="200", uri="/v1/terminals/{terminalId}/sync", instance="a"}
-        values: 0+1.25x65
+        values: 0+0.3x65
       - series: http_server_requests_seconds_count{application="ResilientPOS", method="POST", status="500", uri="/v1/terminals/{terminalId}/sync", instance="a"}
-        values: 0x61 1x1 2x1
+        values: 0x61 1 2 3x2
     alert_rule_test:
       - eval_time: 65m
         alertname: HttpErrorBudgetBurn
@@ -926,30 +928,28 @@ tests:
               summary: "단말 API(/v1)의 5xx가 오류 예산(가용성 99.9%)을 빠르게 쓰고 있다"
               runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#httperrorbudgetburn
 
-  - name: 6시간 창 요청이 167건보다 적으면 실패 한 건으로 울지 않는다
+  - name: 6시간 창의 실패가 2건이면 울지 않는다
     interval: 1m
     input_series:
-      # 6시간 창 161건 중 1건(0.62%)이라 하한이 없으면 0.6%를 넘는다. 1시간 창은 70건이 안 된다.
+      # 6시간 창 177건 중 2건(1.13%), 30분 창에도 실패가 있어 하한이 없으면 6시간 쌍이 운다.
       - series: http_server_requests_seconds_count{application="ResilientPOS", method="POST", status="200", uri="/v1/terminals/{terminalId}/sync", instance="a"}
-        values: 0+0.4444x400
+        values: 0+0.4861x400
       - series: http_server_requests_seconds_count{application="ResilientPOS", method="POST", status="500", uri="/v1/terminals/{terminalId}/sync", instance="a"}
-        values: 0x385 1x14
-      # 429까지 세면 하한을 넘는다.
-      - series: http_server_requests_seconds_count{application="ResilientPOS", method="POST", status="429", uri="/v1/terminals/{terminalId}/sync", instance="a"}
-        values: 0+10x400
+        values: 0x385 1x4 2x9
     alert_rule_test:
       - eval_time: 400m
         alertname: HttpErrorBudgetBurn
         exp_alerts: []
 
-  - name: 6시간 창 요청이 167건을 넘으면 실패 두 건으로 6시간 쌍이 운다
+  - name: 1시간 창에는 2건이어도 6시간 창의 실패가 3건이면 6시간 쌍이 운다
     interval: 1m
     input_series:
-      # 6시간 창 177건 중 2건(1.13%)이다. 1시간 창은 70건이 안 돼 1시간 쌍은 판정하지 않는다.
+      # 분에 1건이고 300·360·395분의 요청이 500이다. 400분의 1시간 창에는 2건이고 5분 창은 깨끗해 1시간 쌍은 울지 않는다.
+      # 6시간 창은 3건(0.83%), 30분 창은 1건(3.3%)이다.
       - series: http_server_requests_seconds_count{application="ResilientPOS", method="POST", status="200", uri="/v1/terminals/{terminalId}/sync", instance="a"}
-        values: 0+0.4861x400
+        values: 0+1x400
       - series: http_server_requests_seconds_count{application="ResilientPOS", method="POST", status="500", uri="/v1/terminals/{terminalId}/sync", instance="a"}
-        values: 0x385 1x4 2x9
+        values: 0x299 1x59 2x34 3x5
     alert_rule_test:
       - eval_time: 400m
         alertname: HttpErrorBudgetBurn
@@ -1095,3 +1095,324 @@ tests:
       - eval_time: 392m
         alertname: HttpErrorBudgetBurn
         exp_alerts: []
+
+  # 느린 소진은 3일 창이라 4,320분 넘게 표본을 둔다. 분에 1,000건이다.
+  - name: 3일과 6시간 창이 모두 0.1%를 넘으면 느린 소진이 울고 6시간 창이 내려가면 풀린다
+    interval: 1m
+    input_series:
+      # 3일 동안 요청의 0.11%가 500이고 그 뒤로 깨끗하다. 6시간 창은 4,353분쯤 0.1% 아래로 내려가고, 3일 창은 4,380분에도 0.1085%다.
+      - series: http_server_requests_seconds_count{application="ResilientPOS", method="POST", status="200", uri="/v1/terminals/{terminalId}/sync", instance="a"}
+        values: 0+998.9x4320 4316248+1000x59
+      - series: http_server_requests_seconds_count{application="ResilientPOS", method="POST", status="500", uri="/v1/terminals/{terminalId}/sync", instance="a"}
+        values: 0+1.1x4320 4752x59
+      # 429는 분모에서도 뺀다. 섞으면 0.002%가 된다.
+      - series: http_server_requests_seconds_count{application="ResilientPOS", method="POST", status="429", uri="/v1/terminals/{terminalId}/sync", instance="a"}
+        values: 0+50000x4380
+    alert_rule_test:
+      - eval_time: 4320m
+        alertname: HttpErrorBudgetSlowBurn
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "단말 API(/v1)의 5xx가 3일 동안 오류 예산(가용성 99.9%)을 기간보다 빠르게 쓰고 있다"
+              runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#httperrorbudgetslowburn
+      - eval_time: 4330m
+        alertname: HttpErrorBudgetSlowBurn
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "단말 API(/v1)의 5xx가 3일 동안 오류 예산(가용성 99.9%)을 기간보다 빠르게 쓰고 있다"
+              runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#httperrorbudgetslowburn
+      - eval_time: 4380m
+        alertname: HttpErrorBudgetSlowBurn
+        exp_alerts: []
+
+  - name: 6시간 창이 0.2%여도 3일 창이 0.095%면 느린 소진이 울지 않는다
+    interval: 1m
+    input_series:
+      # 3,960분까지 0.085%, 마지막 6시간은 0.2%다. 3일 창은 0.0946%라 배수 1 아래다.
+      - series: http_server_requests_seconds_count{application="ResilientPOS", method="POST", status="200", uri="/v1/terminals/{terminalId}/sync", instance="a"}
+        values: 0+999.15x3960 3957632+998x359
+      - series: http_server_requests_seconds_count{application="ResilientPOS", method="POST", status="500", uri="/v1/terminals/{terminalId}/sync", instance="a"}
+        values: 0+0.85x3960 3368+2x359
+      # 실패로 세지 않는 409와 /v1 밖 500이다. 3일 기록에 섞으면 0.14%가 된다.
+      - series: http_server_requests_seconds_count{application="ResilientPOS", method="POST", status="409", uri="/v1/orders", instance="a"}
+        values: 0+0.5x4320
+      - series: http_server_requests_seconds_count{application="ResilientPOS", method="POST", status="500", uri="/owner/v1/login", instance="a"}
+        values: 0+0.5x4320
+    alert_rule_test:
+      - eval_time: 4320m
+        alertname: HttpErrorBudgetSlowBurn
+        exp_alerts: []
+
+  - name: 느린 소진은 3일 창의 실패가 2건이면 울지 않는다
+    interval: 1m
+    input_series:
+      # 분에 0.4건(3일 1,728건)이다. 4,300·4,310분의 실패 2건은 3일 창 0.116%, 6시간 창 1.37%라 하한이 없으면 운다.
+      - series: http_server_requests_seconds_count{application="ResilientPOS", method="POST", status="200", uri="/v1/terminals/{terminalId}/sync", instance="a"}
+        values: 0+0.4x4320
+      - series: http_server_requests_seconds_count{application="ResilientPOS", method="POST", status="500", uri="/v1/terminals/{terminalId}/sync", instance="a"}
+        values: 0x4299 1x9 2x10
+    alert_rule_test:
+      - eval_time: 4320m
+        alertname: HttpErrorBudgetSlowBurn
+        exp_alerts: []
+
+  - name: 느린 소진은 3일 창의 실패가 3건이면 운다
+    interval: 1m
+    input_series:
+      - series: http_server_requests_seconds_count{application="ResilientPOS", method="POST", status="200", uri="/v1/terminals/{terminalId}/sync", instance="a"}
+        values: 0+0.4x4320
+      - series: http_server_requests_seconds_count{application="ResilientPOS", method="POST", status="500", uri="/v1/terminals/{terminalId}/sync", instance="a"}
+        values: 0x4299 1x9 2x4 3x5
+    alert_rule_test:
+      - eval_time: 4320m
+        alertname: HttpErrorBudgetSlowBurn
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "단말 API(/v1)의 5xx가 3일 동안 오류 예산(가용성 99.9%)을 기간보다 빠르게 쓰고 있다"
+              runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#httperrorbudgetslowburn
+
+  - name: 기록이 3일보다 짧으면 실패를 그 기록만큼만 센다
+    interval: 1m
+    input_series:
+      # 스택을 다시 만든 지 10시간이다. 분에 0.4건이고 300분에 1건, 501·512분에 1건씩 실패한다.
+      # 450분에는 3일 비율 0.56%, 6시간 비율 0.69%다. 평균 rate에 3일을 곱하면 실패 1건이 9.6건이 되어 운다.
+      - series: http_server_requests_seconds_count{application="ResilientPOS", method="POST", status="200", uri="/v1/terminals/{terminalId}/sync", instance="a"}
+        values: 0+0.4x602
+      - series: http_server_requests_seconds_count{application="ResilientPOS", method="POST", status="500", uri="/v1/terminals/{terminalId}/sync", instance="a"}
+        values: 0x299 1x200 2x10 3x90
+    alert_rule_test:
+      - eval_time: 450m
+        alertname: HttpErrorBudgetSlowBurn
+        exp_alerts: []
+      - eval_time: 600m
+        alertname: HttpErrorBudgetSlowBurn
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "단말 API(/v1)의 5xx가 3일 동안 오류 예산(가용성 99.9%)을 기간보다 빠르게 쓰고 있다"
+              runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#httperrorbudgetslowburn
+
+  # probe는 Alloy가 15초마다 부른다.
+  - name: health probe가 1분 넘게 모두 실패한 상태가 1분 이어지면 울고 성공하면 풀린다
+    interval: 15s
+    input_series:
+      # 5분부터 15분 직전까지 실패한다. 6분에 1분 창이 모두 실패라 pending, 7분에 firing이다.
+      - series: probe_success{application="ResilientPOS"}
+        values: 1x19 0x39 1x40
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: HealthProbeFailing
+        exp_alerts: []
+      - eval_time: 7m
+        alertname: HealthProbeFailing
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              application: ResilientPOS
+            exp_annotations:
+              summary: "ResilientPOS health probe가 2분 넘게 실패한다"
+              runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#healthprobefailing
+      - eval_time: 16m
+        alertname: HealthProbeFailing
+        exp_alerts: []
+
+  - name: 한 번 실패하거나 1분 안에 회복한 probe는 울지 않는다
+    interval: 15s
+    input_series:
+      # 3분에 한 번 실패한다(GC, 호스트 부하). 5분 15초부터 6분 30초까지 실패해 6분에 pending이 되고, 7분에는 1분 창에 성공이 들어와 풀린다.
+      - series: probe_success{application="ResilientPOS"}
+        values: 1x11 0 1x7 0x5 1x40
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: HealthProbeFailing
+        exp_alerts: []
+      - eval_time: 7m
+        alertname: HealthProbeFailing
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: HealthProbeFailing
+        exp_alerts: []
+
+  - name: probe 창은 1분 전체를 본다
+    interval: 15s
+    input_series:
+      # 5분 15초까지 성공하고 5분 30초부터 실패한다. 6분의 1분 창에는 5분 15초의 성공이 들어 7분에 pending, 8분에 firing이다.
+      # 창을 30초나 45초로 줄이면 6분에 pending이 되어 7분에 운다.
+      - series: probe_success{application="ResilientPOS"}
+        values: 1x21 0x39 1x20
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: HealthProbeFailing
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: HealthProbeFailing
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              application: ResilientPOS
+            exp_annotations:
+              summary: "ResilientPOS health probe가 2분 넘게 실패한다"
+              runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#healthprobefailing
+
+  # G-03 시나리오는 처음 확정된 항목이 분에 6,000건이다. 60초를 넘긴 항목은 count와 le="60.0" bucket의 차이다.
+  - name: 재연결 뒤 60초를 넘긴 항목이 1시간 쌍의 배수를 넘으면 울고 30분 창이 깨끗해지면 풀린다
+    interval: 1m
+    input_series:
+      # 70분까지 항목의 0.2%(분에 12건)가 60초와 300초 사이다. 85분에는 5분 창이 깨끗하지만 30분 창이 0.1%라 6시간 쌍이 붙잡는다.
+      - series: sync_convergence_seconds_count{application="ResilientPOS", instance="a"}
+        values: 0+6000x110
+      - series: sync_convergence_seconds_bucket{application="ResilientPOS", instance="a", le="60.0"}
+        values: 0+5988x70 425160+6000x39
+      # 다른 bucket을 고르면 결과가 달라진다. 300초 bucket에는 모두 들고, 10초 bucket에는 1%가 빠진다.
+      - series: sync_convergence_seconds_bucket{application="ResilientPOS", instance="a", le="300.0"}
+        values: 0+6000x110
+      - series: sync_convergence_seconds_bucket{application="ResilientPOS", instance="a", le="10.0"}
+        values: 0+5940x110
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: SyncConvergenceBudgetBurn
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "재연결 뒤 60초 안에 확정되지 않은 sync 항목이 G-03 예산(99.99%)을 빠르게 쓰고 있다"
+              runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#syncconvergencebudgetburn
+      - eval_time: 85m
+        alertname: SyncConvergenceBudgetBurn
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "재연결 뒤 60초 안에 확정되지 않은 sync 항목이 G-03 예산(99.99%)을 빠르게 쓰고 있다"
+              runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#syncconvergencebudgetburn
+      - eval_time: 101m
+        alertname: SyncConvergenceBudgetBurn
+        exp_alerts: []
+
+  - name: G-03 1시간 쌍은 0.15%에 운다
+    interval: 1m
+    input_series:
+      # 6시간 동안 깨끗하다가 마지막 1시간만 0.15%가 60초를 넘는다. 6시간 창은 0.025%라 6시간 쌍은 울지 않는다.
+      - series: sync_convergence_seconds_count{application="ResilientPOS", instance="a"}
+        values: 0+6000x420
+      - series: sync_convergence_seconds_bucket{application="ResilientPOS", instance="a", le="60.0"}
+        values: 0+6000x360 2165991+5991x59
+    alert_rule_test:
+      - eval_time: 420m
+        alertname: SyncConvergenceBudgetBurn
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "재연결 뒤 60초 안에 확정되지 않은 sync 항목이 G-03 예산(99.99%)을 빠르게 쓰고 있다"
+              runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#syncconvergencebudgetburn
+
+  - name: G-03 1시간 쌍은 0.14%에 울지 않는다
+    interval: 1m
+    input_series:
+      - series: sync_convergence_seconds_count{application="ResilientPOS", instance="a"}
+        values: 0+6000x420
+      - series: sync_convergence_seconds_bucket{application="ResilientPOS", instance="a", le="60.0"}
+        values: 0+6000x360 2165991.6+5991.6x59
+      # 10초 bucket을 고르면 1%가 넘는다.
+      - series: sync_convergence_seconds_bucket{application="ResilientPOS", instance="a", le="10.0"}
+        values: 0+5940x420
+    alert_rule_test:
+      - eval_time: 420m
+        alertname: SyncConvergenceBudgetBurn
+        exp_alerts: []
+
+  - name: G-03 1시간 쌍은 5분 창이 깨끗하면 울지 않는다
+    interval: 1m
+    input_series:
+      # 6시간 동안 깨끗하다가 360~410분에 0.2%가 60초를 넘고 마지막 10분은 깨끗하다.
+      # 420분에 1시간 창 0.167%, 5분 창 0, 30분 창 0.133%, 6시간 창 0.028%다. 5분 창을 빼면 운다.
+      - series: sync_convergence_seconds_count{application="ResilientPOS", instance="a"}
+        values: 0+6000x420
+      - series: sync_convergence_seconds_bucket{application="ResilientPOS", instance="a", le="60.0"}
+        values: 0+6000x360 2165988+5988x49 2465400+6000x9
+    alert_rule_test:
+      - eval_time: 420m
+        alertname: SyncConvergenceBudgetBurn
+        exp_alerts: []
+
+  - name: G-03 1시간 쌍은 마지막 몇 분만 튀면 울지 않는다
+    interval: 1m
+    input_series:
+      # 6시간 동안 깨끗하다가 418~420분만 1%가 60초를 넘는다.
+      # 420분에 5분 창 0.6%, 1시간 창 0.05%, 30분 창 0.1%, 6시간 창 0.008%다. 1시간 창을 빼면 운다.
+      - series: sync_convergence_seconds_count{application="ResilientPOS", instance="a"}
+        values: 0+6000x420
+      - series: sync_convergence_seconds_bucket{application="ResilientPOS", instance="a", le="60.0"}
+        values: 0+6000x417 2507940+5940x2
+    alert_rule_test:
+      - eval_time: 420m
+        alertname: SyncConvergenceBudgetBurn
+        exp_alerts: []
+
+  - name: G-03 6시간 쌍은 0.065%에 운다
+    interval: 1m
+    input_series:
+      # 처음부터 0.065%가 60초를 넘는다. 0.144% 아래라 1시간 쌍은 울지 않는다.
+      - series: sync_convergence_seconds_count{application="ResilientPOS", instance="a"}
+        values: 0+6000x40
+      - series: sync_convergence_seconds_bucket{application="ResilientPOS", instance="a", le="60.0"}
+        values: 0+5996.1x40
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: SyncConvergenceBudgetBurn
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "재연결 뒤 60초 안에 확정되지 않은 sync 항목이 G-03 예산(99.99%)을 빠르게 쓰고 있다"
+              runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#syncconvergencebudgetburn
+
+  - name: G-03 6시간 쌍은 0.055%에 울지 않는다
+    interval: 1m
+    input_series:
+      - series: sync_convergence_seconds_count{application="ResilientPOS", instance="a"}
+        values: 0+6000x40
+      - series: sync_convergence_seconds_bucket{application="ResilientPOS", instance="a", le="60.0"}
+        values: 0+5996.7x40
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: SyncConvergenceBudgetBurn
+        exp_alerts: []
+
+  - name: 60초를 넘긴 항목이 2건이면 G-03이 울지 않는다
+    interval: 1m
+    input_series:
+      # 분에 1건이 확정되고 62·63분의 항목이 60초를 넘는다. 1시간 창 3.3%라 하한이 없으면 운다.
+      - series: sync_convergence_seconds_count{application="ResilientPOS", instance="a"}
+        values: 0+1x65
+      - series: sync_convergence_seconds_bucket{application="ResilientPOS", instance="a", le="60.0"}
+        values: 0+1x61 61 61 62 63
+    alert_rule_test:
+      - eval_time: 65m
+        alertname: SyncConvergenceBudgetBurn
+        exp_alerts: []
+
+  - name: 60초를 넘긴 항목이 3건이면 G-03이 운다
+    interval: 1m
+    input_series:
+      - series: sync_convergence_seconds_count{application="ResilientPOS", instance="a"}
+        values: 0+1x65
+      - series: sync_convergence_seconds_bucket{application="ResilientPOS", instance="a", le="60.0"}
+        values: 0+1x61 61 61 61 62
+    alert_rule_test:
+      - eval_time: 65m
+        alertname: SyncConvergenceBudgetBurn
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "재연결 뒤 60초 안에 확정되지 않은 sync 항목이 G-03 예산(99.99%)을 빠르게 쓰고 있다"
+              runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#syncconvergencebudgetburn

@@ -8,3 +8,9 @@ storage:
   tsdb:
     # 이미지 기본값과 같다. remote_write 재시도로 늦게 온 샘플을 받는다.
     out_of_order_time_window: 10m
+
+# obs profile의 Alertmanager로 보낸다. 라우팅은 docker/alertmanager/alertmanager.yaml에 있다.
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: [alertmanager:9093]
