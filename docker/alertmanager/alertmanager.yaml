@@ -1,0 +1,13 @@
+# 로컬 compose의 알림 라우팅이다. 규칙의 severity로 수신자를 가른다(docs/wiki/runbook.md 공통 절).
+# 수신자는 연동 없이 이름만 둔다. 로컬에는 호출하거나 티켓을 만들 곳이 없어, 받을 곳이 생기면 그 수신자에 연동을 더한다.
+# 검증: AlertRulesTest가 amtool check-config와 config routes test로 라우팅을 고정한다.
+route:
+  receiver: ticket
+  group_by: [alertname]
+  routes:
+    - matchers: ['severity="critical"']
+      receiver: page
+
+receivers:
+  - name: page
+  - name: ticket

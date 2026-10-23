@@ -6,7 +6,7 @@
 
 ## 공통
 
-- **울린 알림 보기.** 로컬은 Alertmanager가 없어 알림이 발송되지 않는다. Grafana(`localhost:3000`)의 Alerting → Alert rules에서 Prometheus 데이터소스가 관리하는 규칙의 상태를 보거나, Grafana 데이터소스 proxy로 `GET /api/datasources/proxy/uid/prometheus/api/v1/alerts`를 부른다.
+- **울린 알림 보기.** 로컬은 obs profile의 Alertmanager(`localhost:9093`)가 알림을 severity로 나눈다. critical은 `page`, 그 밖은 `ticket` 수신자로 가지만 두 수신자에 연동이 없어 사람에게 발송되지는 않는다. 받은 알림과 수신자는 Alertmanager 화면이나 `GET localhost:9093/api/v2/alerts`의 `receivers`로 본다. 규칙의 상태(pending 포함)는 Grafana(`localhost:3000`)의 Alerting → Alert rules에서 Prometheus 데이터소스가 관리하는 규칙으로 보거나, Grafana 데이터소스 proxy로 `GET /api/datasources/proxy/uid/prometheus/api/v1/alerts`를 부른다.
 - **로그에서 trace로.** Loki에서 `{service_name="ResilientPOS", level="ERROR"} |= "검색어"`로 줄을 찾는다. 줄마다 structured metadata `trace_id`가 붙어 있고, Grafana 로그 상세의 `trace_id` 링크가 Tempo의 그 trace를 연다. `orderId`·`paymentId`·`terminalId`는 label이 아니라 로그 본문에 있으므로 `|= "주문ID"`로 거른다.
 - **trace에서 로그로.** Tempo에서 연 span의 "Logs for this span"이 같은 `trace_id`의 로그를 연다. 한 trace에 HTTP 요청, Kafka 전송(producer), 소비(consumer), 그 consumer가 낸 다음 이벤트가 이어진다. 재전송 작업이 다시 보낸 메시지는 원래 요청의 trace가 아니라 그 주기 작업(`resubmitAndPurge`)의 trace에 있다.
 - **인스턴스.** pod마다 도는 작업과 신선도 알림에는 `instance` label이 붙는다. 같은 DB를 세는 gauge의 알림은 모든 인스턴스를 `max`로 모아 label이 없다.
@@ -158,10 +158,39 @@
 
 ## HttpErrorBudgetBurn
 
-- **뜻.** 단말 API(`/v1/**`)의 5xx가 오류 예산을 빠르게 쓰고 있다. SLO는 원문 "주문 API 가용성 99.9%"를 30일 예산으로 둔 것이다. 1시간과 5분 창이 모두 1.44%(예산의 2%를 1시간에 씀)를 넘거나, 6시간과 30분 창이 모두 0.6%(예산의 5%를 6시간에 씀)를 넘으면 운다(Google SRE Workbook "Alerting on SLOs"). 429(빈도 상한의 정상 거절)는 분모에서도 빼고, 409와 그 밖의 4xx는 실패로 세지 않는다. 긴 창의 요청이 70건(1시간)·167건(6시간)보다 적으면 그 쌍을 판정하지 않으므로, 6시간에 167건(시간당 약 28건)보다 적은 영업 외 시간에는 전부 실패해도 울지 않는다. 시간당 70~138건이면 같은 5분 안의 실패 2건으로도 운다. 서버가 끝낸 요청만 세므로 클라이언트가 먼저 끊은 요청과 ingress·LB의 5xx는 들지 않는다. 원인이 멈추면 짧은 창이 깨끗해질 때 풀린다. 큰 장애 뒤에는 30분 창 때문에 30분쯤 더 울 수 있다. 근거는 [slo-alert-baseline](../spec/2026-10-23-slo-alert-baseline.md) 결정 3·4다.
+- **뜻.** 단말 API(`/v1/**`)의 5xx가 오류 예산을 빠르게 쓰고 있다. SLO는 원문 "주문 API 가용성 99.9%"를 30일 예산으로 둔 것이다. 1시간과 5분 창이 모두 1.44%(예산의 2%를 1시간에 씀)를 넘거나, 6시간과 30분 창이 모두 0.6%(예산의 5%를 6시간에 씀)를 넘으면 운다(Google SRE Workbook "Alerting on SLOs"). 429(빈도 상한의 정상 거절)는 분모에서도 빼고, 409와 그 밖의 4xx는 실패로 세지 않는다. 긴 창(1시간·6시간)의 5xx가 3건보다 적으면 그 쌍을 판정하지 않는다(Workbook 저트래픽 절의 최소 실패 건수). 실패 2건까지는 울지 않고, 트래픽이 적은 영업 외 시간에도 3건 넘게 실패하고 비율이 배수를 넘으면 운다. 밤에 20건 가운데 3건이 실패해도 critical이 운다. 3에는 측정 근거가 없다. 서버가 끝낸 요청만 세므로 클라이언트가 먼저 끊은 요청과 ingress·LB의 5xx는 들지 않는다. 원인이 멈추면 짧은 창이 깨끗해질 때 풀린다. 큰 장애 뒤에는 30분 창 때문에 30분쯤 더 울 수 있다. 근거는 [slo-alert-baseline](../spec/2026-10-23-slo-alert-baseline.md) 결정 3·4이고, 실패 건수 하한은 [slo-alert-followups](../spec/2026-10-23-slo-alert-followups.md) 결정 9다.
 - **먼저 볼 것.**
   1. `sum by (uri, status) (rate(http_server_requests_seconds_count{uri=~"/v1/.*", status=~"5.."}[5m]))`로 어느 경로의 어느 상태인지 본다. 어느 쌍이 울었는지는 창마다 실패율을 본다. `sum(rate(http_server_requests_seconds_count{uri=~"/v1/.*", status=~"5.."}[1h])) / sum(rate(http_server_requests_seconds_count{uri=~"/v1/.*", status!="429"}[1h]))`에서 `[1h]`를 `[5m]`·`[6h]`·`[30m]`으로 바꿔 1.44%(1시간·5분)와 0.6%(6시간·30분)에 견준다. 5분 창이 이미 깨끗한데 울고 있으면 30분 창이 빠지기를 기다리는 중이다.
   2. Loki에서 `{service_name="ResilientPOS", level="ERROR"} |= "errorCode=INTERNAL_ERROR"`의 예외를 본다. `Connection is not available, request timed out`이면 커넥션 풀이 비었다. #77에서 무너진 단계(400 RPS)의 500은 모두 이것이었다.
   3. 함께 운 알림. [HttpLatencyAboveTarget](#httplatencyabovetarget)이 함께 울면 과부하나 DB 지연일 가능성이 크다. 지연 없이 500만 나면 배포한 코드의 버그를 의심한다.
 - **조치.** 원인(과부하, DB, 배포)을 고친다. 배포 직후 시작됐으면 이전 버전으로 되돌린다. 과부하면 [HttpLatencyAboveTarget](#httplatencyabovetarget)의 조치를 따른다.
 - **하지 말 것.** 원인을 알기 전에 silence로 끄지 않는다. 이 알림은 critical이고, 끄는 동안 예산이 계속 줄어든다.
+
+## HttpErrorBudgetSlowBurn
+
+- **뜻.** 단말 API(`/v1/**`)의 5xx가 3일과 6시간 창에서 모두 0.1%(30일 예산의 10%를 3일에 씀)를 넘는다. [HttpErrorBudgetBurn](#httperrorbudgetburn)이 울 만큼 빠르지는 않지만 이대로면 30일 안에 예산을 다 쓴다(Workbook의 ticket 쌍). 분자와 분모는 HttpErrorBudgetBurn과 같고, 3일 창의 5xx가 3건보다 적으면 판정하지 않는다. 3일 창은 평가마다 원시 series를 읽지 않도록 기록 규칙(`resilientpos:http_v1_errors:rate5m`, `resilientpos:http_v1_requests:rate5m`)의 3일 평균으로 계산하고, 실패 수도 그 평균에서 어림한다. 그래서 기록이 3일보다 짧게 쌓였거나 Prometheus가 멈춘 구간이 있으면 값이 어긋난다. 6시간 창이 0.1% 아래로 내려가면 풀린다. warning이라 `ticket`으로 간다. 근거는 [slo-alert-followups](../spec/2026-10-23-slo-alert-followups.md) 결정 2·9다.
+- **먼저 볼 것.**
+  1. `sum by (uri, status) (increase(http_server_requests_seconds_count{application="ResilientPOS", uri=~"/v1/.*", status=~"5.."}[3d]))`로 3일 동안 어느 경로에 어떤 상태가 났는지 본다. 한 경로에 몰렸으면 그 경로의 코드를, 고르게 퍼졌으면 DB와 커넥션을 의심한다.
+  2. `sum(rate(http_server_requests_seconds_count{application="ResilientPOS", uri=~"/v1/.*", status=~"5.."}[1h]))`를 3일 범위로 그려 특정 시각(배포, 피크)에 몰리는지 본다. 그 무렵 HttpErrorBudgetBurn이 울었으면 한 번의 큰 장애가 쓴 예산이다.
+  3. Loki에서 `{service_name="ResilientPOS", level="ERROR"} |= "errorCode=INTERNAL_ERROR"`의 예외를 본다.
+- **조치.** 반복되는 원인을 고치는 작업을 잡는다. 한 번의 큰 장애가 쓴 예산이면 그 장애의 후속 조치로 다룬다.
+
+## HealthProbeFailing
+
+- **뜻.** Alloy의 blackbox probe가 15초마다 부르는 `/actuator/health`가 2분 넘게 성공하지 못했다(`probe_success`). 1분 창의 probe가 모두 실패한 상태가 1분 이어지면 운다. 한 번의 timeout에는 울지 않고, 탐지까지 약 2~3분이 걸린다. health는 DB를 보고 Redis는 보지 않으므로 앱이 멈췄거나, 응답하지 않거나, DB에 닿지 못한다는 뜻이다. 오류율·지연 규칙과 달리 트래픽이 없는 시간에도 운다. 주문 API 경로(인증, 도메인 로직)의 고장과 Redis 장애는 보지 않는다. 앱이 모두 내려가면 [ResilientPosMetricsAbsent](#resilientposmetricsabsent)도 함께 운다(억제 규칙은 두지 않는다). 근거는 [slo-alert-followups](../spec/2026-10-23-slo-alert-followups.md) 결정 3이다.
+- **먼저 볼 것.**
+  1. `probe_http_status_code{application="ResilientPOS"}`로 응답 코드를 본다. 503이면 앱은 떠 있고 health가 DOWN이다(DB). 0이면 연결하지 못했거나 응답 전에 끊겼다. `probe_duration_seconds{application="ResilientPOS"}`가 10초 가까이면 앱이 응답하지 않는다.
+  2. 503이면 DB 상태와 앱 로그의 Hikari·DB 예외를 본다.
+  3. 연결하지 못하면 [ResilientPosMetricsAbsent](#resilientposmetricsabsent)의 먼저 볼 것(pod 상태, 기동 실패)을 따른다. 앱 metric(`process_uptime_seconds`)은 계속 들어오는데 probe만 실패하면 Alloy에서 앱으로 가는 경로(로컬은 `app:8080`)를 본다.
+- **조치.** DB면 DB를 되살린다. 앱이 응답하지 않으면(스레드 고갈, GC) 스레드 덤프를 남기고 재시작한다.
+
+## SyncConvergenceBudgetBurn
+
+- **뜻.** 재연결 뒤 60초 안에 확정되지 않은 sync 항목이 G-03 예산(99.99%, 30일)을 빠르게 쓰고 있다. 1시간과 5분 창이 모두 0.144%를 넘거나, 6시간과 30분 창이 모두 0.06%를 넘으면 운다. 긴 창에서 60초를 넘긴 항목이 3건보다 적으면 판정하지 않는다. 값은 처음 확정된 항목마다 서버 시각에서 `createdAt`과 `reconnectedAt` 가운데 늦은 쪽을 뺀 `sync_convergence_seconds`이고, 60초를 넘긴 항목은 count와 `le="60.0"` bucket의 차이다. 확정 시점에 기록하는 후행 지표라 서버 장애 중에는 값이 비고, 장애가 끝나 밀린 항목이 확정될 때 운다. 장애 자체는 [HttpErrorBudgetBurn](#httperrorbudgetburn)·[HttpLatencyAboveTarget](#httplatencyabovetarget)·[HealthProbeFailing](#healthprobefailing)이 page하므로 이 알림은 warning이다. 장애 알림 없이 이것만 울면 서버가 5xx 없이 수렴을 늦춘 것이다(429 거절, 409 뒤 재시도). 근거는 [slo-alert-followups](../spec/2026-10-23-slo-alert-followups.md) 결정 4~6이다.
+- **먼저 볼 것.**
+  1. 함께 운 알림. 그 무렵 장애 알림이 울었으면 장애 동안 밀린 항목이 확정된 것이다.
+  2. `sum(rate(http_server_requests_seconds_count{application="ResilientPOS", uri="/v1/terminals/{terminalId}/sync", status="429"}[5m]))`로 sync 거절을 본다. 있으면 [InboundStoreRateLimited](#inboundstoreratelimited)와 Loki의 `빈도 상한으로 거절했다` 줄을 본다.
+  3. `sum by (le) (increase(sync_convergence_seconds_bucket{application="ResilientPOS"}[1h]))`로 60초를 넘긴 항목이 어느 bucket(5분·15분·1시간 이상)에 몰렸는지 본다. 몇 분이면 재시도 지연이고, 몇 시간이면 `reconnectedAt`을 싣지 않는 단말을 의심한다. 그런 단말의 값은 `createdAt`부터라 오프라인으로 있던 시간이 들어간다.
+  4. `increase(sync_reconnected_at_invalid_total{application="ResilientPOS"}[1h])`가 늘면 형식이 틀린 `reconnectedAt`을 보내는 단말이 있다. 그 배치도 `createdAt`부터 잰다.
+- **조치.** 429면 InboundStoreRateLimited의 조치를 따른다. `reconnectedAt`을 싣지 않거나 틀리게 싣는 단말이면 단말을 고친다.
+- **한계.** 단말 시계가 서버와 어긋나면 값도 어긋난다. 패킷을 버리는 단절로 생긴 timeout은 서버 책임으로 잡힌다. 단말이 응답을 받은 시각이 아니라 서버가 확정한 시각까지다.

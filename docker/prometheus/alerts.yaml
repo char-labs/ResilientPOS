@@ -4,6 +4,15 @@
 # 여러 pod가 같은 DB를 세는 gauge는 max로 모으고, pod마다 도는 작업은 instance별로 본다.
 # increase(x[W]) > 0은 마지막 증가 뒤에도 W 동안 참이라, for를 두는 규칙의 창은 for보다 짧게 둔다(scrape 15초의 4배 이상).
 groups:
+  # HttpErrorBudgetSlowBurn이 3일 창을 평가마다 원시 series로 읽지 않도록 5분 rate를 기록한다.
+  # 해당 series가 없을 때 0을 남겨야 3일 평균의 분모와 분자가 같은 구간을 센다.
+  - name: resilientpos-records
+    rules:
+      - record: resilientpos:http_v1_errors:rate5m
+        expr: sum(rate(http_server_requests_seconds_count{application="ResilientPOS", uri=~"/v1/.*", status=~"5.."}[5m])) or vector(0)
+      - record: resilientpos:http_v1_requests:rate5m
+        expr: sum(rate(http_server_requests_seconds_count{application="ResilientPOS", uri=~"/v1/.*", status!="429"}[5m])) or vector(0)
+
   - name: resilientpos
     rules:
       - alert: ResilientPosMetricsAbsent
@@ -230,7 +239,7 @@ groups:
       - alert: HttpErrorBudgetBurn
         # SLO는 원문 "주문 API 99.9%"를 단말 API(/v1)에 둔 것이고 예산 기간은 30일이다. 실패는 5xx이고 429(빈도 상한의 정상 거절)는 분모에서도 뺀다.
         # Google SRE Workbook "Alerting on SLOs"의 page 두 쌍이다. 1시간·5분 14.4배는 예산의 2%를 1시간에, 6시간·30분 6배는 5%를 6시간에 쓴 것이다.
-        # 긴 창의 요청이 1 ÷ (배수 × 0.1%)건(70, 167) 미만이면 실패 한 건으로 배수를 넘으므로 판정하지 않는다. 짧은 창이 빨리 풀리게 하므로 for는 두지 않는다.
+        # 긴 창의 실패가 3건 미만이면 그 쌍을 판정하지 않는다(Workbook 저트래픽 절의 최소 실패 건수, 3에는 측정 근거가 없다). 짧은 창이 빨리 풀리게 하므로 for는 두지 않는다.
         expr: |
           (
             sum(rate(http_server_requests_seconds_count{application="ResilientPOS", uri=~"/v1/.*", status=~"5.."}[1h]))
@@ -239,7 +248,7 @@ groups:
             sum(rate(http_server_requests_seconds_count{application="ResilientPOS", uri=~"/v1/.*", status=~"5.."}[5m]))
               / sum(rate(http_server_requests_seconds_count{application="ResilientPOS", uri=~"/v1/.*", status!="429"}[5m])) > 14.4 * 0.001
             and
-            sum(increase(http_server_requests_seconds_count{application="ResilientPOS", uri=~"/v1/.*", status!="429"}[1h])) >= 70
+            sum(increase(http_server_requests_seconds_count{application="ResilientPOS", uri=~"/v1/.*", status=~"5.."}[1h])) >= 3
           )
           or
           (
@@ -249,10 +258,68 @@ groups:
             sum(rate(http_server_requests_seconds_count{application="ResilientPOS", uri=~"/v1/.*", status=~"5.."}[30m]))
               / sum(rate(http_server_requests_seconds_count{application="ResilientPOS", uri=~"/v1/.*", status!="429"}[30m])) > 6 * 0.001
             and
-            sum(increase(http_server_requests_seconds_count{application="ResilientPOS", uri=~"/v1/.*", status!="429"}[6h])) >= 167
+            sum(increase(http_server_requests_seconds_count{application="ResilientPOS", uri=~"/v1/.*", status=~"5.."}[6h])) >= 3
           )
         labels:
           severity: critical
         annotations:
           summary: "단말 API(/v1)의 5xx가 오류 예산(가용성 99.9%)을 빠르게 쓰고 있다"
           runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#httperrorbudgetburn
+
+      - alert: HttpErrorBudgetSlowBurn
+        # Workbook의 ticket 쌍이다. 3일·6시간 창이 모두 배수 1(30일 예산의 10%를 3일에 씀)을 넘으면 운다. 분자와 분모는 HttpErrorBudgetBurn과 같다.
+        # 3일 실패 수는 기록의 평균 rate에 3일을 곱한 어림값이라 2.5를 3건의 문턱으로 쓴다. 기록이 3일보다 짧게 쌓였거나 Prometheus가 멈춘 구간이 있으면 어긋난다.
+        expr: |
+          avg_over_time(resilientpos:http_v1_errors:rate5m[3d]) / avg_over_time(resilientpos:http_v1_requests:rate5m[3d]) > 1 * 0.001
+          and
+          sum(rate(http_server_requests_seconds_count{application="ResilientPOS", uri=~"/v1/.*", status=~"5.."}[6h]))
+            / sum(rate(http_server_requests_seconds_count{application="ResilientPOS", uri=~"/v1/.*", status!="429"}[6h])) > 1 * 0.001
+          and
+          avg_over_time(resilientpos:http_v1_errors:rate5m[3d]) * 3 * 86400 > 2.5
+        labels:
+          severity: warning
+        annotations:
+          summary: "단말 API(/v1)의 5xx가 3일 동안 오류 예산(가용성 99.9%)을 기간보다 빠르게 쓰고 있다"
+          runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#httperrorbudgetslowburn
+
+      - alert: HealthProbeFailing
+        # Alloy blackbox가 15초마다 /actuator/health(DB 포함, Redis 제외)를 부른다. 트래픽이 없을 때의 멈춤·무응답·DB 장애를 잡는다.
+        # 1분 창의 probe가 모두 실패한 상태가 1분 이어져야 운다. 한 번의 timeout에는 울지 않고, 탐지까지 약 2~3분이 걸린다.
+        expr: max_over_time(probe_success{application="ResilientPOS"}[1m]) == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: ResilientPOS health probe가 2분 넘게 실패한다
+          runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#healthprobefailing
+
+      - alert: SyncConvergenceBudgetBurn
+        # G-03(재연결 뒤 60초 안에 99.99% 확정, 예산 기간 30일)의 burn rate다. 60초를 넘긴 항목은 count와 le="60.0" bucket의 차이다.
+        # HttpErrorBudgetBurn과 같은 두 쌍과 실패 3건 하한이다. 확정 시점에 기록하는 후행 지표라 장애가 끝난 뒤에 울어 warning이다.
+        expr: |
+          (
+            1 - sum(rate(sync_convergence_seconds_bucket{application="ResilientPOS", le="60.0"}[1h]))
+              / sum(rate(sync_convergence_seconds_count{application="ResilientPOS"}[1h])) > 14.4 * 0.0001
+            and
+            1 - sum(rate(sync_convergence_seconds_bucket{application="ResilientPOS", le="60.0"}[5m]))
+              / sum(rate(sync_convergence_seconds_count{application="ResilientPOS"}[5m])) > 14.4 * 0.0001
+            and
+            sum(increase(sync_convergence_seconds_count{application="ResilientPOS"}[1h]))
+              - sum(increase(sync_convergence_seconds_bucket{application="ResilientPOS", le="60.0"}[1h])) >= 3
+          )
+          or
+          (
+            1 - sum(rate(sync_convergence_seconds_bucket{application="ResilientPOS", le="60.0"}[6h]))
+              / sum(rate(sync_convergence_seconds_count{application="ResilientPOS"}[6h])) > 6 * 0.0001
+            and
+            1 - sum(rate(sync_convergence_seconds_bucket{application="ResilientPOS", le="60.0"}[30m]))
+              / sum(rate(sync_convergence_seconds_count{application="ResilientPOS"}[30m])) > 6 * 0.0001
+            and
+            sum(increase(sync_convergence_seconds_count{application="ResilientPOS"}[6h]))
+              - sum(increase(sync_convergence_seconds_bucket{application="ResilientPOS", le="60.0"}[6h])) >= 3
+          )
+        labels:
+          severity: warning
+        annotations:
+          summary: "재연결 뒤 60초 안에 확정되지 않은 sync 항목이 G-03 예산(99.99%)을 빠르게 쓰고 있다"
+          runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#syncconvergencebudgetburn
