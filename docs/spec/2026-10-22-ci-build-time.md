@@ -3,7 +3,7 @@
 ## 목적
 PR 검사(`.github/workflows/pr-checks.yml`) 한 번이 5분 넘게 걸린다. 이슈는 없고 사용자가 직접 요청했다.
 
-기준선은 CI 실행 39736986219(feature/alert-state-gauges PR)다. 전체 5분 22초 가운데 준비와 캐시 복원이 약 9초, Gradle daemon 기동과 설정이 16초, `compileKotlin`·`compileTestKotlin`이 약 33초, test가 4분 11초다. Flyway version gate(5초)는 빌드가 끝난 뒤에야 돈다. 최근 PR 실행 8건은 4분 42초~5분 53초로 1분 넘게 흔들린다.
+기준선은 CI 실행 39736986219(feature/alert-state-gauges PR)다. 전체 5분 22초(run 생성부터 끝까지. attempt 시작부터 재면 5분 25초이고 결과 절은 이 기준이다) 가운데 준비와 캐시 복원이 약 9초, Gradle daemon 기동과 설정이 16초, `compileKotlin`·`compileTestKotlin`이 약 33초, test가 4분 11초다. Flyway version gate(5초)는 빌드가 끝난 뒤에야 돈다. 최근 PR 실행 8건은 4분 42초~5분 53초로 1분 넘게 흔들린다.
 
 로컬 기준선(k6 worktree의 `build/test-results`, 2026-10-22)은 130개 클래스, 868개 테스트, 합계 251초이고 한 JVM에서 직렬로 돈다. Spring 컨텍스트 기동이 57번이고 "Started … in N seconds" 로그만 합해도 70초다(종료 시간 제외). 오래 걸리는 클래스는 `ResilientPosApplicationTests` 21초(테스트 1개), `KafkaRetryIntegrationTest` 18초, `DeadLetterRedriveIntegrationTest` 17초다.
 
@@ -65,7 +65,7 @@ PR 검사(`.github/workflows/pr-checks.yml`) 한 번이 5분 넘게 걸린다. �
 - 같은 커밋 재실행은 run id가 같고 attempt 번호만 오른다. 인수 조건 3은 run id와 attempt로 적고, attempt마다 시작부터 끝까지 잰다.
 - fork 2와 3의 CI 비교를 인수 조건에 넣는다. 인수 조건 3은 고른 값이 들어간 최종 커밋의 실행이다.
 
-**3. test를 CI job 2개로 나눈다(2026-10-23, 사용자 결정).** fork 2로 CI 전체가 4분 26초와 4분 14초였고 3분에 못 미쳤다(결과 절). fork 3은 더 느렸다. 컨텍스트 기동(58번, 102초)과 fork마다의 컨테이너 기동(약 20초)이 남고, Kafka fetch 대기를 줄여도 10~20초라 합의한 후보로는 3분에 닿지 않는다.
+**3. test를 CI job 2개로 나눈다(2026-10-23, 사용자 결정).** fork 2로 CI 전체가 4분 26초와 4분 14초였고 3분에 못 미쳤다(결과 절). fork 3은 더 느렸다. 컨텍스트 기동(58번, 102초. CI run 39876952347의 test 결과)과 fork마다의 컨테이너 기동(약 20초)이 남고, Kafka fetch 대기를 줄여도 10~20초라 합의한 후보로는 3분에 닿지 않는다.
 - build job을 matrix로 둘 띄운다. 각 job이 `./gradlew build -PtestShard=번호/2`를 돌린다. 두 job 모두 준비·컴파일을 따로 하므로 러너 시간은 약 두 배가 된다.
 - 나누는 기준은 바깥 클래스 이름(중첩 클래스는 바깥 클래스를 따른다)의 해시다(사용자 결정). 모든 클래스가 정확히 한 job에서 돌고 관리할 목록이 없다. 대신 무거운 클래스가 한쪽에 몰릴 수 있다.
 - `testShard`가 없으면(로컬) 전부 돈다. 형식이 틀리면 빌드가 바로 실패한다.
@@ -115,6 +115,9 @@ PR 검사(`.github/workflows/pr-checks.yml`) 한 번이 5분 넘게 걸린다. �
 - 시간 상한을 단언하는 테스트(`RedisTerminalRateLimiterOutageIntegrationTest`의 500ms, `AdminIdentityProviderTimeoutsTest`, `awaitUntil` 마감)는 fork가 CPU를 나눠 쓰면 여유가 줄어든다. 결정 9의 감시 대상이다.
 - fork 수가 같아도 클래스를 fork에 나누는 순서와 fork 안의 실행 순서는 환경마다 다를 수 있다. 고정값은 CPU 수에 따라 배치가 바뀌지 않게 할 뿐이다.
 - 로컬 후보 비교는 다른 세션과 compose 스택이 함께 도는 머신에서 각각 한 번 잰 값이다.
+- 컨텍스트를 클래스끼리 같이 써서 앞 클래스의 늦은 처리가 다음 클래스까지 이어진다. TRUNCATE 뒤에는 비워진 행 때문에 실패해 재시도와 DLT를 만들 수 있고, 전역 개수(DLT counter 증가분, 잠금 대기 수)를 단언하는 테스트가 드물게 흔들릴 수 있다. 결과 불명 확정 작업의 커서도 클래스를 넘어 이어진다.
+- 공유 spy에 스텁을 거는 순간 다른 스레드가 같은 spy를 부르면 Mockito가 그 호출을 스텁 대상으로 잡을 수 있다(Mockito의 알려진 한계). 스텁은 테스트 ID로 거르지만 이 경합은 막지 못한다.
+- 새 Fixture factory는 모든 필드를 넘겨받아 Fixture Monkey가 채우는 값이 없다. 그 대가로 sample 비용(재지 않음)을 치른다.
 
 ## 관련 문서
 없음. 이 PR이 따르는 장기 스펙 문서가 없다. 앞 PR은 [flyway-version-guard](2026-09-15-flyway-version-guard.md)(Flyway gate), [kafka-event-redelivery](2026-09-26-kafka-event-redelivery.md)(컨텍스트 캐시 1개 제한)다.
@@ -157,7 +160,7 @@ PR 검사(`.github/workflows/pr-checks.yml`) 한 번이 5분 넘게 걸린다. �
 
 ## Wiki 영향
 - [개발 규칙](../wiki/development-workflow.md)의 "PR 워크플로" 절: 두 단계를 순서대로 돈다는 서술과 "빌드를 앞에 두는 이유"를 병렬 구성과 build cache로 고친다.
-- [테스트 전략](../wiki/testing-strategy.md)에 "통합 테스트 컨텍스트" 절을 더한다(범위 조정 4). 하위 클래스에서 `@MockitoBean`·`@MockitoSpyBean`을 새로 선언하지 않는 규칙, 클래스 정렬, 단말 API를 기다림 안에서 부르지 않는 규칙이다.
+- [테스트 전략](../wiki/testing-strategy.md)에 "통합 테스트 컨텍스트" 절을 더한다(범위 조정 4·5). 하위 클래스에서 `@MockitoBean`·`@MockitoSpyBean`을 새로 선언하지 않는 규칙, 스텁을 테스트 ID로 거르는 규칙, `@Autowired` 없는 생성자 주입과 슬라이스 mock 선언, 공용 `ScriptedPaymentGateway`·`PaymentDeclinedRecorder`, 클래스 시작 전 TRUNCATE, 클래스 정렬, 단말 API를 기다림 안에서 부르지 않는 규칙이다. "Fixture Monkey" 절에 공용 인스턴스, 모듈 Fixture, 직접 생성 금지, `FixtureFactoriesTest`, 동시성 테스트의 커맨드 생성 위치를 더한다.
 - 업무 요구사항·도메인 모델은 무영향이다. 업무 동작과 운영 설정을 바꾸지 않는다.
 - Modulith·Kafka 키워드 문서(볼트, 저장소 추적 대상 아님)는 결정 10에 해당할 때만 고친다.
 
@@ -224,8 +227,11 @@ PR 검사(`.github/workflows/pr-checks.yml`) 한 번이 5분 넘게 걸린다. �
 | test job 2개(artifact 포함) | e8b9ae4 | 39878763373 | 3분 46초 |
 | test job 2개 | b5a1546 | 39879323889 | 4분 5초, 3분 48초, 4분 7초(중앙값 4분 5초) |
 | 컨텍스트 재사용(범위 조정 4) | 111df11 | 39883734999 | 3분 41초, 3분 31초, 3분 39초(중앙값 3분 39초) |
+| 공용 대역·TRUNCATE·Fixture(범위 조정 5, 리뷰 전) | 4d41290 | 39890304994 | 3분 36초, 3분 36초, 4분 31초(중앙값 3분 36초) |
+| 범위 조정 5 리뷰 반영(최종) | 9a0b645 | 39892838533 | 3분 36초, 3분 37초, 3분 49초(중앙값 3분 37초) |
 
-- **성공 기준(중앙값 3분 이하)은 달성하지 못했다.** 최종 코드 커밋 111df11의 중앙값은 3분 39초로 기준선보다 1분 46초(33%) 줄었다. 그 뒤 커밋은 spec과 wiki만 바꾼다.
+- **성공 기준(중앙값 3분 이하)은 달성하지 못했다.** 최종 커밋 9a0b645(코드는 2932c84와 같고 그 뒤는 wiki만 바꾼다)의 중앙값은 3분 37초로 기준선보다 1분 48초(33%) 줄었다.
+- 범위 조정 4·5는 컨텍스트 기동을 크게 줄였지만(아래 표) CI 시간은 3분 39초에서 3분 37초로 거의 같았다. 같은 커밋의 job 하나가 2분 40초에서 4분 27초까지 흔들리는(4d41290 attempt 3) 러너 차이가 기동 몫(job당 약 10~20초)보다 크다. 범위 조정 4·5의 효과는 기동 수를 주 근거로 두고 CI 시간은 참고로 본다.
 - fork 3은 CI test가 약 4분 9초로 fork 2(약 3분 10초~3분 19초)보다 느렸다. 코어 4개에 JVM 3개와 컨테이너 9개가 경합한다. fork 2를 고른다(인수 조건 9).
 - test job 2개의 클래스·테스트 수는 62개·455개와 71개·446개로, 합치면 133개·901개다. 로컬 전체와 같다(인수 조건 11, run 39878763373의 artifact).
 - 111df11의 job 하나는 준비 약 10초, daemon·설정·컴파일 약 60초, test 약 2분 5초~2분 15초다. 줄지 않은 몫은 job마다 따로 하는 컴파일과, fork마다 하는 이미지 받기(약 15초)·컨테이너 기동(약 7초)이다.
@@ -237,9 +243,12 @@ PR 검사(`.github/workflows/pr-checks.yml`) 한 번이 5분 넘게 걸린다. �
 | 범위 조정 4 전 | 26번 | 33번 | 59번 |
 | 클래스 정렬만 | 20번 | 23번 | 43번 |
 | 정렬과 기반 클래스 통합(111df11) | 17번 | 20번 | 37번 |
+| 공용 대역 통합(범위 조정 5, 2932c84) | 12번 | 16번 | 28번 |
 
 - 기동 수는 머신 부하와 상관없이 세어지는 값이라 로컬에서 쟀다. 시간은 위 CI 표다.
 - 111df11로 두 job 몫을 로컬에서 모두 돌려 통과했다(62개·455개, 71개·446개, 실패 0).
+- 2932c84로 두 job 몫을 돌려 통과했다(62개·455개, 72개·450개, 실패 0. 자체 점검 테스트 4개가 늘었다).
+- 2932c84로 분할 없이 `./gradlew test --rerun`을 3회 연속 돌려 모두 통과했다(134개 클래스, 905개 테스트, 실패 0). 기동은 세 번 모두 24번이다(범위 조정 4 전 fork 2개 전체 실행은 57~58번). 범위 조정 5 리뷰 전 커밋 d2ee896에서도 3회 연속 통과했고 기동은 24번이었다.
 - 정렬로 드러난 `PaymentAttemptApiIntegrationTest`의 429는 기다리기를 DB 상태로 바꿔 고쳤다(범위 조정 4).
 - `junit-platform.properties`가 생기면 Fixture Monkey가 쓰는 jqwik 엔진이 저장소 루트에 `.jqwik-database`를 만든다(파일이 없을 때는 만들지 않는 것을 확인했다). `jqwik.database`로 `build/` 아래에 둔다.
 
@@ -247,7 +256,21 @@ PR 검사(`.github/workflows/pr-checks.yml`) 한 번이 5분 넘게 걸린다. �
 - [우아한형제들 기술블로그, 야, 너도 WireMock으로 테스트할 수 있어](https://techblog.woowahan.com/17674/): 테스트마다 다른 `@MockBean`이 컨텍스트를 새로 띄워 시간이 크게 늘어서, `@MockBean`을 줄이고 공통 지원 클래스를 상속해 stub을 공유했다.
 - [woowacourse-teams/2026-ChongChong #538](https://github.com/woowacourse-teams/2026-ChongChong/pull/538): PostgreSQL 컨테이너를 JVM 안에서 공유하고 컨텍스트를 재사용한다. 마이그레이션 테스트는 독립 컨테이너로 둔다. PR에서는 Gradle 캐시를 읽기만 한다.
 - [Spring 컨텍스트 캐싱을 이용한 411개의 테스트 코드 최적화 과정](https://velog.io/@32190192/%ED%85%8C%EC%8A%A4%ED%8A%B8-%EC%BD%94%EB%93%9C-%EC%B5%9C%EC%A0%81%ED%99%94), [@SpringBootTest 테스트 실행 시간 줄이기](https://targetcoders.com/springboottest-%EC%BB%A8%ED%85%8D%EC%8A%A4%ED%8A%B8-%EC%BA%90%EC%8B%B1/): 초기화된 컨텍스트 수를 세고, 공통 부모 클래스로 구성을 맞춰 줄인다.
-- [테스트 코드 트랜잭션 격리](https://www.ybchar.dev/tech-blog/20240302_test_code_transaction_isolation)(사용자 제공): 요청이 다른 스레드에서 처리되면 테스트의 `@Transactional` 롤백이 적용되지 않는다. `@DirtiesContext` 대신 `@BeforeEach`에서 TRUNCATE로 정리한다. 이 저장소의 테스트는 테스트 쪽 `@Transactional`을 쓰지 않고, UUID v7 ID를 테스트마다 새로 만들어 격리한다. 테스트마다 테이블을 비우면 앞 테스트의 비동기 consumer가 지운 뒤에 다시 쓸 수 있어 TRUNCATE는 쓰지 않는다.
+- [테스트 코드 트랜잭션 격리](https://www.ybchar.dev/tech-blog/20240302_test_code_transaction_isolation)(사용자 제공): 요청이 다른 스레드에서 처리되면 테스트의 `@Transactional` 롤백이 적용되지 않는다. `@DirtiesContext` 대신 `@BeforeEach`에서 TRUNCATE로 정리한다. 이 저장소의 테스트는 테스트 쪽 `@Transactional`을 쓰지 않는다. 범위 조정 5에서 사용자 결정으로 TRUNCATE를 들였다. 테스트 메서드가 아니라 테스트 클래스가 시작하기 전에 비우고, 클래스 안의 테스트끼리는 UUID v7 ID를 테스트마다 새로 만들어 격리한다.
+
+### TRUNCATE 실측 (범위 조정 5)
+- 처음에는 전체 실행 한 번에서 `OwnerManagementIntegrationTest`가 클래스 시작 전 TRUNCATE에서 `deadlock detected`로 실패했다. 앞 클래스의 비동기 consumer 트랜잭션이 표 몇 개를 잡은 채 다른 표를 기다렸고, TRUNCATE가 표를 차례로 독점 잠금하다 서로 기다렸다. PostgreSQL이 TRUNCATE를 희생자로 취소했다.
+- 그 트랜잭션은 곧 끝나므로 교착이나 잠금 실패(`PessimisticLockingFailureException`)면 200ms 뒤 다시 비우고, 다섯 번째도 실패하면 그대로 던진다. 그 뒤 전체 3회 연속(두 번)과 CI 6회에서 다시 나지 않았다.
+- `PER_CLASS` 생명주기, `@Nested`, `@BeforeAll`을 쓰는 테스트는 없다. 그래서 클래스 시작 전에 비워도 클래스 안의 준비 데이터를 지우지 않는다.
+
+### 리뷰 반영 (범위 조정 5)
+- `resilientpos-multi-review`를 범위 조정 3·4 뒤와 범위 조정 5 뒤에 다시 돌렸다. Claude는 각각 80/100이었고, Codex는 점수 없이 지적만 냈다. Gemini는 CLI가 없어 미실행이다.
+- 범위 조정 3·4 리뷰(두 리뷰어 공통): identity hash 정렬 키 때문에 묶음 순서가 실행마다 달랐다. 하위 클래스에 `@AutoConfigureMockMvc`가 중복으로 남았다. 최종 코드 뒤 전체 3회 기록이 없었다. 세 가지 모두 범위 조정 5에서 고쳤다.
+- 범위 조정 3·4 리뷰(Claude만): 정렬기가 테스트 발견 단계에서 컨테이너를 띄워, Docker가 없으면 단위 테스트까지 못 돌았다. 그래서 계산이 실패하면 이름 키로 둔다. `ReconciliationOpenConcurrencyIntegrationTest`의 spy 스텁이 남의 paymentId에도 반응해서 이 테스트의 시도로 거른다. `testShard` 형식 검사를 정규식으로 바꿨다. jqwik 엔진을 뺐다. 같은 spy를 두 이름으로 받던 것을 합쳤다.
+- 범위 조정 3·4 리뷰(Codex만, 아님을 확인): Codex는 "`testShard`가 캐시 키에 없어 job끼리 결과가 섞인다"고 짚었다. 그런데 단위 테스트만 골라 `-PtestShard=1/2`를 돌린 뒤 `--rerun` 없이 2/2를 돌리면 다시 실행된다. `clean` 뒤에는 job마다 자기 결과(1/2는 3개, 2/2는 1개)만 `FROM-CACHE`로 되살아난다. Gradle이 걸러진 후보 클래스를 test 입력으로 본다.
+- 범위 조정 5 리뷰(Claude): 공용 gateway의 "그 금액의 첫 호출" 상태를 같은 금액을 쓰는 다른 클래스의 늦은 호출이 먼저 차지할 수 있었다. 실제로 4535를 두 클래스가 썼다. 그래서 첫 시도가 자리 잡은 뒤 "그 시도가 아닌 같은 금액은 승인"을 거는 상태 없는 방식으로 바꿨다. 동시성 테스트가 경쟁하는 스레드 안에서 Fixture를 만들던 것을 밖으로 뺐다. 분산 락 spy 스텁은 결과에 관여하지 않고 공유 spy에 스텁을 거는 위험만 남아 지웠다. Fixture Monkey가 중첩 값과 null을 그대로 두는지 확인하는 `FixtureFactoriesTest`(4개)를 더했다(통과). 웹 슬라이스의 `@MockitoBean lateinit var` 필드 약 30개를 클래스 수준 선언과 생성자 주입으로 바꿨다.
+- 범위 조정 5 리뷰(Codex): `ReconciliationFixtures.resolve`에 `storeId`·`ownerId`를 더하고, REST Docs 테스트의 7필드 해소 커맨드를 이 factory로 만들었다. `queried().isEmpty()`를 이 테스트의 시도로 거르는 단언으로 바꿨다.
+- 받아들인 한계(한계 절): TRUNCATE 뒤 앞 클래스의 늦은 메시지가 비워진 행 때문에 실패해 재시도와 DLT를 만들 수 있다. gateway reset 뒤에는 그 테스트 자신의 늦은 호출도 기본 동작을 탄다. 결과 불명 확정 작업의 커서가 클래스를 넘어 이어진다. 공유 spy(`ReconciliationManagement`)에 스텁을 거는 순간 다른 스레드가 같은 spy를 부르면 스텁이 그 호출에 걸릴 수 있다.
 
 ### 리뷰 반영 (범위 조정 2)
 - `resilientpos-multi-review`: Claude 81/100, Codex는 점수 없이 지적만, Gemini는 CLI가 없어 미실행이다. 두 리뷰어가 함께 짚은 것은 닫은 임시 포트의 경쟁과, 인수 조건 2의 CI 적중 실측을 머지 전에 할 수 없다는 것이다. 둘 다 범위 조정 2로 반영했다.
