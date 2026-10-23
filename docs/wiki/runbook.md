@@ -61,7 +61,7 @@
 
 ## KafkaConsumerLag
 
-- **뜻.** 한 파티션이 10분 넘게 1000건 넘게 밀렸다. 재시도는 blocking이라 한 메시지가 재시도 중이면 그 파티션 전체가 기다린다. DB에 닿지 못하는 실패는 횟수 없이 기다린다. 1000은 #77에서 판별만 확인된 값이다(정상 부하 lag 0, provider가 1초 느려지면 1분에 2,398). provider 지연이 1초면 승인 파티션 하나가 초당 1건을 처리하므로 1000건은 약 17분 밀린 것이다.
+- **뜻.** 한 파티션이 10분 넘게 1000건 넘게 밀렸다. 재시도는 blocking이라 한 메시지가 재시도 중이면 그 파티션 전체가 기다린다. DB에 닿지 못하는 실패는 횟수 없이 기다린다. 1000은 #77에서 판별만 확인된 값이다(정상 부하 lag 0, provider가 1초 느려지면 1분 실행에 lag 최대 2,398). provider 지연이 1초면 승인 파티션 하나가 초당 1건을 처리하므로 1000건은 약 17분 밀린 것이다.
 - **먼저 볼 것.** WARN `소비 실패 topic=… key=… attempt=…`가 같은 key로 반복되면 그 메시지가 재시도 중이다. 예외가 커넥션 획득 실패면 DB부터 본다. 반복이 없으면 처리량이 모자란 것이라 `spring_kafka_listener_seconds`(처리 시간)와 DB 지연을 본다.
 - **조치.** 원인을 고치면 재시도가 이어서 처리한다. 처리량이 모자라면 파티션 수를 바꾸는 PR로 다룬다([도메인 모델 §4.3](domain-model.md#43-이벤트-전달과-저장-형식) 토픽 항목). 환경 변수로 바꾸지 않는다.
 
@@ -145,21 +145,22 @@
 
 ## HttpLatencyAboveTarget
 
-- **뜻.** 단말 경로 하나(`uri` label)의 5분 p95가 원문 목표를 10분 넘게 넘는다. 목표는 주문 생성(`POST /v1/orders`) 200ms, checkout(`POST /v1/orders/{orderId}/checkout`) 150ms, sync(`POST /v1/terminals/{terminalId}/sync`) 2초다([시스템 설계 §7](../references/02_System_Design.md#7-nfr-and-observability)). checkout은 승인을 Kafka 뒤로 넘겨 PG를 부르지 않는다. sync의 2초는 가장 큰 배치(500 op)의 목표라, sync가 울면 배치 크기와 상관없이 요청의 5% 넘게 최악 목표보다 느리다. 429는 빼고 보고, 5분에 그 uri 요청이 20건 미만이면 판정하지 않는다. 1분 안에 끝나는 튐(단말 동시 재연결)에는 울지 않는다. 근거는 [slo-alert-baseline](../spec/2026-10-23-slo-alert-baseline.md) 결정 2다.
+- **뜻.** 단말 경로 하나(`uri` label)의 5분 p95가 원문 목표를 10분 넘게 넘는다. 목표는 주문 생성(`POST /v1/orders`) 200ms, checkout(`POST /v1/orders/{orderId}/checkout`) 150ms, sync(`POST /v1/terminals/{terminalId}/sync`) 2초다([시스템 설계 §7](../references/02_System_Design.md#7-nfr-and-observability)). checkout은 승인을 Kafka 뒤로 넘겨 PG를 부르지 않는다. sync의 2초는 가장 큰 배치(500 op)의 목표라, sync가 울면 bucket 보간 오차 안에서 배치 크기와 상관없이 요청의 5% 넘게 최악 목표보다 느리다(분위수는 bucket 안을 고르게 보간한 추정값이다). 429는 빼고 보고, 5분에 그 uri 요청이 20건 미만이면 판정하지 않는다. 5분보다 짧은 튐(단말 동시 재연결)에는 울지 않는다. 근거는 [slo-alert-baseline](../spec/2026-10-23-slo-alert-baseline.md) 결정 2다.
 - **먼저 볼 것.**
   1. 어느 pod인지 본다. `histogram_quantile(0.95, sum by (le, instance) (rate(http_server_requests_seconds_bucket{uri="울린 uri", method="POST", status!="429"}[5m])))`. 한 pod만 느리면 그 pod의 CPU·힙·GC를 본다.
   2. 커넥션 대기. `max(hikaricp_connections_pending)`와 `max(hikaricp_connections_acquire_seconds_max)`. #77에서 무너진 단계(400 RPS)는 커넥션 대기가 먼저 쌓였다([용량 기준](capacity.md#인스턴스-하나의-용량)).
-  3. 부하. `sum by (uri) (rate(http_server_requests_seconds_count{uri=~"/v1/.*"}[5m]))`를 [용량 기준](capacity.md#인스턴스-하나의-용량)의 인스턴스 하나 용량 × pod 수와 견준다.
-  4. sync만 울면 큰 배치가 몰렸는지 본다. INFO `sync 배치 처리 terminalId=…`의 항목 수와 같은 시각의 단말 수.
-  5. Tempo에서 그 uri의 느린 trace를 열어 긴 span(DB 문장, 커넥션 획득, 락 대기)을 찾는다. 락 대기는 `distributed_lock_wait_seconds`로도 본다.
+  3. 부하. 인스턴스 하나의 용량은 단말 요청 전체의 혼합 RPS라 `sum(rate(http_server_requests_seconds_count{uri=~"/v1/.*", status!="429"}[5m]))`를 [용량 기준](capacity.md#인스턴스-하나의-용량)의 인스턴스 하나 용량 × pod 수와 견준다.
+  4. 느린 실패인지 본다. `sum by (status) (rate(http_server_requests_seconds_count{uri="울린 uri"}[5m]))`에 500이 있으면 커넥션 획득 대기(3초 뒤 실패)가 p95를 올리는 것일 수 있고 [HttpErrorBudgetBurn](#httperrorbudgetburn)도 함께 운다.
+  5. sync만 울면 큰 배치가 몰렸는지 본다. INFO `sync 배치 처리 terminalId=…`의 항목 수와 같은 시각의 단말 수.
+  6. Tempo에서 그 uri의 느린 trace를 열어 긴 span(DB 문장, 커넥션 획득, 락 대기)을 찾는다. 락 대기는 `distributed_lock_wait_seconds`로도 본다.
 - **조치.** 부하가 용량을 넘으면 pod를 늘린다. 이벤트 외부화 상한은 DB 커밋에 묶여 pod를 늘려도 풀리지 않는다([용량 기준](capacity.md#인스턴스-하나의-용량)). DB 지연이면 DB를 본다. 배포 직후 시작됐으면 그 배포를 의심한다.
-- **하지 말 것.** Hikari 풀을 키워 지연을 풀려고 하지 않는다. #77에서 20으로 늘려도 처리량은 늘지 않고 지연만 나빠졌다.
+- **하지 말 것.** Hikari 풀을 환경 변수로 바로 키우지 않는다. #77에서 20으로 늘려도 외부화 처리량은 늘지 않았고(병목은 DB 커밋), 지연에 주는 효과는 실행기 스레드 수와 섞여 가르지 못했다. 바꾸려면 그 근거를 재는 PR로 다룬다.
 
 ## HttpErrorBudgetBurn
 
-- **뜻.** 단말 API(`/v1/**`)의 5xx가 오류 예산을 빠르게 쓰고 있다. SLO는 원문 "주문 API 가용성 99.9%"를 30일 예산으로 둔 것이다. 1시간과 5분 창이 모두 1.44%(예산의 2%를 1시간에 씀)를 넘거나, 6시간과 30분 창이 모두 0.6%(예산의 5%를 6시간에 씀)를 넘으면 운다(Google SRE Workbook "Alerting on SLOs"). 429(빈도 상한의 정상 거절)는 분모에서도 빼고, 409와 그 밖의 4xx는 실패로 세지 않는다. 긴 창의 요청이 70건(1시간)·167건(6시간)보다 적으면 판정하지 않으므로 영업 외 시간에는 전부 실패해도 울지 않는다. 원인이 멈추면 짧은 창이 깨끗해질 때 풀린다. 큰 장애 뒤에는 30분 창 때문에 30분쯤 더 울 수 있다. 근거는 [slo-alert-baseline](../spec/2026-10-23-slo-alert-baseline.md) 결정 3·4다.
+- **뜻.** 단말 API(`/v1/**`)의 5xx가 오류 예산을 빠르게 쓰고 있다. SLO는 원문 "주문 API 가용성 99.9%"를 30일 예산으로 둔 것이다. 1시간과 5분 창이 모두 1.44%(예산의 2%를 1시간에 씀)를 넘거나, 6시간과 30분 창이 모두 0.6%(예산의 5%를 6시간에 씀)를 넘으면 운다(Google SRE Workbook "Alerting on SLOs"). 429(빈도 상한의 정상 거절)는 분모에서도 빼고, 409와 그 밖의 4xx는 실패로 세지 않는다. 긴 창의 요청이 70건(1시간)·167건(6시간)보다 적으면 그 쌍을 판정하지 않으므로, 6시간에 167건(시간당 약 28건)보다 적은 영업 외 시간에는 전부 실패해도 울지 않는다. 시간당 70~138건이면 같은 5분 안의 실패 2건으로도 운다. 서버가 끝낸 요청만 세므로 클라이언트가 먼저 끊은 요청과 ingress·LB의 5xx는 들지 않는다. 원인이 멈추면 짧은 창이 깨끗해질 때 풀린다. 큰 장애 뒤에는 30분 창 때문에 30분쯤 더 울 수 있다. 근거는 [slo-alert-baseline](../spec/2026-10-23-slo-alert-baseline.md) 결정 3·4다.
 - **먼저 볼 것.**
-  1. `sum by (uri, status) (rate(http_server_requests_seconds_count{uri=~"/v1/.*", status=~"5.."}[5m]))`로 어느 경로의 어느 상태인지 본다.
+  1. `sum by (uri, status) (rate(http_server_requests_seconds_count{uri=~"/v1/.*", status=~"5.."}[5m]))`로 어느 경로의 어느 상태인지 본다. 어느 쌍이 울었는지는 창마다 실패율을 본다. `sum(rate(http_server_requests_seconds_count{uri=~"/v1/.*", status=~"5.."}[1h])) / sum(rate(http_server_requests_seconds_count{uri=~"/v1/.*", status!="429"}[1h]))`에서 `[1h]`를 `[5m]`·`[6h]`·`[30m]`으로 바꿔 1.44%(1시간·5분)와 0.6%(6시간·30분)에 견준다. 5분 창이 이미 깨끗한데 울고 있으면 30분 창이 빠지기를 기다리는 중이다.
   2. Loki에서 `{service_name="ResilientPOS", level="ERROR"} |= "errorCode=INTERNAL_ERROR"`의 예외를 본다. `Connection is not available, request timed out`이면 커넥션 풀이 비었다. #77에서 무너진 단계(400 RPS)의 500은 모두 이것이었다.
   3. 함께 운 알림. [HttpLatencyAboveTarget](#httplatencyabovetarget)이 함께 울면 과부하나 DB 지연일 가능성이 크다. 지연 없이 500만 나면 배포한 코드의 버그를 의심한다.
 - **조치.** 원인(과부하, DB, 배포)을 고친다. 배포 직후 시작됐으면 이전 버전으로 되돌린다. 과부하면 [HttpLatencyAboveTarget](#httplatencyabovetarget)의 조치를 따른다.
