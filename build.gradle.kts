@@ -92,7 +92,7 @@ tasks.withType<Test> {
     useJUnitPlatform()
     // fork마다 PostgreSQL·Redis·Kafka 컨테이너를 따로 띄워 DB와 consumer group을 같이 쓰지 않는다. CI(4 vCPU)에서 2와 3을 재서 고른 고정값이다.
     // CPU 수에서 정하지 않는다. 로컬과 CI가 같은 fork 수로 돈다.
-    maxParallelForks = 2
+    maxParallelForks = 3
     // AlertRulesTest·ObservabilityConfigurationTest가 알림 규칙과 runbook을 읽는다. 입력으로 두지 않으면 규칙만 고쳤을 때 테스트가 up-to-date로 건너뛰어진다.
     inputs.dir("docker/prometheus").withPropertyName("alertRules").withPathSensitivity(PathSensitivity.RELATIVE)
     inputs.file("docs/wiki/runbook.md").withPropertyName("runbook").withPathSensitivity(PathSensitivity.RELATIVE)
