@@ -14,6 +14,8 @@ const ABUSIVE_RATE = Number(__ENV.ABUSIVE_RATE || 2);
 // VU 하나라 단말도 하나다. 한 묶음이 간격을 넘기면 다음 묶음은 dropped_iterations로 보인다.
 export const TERMINAL_BURST = Number(__ENV.TERMINAL_BURST || 0);
 const BURST_EVERY = __ENV.BURST_EVERY || '1s';
+// 묶음마다 outbox에 더하는 판매 수. 250이면 묶음마다 500 op backlog 배치를 동시에 보낸다(#101: 같은 watermark 잠금 앞에서 커넥션을 쥐고 기다리는 장면).
+const BURST_SALES = Number(__ENV.BURST_SALES || 1);
 const SYNC_VUS = Number(__ENV.SYNC_VUS || 300);
 const HTTP_VUS = Number(__ENV.HTTP_VUS || 100);
 
@@ -71,7 +73,7 @@ export function abusiveSync(data) {
 
 export function terminalBurst(data) {
   const outbox = myOutboxes(data)[0];
-  enqueueSales(outbox, 1, new Date().toISOString());
+  enqueueSales(outbox, BURST_SALES, new Date().toISOString());
   const request = [
     'POST', `${BASE_URL}/v1/terminals/${outbox.terminal.terminalId}/sync`, JSON.stringify({ operations: outbox.pending.slice(0, 500) }),
     { headers: terminalHeaders(outbox.terminal), tags: { name: 'sync', traffic: 'burst' } },
