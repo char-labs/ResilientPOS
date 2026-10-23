@@ -603,3 +603,280 @@ tests:
       - eval_time: 15m
         alertname: InboundStoreRateLimited
         exp_alerts: []
+
+  # 지연 bucket은 p95가 딱 떨어지게 골랐다. 모두 (0.1, 0.25]면 p95 = 0.1 + 0.15 × 0.95 = 0.2425초,
+  # 90%가 0.1 이하이고 10%가 (0.1, 0.25]면 0.1 + 0.15 × 0.5 = 0.175초다. sync는 같은 비율을 (1, 2.5]에 두었다.
+  - name: 지연 p95가 그 uri의 목표를 10분 넘게 넘으면 그 uri로 울린다
+    interval: 1m
+    input_series:
+      # 생성 0.2425초는 200ms를 넘는다.
+      - series: http_server_requests_seconds_bucket{application="ResilientPOS", method="POST", status="201", uri="/v1/orders", le="0.1", instance="a"}
+        values: 0x20
+      - series: http_server_requests_seconds_bucket{application="ResilientPOS", method="POST", status="201", uri="/v1/orders", le="0.25", instance="a"}
+        values: 0+60x20
+      - series: http_server_requests_seconds_bucket{application="ResilientPOS", method="POST", status="201", uri="/v1/orders", le="+Inf", instance="a"}
+        values: 0+60x20
+      - series: http_server_requests_seconds_count{application="ResilientPOS", method="POST", status="201", uri="/v1/orders", instance="a"}
+        values: 0+60x20
+      # checkout 0.175초는 150ms를 넘는다.
+      - series: http_server_requests_seconds_bucket{application="ResilientPOS", method="POST", status="200", uri="/v1/orders/{orderId}/checkout", le="0.1", instance="a"}
+        values: 0+54x20
+      - series: http_server_requests_seconds_bucket{application="ResilientPOS", method="POST", status="200", uri="/v1/orders/{orderId}/checkout", le="0.25", instance="a"}
+        values: 0+60x20
+      - series: http_server_requests_seconds_bucket{application="ResilientPOS", method="POST", status="200", uri="/v1/orders/{orderId}/checkout", le="+Inf", instance="a"}
+        values: 0+60x20
+      - series: http_server_requests_seconds_count{application="ResilientPOS", method="POST", status="200", uri="/v1/orders/{orderId}/checkout", instance="a"}
+        values: 0+60x20
+      # sync 1.75초는 2초 안이다.
+      - series: http_server_requests_seconds_bucket{application="ResilientPOS", method="POST", status="200", uri="/v1/terminals/{terminalId}/sync", le="1", instance="a"}
+        values: 0+54x20
+      - series: http_server_requests_seconds_bucket{application="ResilientPOS", method="POST", status="200", uri="/v1/terminals/{terminalId}/sync", le="2.5", instance="a"}
+        values: 0+60x20
+      - series: http_server_requests_seconds_bucket{application="ResilientPOS", method="POST", status="200", uri="/v1/terminals/{terminalId}/sync", le="+Inf", instance="a"}
+        values: 0+60x20
+      - series: http_server_requests_seconds_count{application="ResilientPOS", method="POST", status="200", uri="/v1/terminals/{terminalId}/sync", instance="a"}
+        values: 0+60x20
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: HttpLatencyAboveTarget
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: HttpLatencyAboveTarget
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              uri: /v1/orders
+            exp_annotations:
+              summary: "/v1/orders 요청의 p95가 10분 넘게 원문 목표를 넘는다"
+              runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#httplatencyabovetarget
+          - exp_labels:
+              severity: warning
+              uri: /v1/orders/{orderId}/checkout
+            exp_annotations:
+              summary: "/v1/orders/{orderId}/checkout 요청의 p95가 10분 넘게 원문 목표를 넘는다"
+              runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#httplatencyabovetarget
+
+  - name: 목표 안의 p95와 5분에 20건보다 적은 느린 요청은 울지 않는다
+    interval: 1m
+    input_series:
+      # 생성 0.175초는 200ms 안이다.
+      - series: http_server_requests_seconds_bucket{application="ResilientPOS", method="POST", status="201", uri="/v1/orders", le="0.1", instance="a"}
+        values: 0+54x20
+      - series: http_server_requests_seconds_bucket{application="ResilientPOS", method="POST", status="201", uri="/v1/orders", le="0.25", instance="a"}
+        values: 0+60x20
+      - series: http_server_requests_seconds_bucket{application="ResilientPOS", method="POST", status="201", uri="/v1/orders", le="+Inf", instance="a"}
+        values: 0+60x20
+      - series: http_server_requests_seconds_count{application="ResilientPOS", method="POST", status="201", uri="/v1/orders", instance="a"}
+        values: 0+60x20
+      # 영업 외 시간: sync가 분에 3건(5분에 15건)뿐이다. 모두 느려도(p95 2.425초) 판정하지 않는다.
+      - series: http_server_requests_seconds_bucket{application="ResilientPOS", method="POST", status="200", uri="/v1/terminals/{terminalId}/sync", le="1", instance="a"}
+        values: 0x20
+      - series: http_server_requests_seconds_bucket{application="ResilientPOS", method="POST", status="200", uri="/v1/terminals/{terminalId}/sync", le="2.5", instance="a"}
+        values: 0+3x20
+      - series: http_server_requests_seconds_bucket{application="ResilientPOS", method="POST", status="200", uri="/v1/terminals/{terminalId}/sync", le="+Inf", instance="a"}
+        values: 0+3x20
+      - series: http_server_requests_seconds_count{application="ResilientPOS", method="POST", status="200", uri="/v1/terminals/{terminalId}/sync", instance="a"}
+        values: 0+3x20
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: HttpLatencyAboveTarget
+        exp_alerts: []
+
+  - name: sync p95가 2초를 넘는 동안 울고 창이 깨끗해지면 풀린다
+    interval: 1m
+    input_series:
+      # 10분부터 31분까지 모든 sync가 (1, 2.5]초다. 창 5분에 느린 분이 하나라도 있으면 p95가 2초를 넘는다.
+      - series: http_server_requests_seconds_bucket{application="ResilientPOS", method="POST", status="200", uri="/v1/terminals/{terminalId}/sync", le="1", instance="a"}
+        values: 0+60x10 600x20 660+60x14
+      - series: http_server_requests_seconds_bucket{application="ResilientPOS", method="POST", status="200", uri="/v1/terminals/{terminalId}/sync", le="2.5", instance="a"}
+        values: 0+60x46
+      - series: http_server_requests_seconds_bucket{application="ResilientPOS", method="POST", status="200", uri="/v1/terminals/{terminalId}/sync", le="+Inf", instance="a"}
+        values: 0+60x46
+      - series: http_server_requests_seconds_count{application="ResilientPOS", method="POST", status="200", uri="/v1/terminals/{terminalId}/sync", instance="a"}
+        values: 0+60x46
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: HttpLatencyAboveTarget
+        exp_alerts: []
+      - eval_time: 22m
+        alertname: HttpLatencyAboveTarget
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              uri: /v1/terminals/{terminalId}/sync
+            exp_annotations:
+              summary: "/v1/terminals/{terminalId}/sync 요청의 p95가 10분 넘게 원문 목표를 넘는다"
+              runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#httplatencyabovetarget
+      # 마지막 느린 분(31분)이 창에서 빠지는 35분에 풀린다.
+      - eval_time: 36m
+        alertname: HttpLatencyAboveTarget
+        exp_alerts: []
+
+  - name: 1분짜리 지연 튐은 울지 않는다
+    interval: 1m
+    input_series:
+      # 단말 100대 동시 재연결(#109 S3, 39.9초)처럼 한 분만 모든 sync가 느리다. 창 5분 동안만 p95가 2초를 넘는다.
+      - series: http_server_requests_seconds_bucket{application="ResilientPOS", method="POST", status="200", uri="/v1/terminals/{terminalId}/sync", le="1", instance="a"}
+        values: 0+60x10 600 660+60x18
+      - series: http_server_requests_seconds_bucket{application="ResilientPOS", method="POST", status="200", uri="/v1/terminals/{terminalId}/sync", le="2.5", instance="a"}
+        values: 0+60x30
+      - series: http_server_requests_seconds_bucket{application="ResilientPOS", method="POST", status="200", uri="/v1/terminals/{terminalId}/sync", le="+Inf", instance="a"}
+        values: 0+60x30
+      - series: http_server_requests_seconds_count{application="ResilientPOS", method="POST", status="200", uri="/v1/terminals/{terminalId}/sync", instance="a"}
+        values: 0+60x30
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: HttpLatencyAboveTarget
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: HttpLatencyAboveTarget
+        exp_alerts: []
+
+  - name: 빠른 429에 가려도 느린 sync는 운다
+    interval: 1m
+    input_series:
+      # 처리한 sync는 모두 (1, 2.5]초(p95 2.425초)다.
+      - series: http_server_requests_seconds_bucket{application="ResilientPOS", method="POST", status="200", uri="/v1/terminals/{terminalId}/sync", le="1", instance="a"}
+        values: 0x20
+      - series: http_server_requests_seconds_bucket{application="ResilientPOS", method="POST", status="200", uri="/v1/terminals/{terminalId}/sync", le="2.5", instance="a"}
+        values: 0+60x20
+      - series: http_server_requests_seconds_bucket{application="ResilientPOS", method="POST", status="200", uri="/v1/terminals/{terminalId}/sync", le="+Inf", instance="a"}
+        values: 0+60x20
+      - series: http_server_requests_seconds_count{application="ResilientPOS", method="POST", status="200", uri="/v1/terminals/{terminalId}/sync", instance="a"}
+        values: 0+60x20
+      # 고장 단말의 빈도 상한 거절은 처리 없이 빨리 끝난다. 섞으면 p95가 1초 아래로 내려간다.
+      - series: http_server_requests_seconds_bucket{application="ResilientPOS", method="POST", status="429", uri="/v1/terminals/{terminalId}/sync", le="1", instance="a"}
+        values: 0+1200x20
+      - series: http_server_requests_seconds_bucket{application="ResilientPOS", method="POST", status="429", uri="/v1/terminals/{terminalId}/sync", le="2.5", instance="a"}
+        values: 0+1200x20
+      - series: http_server_requests_seconds_bucket{application="ResilientPOS", method="POST", status="429", uri="/v1/terminals/{terminalId}/sync", le="+Inf", instance="a"}
+        values: 0+1200x20
+      - series: http_server_requests_seconds_count{application="ResilientPOS", method="POST", status="429", uri="/v1/terminals/{terminalId}/sync", instance="a"}
+        values: 0+1200x20
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: HttpLatencyAboveTarget
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              uri: /v1/terminals/{terminalId}/sync
+            exp_annotations:
+              summary: "/v1/terminals/{terminalId}/sync 요청의 p95가 10분 넘게 원문 목표를 넘는다"
+              runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#httplatencyabovetarget
+
+  - name: 단말 API 5xx가 1시간 쌍의 배수를 넘으면 바로 울리고 30분 창이 깨끗해지면 풀린다
+    interval: 1m
+    input_series:
+      # 60분부터 70분까지 DB가 멈춰 모든 sync가 500이다. 1시간 창 1.64%, 5분 창 25%로 61분에 두 창이 모두 1.44%를 넘는다.
+      - series: http_server_requests_seconds_count{application="ResilientPOS", method="POST", status="200", uri="/v1/terminals/{terminalId}/sync", instance="a"}
+        values: 0+6000x60 360000x9 366000+6000x39
+      - series: http_server_requests_seconds_count{application="ResilientPOS", method="POST", status="500", uri="/v1/terminals/{terminalId}/sync", instance="a"}
+        values: 0x60 6000+6000x9 60000x39
+    alert_rule_test:
+      - eval_time: 60m
+        alertname: HttpErrorBudgetBurn
+        exp_alerts: []
+      - eval_time: 61m
+        alertname: HttpErrorBudgetBurn
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: "단말 API(/v1)의 5xx가 오류 예산(가용성 99.9%)을 빠르게 쓰고 있다"
+              runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#httperrorbudgetburn
+      # 5분 창은 75분에 깨끗하지만 30분 창(6시간 쌍)이 아직 0.6%를 넘는다.
+      - eval_time: 90m
+        alertname: HttpErrorBudgetBurn
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: "단말 API(/v1)의 5xx가 오류 예산(가용성 99.9%)을 빠르게 쓰고 있다"
+              runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#httperrorbudgetburn
+      - eval_time: 100m
+        alertname: HttpErrorBudgetBurn
+        exp_alerts: []
+
+  - name: 1시간 쌍의 배수 아래인 실패가 이어지면 6시간 쌍이 운다
+    interval: 1m
+    input_series:
+      # 60분부터 요청의 1%가 500이다. 1.44%를 넘지 않아 1시간 쌍은 울지 않는다.
+      # 6시간 창 비율은 (t − 60) ÷ t %라 150분을 지나야 0.6%를 넘는다.
+      - series: http_server_requests_seconds_count{application="ResilientPOS", method="POST", status="200", uri="/v1/terminals/{terminalId}/sync", instance="a"}
+        values: 0+6000x60 365940+5940x139
+      - series: http_server_requests_seconds_count{application="ResilientPOS", method="POST", status="500", uri="/v1/terminals/{terminalId}/sync", instance="a"}
+        values: 0x60 60+60x139
+    alert_rule_test:
+      - eval_time: 140m
+        alertname: HttpErrorBudgetBurn
+        exp_alerts: []
+      - eval_time: 160m
+        alertname: HttpErrorBudgetBurn
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: "단말 API(/v1)의 5xx가 오류 예산(가용성 99.9%)을 빠르게 쓰고 있다"
+              runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#httperrorbudgetburn
+
+  - name: 한 시간 70건보다 적은 트래픽의 실패 한 건은 울지 않는다
+    interval: 1m
+    input_series:
+      # 분에 1건인 영업 외 시간에 30분째 요청 하나가 500이다. 1시간 창 3%, 5분 창 25%지만 요청이 33건뿐이다.
+      - series: http_server_requests_seconds_count{application="ResilientPOS", method="POST", status="200", uri="/v1/terminals/{terminalId}/sync", instance="a"}
+        values: 0+1x30 30 31+1x8
+      - series: http_server_requests_seconds_count{application="ResilientPOS", method="POST", status="500", uri="/v1/terminals/{terminalId}/sync", instance="a"}
+        values: 0x30 1x9
+    alert_rule_test:
+      - eval_time: 33m
+        alertname: HttpErrorBudgetBurn
+        exp_alerts: []
+
+  - name: 429 폭주가 있어도 5xx 비율은 429를 뺀 요청으로 판정한다
+    interval: 1m
+    input_series:
+      # 처리한 요청의 1.96%가 500이다. 429까지 분모에 넣으면 0.18%라 두 쌍 모두 울지 않는다.
+      - series: http_server_requests_seconds_count{application="ResilientPOS", method="POST", status="200", uri="/v1/terminals/{terminalId}/sync", instance="a"}
+        values: 0+6000x10
+      - series: http_server_requests_seconds_count{application="ResilientPOS", method="POST", status="500", uri="/v1/terminals/{terminalId}/sync", instance="a"}
+        values: 0+120x10
+      - series: http_server_requests_seconds_count{application="ResilientPOS", method="POST", status="429", uri="/v1/terminals/{terminalId}/sync", instance="a"}
+        values: 0+60000x10
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: HttpErrorBudgetBurn
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: "단말 API(/v1)의 5xx가 오류 예산(가용성 99.9%)을 빠르게 쓰고 있다"
+              runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#httperrorbudgetburn
+
+  - name: 409와 단말 API 밖의 5xx는 실패로 세지 않는다
+    interval: 1m
+    input_series:
+      - series: http_server_requests_seconds_count{application="ResilientPOS", method="POST", status="201", uri="/v1/orders", instance="a"}
+        values: 0+6000x10
+      # 같은 키의 겹친 요청·행 잠금 대기 초과·업무 충돌이다. 서버 오류로 집계하지 않는다(ApiControllerAdvice).
+      - series: http_server_requests_seconds_count{application="ResilientPOS", method="POST", status="409", uri="/v1/orders", instance="a"}
+        values: 0+600x10
+      # 점주 경로의 장애는 OwnerSessionStoreUnavailable이 본다.
+      - series: http_server_requests_seconds_count{application="ResilientPOS", method="POST", status="500", uri="/owner/v1/login", instance="a"}
+        values: 0+600x10
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: HttpErrorBudgetBurn
+        exp_alerts: []
+
+  - name: 예산을 조금 쓰는 1분짜리 실패는 울지 않는다
+    interval: 1m
+    input_series:
+      # 6시간 넘게 깨끗하다가 390분째 1분 동안 요청의 절반이 500이다. 5분 창은 10%지만 1시간 창 0.83%, 6시간 창 0.14%라 예산을 거의 쓰지 않았다.
+      - series: http_server_requests_seconds_count{application="ResilientPOS", method="POST", status="200", uri="/v1/terminals/{terminalId}/sync", instance="a"}
+        values: 0+6000x390 2343000+6000x10
+      - series: http_server_requests_seconds_count{application="ResilientPOS", method="POST", status="500", uri="/v1/terminals/{terminalId}/sync", instance="a"}
+        values: 0x390 3000x10
+    alert_rule_test:
+      - eval_time: 392m
+        alertname: HttpErrorBudgetBurn
+        exp_alerts: []
