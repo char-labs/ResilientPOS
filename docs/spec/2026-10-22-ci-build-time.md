@@ -190,6 +190,43 @@ PR 검사(`.github/workflows/pr-checks.yml`) 한 번이 5분 넘게 걸린다. �
 - fork는 JVM마다 PostgreSQL·Redis·Kafka 컨테이너를 따로 띄운다. 전역 `Tx`·`Lock`은 JVM 단위라 fork끼리 섞이지 않고, consumer group은 브로커가 달라 fork끼리 나누지 않는다.
 - 컨텍스트 캐시는 1개 그대로라 한 JVM 안의 전역 상태와 group 공유 조건은 바뀌지 않았다.
 
+### CI 실측
+시간은 attempt마다 `run_started_at`부터 `updated_at`까지다. 같은 커밋 3회는 한 run의 attempt 1·2·3이다.
+
+| 구성 | 커밋 | run | 전체 시간 |
+|---|---|---|---|
+| 기준선(fork 1, 빌드 뒤 gate) | ea04066 | 39736986219 | 5분 25초 |
+| gate 병렬, build cache, fork 2 | 084f0c7 | 39875673386 | 4분 26초 |
+| fork 3 | 3fdf208 | 39876249439 | 5분 32초 |
+| fork 2(측정용 artifact step 포함) | f59838d | 39876952347 | 4분 14초 |
+| test job 2개(artifact 포함) | e8b9ae4 | 39878763373 | 3분 46초 |
+| test job 2개 | b5a1546 | 39879323889 | 4분 5초, 3분 48초, 4분 7초(중앙값 4분 5초) |
+| 컨텍스트 재사용(범위 조정 4) | 111df11 | 39883734999 | 3분 41초, 3분 31초, 3분 39초(중앙값 3분 39초) |
+
+- **성공 기준(중앙값 3분 이하)은 달성하지 못했다.** 최종 코드 커밋 111df11의 중앙값은 3분 39초로 기준선보다 1분 46초(33%) 줄었다. 그 뒤 커밋은 spec과 wiki만 바꾼다.
+- fork 3은 CI test가 약 4분 9초로 fork 2(약 3분 10초~3분 19초)보다 느렸다. 코어 4개에 JVM 3개와 컨테이너 9개가 경합한다. fork 2를 고른다(인수 조건 9).
+- test job 2개의 클래스·테스트 수는 62개·455개와 71개·446개로, 합치면 133개·901개다. 로컬 전체와 같다(인수 조건 11, run 39878763373의 artifact).
+- 111df11의 job 하나는 준비 약 10초, daemon·설정·컴파일 약 60초, test 약 2분 5초~2분 15초다. 줄지 않은 몫은 job마다 따로 하는 컴파일과, fork마다 하는 이미지 받기(약 15초)·컨테이너 기동(약 7초)이다.
+- PR 재실행은 build cache에 적중하지 않았다. 111df11의 attempt 1·2·3 모든 job에서 `FROM-CACHE`가 0건이고 `compileKotlin`이 다시 돌았다(인수 조건 2). main push 적중은 머지 뒤 확인할 항목이다.
+
+### 컨텍스트 기동 수 (범위 조정 4, 로컬 `-PtestShard`)
+| 구성 | 1/2 job | 2/2 job | 합계 |
+|---|---|---|---|
+| 범위 조정 4 전 | 26번 | 33번 | 59번 |
+| 클래스 정렬만 | 20번 | 23번 | 43번 |
+| 정렬과 기반 클래스 통합(111df11) | 17번 | 20번 | 37번 |
+
+- 기동 수는 머신 부하와 상관없이 세어지는 값이라 로컬에서 쟀다. 시간은 위 CI 표다.
+- 111df11로 두 job 몫을 로컬에서 모두 돌려 통과했다(62개·455개, 71개·446개, 실패 0).
+- 정렬로 드러난 `PaymentAttemptApiIntegrationTest`의 429는 기다리기를 DB 상태로 바꿔 고쳤다(범위 조정 4).
+- `junit-platform.properties`가 생기면 Fixture Monkey가 쓰는 jqwik 엔진이 저장소 루트에 `.jqwik-database`를 만든다(파일이 없을 때는 만들지 않는 것을 확인했다). `jqwik.database`로 `build/` 아래에 둔다.
+
+### 참고 자료 (범위 조정 4)
+- [우아한형제들 기술블로그, 야, 너도 WireMock으로 테스트할 수 있어](https://techblog.woowahan.com/17674/): 테스트마다 다른 `@MockBean`이 컨텍스트를 새로 띄워 시간이 크게 늘어서, `@MockBean`을 줄이고 공통 지원 클래스를 상속해 stub을 공유했다.
+- [woowacourse-teams/2026-ChongChong #538](https://github.com/woowacourse-teams/2026-ChongChong/pull/538): PostgreSQL 컨테이너를 JVM 안에서 공유하고 컨텍스트를 재사용한다. 마이그레이션 테스트는 독립 컨테이너로 둔다. PR에서는 Gradle 캐시를 읽기만 한다.
+- [Spring 컨텍스트 캐싱을 이용한 411개의 테스트 코드 최적화 과정](https://velog.io/@32190192/%ED%85%8C%EC%8A%A4%ED%8A%B8-%EC%BD%94%EB%93%9C-%EC%B5%9C%EC%A0%81%ED%99%94), [@SpringBootTest 테스트 실행 시간 줄이기](https://targetcoders.com/springboottest-%EC%BB%A8%ED%85%8D%EC%8A%A4%ED%8A%B8-%EC%BA%90%EC%8B%B1/): 초기화된 컨텍스트 수를 세고, 공통 부모 클래스로 구성을 맞춰 줄인다.
+- [테스트 코드 트랜잭션 격리](https://www.ybchar.dev/tech-blog/20240302_test_code_transaction_isolation)(사용자 제공): 요청이 다른 스레드에서 처리되면 테스트의 `@Transactional` 롤백이 적용되지 않는다. `@DirtiesContext` 대신 `@BeforeEach`에서 TRUNCATE로 정리한다. 이 저장소의 테스트는 테스트 쪽 `@Transactional`을 쓰지 않고, UUID v7 ID를 테스트마다 새로 만들어 격리한다. 테스트마다 테이블을 비우면 앞 테스트의 비동기 consumer가 지운 뒤에 다시 쓸 수 있어 TRUNCATE는 쓰지 않는다.
+
 ### 리뷰 반영 (범위 조정 2)
 - `resilientpos-multi-review`: Claude 81/100, Codex는 점수 없이 지적만, Gemini는 CLI가 없어 미실행이다. 두 리뷰어가 함께 짚은 것은 닫은 임시 포트의 경쟁과, 인수 조건 2의 CI 적중 실측을 머지 전에 할 수 없다는 것이다. 둘 다 범위 조정 2로 반영했다.
 - Claude만 짚은 REST Docs 스니펫 누락은 실측으로 확인했다. 고치기 전에는 `clean` 뒤 캐시가 적중한 빌드에 `build/generated-snippets`가 없었다. output을 선언한 뒤에는 `./gradlew test --rerun`이 스니펫 디렉터리 73개를 만들고, `clean` 뒤 `./gradlew test`가 `FROM-CACHE`일 때도 73개가 그대로 되살아났다.
