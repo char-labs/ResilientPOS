@@ -73,6 +73,13 @@ PR 검사(`.github/workflows/pr-checks.yml`) 한 번이 5분 넘게 걸린다. �
 - 한 job이 실패해도 다른 job은 끝까지 돈다(`fail-fast: false`). 실패를 한 번에 보려는 것이다.
 - 제외 절의 "테스트를 여러 job·matrix로 나누기"를 범위로 옮긴다.
 
+**4. 테스트 컨텍스트를 덜 띄우도록 테스트 코드를 바꾼다(2026-10-23, 사용자 결정).** job 분할 뒤 최종 커밋 3회 중앙값이 4분 5초였다. job마다 test가 약 2분 25초이고, 컨텍스트가 job마다 거의 다 다시 뜬다(두 job 합계 59번). 사용자가 Fake로 장애 주입 테스트를 정리해 이 PR에서 줄이자고 했고, 국내 사례를 참고하라고 했다.
+- 참고한 사례는 결과 절 "참고 자료"에 있다. 공통 기법은 컨테이너를 JVM 안에서 공유하고, 클래스마다 다른 설정(`@MockBean` 등)을 없애 컨텍스트를 재사용하고, 장애는 공통 stub으로 재현하는 것이다.
+- 같은 컨텍스트 구성을 쓰는 클래스를 이어서 돌린다. JUnit `ClassOrderer`가 클래스를 컨텍스트 캐시 키(`MergedContextConfiguration`) 순으로 묶는다. 캐시가 하나라 같은 구성 사이에 다른 구성이 끼면 같은 컨텍스트를 다시 띄우기 때문이다. 로컬에서 두 job의 기동 합계가 59번에서 43번이 됐다.
+- 정렬하자 순서 의존이 하나 드러났다. API 통합 테스트가 같은 픽스처 매장으로 연달아 돌면서 #102의 매장 rate limit bucket이 바닥나 429가 났다. 전에는 컨텍스트를 다시 띄우는 사이에 bucket이 찼다. 결정 9대로 원인을 고친다. 통합 테스트마다 시작 전에 공유 Redis 컨테이너의 `rate-limit:*` 키를 지운다.
+- 클래스마다 달랐던 설정 가운데 다른 테스트에 무해한 것을 `PostgresIntegrationTest`로 올린다. `@AutoConfigureMockMvc`(통합 테스트 67개 가운데 16개가 쓴다)와, 장애 주입에 쓰는 spy bean 셋(`FulfillmentCommandFacade`, `OrderCommandFacade`, `ReconciliationManagement`)이다. spy는 클래스 수준 `@MockitoSpyBean(types = …)`로 선언하고, 기본값대로 테스트마다 초기화된다(`MockReset.AFTER`). 테스트는 이 spy를 주입받아 쓴다.
+- 다음은 합치지 않는다. 결제 gateway를 감싼 중첩 구성 9개(두 스레드를 맞물리는 gateway, 호출 순간 DB 자원을 검사하는 gateway, 첫 시도만 거절하는 gateway, 분산 락을 끈 구성)는 공용으로 바꾸면 테스트마다 동작을 갈아 끼우는 공유 상태가 되고, 앞 테스트가 남긴 Kafka 메시지를 비동기 consumer가 다음 테스트의 동작으로 처리할 수 있다. IdP stub은 JWK 장애 테스트가 같은 customizer를 켜고 끄는 다른 stub을 쓰고, IdP 장애 테스트는 stub이 없는 상태를 전제로 한다. Redis 장애 구성 셋과 스케줄 속성 구성 하나는 다른 설정 자체가 목적이다.
+
 계약: 업무 계약(HTTP·이벤트·토픽·consumer group)은 바뀌지 않는다. 바뀌는 것은 PR 검사 job 구성, Gradle 빌드 설정, 테스트 기반 설정이다.
 
 ## 제외
@@ -98,8 +105,8 @@ PR 검사(`.github/workflows/pr-checks.yml`) 한 번이 5분 넘게 걸린다. �
 - gradle.properties
 - build.gradle.kts
 - src/test/resources/spring.properties
-- src/test/kotlin/com/resilientpos/PostgresIntegrationTest.kt
-- src/test/kotlin/com/resilientpos/platform/OwnerSessionStoreOutageIntegrationTest.kt
+- src/test/resources/junit-platform.properties
+- src/test/kotlin/com/resilientpos/**
 - docs/wiki/development-workflow.md
 
 ## 인수 조건
@@ -114,6 +121,7 @@ PR 검사(`.github/workflows/pr-checks.yml`) 한 번이 5분 넘게 걸린다. �
 9. 결과 절에 CI에서 잰 fork 2와 3의 run id·test step 시간과 고른 값이 있다.
 10. test가 캐시에서 와도 `build/generated-snippets`가 되살아난다. `OwnerSessionStoreOutageIntegrationTest`가 닫은 임시 포트를 쓰지 않는다.
 11. CI의 두 job이 돈 클래스와 테스트 수를 합치면 로컬 전체와 같다(빠지거나 겹친 클래스가 없다). 결과 절에 job별 시간이 있다.
+12. 결과 절에 범위 조정 4 전과 뒤의 컨텍스트 기동 수(job별)와 CI 시간이 있다. 정렬 뒤에도 로컬 `./gradlew test --rerun`이 통과하고, 드러난 순서 의존의 원인과 고친 방법이 있다.
 
 ## 검증
 - 개발 중: `python3 scripts/check_pr.py --base origin/main --worktree`
