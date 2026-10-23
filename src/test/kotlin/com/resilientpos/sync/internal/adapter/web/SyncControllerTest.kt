@@ -125,13 +125,15 @@ class SyncControllerTest(
     fun `createdAt이 있는 CREATE_ORDER와 REQUEST_CHECKOUT은 원문 문자열 그대로 Facade에 전달되고 요청 필드에 문서화된다`() {
         val orderCreatedAt = "2026-10-21T09:00:00+09:00"
         val checkoutCreatedAt = "2026-10-21T00:00:05Z"
+        val reconnectedAt = "2026-10-21T09:00:30+09:00"
         val expected = command(
             operation(1, ORDER_COMMAND, orderCreatedAt),
             operation(2, CHECKOUT_COMMAND, checkoutCreatedAt),
+            reconnectedAt = reconnectedAt,
         )
         given(facade.receiveBatch(expected)).willReturn(SyncCommand.ReceiveBatch.Result(2, emptyList()))
 
-        postBatch(requestJson(operationJson(OPERATION_ID_1, 1, orderCreatedAt), checkoutJson(OPERATION_ID_2, 2, checkoutCreatedAt)))
+        postBatch(requestJson(operationJson(OPERATION_ID_1, 1, orderCreatedAt), checkoutJson(OPERATION_ID_2, 2, checkoutCreatedAt), reconnectedAt = reconnectedAt))
             .andExpect(status().isOk)
             .andDo(
                 document(
@@ -349,8 +351,8 @@ class SyncControllerTest(
         private fun operation(sequence: Long, payload: OperationPayload, createdAt: String? = null) =
             SyncCommand.ReceiveBatch.Operation(if (sequence == 1L) OPERATION_ID_1 else OPERATION_ID_2, sequence, payload, createdAt)
 
-        private fun command(vararg operations: SyncCommand.ReceiveBatch.Operation) =
-            SyncFixtures.receiveBatchCommand(TerminalId(UUID.fromString(TERMINAL_ID)), StoreId(UUID.fromString(STORE_ID)), operations.toList())
+        private fun command(vararg operations: SyncCommand.ReceiveBatch.Operation, reconnectedAt: String? = null) =
+            SyncFixtures.receiveBatchCommand(TerminalId(UUID.fromString(TERMINAL_ID)), StoreId(UUID.fromString(STORE_ID)), operations.toList(), reconnectedAt)
 
         private fun operationJson(operationId: UUID, sequence: Long, createdAt: String? = null) = """
             {
@@ -371,11 +373,13 @@ class SyncControllerTest(
             { "operationId": "$operationId", "sequence": $sequence, ${createdAt?.let { "\"createdAt\": \"$it\"," } ?: ""} "kind": "REQUEST_CHECKOUT", "clientOrderId": "$CLIENT_ORDER_ID", "amount": "3502" }
         """.trimIndent()
 
-        private fun requestJson(vararg operations: String) = """{ "operations": [${operations.joinToString(",")}] }"""
+        private fun requestJson(vararg operations: String, reconnectedAt: String? = null) =
+            """{ ${reconnectedAt?.let { "\"reconnectedAt\": \"$it\"," } ?: ""} "operations": [${operations.joinToString(",")}] }"""
 
         private val PATH_PARAMETERS = pathParameters(parameterWithName("terminalId").description("배치를 보낸 단말 ID(UUID). 항목의 주문은 모두 이 단말의 것이다"))
 
         private val REQUEST_FIELDS: List<FieldDescriptor> = listOf(
+            fieldWithPath("reconnectedAt").type(JsonFieldType.STRING).optional().description("선택. 단말이 끊긴 뒤 서버에 닿은 첫 요청의 전송 시각으로 ISO-8601 offset 시각 문자열이다(예: 2026-10-21T09:00:30+09:00). 저장하지 않고 수렴 시간 metric에만 쓴다. 항목의 createdAt과 이 값 가운데 늦은 쪽부터 확정까지를 잰다. 없어도 된다. 형식이 틀리면 무시한다"),
             fieldWithPath("operations[].operationId").type(JsonFieldType.STRING).description("단말이 부여한 operation ID(UUID v7). 재전송 판별 키"),
             fieldWithPath("operations[].sequence").type(JsonFieldType.NUMBER).description("단말 안에서 단조 증가하는 순번. 1부터 시작하고 서버는 watermark 다음 순번만 적용한다"),
             fieldWithPath("operations[].createdAt").type(JsonFieldType.STRING).optional().description("선택. 단말이 operation을 만든 시각으로 ISO-8601 offset 시각 문자열이다(예: 2026-10-21T09:00:00+09:00). 저장하지 않고 수렴 시간 metric에만 쓴다. 없어도 된다. 형식이 틀리면 무시하고 수렴 시간을 기록하지 않는다"),
