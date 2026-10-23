@@ -73,7 +73,7 @@
 - 버린 것: critical(장애 뒤 회복 중에 `HttpErrorBudgetBurn`과 거의 늘 겹쳐 두 번 호출한다), 알림 없이 조회만 두기(429·409로 수렴이 늦어져도 아무 알림도 울지 않는다).
 
 **7. 시연 단말의 sync 계약은 배치 50, timeout 30초, 실패 뒤 5초 재시도다(사용자 결정).**
-- timeout만 5초에서 30초로 늘린다. S3(단말 100대 × 500 op, 39.9초, op당 약 80ms)를 환산하면 배치 50은 같은 부하에서 약 4초라 5초 timeout에 바로 걸린다. 단말이 끊고 다시 보내도 서버는 앞 배치를 계속 처리한다. 열린 PR #117이 머지되면 같은 pod로 간 재전송은 앞 배치가 끝날 때까지 429를 받는다. 결국 5초 timeout은 서버 처리를 앞당기지 못하고 단말이 확정 응답을 받는 시점만 늦춘다.
+- timeout만 5초에서 30초로 늘린다. S3(단말 100대 × 500 op, 39.9초, op당 약 80ms)를 환산하면 배치 50은 같은 부하에서 약 4초라 5초 timeout에 바로 걸린다. 단말이 끊고 다시 보내도 서버는 앞 배치를 계속 처리한다. #117(2026-10-23 머지)부터 같은 pod로 간 재전송은 앞 배치가 끝날 때까지 429를 받는다. 결국 5초 timeout은 서버 처리를 앞당기지 못하고 단말이 확정 응답을 받는 시점만 늦춘다.
 - 30초는 환산한 배치 시간의 7배가 넘고, 조용히 끊긴 연결을 붙잡는 시간이 G-03 60초의 절반 아래다. 환산값이라 S3 변형으로 확인한다(결정 8).
 - 배치 50과 5초 재시도는 그대로다. 5초는 429의 `Retry-After`(1초)보다 길어 #87 재시도 규약 안이다. 500 op backlog는 배치 10개라 단말 bucket capacity(10)에 들어 빈도 상한에 걸리지 않는다.
 - 버린 것: timeout 60초(k6의 응답 대기와 같지만 끊긴 연결 하나가 G-03 창 전체를 쓸 수 있다), 지금 계약 유지(부하 때 단말이 확정 응답을 늦게 받고 429 재전송이 는다).
@@ -86,6 +86,7 @@
 - `HttpLatencyAboveTarget`의 `for: 10m`(다시 볼 조건: 단말 sync timeout·재전송 계약이 정해질 때): 최악 backlog(1,800 op)를 가진 단말 100대가 S3 처리량(약 1,250 op/s)으로 빠지는 데 약 2.4분이 걸린다. 창 5분을 더해도 7.4분이라 10분 안이다.
 - S3 변형 두 번(배치 50, timeout 30초, 단말 100대): 500 op(G-03의 트래픽 가정)로는 G-03 60초와 배치 시간 환산값(약 4초)을, 1,800 op(빈도 상한의 최악)로는 지연 규칙 `for: 10m`의 계산과 timeout 30초를 확인한다. 두 실행에서 `sync_convergence_seconds`의 60초 비율과 새 알림·지연 알림의 상태를 함께 본다.
 - 1,800 op는 G-03 판정에 쓰지 않는다. 100대 × 1,800 op는 계산상 약 144초가 걸려 G-03 가정(500 op) 밖이다.
+- S3는 실패한 배치를 시연 단말처럼 5초 뒤 다시 보낸다(범위 조정, 2026-10-23). 지금 S3는 바로 다시 보내서, timeout 뒤의 재전송이 앞 배치가 도는 동안 #117의 429를 연달아 받고 5번 만에 수렴하지 못한 것으로 세어진다. 실패가 없던 지금까지의 S3 결과는 바뀌지 않는다.
 
 **9. burn rate 규칙의 하한을 요청 수에서 "긴 창의 실패 3건"으로 바꾼다(사용자 결정).**
 - 지금 하한(1시간 70건, 6시간 167건)은 "실패 한 건으로는 울지 않는다"만 막는다. 시간당 70~138건이면 실패 2건으로 critical이 울고, 시간당 28건 미만이면 요청이 전부 실패해도 울지 않는다.
@@ -115,7 +116,6 @@
 - 운영 분포로 하는 재판정과, 결정 8 밖의 시작값을 위한 추가 측정.
 - 재전송 선택 건수 알림(#112 결정 6 그대로).
 - Grafana에 Alertmanager 데이터소스를 붙이는 것. 알림은 Alertmanager API와 Prometheus에서 본다.
-- PR #117(단말 동시 요청 상한)의 동작. 그 PR이 머지되기 전 main 위에서 잰다(분할 계획).
 
 ## 한계
 - 수신자에 연동이 없어 알림이 사람에게 가지 않는다. 라우팅만 확인한다.
@@ -124,7 +124,7 @@
 - 수렴 metric은 서버가 확정한 시각까지라, 단말이 응답을 받은 시각은 아니다. 단말 시계가 서버와 어긋나면 값도 어긋난다.
 - 패킷을 버리는 단절로 생긴 timeout은 서버 책임으로 잡힌다(결정 4).
 - 실패 3건이라는 하한, `SyncGapPersistent`의 `for: 30m`, probe의 `for: 1m`에는 측정 근거가 없다.
-- S3 변형은 로컬 한 대의 상대 측정이다(#77과 같은 전제). #117이 머지되면 재전송 겹침이 429로 바뀌어 결과가 달라질 수 있다.
+- S3 변형은 로컬 한 대의 상대 측정이다(#77과 같은 전제). #117의 동시 상한 위에서 재고, pod가 하나라 재전송 겹침은 모두 429가 된다. pod가 여럿이면 다른 pod로 간 재전송은 겹친다.
 
 ## 관련 문서
 없음
@@ -166,7 +166,7 @@
 - promtool 직접: `docker run --rm -v "$PWD/docker/prometheus:/rules:ro" --entrypoint promtool prom/prometheus:v3.15.0 test rules /rules/alerts.test.yaml`
 - amtool 직접: Alertmanager 이미지로 `amtool check-config`와 `amtool config routes test --config.file=... severity=critical`(기대 `page`), `severity=warning`(기대 `ticket`).
 - `./gradlew test --tests 'com.resilientpos.platform.AlertRulesTest' --tests 'com.resilientpos.sync.*'`, 그리고 `./gradlew test` 전체.
-- `python3 scripts/check_pr.py --base 5e5721a --worktree`, 제출 전에는 `--worktree` 없이 한 번 더.
+- `python3 scripts/check_pr.py --base d850d3f --worktree`, 제출 전에는 `--worktree` 없이 한 번 더.
 - 단말 selftest: 시연 페이지에서 selftest를 실행해 "selftest 통과"를 확인한다.
 - compose 실측: 공유 스택(`name: resilientpos`)을 다른 세션이 쓰는지 `docker ps`와 그 세션 상태로 확인한 뒤 띄운다. 다른 세션이 측정 중이면 기다리거나 사용자에게 묻는다. PostgreSQL 정지는 공유 인프라라 사용자 확인을 받고 한다.
   - 발송: probe 알림(PostgreSQL 정지)이 `page`로, warning 하나가 `ticket`으로 가는 것을 Alertmanager `/api/v2/alerts`의 수신자로 본다.
@@ -183,6 +183,7 @@
 - 개발 컨텍스트는 "#112 SLO 알림의 후속(발송, 느린 소진, probe, 재연결 기준 수렴, 시작값, 문서)" 하나다. 네 이슈를 묶은 것은 사용자 결정이다.
 - 따로 둔 것: G-06 검토, 실제 호출·티켓 연동(제외).
 - 겹침 확인(2026-10-23, origin/main 5e5721a): 열린 PR은 #117(`feature/terminal-concurrency-limit`)뿐이다. 겹치는 경로는 `docs/wiki/observability.md`, `docs/wiki/capacity.md`, `load-test/README.md`다. 규칙 파일, sync 코드, `load-test/lib/api.js`·`s3-sync-batch.js`, runbook은 겹치지 않는다. 먼저 머지된 쪽 위로 rebase하고, push·PR 생성·머지 직전에 다시 확인한다.
+- 다시 확인(2026-10-23): #117이 `d850d3f`로 머지됐고 열린 PR은 없다. 그 위로 rebase하고 PR 기준을 `d850d3f`로 바꾼다. 측정도 #117 위에서 한다.
 - #117과의 관계: 그 PR의 동시 거절도 429라 결정 9의 오류율 정의(429 제외)와 맞는다. 결정 7의 timeout 근거(같은 pod 재전송은 429)는 그 PR의 동작을 전제로 하지만, timeout을 늘리는 판단은 그 PR 없이도 성립한다(서버는 끊긴 배치를 계속 처리한다).
 
 ## TDD 검증 기록
