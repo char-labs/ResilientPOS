@@ -6,7 +6,9 @@
 groups:
   # HttpErrorBudgetSlowBurn이 3일 창을 평가마다 원시 series로 읽지 않도록 5분 rate를 기록한다.
   # 해당 series가 없을 때 0을 남겨야 3일 평균의 분모와 분자가 같은 구간을 센다.
+  # 3일 실패 수는 기록을 더해 평가 주기(초)를 곱해 어림하므로 주기를 1분으로 고정한다.
   - name: resilientpos-records
+    interval: 1m
     rules:
       - record: resilientpos:http_v1_errors:rate5m
         expr: sum(rate(http_server_requests_seconds_count{application="ResilientPOS", uri=~"/v1/.*", status=~"5.."}[5m])) or vector(0)
@@ -269,14 +271,15 @@ groups:
 
       - alert: HttpErrorBudgetSlowBurn
         # Workbook의 ticket 쌍이다. 3일·6시간 창이 모두 배수 1(30일 예산의 10%를 3일에 씀)을 넘으면 운다. 분자와 분모는 HttpErrorBudgetBurn과 같다.
-        # 3일 실패 수는 기록의 평균 rate에 3일을 곱한 어림값이라 2.5를 3건의 문턱으로 쓴다. 기록이 3일보다 짧게 쌓였거나 Prometheus가 멈춘 구간이 있으면 어긋난다.
+        # 3일 실패 수는 1분마다 남긴 5분 rate를 더해 60을 곱한 어림값이다. scrape 15초에서 실패 한 건이 0.84~1.05로 잡혀 2건은 2.1 아래, 3건은 2.5 위라 2.3을 문턱으로 쓴다.
+        # 기록이 3일보다 짧거나 Prometheus가 멈춘 구간은 그만큼 덜 센다. 3일 비율은 있는 기록만의 비율이다.
         expr: |
           avg_over_time(resilientpos:http_v1_errors:rate5m[3d]) / avg_over_time(resilientpos:http_v1_requests:rate5m[3d]) > 1 * 0.001
           and
           sum(rate(http_server_requests_seconds_count{application="ResilientPOS", uri=~"/v1/.*", status=~"5.."}[6h]))
             / sum(rate(http_server_requests_seconds_count{application="ResilientPOS", uri=~"/v1/.*", status!="429"}[6h])) > 1 * 0.001
           and
-          avg_over_time(resilientpos:http_v1_errors:rate5m[3d]) * 3 * 86400 > 2.5
+          sum_over_time(resilientpos:http_v1_errors:rate5m[3d]) * 60 > 2.3
         labels:
           severity: warning
         annotations:

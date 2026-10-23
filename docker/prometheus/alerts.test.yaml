@@ -1177,6 +1177,28 @@ tests:
               summary: "단말 API(/v1)의 5xx가 3일 동안 오류 예산(가용성 99.9%)을 기간보다 빠르게 쓰고 있다"
               runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#httperrorbudgetslowburn
 
+  - name: 기록이 3일보다 짧으면 실패를 그 기록만큼만 센다
+    interval: 1m
+    input_series:
+      # 스택을 다시 만든 지 10시간이다. 분에 0.4건이고 300분에 1건, 501·512분에 1건씩 실패한다.
+      # 450분에는 3일 비율 0.56%, 6시간 비율 0.69%다. 평균 rate에 3일을 곱하면 실패 1건이 9.6건이 되어 운다.
+      - series: http_server_requests_seconds_count{application="ResilientPOS", method="POST", status="200", uri="/v1/terminals/{terminalId}/sync", instance="a"}
+        values: 0+0.4x602
+      - series: http_server_requests_seconds_count{application="ResilientPOS", method="POST", status="500", uri="/v1/terminals/{terminalId}/sync", instance="a"}
+        values: 0x299 1x200 2x10 3x90
+    alert_rule_test:
+      - eval_time: 450m
+        alertname: HttpErrorBudgetSlowBurn
+        exp_alerts: []
+      - eval_time: 600m
+        alertname: HttpErrorBudgetSlowBurn
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "단말 API(/v1)의 5xx가 3일 동안 오류 예산(가용성 99.9%)을 기간보다 빠르게 쓰고 있다"
+              runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#httperrorbudgetslowburn
+
   # probe는 Alloy가 15초마다 부른다.
   - name: health probe가 1분 넘게 모두 실패한 상태가 1분 이어지면 울고 성공하면 풀린다
     interval: 15s
