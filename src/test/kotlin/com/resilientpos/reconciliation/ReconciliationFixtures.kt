@@ -54,6 +54,9 @@ object ReconciliationFixtures {
         providerReference: String? = "PG-REF-1",
         approvedAmount: Money? = amount,
         note: String = "PG 가맹점 화면에서 승인 확인",
+        // 위치 인자로 부르는 호출이 있어 생성자 순서와 달리 끝에 둔다.
+        storeId: StoreId = ReconciliationFixtures.storeId,
+        ownerId: OwnerId = ReconciliationFixtures.ownerId,
     ): ReconciliationCommand.Resolve =
         TestFixtureMonkey.instance.giveMeKotlinBuilder<ReconciliationCommand.Resolve>()
             .setExp(ReconciliationCommand.Resolve::caseId, caseId)
