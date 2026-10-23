@@ -29,7 +29,7 @@ dependencyManagement {
 }
 
 dependencies {
-    implementation(platform("org.springframework.modulith:spring-modulith-bom:2.1.1"))
+    implementation(platform("org.springframework.modulith:spring-modulith-bom:2.1.2"))
 
     implementation("org.springframework.boot:spring-boot-starter-actuator")
     implementation("org.springframework.boot:spring-boot-starter-data-jpa")
