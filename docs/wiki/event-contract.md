@@ -28,7 +28,7 @@
 
 ## 3. 지금 consumer가 JSON을 읽는 방식
 
-Boot 4.1.1은 Jackson 3 기본값을 그대로 쓴다(`spring.jackson.use-jackson2-defaults`를 두지 않는다). 이 저장소의 `JsonMapper`로 확인한 동작이다.
+Boot 4.1.2는 Jackson 3 기본값을 그대로 쓴다(`spring.jackson.use-jackson2-defaults`를 두지 않는다). 이 저장소의 `JsonMapper`로 확인한 동작이다.
 
 | JSON의 상태 | 결과 |
 |---|---|
