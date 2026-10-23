@@ -80,6 +80,26 @@ PR 검사(`.github/workflows/pr-checks.yml`) 한 번이 5분 넘게 걸린다. �
 - 클래스마다 달랐던 설정 가운데 다른 테스트에 무해한 것을 `PostgresIntegrationTest`로 올린다. `@AutoConfigureMockMvc`(통합 테스트 67개 가운데 16개가 쓴다)와, 장애 주입에 쓰는 spy bean 셋(`FulfillmentCommandFacade`, `OrderCommandFacade`, `ReconciliationManagement`)이다. spy는 클래스 수준 `@MockitoSpyBean(types = …)`로 선언하고, 기본값대로 테스트마다 초기화된다(`MockReset.AFTER`). 테스트는 이 spy를 주입받아 쓴다.
 - 다음은 합치지 않는다. 결제 gateway를 감싼 중첩 구성 9개(두 스레드를 맞물리는 gateway, 호출 순간 DB 자원을 검사하는 gateway, 첫 시도만 거절하는 gateway, 분산 락을 끈 구성)는 공용으로 바꾸면 테스트마다 동작을 갈아 끼우는 공유 상태가 되고, 앞 테스트가 남긴 Kafka 메시지를 비동기 consumer가 다음 테스트의 동작으로 처리할 수 있다. IdP stub은 JWK 장애 테스트가 같은 customizer를 켜고 끄는 다른 stub을 쓰고, IdP 장애 테스트는 stub이 없는 상태를 전제로 한다. Redis 장애 구성 셋과 스케줄 속성 구성 하나는 다른 설정 자체가 목적이다.
 
+**5. 테스트 코드를 더 정리한다(2026-10-23, 사용자 결정).** 범위 조정 4 뒤 중앙값이 3분 39초였다. 사용자가 다음을 이 PR에서 하자고 했다.
+- **`@Autowired`를 쓰지 않는다.** `junit-platform.properties`의 `spring.test.constructor.autowire.mode=all`로 테스트 생성자를 애너테이션 없이 주입하고, 테스트 코드의 `@Autowired`를 모두 지운다. `@LocalServerPort`·`@Value` 파라미터는 그대로다. 저장소 규칙(생성자 주입만, 필드 주입 금지)은 그대로다.
+- **Fixture는 Fixture Monkey로 만든다.** Fixture Monkey 인스턴스는 테스트 전체에 하나(`TestFixtureMonkey`)이고, 모듈별 Fixture(주문·결제·reconciliation·점주·매장·단말·sync)가 그것을 쓰고 서로의 기본값(매장, 통화 등)을 참조한다. 필드가 둘 이상이고 테스트가 값을 고르는 커맨드는 Fixture 팩토리로 만든다. 식별자 하나만 감싸는 커맨드(`PaymentCommand.Authorize(paymentId)` 등)는 그대로 둔다. 테스트 전략의 "단순 상수까지 fixture로 감싸지 않는다"를 따른다.
+- **결제 gateway를 감싼 구성 8개와 분산 락을 끈 구성 1개를 기반 구성으로 합친다(공용 Fake).** 범위 조정 4에서 합치지 않은 이유(테스트마다 동작을 갈아 끼우는 공유 상태)는 동작을 테스트의 키에 묶어 푼다.
+  - `ScriptedPaymentGateway`(테스트 빈, `@Primary`)가 앱의 `FakePaymentGateway` 빈에 위임한다. 시도별 승인·조회 호출 수와 호출 순간 DB 자원(EntityManager·커넥션)이 묶여 있었는지는 늘 적는다.
+  - 테스트는 자기 금액이나 paymentId에만 동작을 건다. 던지기, 첫 시도 거절 뒤 승인, 같은 금액 재결제 승인, 조회 실패, 두 호출 맞물리기다. 다른 키의 호출(앞 테스트가 남긴 메시지)은 기본 동작을 탄다.
+  - 건 동작과 호출 기록은 테스트마다 끝나면 지운다(TestExecutionListener).
+  - 거절 사실 수집기(`PaymentEvent.Declined` listener)도 기반 구성에 둔다. paymentId로 센다.
+  - 분산 락은 기반 spy에 더한다. 락을 끄던 테스트는 자기 키에서만 잠금 없이 통과시킨다.
+- **spy 스텁은 그 테스트가 만든 ID에만 반응한다.** 같은 consumer group이라 앞 클래스가 남긴 메시지가 공유 컨텍스트에서 spy를 부를 수 있다. `ReconciliationOpenConcurrencyIntegrationTest`의 스텁을 paymentId로 거른다(리뷰).
+- **TRUNCATE로 테스트 클래스 사이를 격리한다(사용자 결정).** 참고 글의 방법이다. 테스트 클래스가 시작하기 전에 Flyway 이력 표를 뺀 모든 표를 한 문장으로 비운다(TestExecutionListener `beforeTestClass`). 클래스 안의 테스트끼리는 지금처럼 고유 ID로 격리한다. `@BeforeEach`에서 비우지 않는 것은 JUnit이 테스트 인스턴스를 먼저 만들어 필드 초기화가 넣은 행이 지워지기 때문이다.
+- **리뷰(Claude·Codex) 반영.**
+  - 정렬을 hash가 아닌 구성 객체(equals)로 묶고, 묶음은 그 안에서 이름이 가장 빠른 클래스 순으로 둔다. hash는 identity 기반이라 묶음 순서가 실행마다 달랐다. 구성 계산은 클래스마다 한 번이다. 계산이 실패하면(Docker가 없어 컨테이너가 뜨지 못하는 등) 이름순으로 둔다. 원래 오류는 그 클래스를 실행할 때 나온다.
+  - 하위 클래스의 중복 `@AutoConfigureMockMvc`를 지운다.
+  - `testShard`를 정규식으로 통째로 맞춘다(`1//2` 같은 형식을 거절). workflow의 job 개수는 matrix 한 곳에서만 정한다.
+  - jqwik `@Property` 테스트가 없으므로 jqwik 엔진을 빼고(`excludeEngines`), `jqwik.database` 설정을 지운다. Fixture Monkey는 엔진이 아닌 API만 쓴다.
+  - `KafkaRetryIntegrationTest`가 같은 spy를 두 이름으로 받던 것을 하나로 합친다.
+  - Codex가 짚은 "`testShard`가 캐시 키에 없다"는 실측으로 아님을 확인했다(결과 절).
+- **단위 테스트로 옮기지는 않는다(사용자 결정).** 통합 테스트 69개는 DB 제약·트랜잭션·잠금·Kafka 경로를 단언하고, 로직은 이미 단위 테스트 52개 클래스(Fake를 쓰는 Facade 테스트 포함)가 본다. 옮겨도 컨텍스트 기동은 줄지 않는다.
+
 계약: 업무 계약(HTTP·이벤트·토픽·consumer group)은 바뀌지 않는다. 바뀌는 것은 PR 검사 job 구성, Gradle 빌드 설정, 테스트 기반 설정이다.
 
 ## 제외
@@ -106,6 +126,7 @@ PR 검사(`.github/workflows/pr-checks.yml`) 한 번이 5분 넘게 걸린다. �
 - build.gradle.kts
 - src/test/resources/spring.properties
 - src/test/resources/junit-platform.properties
+- src/test/resources/META-INF/spring.factories
 - src/test/kotlin/com/resilientpos/**
 - docs/wiki/development-workflow.md
 - docs/wiki/testing-strategy.md
@@ -123,6 +144,7 @@ PR 검사(`.github/workflows/pr-checks.yml`) 한 번이 5분 넘게 걸린다. �
 10. test가 캐시에서 와도 `build/generated-snippets`가 되살아난다. `OwnerSessionStoreOutageIntegrationTest`가 닫은 임시 포트를 쓰지 않는다.
 11. CI의 두 job이 돈 클래스와 테스트 수를 합치면 로컬 전체와 같다(빠지거나 겹친 클래스가 없다). 결과 절에 job별 시간이 있다.
 12. 결과 절에 범위 조정 4 전과 뒤의 컨텍스트 기동 수(job별)와 CI 시간이 있다. 정렬 뒤에도 로컬 `./gradlew test --rerun`이 통과하고, 드러난 순서 의존의 원인과 고친 방법이 있다.
+13. 범위 조정 5 뒤 테스트 코드에 `@Autowired`가 없다. 필드가 둘 이상인 커맨드는 모듈 Fixture로 만들고 Fixture Monkey 인스턴스는 하나다. 결제 gateway·분산 락 변형 구성이 없다. 결과 절에 범위 조정 5 뒤의 컨텍스트 기동 수, 로컬 전체 `--rerun` 3회, CI 3회가 있다.
 
 ## 검증
 - 개발 중: `python3 scripts/check_pr.py --base origin/main --worktree`
