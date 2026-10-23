@@ -9,7 +9,7 @@ ResilientPOS는 네트워크 단절과 부분 실패 속에서도 주문·결제
 | 영역 | 기술 |
 |---|---|
 | 언어 / JVM | Kotlin 2.4.10 / Java 25 toolchain |
-| 프레임워크 | Spring Boot 4.1.1 |
+| 프레임워크 | Spring Boot 4.1.2 |
 | 모듈 경계 / 이벤트 | Spring Modulith (모듈 검증, Event Publication Registry, Kafka externalization) |
 | 웹 / 보안 | Spring MVC, Spring Security, Spring Session Data Redis |
 | 데이터 접근 | Spring Data JPA, Kotlin JDSL, Flyway, Jackson Kotlin |
