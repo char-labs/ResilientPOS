@@ -98,4 +98,11 @@ tasks.withType<Test> {
     inputs.file("docs/wiki/runbook.md").withPropertyName("runbook").withPathSensitivity(PathSensitivity.RELATIVE)
     // REST Docs 스니펫. output으로 두지 않으면 test가 build cache에서 올 때 스니펫이 되살아나지 않는다.
     outputs.dir(layout.buildDirectory.dir("generated-snippets")).withPropertyName("restDocsSnippets")
+    // CI가 test를 job 여러 개로 나눌 때 쓴다(-PtestShard=1/2). 바깥 클래스 이름의 해시로 나눠 모든 클래스가 정확히 한 job에서 돈다. 없으면 전부 돈다.
+    providers.gradleProperty("testShard").orNull?.let { shard ->
+        val (index, count) = shard.split("/").mapNotNull(String::toIntOrNull).takeIf { it.size == 2 }
+            ?: throw GradleException("testShard는 번호/개수 형식이어야 한다: $shard")
+        if (count < 1 || index !in 1..count) throw GradleException("testShard의 번호는 1부터 개수까지다: $shard")
+        exclude { !it.isDirectory && it.relativePath.pathString.removeSuffix(".class").substringBefore('$').hashCode().mod(count) != index - 1 }
+    }
 }

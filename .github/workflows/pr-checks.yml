@@ -20,8 +20,14 @@ on:
 
 jobs:
   build:
-    name: Gradle build
+    name: Gradle build (${{ matrix.shard }}/2)
     runs-on: ubuntu-latest
+    # test를 러너 둘에 나눠 돌린다. 나누는 기준은 build.gradle.kts의 testShard다.
+    strategy:
+      # 한쪽이 실패해도 다른 쪽을 끝까지 돌려 실패를 한 번에 본다.
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
@@ -38,14 +44,14 @@ jobs:
       # 통합 테스트는 Testcontainers로 PostgreSQL·Redis·Kafka를 띄운다.
       # ubuntu-latest 러너에 Docker가 있어 별도 설치 단계가 필요 없다.
       - name: Build and test
-        run: ./gradlew build --console=plain
+        run: ./gradlew build --console=plain -PtestShard=${{ matrix.shard }}/2
 
       # 측정용 임시 step. PR 머지 전에 지운다.
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: test-results
+          name: test-results-${{ matrix.shard }}
           path: build/test-results/test
 
   migration_version_check:
