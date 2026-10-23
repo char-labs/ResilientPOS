@@ -44,6 +44,7 @@
 - health는 DB를 보고 Redis는 보지 않는다(`application.yaml`, [관측성](../wiki/observability.md) 점주 세션 저장소 항목). 그래서 probe는 트래픽이 없을 때의 앱 멈춤·응답 없음·DB 장애를 잡는다. #112 한계 절의 "영업 외 시간의 전체 장애"를 덮는 수단이다.
 - 규칙: 1분 창의 probe가 모두 실패한 상태(`max_over_time(probe_success[1m]) == 0`)가 `for: 1m` 이어지면 운다. 평가 주기 1분에서 탐지까지 약 2~3분이 걸린다. 한 번의 timeout(GC, 호스트 부하)에는 울지 않는다.
 - probe는 데이터를 쓰지 않고 `/actuator` 경로라 `/v1` SLI에 섞이지 않는다.
+- `probe_success`는 앱이 내는 metric이 아니다. 규칙의 metric 이름을 앱 출력과 대조하는 `ObservabilityConfigurationTest`에 앱 밖에서 만드는 이름으로 이유와 함께 더한다(범위 조정, 2026-10-23).
 - 버린 것: 합성 단말의 실제 sync(주문이 DB에 쌓이고 probe 트래픽이 SLI에 섞이며 단말 자격 준비가 필요하다), 단말 인증 읽기 요청(자격과 주문 준비가 필요하고 `/v1` 오류율 분모에 들어간다).
 - 치르는 것: 주문 API 경로(인증, 도메인 로직) 자체의 고장은 probe가 보지 않는다. 그것은 오류율·지연 규칙의 몫이고, 트래픽이 있어야 판정한다.
 
@@ -53,6 +54,7 @@
 - 요청 본문 최상위의 선택 필드다. 형식은 항목의 `createdAt`과 같은 ISO-8601 offset 시각이다. 저장하지 않고 payload hash에도 넣지 않으며 수렴 metric에만 쓴다. 그래서 스키마와 sync 판정은 바뀌지 않는다.
 - 단말 규칙: 오프라인 표시(브라우저의 오프라인, 강제 오프라인)나 fetch 네트워크 오류가 나면 "끊김"으로 둔다. 끊긴 동안에는 요청마다 자기 전송 시각을 `reconnectedAt`으로 싣는다. HTTP 응답(상태 무관)이나 timeout을 받으면 그 값을 고정하고 끊김을 푼다. 서버에 닿은 요청은 곧 네트워크가 살아난 시각을 싣고 있는 셈이다. 페이지를 연 직후는 끊김으로 시작한다.
 - 그래서 매장 네트워크의 단절은 빠지고(브라우저가 온라인으로 아는 동안의 단절 포함), 5xx·timeout·429 같은 서버 쪽 지연만 들어간다.
+- 시연 단말은 지금 `createdAt`을 싣지 않는다([observability-alerts-tracing](2026-10-21-observability-alerts-tracing.md) 제외 절). 서버는 `createdAt`이 없으면 기록하지 않아 `reconnectedAt`만으로는 효과가 없으므로, 시연 단말이 operation마다 대기열에 넣은 시각을 `createdAt`으로 싣는다(범위 조정, 2026-10-23).
 - 치르는 것: 패킷을 버리는 단절로 timeout이 나면 서버 책임으로 잡힌다. 단말 시계를 믿는다(`createdAt`과 같은 전제). 시계가 서버와 N초 어긋나면 값도 N초 어긋난다.
 - 버린 것: 서버가 단말별 수신 공백으로 추정(heartbeat가 없어 쉬는 단말과 끊긴 단말을 가르지 못하고, 서버에 닿기 전에 실패한 재시도 시간을 놓친다), 단말이 수렴 시간을 직접 보고(서버 판정이 아니라 구현마다 정의가 갈리고, 마지막 배치의 값은 다음 배치가 와야 들어온다), 단말 시계로만 경과를 계산(필드가 둘이 되고 요청 전송 시간이 빠진다).
 
@@ -136,6 +138,7 @@
 - src/main/kotlin/com/resilientpos/sync/**
 - src/test/kotlin/com/resilientpos/sync/**
 - src/test/kotlin/com/resilientpos/platform/AlertRulesTest.kt
+- src/test/kotlin/com/resilientpos/platform/ObservabilityConfigurationTest.kt
 - src/main/resources/static/terminal/index.html
 - load-test/lib/api.js
 - load-test/s3-sync-batch.js
@@ -152,7 +155,7 @@
 4. sync 배치에 `reconnectedAt`이 있으면 처음 확정된 항목의 수렴 시간을 `createdAt`과 `reconnectedAt` 가운데 늦은 쪽부터 잰다. 없으면 `createdAt`부터 잰다. 형식이 틀리면 배치는 정상 처리되고 `createdAt`부터 재며 `sync_reconnected_at_invalid_total`이 1 오른다. 통합 테스트로 확인하고 REST Docs에 필드를 적는다.
 5. 재연결 뒤 60초를 넘겨 확정된 항목의 비율이 1시간·5분 창에서 모두 0.144%를 넘거나 6시간·30분 창에서 모두 0.06%를 넘고, 긴 창에서 60초를 넘긴 항목이 3건 이상이면 `SyncConvergenceBudgetBurn`(warning)이 울린다. 60초 이하 항목만 있거나 넘긴 항목이 2건이면 울지 않는다. promtool 시나리오로 확인한다.
 6. `HttpErrorBudgetBurn`은 긴 창의 실패가 2건이면 울지 않고, 3건이며 비율이 배수를 넘으면 시간당 요청이 28건보다 적어도 운다. 기존 시나리오의 요청 수 하한 경계를 실패 수 경계로 바꾼다.
-7. 시연 단말은 끊긴 뒤 서버에 닿은 첫 요청의 전송 시각을 `reconnectedAt`으로 싣고, 응답이나 timeout을 받은 뒤에는 그 값을 유지하며, sync timeout이 30초다. 페이지 selftest가 이 규칙을 확인한다.
+7. 시연 단말은 operation마다 `createdAt`을 싣고, 끊긴 뒤 서버에 닿은 첫 요청의 전송 시각을 `reconnectedAt`으로 싣고, 응답이나 timeout을 받은 뒤에는 그 값을 유지하며, sync timeout이 30초다. 페이지 selftest가 이 규칙을 확인한다.
 8. S3 변형 두 번(배치 50, timeout 30초, 단말 100대, 500 op와 1,800 op)의 결과가 결과 절에 남는다. 수렴 시간, timeout 수, sync p95, `sync_convergence_seconds`의 60초 비율, 알림 상태를 적고 결정 7·8의 판정을 내린다.
 9. 결정 8의 판정이 결과 절의 시작값 판정 표에 남는다.
 10. 새 규칙과 바뀐 규칙의 시나리오는 규칙을 고치기 전에 promtool에서 실패한다(TDD 검증 기록).
