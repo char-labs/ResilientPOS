@@ -40,6 +40,14 @@ jobs:
       - name: Build and test
         run: ./gradlew build --console=plain
 
+      # 측정용 임시 step. PR 머지 전에 지운다.
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-results
+          path: build/test-results/test
+
   migration_version_check:
     name: Flyway version gate
     # push에는 비교할 기준 브랜치가 없다. PR에서만 의미가 있다.
