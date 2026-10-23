@@ -149,7 +149,8 @@
 ## 분할 계획
 - 이 PR은 단말별 동시 요청 상한 하나의 개발 컨텍스트다. 인스턴스 전체의 sync 동시 실행 상한, 단말 sync timeout 규약, 행 잠금 대기 시간은 따로 둔다(제외).
 - 겹침 확인(2026-10-23, origin/main `63b73bc`): 열린 PR은 #94(draft, `refactor/modulith-2-1-2-resubmit`)뿐이고 그 경로(`build.gradle.kts`, `EventPublicationResubmitter`와 그 테스트, `domain-model.md`, 자기 spec)는 이 PR과 겹치지 않는다. 진행 중이지만 PR이 없는 브랜치 중 `feature/slo-alert-baseline`(#103)이 `docs/wiki/observability.md`를 고쳐 이 PR과 겹친다(같은 파일의 다른 항목일 가능성이 크다). `alerts.yaml`·`alerts.test.yaml`·`runbook.md`는 이 PR이 건드리지 않는다. `fix/boot-4-1-2`(`build.gradle.kts`)는 겹치지 않는다. push·PR 생성·머지 직전에 다시 확인하고 먼저 머지된 쪽에 맞춰 rebase한다.
-- rebase(2026-10-23, origin/main `0cb9b93`): 그 사이 #111(Boot 4.1.2)과 #94(Modulith 2.1.2)가 머지됐다. 두 PR의 경로(`build.gradle.kts`, `README.md`, `EventPublicationResubmitter`와 그 테스트, `domain-model.md`, `event-contract.md`, 두 spec)는 이 PR과 겹치지 않아 충돌 없이 옮겨졌다. 열린 PR은 없다. #103(`feature/slo-alert-baseline`)은 아직 PR이 없고 `observability.md`가 겹칠 수 있다.
+- rebase(2026-10-23, origin/main `0cb9b93`): 그 사이 #111(Boot 4.1.2)과 #94(Modulith 2.1.2)가 머지됐다. 두 PR의 경로(`build.gradle.kts`, `README.md`, `EventPublicationResubmitter`와 그 테스트, `domain-model.md`, `event-contract.md`, 두 spec)는 이 PR과 겹치지 않아 충돌 없이 옮겨졌다. 열린 PR은 없다.
+- rebase(2026-10-23, origin/main `5e5721a`): #103(PR #112, SLO 알림)이 머지됐다. 겹친 경로는 `docs/wiki/observability.md` 하나였고 다른 절(알림 규칙·분산 락·아직 없는 것)이라 충돌 없이 옮겨졌다. #112는 `capacity.md`의 "HTTP 지연 기준선" 절도 고쳤고, 이 PR은 그 뒤에 "단말·매장 rate limit 권장값" 절을 고친다. #112의 오류율·지연 알림은 상태 429를 분모와 판정에서 빼므로 동시 거절의 429도 그대로 맞는다.
 - 공용 헬퍼: main과 #94에 동시 요청 상한이나 in-flight 계수기가 없다. 로그 줄 수를 줄이는 헬퍼는 `RedisTerminalRateLimiter`의 private `Throttle` 하나뿐이라, 새로 만들지 않고 그것을 같은 모듈에서 함께 쓰도록 꺼낸다.
 
 ## TDD 검증 기록
@@ -174,4 +175,43 @@ limiter와 인터셉터의 동작 변경에 적용한다. 명령은 모두 `./gr
 | `TerminalInFlightIntegrationTest`: 같은 단말의 checkout이 주문 행 잠금을 기다리는 동안 온 checkout은 429 RATE_LIMITED이고 잠금이 풀리면 앞 요청은 200이며 다음 checkout은 통과한다, 같은 단말의 sync가 watermark 행 잠금을 기다리는 동안 온 sync는 429이고 sync 밖 쓰기 요청은 201이며 잠금이 풀리면 앞 sync는 200이다, v1의 GET pattern은 결제 시도 조회 하나로 고정되어 있다(인수 1·3·11·15) | 구현 뒤에 써서 처음부터 통과했다(`--tests '…web.TerminalInFlightIntegrationTest'`, 2건). 판별력은 운영 코드를 잠깐 바꿔 확인하고 Edit로 되돌렸다. 인터셉터의 sync pattern을 틀리게 하면 sync 장면이 실패했다(sync 밖 요청이 429). `inFlight.acquire` 호출을 지우면 두 장면 모두 실패했다(429 대신 409. 겹친 요청이 3초 동안 잠금을 기다리다 대기 초과로 끝났다). 리뷰 반영: 잠금 대기 감지를 잠근 세션에 막힌 잠금만 세게 바꾸고, sync 밖 요청을 `POST /v1/orders`(201)로, checkout 대기 중 결제 시도 조회 GET이 200인지 단정을 더했다. GET 판정을 잠깐 끄면 장면 1이 실패했다. 재리뷰 반영: 두 장면의 429 뒤 `scope="in_flight"` counter가 정확히 1 오르는지 단정하고(처음부터 통과), `/v1` GET pattern 고정 테스트를 더했다(처음부터 통과. 같은 패키지의 인터셉터 테스트용 Controller가 섞여 처음 실행에서 실패해 그 접두어를 뺐다) | 같은 명령, 2건 통과 | `--tests 'com.resilientpos.terminal.*'` 123건 통과 |
 
 ## 결과
-개발 전 작성. 개발 후 실행 결과, k6 전후 수치, 변경 이유를 추가한다.
+구현은 인수 조건 1~12·14·15를 테스트로 확인했다(위 TDD 검증 기록). rebase 뒤 `./gradlew test` 전체 926건이 통과했다(실패·오류·skip 0). k6 결과(인수 13)는 아래와 같다.
+
+### 측정 환경
+- 2026-10-23 08:15~09:03Z, 로컬 compose 한 대(앱 1대, Hikari 10, `mem_limit` 1g). Apple M3 Pro 11코어·RAM 36GB, OrbStack CPU 11·메모리 16GiB, k6 v2.2.0. 이미지 ID는 `grafana/otel-lgtm:latest` 57b5ab1ca661, `grafana/alloy:latest` 9726bfba078d, postgres 18-alpine, redis 8-alpine, kafka 4.1.0.
+- 빌드: 바꾸기 전은 origin/main `0cb9b93`(빈도 상한 있음, 이 PR 없음), 바꾼 뒤는 이 브랜치 `daad015`(앱 코드는 이 PR의 최종과 같다). 앱 컨테이너만 `docker compose … up -d --build --no-deps app`으로 다시 만들었다.
+- 공유 스택이라 DB를 비우지 않았다. `event_publication`이 약 212만~222만 행이었고 08:55:24Z에 부하 중 autovacuum이 돌았다. #103 세션은 08:12Z에 스택 사용을 끝냈다.
+- 재현: `load-test/README.md`의 S1 고장 단말 행. 바탕은 `k6 run -e RATE=70 load-test/s1-baseline.js`(2분)이다. 고장 단말은 여기에 `-e TERMINAL_BURST=10 -e BURST_EVERY=5s`를 더하고, backlog 되풀이는 `-e BURST_SALES=250`을 더 붙인다. 실행마다 앞에서 미완료 발행 기록이 50건 아래로 빠지기를 기다렸고, 빌드를 바꿀 때마다 JIT를 예열했다(`RATE=50`, 1분). Prometheus 값은 실행 끝까지 125초 창의 `max_over_time`(scrape 15초)과 `increase`(외삽값)다.
+
+### 범위 조정(k6 측정 뒤)
+검증 절의 고장 단말(판매 1건 배치)로는 바꾸기 전 빌드에서 커넥션이 묶이는 장면이 뚜렷이 재현되지 않았다. 겹친 요청이 잠금을 기다리는 시간이 ms 단위라 15초 표본에 잡히지 않았다. pending이 한 번씩 튄 것은 바탕만 실행에도 있었다. 판정 규칙대로 결론을 다시 물었고, 사용자 결정으로 backlog 배치로 다시 쟀다. `lib/baseline.js`에 `BURST_SALES`를 더했다. 1보다 크면 첫 묶음에만 그만큼 판매를 쌓고 그 뒤로는 같은 500 op 배치를 되풀이한다. 확정된 항목도 항목마다 watermark 행을 잠그므로, 새 주문 없이 같은 잠금 앞의 경합만 생긴다(이슈의 장면). 묶음마다 판매 250건을 새로 더하는 모양도 한 번 쟀지만(heavy-after1) 버렸다. 업무 부하가 초당 판매 50건만큼 늘어 경합 효과와 갈리지 않았다.
+
+### 원시 수치
+load는 실행이 끝날 때의 1분 load average다. "normal"은 바탕 sync(`traffic:normal`)이고 "고장 단말"은 burst 요청이다.
+
+| 실행 | 빌드 | 시나리오 | 시각(Z) | load | req/s | normal 실패 | normal p95/p99 | pending 최대 | active 최대 | 대기 초과 | 고장 단말 200/429 | 고장 단말 p95 | in_flight 증가 | 미처리 iteration |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| base-before | 전 | 바탕 | 08:18~08:20 | 6.7 | 77 | 0.00% | 26/64ms | 9 | 10 | 0 | - | - | - | 0 |
+| burst-before | 전 | 판매 1건 | 08:21~08:23 | 97.0 | 75 | 2.72% | 7,129/13,656ms | 91 | 9 | 233 | 222/2 | - | - | 488 |
+| burst-before2 | 전 | 판매 1건 | 08:24~08:26 | 11.9 | 77 | 0.00% | 106/342ms | 5 | 10 | 0 | 237/3 | 276ms | - | 0 |
+| base-after | 후 | 바탕 | 08:29~08:31 | 15.2 | 76 | 0.00% | 129/489ms | 13 | 10 | 0 | - | - | 0 | 0 |
+| burst-after | 후 | 판매 1건 | 08:31~08:34 | 14.9 | 78 | 0.00% | 181/1,134ms | 26 | 10 | 0 | 24/216 | 127ms | 220 | 0 |
+| heavy-after1 | 후 | 묶음마다 판매 250건 | 08:36~08:38 | 18.5 | 77 | 0.00% | 387/1,209ms | 73 | 10 | 0 | 22/198 | - | 193 | 3 |
+| replay-after1 | 후 | backlog 되풀이 | 08:39~08:41 | 8.3 | 79 | 0.00% | 39/155ms | 7 | 10 | 0 | 24/216 | 1,134ms | 225 | 0 |
+| base-before3 | 전 | 바탕 | 08:43~08:45 | 5.4 | 76 | 0.00% | 29/103ms | 0 | 6 | 0 | - | - | - | 0 |
+| replay-before1 | 전 | backlog 되풀이 | 08:46~08:48 | 5.1 | 76 | 0.00% | 166/518ms | 23 | 10 | 0 | 100/0 | 13,610ms | - | 15 |
+| base-after2 | 후 | 바탕 | 08:50~08:52 | 58.2 | 74 | 0.25% | 3,090/9,499ms | 172 | 10 | 23 | - | - | 0 | 269 |
+| replay-after2 | 후 | backlog 되풀이 | 08:53~08:55 | 31.2 | 77 | 0.28% | 2,174/4,426ms | 187 | 10 | 26 | 20/180 | - | 192 | 4 |
+| base-after3 | 후 | 바탕 | 08:57~08:59 | 12.9 | 75 | 0.00% | 281/790ms | 28 | 10 | 0 | - | - | 0 | 0 |
+| replay-after3 | 후 | backlog 되풀이 | 09:00~09:02 | 9.0 | 77 | 0.00% | 47/189ms | 10 | 10 | 0 | 24/216 | 993ms | 225 | 0 |
+
+- 버린 실행: burst-before는 08:22:48Z 한 번의 호스트 정지와 겹쳤다(그 표본만 pending 91, 나머지는 0). base-after2와 replay-after2는 호스트 부하(load 58·31)와 autovacuum이 겹쳐, 동시 상한과 무관한 바탕만 실행도 p95가 3초였다. heavy-after1은 위 범위 조정의 이유로 버렸다.
+- active 최대는 바탕만 실행에서도 10이다(외부화가 풀을 쓴다). 그래서 가르는 값이 아니다.
+
+### 해석
+- 바꾸기 전: 고장 단말이 같은 500 op 배치를 5초마다 10개 동시에 보내자, 다른 단말 sync p95가 같은 빌드 바탕의 5.7배(29 → 166ms)가 됐고 pending 최대가 0에서 23이 됐다. 고장 단말 요청은 p95 13.6초였다. 10개가 항목마다 같은 watermark 잠금을 번갈아 기다리며 각자 커넥션을 쥔 것이다. 묶음 하나가 간격 5초를 넘겨 미처리 iteration이 15건 생겼다.
+- 바꾼 뒤: 같은 시나리오에서 묶음마다 1개만 통과했다(200 24건, 429 216건). 다른 단말 sync p95는 39·47ms, pending 최대는 7·10, 미처리는 0이다. 통과한 1개는 500 op 배치를 혼자 처리해 p95 약 1초다.
+- 판매 1건 배치: 바꾸기 전에는 묶음마다 10개가 모두 통과했고(237/3) 다른 단말 p95가 바탕의 4배(26 → 106ms)였지만, pending은 5에 그쳤다. 바꾼 뒤에는 묶음마다 1개만 통과했다(24/216).
+- 판정 규칙: 바꾼 뒤 되풀이 실행(replay-after3: pending 10, p95 47ms)이 같은 빌드의 바탕만 실행(base-after3: pending 28, p95 281ms)보다 좋아 규칙은 통과한다. 다만 그 바탕이 호스트 부하로 흔들려 규칙의 비교는 뜻이 약하다. 깨끗한 바꾸기 전 바탕(base-before3: p95 29ms, pending 0)과 견주면, 바꾼 뒤 되풀이는 p95 1.3~1.6배, pending 최대 7~10이다. 남은 차이에는 묶음마다 통과하는 배치 하나(커넥션 하나를 1초쯤 쥔다)와 호스트 잡음이 섞여 있고, 이 측정으로는 둘을 가르지 못했다.
+- 결론: 동시 상한은 같은 단말의 겹친 배치가 잠금 앞에서 커넥션을 나눠 쥐는 것을 막아, 다른 단말의 지연을 바꾸기 전 고장 단말 실행의 4분의 1 수준으로 되돌렸다. 정량 판정을 10% 해상도로 다시 하려면 호스트 부하가 없는 환경과 비운 DB에서 재야 한다.
+- 한계: 앱 한 대(단일 pod)이고, scrape 15초라 짧은 pending은 놓친다. 동시 거절의 재시도 비용(결정 5)은 이 시나리오에서 고장 단말 하나의 거절 초당 약 1.8건이라 따로 보이지 않았다.
