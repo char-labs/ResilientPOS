@@ -3,12 +3,12 @@ package com.resilientpos.terminal.internal.adapter.redis
 import com.resilientpos.platform.RateLimitedException
 import com.resilientpos.platform.logger
 import com.resilientpos.terminal.AuthenticatedTerminal
+import com.resilientpos.terminal.internal.adapter.LogThrottle
 import io.lettuce.core.RedisCommandExecutionException
 import io.micrometer.core.instrument.MeterRegistry
 import jakarta.annotation.PostConstruct
 import java.time.Clock
 import java.time.Duration
-import java.time.Instant
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
@@ -57,9 +57,9 @@ class RedisTerminalRateLimiter(
     /** 첫 거절 전에도 시계열이 있어야 increase()가 첫 증가를 잡는다. */
     private val rejectCounters = SCOPES.associateWith { meterRegistry.counter(METRIC, SCOPE_TAG, it) }
 
-    private val rejectLogs = SCOPES.associateWith { Throttle() }
-    private val warnLog = Throttle()
-    private val errorLog = Throttle()
+    private val rejectLogs = SCOPES.associateWith { LogThrottle() }
+    private val warnLog = LogThrottle()
+    private val errorLog = LogThrottle()
 
     /** 마지막 연결 계열 실패 시각. 그 뒤 [SKIP_AFTER_CONNECTION_FAILURE] 동안은 Redis를 부르지 않는다. */
     private val connectionFailedAt = AtomicLong(NEVER)
@@ -160,7 +160,7 @@ class RedisTerminalRateLimiter(
     }
 
     /** 창을 연다. 창을 여는 수준을 먼저 바꿔 둬야 창 안에서 건너뛴 건수가 그 수준의 줄로 간다. */
-    private fun openWindow(level: Throttle, at: Long) {
+    private fun openWindow(level: LogThrottle, at: Long) {
         windowLog.set(level)
         connectionFailedAt.set(at)
     }
@@ -182,41 +182,11 @@ class RedisTerminalRateLimiter(
         return reply.substringBefore(' ') in CONFIG_REDIS_ERRORS || CONFIG_REDIS_ERROR_PREFIXES.any(reply::startsWith)
     }
 
-    /**
-     * 같은 종류의 로그를 [LOG_INTERVAL]에 한 줄로 줄인다. 남길 차례면 그 사이 건너뛴 수와 직전 줄의 시각을, 아니면 null을 돌려준다.
-     * 직전 시각이 있어야 장애 사이를 넘어 이월된 건수를 가를 수 있다. 시계가 뒤로 가면 기다리지 않고 남긴다.
-     */
-    private class Throttle {
-        private val lastMillis = AtomicLong(NEVER)
-        private val skipped = AtomicLong()
-
-        fun skip() {
-            skipped.incrementAndGet()
-        }
-
-        fun pass(nowMillis: Long): Logged? {
-            val last = lastMillis.get()
-            // 거절 경로는 Redis를 부르기 전 시각이라 동시 요청의 완료 순서가 뒤바뀌면 조금 음수가 된다. 간격보다 크게 뒤로 간 것만 시계 역행으로 본다.
-            val interval = LOG_INTERVAL.toMillis()
-            val due = last == NEVER || nowMillis - last !in -interval until interval
-            if (!due || !lastMillis.compareAndSet(last, nowMillis)) {
-                skip()
-                return null
-            }
-            return Logged(skipped.getAndSet(0), last.takeIf { it != NEVER })
-        }
-    }
-
-    private data class Logged(val suppressed: Long, val lastMillis: Long?) {
-        override fun toString() = "suppressedSinceLast=$suppressed lastLoggedAt=${lastMillis?.let(Instant::ofEpochMilli) ?: "none"}"
-    }
-
     private companion object {
         val log by logger()
         const val MICROS_PER_SECOND = 1_000_000.0
         const val MAX_FILL_SECONDS = 86_400.0
         const val MAX_EXACT_LUA_INTEGER = 1L shl 53
-        val LOG_INTERVAL: Duration = Duration.ofSeconds(10)
         val SKIP_AFTER_CONNECTION_FAILURE: Duration = Duration.ofSeconds(1)
         const val NEVER = Long.MIN_VALUE
 
