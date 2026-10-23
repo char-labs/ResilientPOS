@@ -137,7 +137,7 @@ t_reconciliation_case.resolved_by_owner_id ────────────�
 
 | 단계 | 단말·운영자에게 보이는 것 | 표 | 트랜잭션·전달 |
 |---|---|---|---|
-| 1. 단말이 `POST /v1/orders` | 201, `orderId`·`status=OPEN` | `t_order` 1행 + `t_order_line` N행 | **한 커밋**(`Lock` 블록, 같은 `clientOrderId` 동시 요청은 줄 서서 같은 주문을 받는다. 락이 통하지 않거나 sync와 겹쳐 이 요청이 늦으면 `409 CONCURRENT_REQUEST`다. 다시 보내면 먼저 저장된 주문과 내용이 같을 때 그 주문을, 다르면 `409 IDEMPOTENCY_CONFLICT`를 받는다) |
+| 1. 단말이 `POST /v1/orders` | 201, `orderId`·`status=OPEN` | `t_order` 1행 + `t_order_line` N행 | **한 커밋**(`Lock` 블록, 같은 `clientOrderId` 동시 요청은 줄 서서 같은 주문을 받는다. 같은 단말의 요청이 같은 pod에 겹치면 뒤 요청은 줄 서지 않고 `429 RATE_LIMITED`(`Retry-After: 1`, 동시 요청 상한)를 받고 그 뒤 다시 보낸다. 락이 통하지 않거나 sync와 겹쳐 이 요청이 늦으면 `409 CONCURRENT_REQUEST`다. 다시 보내면 먼저 저장된 주문과 내용이 같을 때 그 주문을, 다르면 `409 IDEMPOTENCY_CONFLICT`를 받는다) |
 | 2. 단말이 `POST /v1/orders/{id}/checkout` | 200, `checkoutNo=1`·`amount`·`status=CHECKOUT_REQUESTED` | `t_order.status` 갱신 + `t_order_checkout` 1행 + `event_publication`(`OrderPaymentRequested`) | **한 커밋**(주문 행 잠금). 응답은 커밋 직후 |
 | 3. Kafka `order.payment-requested` → `payment` | 단말에는 아직 아무것도 없다 | `t_payment_attempt` 1행(`REQUESTED`, 0원이면 바로 `APPROVED`) + `event_publication`(`AttemptCreated`) | **한 커밋**(`Lock` 블록). 같은 사실이 두 번 와도 기존 시도를 돌려준다 |
 | 4. Kafka `payment.attempt-created` → provider 호출 | 없음 | 호출은 **트랜잭션 밖** | provider 응답 뒤 행을 잠그고 결말 적용 |
