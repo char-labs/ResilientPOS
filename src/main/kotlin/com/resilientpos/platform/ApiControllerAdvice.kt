@@ -71,7 +71,7 @@ class ApiControllerAdvice : ResponseEntityExceptionHandler() {
     /**
      * 단말이나 매장의 요청 빈도가 상한을 넘었거나 같은 단말의 요청이 이미 처리 중이다(동시 상한). 어느 상한인지 구분하지 않고 같은 응답이다.
      * 단말은 `Retry-After`(정수 초)만큼 기다린 뒤 같은 요청을 그대로 다시 보낸다.
-     * 로그는 남기지 않는다. limiter가 scope별 10초에 한 줄로 남긴다. 여기서 요청마다 남기면 `Retry-After`를 무시하는 단말이 로그를 요청 수만큼 늘린다.
+     * 로그는 남기지 않는다. 두 limiter가 거절 종류(scope·묶음)별로 10초에 한 줄로 남긴다. 여기서 요청마다 남기면 `Retry-After`를 무시하는 단말이 로그를 요청 수만큼 늘린다.
      */
     @ExceptionHandler(RateLimitedException::class)
     fun handleRateLimited(e: RateLimitedException): ResponseEntity<ApiResponse<Nothing>> =
