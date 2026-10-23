@@ -9,9 +9,11 @@ export const DURATION = __ENV.DURATION || '2m';
 // #87 상한 검증용. 오작동 단말 ABUSIVE대가 단말마다 초당 ABUSIVE_RATE번 sync를 보낸다. VU 하나가 단말 하나다.
 export const ABUSIVE = Number(__ENV.ABUSIVE || 0);
 const ABUSIVE_RATE = Number(__ENV.ABUSIVE_RATE || 2);
-// #87 시나리오 3. bucket이 가득 찬 고장 단말 하나가 같은 sync 배치를 TERMINAL_BURST개 동시에 보낸다. 초마다 한 번.
-// VU 하나라 단말도 하나다. 한 묶음이 1초를 넘기면 다음 묶음은 dropped_iterations로 보인다.
+// #87 시나리오 3. bucket이 가득 찬 고장 단말 하나가 같은 sync 배치를 TERMINAL_BURST개 동시에 보낸다. BURST_EVERY(기본 1s)마다 한 번.
+// 빈도 상한이 있는 빌드에서 bucket이 가득 찬 채로 보내려면 BURST_EVERY를 빈 bucket이 차는 시간(capacity ÷ refill, 권장값이면 5s) 이상으로 준다.
+// VU 하나라 단말도 하나다. 한 묶음이 간격을 넘기면 다음 묶음은 dropped_iterations로 보인다.
 export const TERMINAL_BURST = Number(__ENV.TERMINAL_BURST || 0);
+const BURST_EVERY = __ENV.BURST_EVERY || '1s';
 const SYNC_VUS = Number(__ENV.SYNC_VUS || 300);
 const HTTP_VUS = Number(__ENV.HTTP_VUS || 100);
 
@@ -28,7 +30,7 @@ export function baselineScenarios() {
   };
   if (TERMINAL_BURST > 0) {
     scenarios.terminal_burst = {
-      executor: 'constant-arrival-rate', exec: 'terminalBurst', rate: 1, timeUnit: '1s',
+      executor: 'constant-arrival-rate', exec: 'terminalBurst', rate: 1, timeUnit: BURST_EVERY,
       duration: DURATION, preAllocatedVUs: 1, maxVUs: 1,
     };
   }
