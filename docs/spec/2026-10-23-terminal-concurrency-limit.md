@@ -29,7 +29,7 @@
 
 **결정 3: 묶음은 sync와 그 밖 둘이고 상한은 각각 1이다. 상수로 둔다.**
 - sync는 `POST /v1/terminals/{terminalId}/sync`다. 판별은 handler mapping이 고른 경로 pattern(`HandlerMapping.BEST_MATCHING_PATTERN_ATTRIBUTE`)이 그 pattern과 같은지로 한다. 그 밖은 sync가 아닌 `/v1/**` 쓰기 요청(`POST /v1/orders`, `POST /v1/orders/{orderId}/checkout`, `POST /v1/payment-attempts/{paymentId}/retry`)이다.
-- GET(`GET /v1/orders/{orderId}/payment-attempts`)은 자리를 잡지 않는다. 행 잠금을 잡지 않는 읽기라(PostgreSQL MVCC 읽기는 `FOR UPDATE`에 막히지 않는다) 잠금 앞에서 커넥션을 쥐고 기다리는 일이 없다. 묶으면 결제 상태를 폴링하는 동안 다음 주문을 만들거나, 클라이언트가 GET을 자동 재시도할 때 막을 것 없이 429만 난다. 대가로 GET 폭주는 빈도 상한만 막는다.
+- GET(`GET /v1/orders/{orderId}/payment-attempts`)과 HEAD(Spring이 GET handler로 처리한다)는 자리를 잡지 않는다. 행 잠금을 잡지 않는 읽기라(PostgreSQL MVCC 읽기는 `FOR UPDATE`에 막히지 않는다) 잠금 앞에서 커넥션을 쥐고 기다리는 일이 없다. 묶으면 결제 상태를 폴링하는 동안 다음 주문을 만들거나, 클라이언트가 GET을 자동 재시도할 때 막을 것 없이 429만 난다. 대가로 GET 폭주는 빈도 상한만 막는다.
 - sync를 1로 두는 것은 프로토콜 때문이다. 단말은 응답의 `lastAckedSequence` 다음부터 이어 보내므로 같은 단말의 배치는 차례로 온다. 조정할 값이 아니어서 설정으로 열지 않는다.
 - 묶음을 나누는 이유: 한 묶음으로 두면, 오프라인에서 돌아온 단말의 backlog sync(부하가 걸리면 수십 초)가 도는 동안 그 단말의 실시간 checkout이 거절된다. 단말이 5초에 끊고 같은 배치를 다시 보내면 sync가 둘이 돌면서 그동안 checkout이 계속 막힌다. 나누면 다시 보낸 sync만 거절되고 checkout은 지나간다.
 - 버린 것: `/v1` 전체를 한 묶음으로 세고 상한을 2로 두는 안. 경로 판별이 없지만 위의 재전송 경우에 실시간 checkout이 막힌다.
@@ -40,7 +40,7 @@
 - 동시 상한을 빈도 상한보다 먼저 본다. 동시 상한이 거절한 요청은 token을 쓰지 않는다(#87 결정 6의 "거절된 요청은 토큰을 쓰지 않는다"). 고장 단말이 동시에 보낸 9개가 bucket을 비우지 않으므로 같은 단말의 다음 정상 요청이 빈도 상한에 걸리지 않는다.
 - 빈도 상한이 거절하면 잡은 자리를 그 자리에서 푼다. `afterCompletion`은 그 인터셉터의 `preHandle`이 끝까지 돌아 `true`를 돌려줄 때만 불리기 때문이다([HandlerInterceptor](https://docs.spring.io/spring-framework/docs/current/javadoc-api/org/springframework/web/servlet/HandlerInterceptor.html)).
 - 자리는 `afterCompletion`에서 푼다. handler의 결과와 관계없이(예외 포함) 불린다.
-- 자리를 잡았다는 표시를 요청 속성에 둔다. 표시가 있는 요청에서 `preHandle`이 다시 불리면 인증과 두 상한을 다시 하지 않고 통과한다. 비동기 handler가 생기면 ASYNC dispatch가 `preHandle`을 다시 부르는데(첫 dispatch에서는 `afterCompletion`이 불리지 않는다), 그때는 handler가 이미 일했다. 다시 인증·빈도 상한을 돌려 401·429를 내면 "429면 처리되지 않았으니 그대로 다시 보낸다"는 계약(결정 5)이 깨지고, 다시 자리를 잡으면 pod 메모리의 자리가 새서 그 단말이 재시작까지 거절만 받는다. 자리는 마지막 `afterCompletion`이 한 번 푼다. 지금 `/v1`에는 비동기 handler가 없다.
+- 자리는 요청 속성에 두고 `afterCompletion`이 그것을 푼다. 앞 dispatch의 `preHandle`이 끝까지 통과한 요청(인증 결과 속성이 있다)에서 `preHandle`이 다시 불리면 인증과 두 상한을 다시 하지 않고 통과한다. 자리 표시가 아니라 인증 결과로 가르는 것은 자리를 잡지 않는 GET에도 같은 규칙이 걸리게 하려는 것이다. 비동기 handler가 생기면 ASYNC dispatch가 `preHandle`을 다시 부르는데(첫 dispatch에서는 `afterCompletion`이 불리지 않는다), 그때는 handler가 이미 일했다. 다시 인증·빈도 상한을 돌려 401·429를 내면 "429면 처리되지 않았으니 그대로 다시 보낸다"는 계약(결정 5)이 깨지고, 다시 자리를 잡으면 pod 메모리의 자리가 새서 그 단말이 재시작까지 거절만 받는다. 자리는 마지막 `afterCompletion`이 한 번 푼다. 지금 `/v1`에는 비동기 handler가 없다.
 - 한계(비동기 handler가 생길 때 다시 본다): ASYNC dispatch가 오지 않는 handler(timeout 없는 `DeferredResult`)는 자리를 계속 쥐므로 비동기 handler에는 timeout이 있어야 한다. 비동기 timeout으로 자리가 풀려도 작업 스레드는 아직 커넥션을 쥐고 있을 수 있다.
 - 한 인터셉터 안에서 한다. 별도 인터셉터를 두면 순서가 `addInterceptors`의 등록 순서에 기대서 두 파일을 함께 봐야 보인다(#87 결정 2와 같은 이유).
 - 인증에 실패한 요청은 자리를 잡지 않는다.
@@ -110,7 +110,7 @@
 4. 다른 단말(같은 매장 포함)의 요청은 영향을 받지 않는다.
 5. 동시 상한이 거절한 요청은 빈도 token을 쓰지 않는다. 빈도 상한이 거절하면 잡은 자리를 바로 풀어서 같은 단말의 다음 요청이 동시 상한에 걸리지 않는다.
 6. handler가 예외로 끝나도 자리가 풀린다.
-7. 자리를 잡은 표시가 있는 요청에서 `preHandle`이 다시 불리면(ASYNC dispatch) 인증·동시 상한·빈도 상한을 다시 하지 않고 통과하고, 마지막 `afterCompletion`이 한 번 풀면 그 단말이 다시 통과한다.
+7. 앞 dispatch에서 통과한 요청에서 `preHandle`이 다시 불리면(ASYNC dispatch) 인증·동시 상한·빈도 상한을 다시 하지 않고 통과하고, 마지막 `afterCompletion`이 한 번 풀면 그 단말이 다시 통과한다.
 8. 인증에 실패한 요청은 자리를 잡지 않고 401이다.
 9. 동시 거절마다 `inbound_rate_limited_total{scope="in_flight"}`가 1 오르고, 이 시계열은 limiter를 만들 때 0으로 등록된다(첫 거절 전에 조회된다). 거절 INFO는 묶음별로 10초에 한 줄이고 kind·terminalId·storeId·자리를 쥔 시간·건수·직전 시각을 담는다. 토큰과 `Authorization` 값은 남지 않는다.
 10. `RateLimitedException`은 두 limiter만 만들고, 빈도 limiter의 `acquire`와 동시 limiter의 `acquire`·`release`는 인증 인터셉터만 부른다.
@@ -118,7 +118,7 @@
 12. REST Docs의 429 설명이 빈도 거절과 동시 거절을 함께 말한다.
 13. k6 고장 단말 시나리오를 바꾸기 전과 후 빌드에서 재고 원시 수치·환경·재현 명령을 결과에 남긴다. 판정은 검증 절의 규칙을 따른다.
 14. 기존 테스트가 하나도 깨지지 않는다.
-15. GET 요청은 자리를 잡지 않는다. 같은 단말의 쓰기 요청이 처리 중이어도 결제 시도 조회는 동시 상한에 걸리지 않는다.
+15. GET·HEAD 요청은 자리를 잡지 않는다(인증과 빈도 상한은 한다). 같은 단말의 쓰기 요청이 처리 중이어도 결제 시도 조회는 동시 상한에 걸리지 않는다.
 
 ## 검증
 - `./gradlew test --tests 'com.resilientpos.terminal.*'`: limiter와 인터셉터. 동시성은 실제 스레드로 handler 안에 머무는 요청을 만들어 확인한다.
@@ -155,12 +155,14 @@ limiter와 인터셉터의 동작 변경에 적용한다. 명령은 모두 `./gr
 | 다른 단말은 같은 매장이어도 영향을 받지 않는다(인수 4) | 빈 구현도 통과한다. 거절 키를 단말로 좁히는지 보는 대조로 남긴다 | 통과 | 위와 같음 |
 | `TerminalAuthenticationInterceptorTest`: 성공 요청은 동시 상한 빈도 상한 Controller 순서로 지나고 끝나면 REQUEST 자리를 한 번 푼다, 단말 sync 경로 패턴은 SYNC 묶음으로 자리를 잡고 푼다(인수 1·2) | `--tests '…web.TerminalAuthenticationInterceptorTest'`(인터셉터 연결 전). 새 동작 7건이 모두 실패했다. 6건은 `WantedButNotInvoked`(`inFlight.acquire`가 불리지 않음)이고 1건은 아래 줄이다 | 같은 명령, 11건 통과 | `--tests 'com.resilientpos.terminal.*'` 통과, `./gradlew test` 전체 919건 통과 |
 | 동시 상한이 거절하면 429와 Retry-After 1이고 Controller와 빈도 limiter와 release를 부르지 않는다, 빈도 상한이 거절하면 잡은 자리를 푼다(인수 5) | 위 RED. 동시 거절 테스트는 429 대신 200이었다 | 통과 | 위와 같음 |
-| handler가 예외를 던져도 자리를 한 번 푼다, 비동기 dispatch는 자리를 다시 잡지 않고 마지막에 한 번 푼다, 비동기 dispatch에서 빈도 상한이 던져도 자리를 푼다(인수 6·7) | 위 RED(`WantedButNotInvoked`) | 통과 | 위와 같음 |
+| handler가 예외를 던져도 자리를 한 번 푼다(인수 6) | 위 RED(`WantedButNotInvoked`) | 통과 | 위와 같음 |
+| 비동기 dispatch는 자리와 인증과 빈도 상한을 다시 하지 않고 마지막에 한 번 푼다, 비동기 dispatch는 인증과 빈도 상한을 다시 하지 않는다(인수 7, 리뷰 반영) | `--tests '…web.TerminalAuthenticationInterceptorTest' --tests '…web.TerminalInFlightLimiterTest'`(리뷰 반영 전 구현). 첫 테스트는 `TooManyActualInvocations`(인증·빈도 상한이 두 번), 둘째는 두 번째 dispatch의 401·429가 최종 응답이 됐다 | 같은 명령, 통과 | `./gradlew test` 전체 922건 통과 |
+| GET은 자리를 잡지 않고 인증과 빈도 상한만 한다(인수 15) | 위 RED에서 `NoInteractionsWanted`(GET이 자리를 잡음) | 통과 | 위와 같음 |
 | 형식이 토큰과 다른 값·모르는 토큰이면 limiter를 부르지 않는다(인수 8) | 기존 두 테스트에 `verifyNoInteractions(inFlight)`를 더했다. 처음부터 통과하는 characterization이다 | 통과 | 위와 같음 |
-| `TerminalInFlightLimiterTest`: acquire는 인증 인터셉터만 부른다(인수 10의 부르는 곳) | 구현 뒤에 더해 처음부터 통과했다. 양성 대조가 있어 인터셉터가 부르지 않으면 실패하는 규칙이다(실패 상태를 직접 보지는 않았다) | 통과 | 위와 같음 |
-| 거절마다 in_flight scope counter가 1 오르고 처음부터 0으로 있다, 같은 묶음의 거절 로그는 10초에 한 줄이고 건수와 직전 시각을 다음 줄에 적는다, 묶음이 다르면 거절 로그도 따로 남긴다(인수 9) | 위 RED에서 함께 실패(counter 0, 거절 로그 0줄) | 통과 | 위와 같음 |
+| `TerminalInFlightLimiterTest`: acquire와 release는 인증 인터셉터만 부른다(인수 10의 부르는 곳) | 구현 뒤에 더해 처음부터 통과했다. 양성 대조가 있어 인터셉터가 부르지 않으면 실패하는 규칙이다(실패 상태를 직접 보지는 않았다). 리뷰 반영에서 `release`를 더하고 두 구조 테스트의 양성 대조를 인터셉터 이름으로 좁혀 `HeldSlot`을 중첩 클래스로 옮겼다 | 통과 | 위와 같음 |
+| 거절마다 in_flight scope counter가 1 오르고 처음부터 0으로 있다, 같은 묶음의 거절 로그는 10초에 한 줄이고 건수와 직전 시각을 다음 줄에 적는다, 묶음이 다르면 거절 로그도 따로 남긴다(인수 9) | 위 RED에서 함께 실패(counter 0, 거절 로그 0줄). 리뷰 반영: 거절 로그의 `heldForMs`(첫 줄 0, 10초 뒤 줄 10000)는 추가 전 실패했다. counter 단정을 `find`로 바꾼 것은 처음부터 통과했고, 생성자 등록을 잠깐 `by lazy`로 바꾸면 실패하는 것을 보고 되돌렸다 | 통과 | 위와 같음 |
 | `RateLimitedExceptionTest`: RateLimitedException은 handler 전에 판정하는 빈도·동시 상한 limiter만 만든다(인수 10의 만드는 곳) | limiter를 더한 뒤 허용 목록을 고치기 전 `--tests 'com.resilientpos.platform.RateLimitedExceptionTest'`가 실패(3개 중 1개, 새 limiter의 생성 호출) | 허용 목록에 새 limiter와 그 양성 대조를 더해 통과 | 위와 같음 |
-| `TerminalInFlightIntegrationTest`: 같은 단말의 checkout이 주문 행 잠금을 기다리는 동안 온 checkout은 429 RATE_LIMITED이고 잠금이 풀리면 앞 요청은 200이며 다음 checkout은 통과한다, 같은 단말의 sync가 watermark 행 잠금을 기다리는 동안 온 sync는 429이고 sync 밖 요청은 429가 아니며 잠금이 풀리면 앞 sync는 200이다(인수 1·3·11) | 구현 뒤에 써서 처음부터 통과했다(`--tests '…web.TerminalInFlightIntegrationTest'`, 2건). 판별력은 운영 코드를 잠깐 바꿔 확인하고 Edit로 되돌렸다. 인터셉터의 sync pattern을 틀리게 하면 sync 장면이 실패했다(sync 밖 요청이 429). `inFlight.acquire` 호출을 지우면 두 장면 모두 실패했다(429 대신 409. 겹친 요청이 3초 동안 잠금을 기다리다 대기 초과로 끝났다) | 같은 명령, 2건 통과 | `--tests 'com.resilientpos.terminal.*'` 123건 통과 |
+| `TerminalInFlightIntegrationTest`: 같은 단말의 checkout이 주문 행 잠금을 기다리는 동안 온 checkout은 429 RATE_LIMITED이고 잠금이 풀리면 앞 요청은 200이며 다음 checkout은 통과한다, 같은 단말의 sync가 watermark 행 잠금을 기다리는 동안 온 sync는 429이고 sync 밖 요청은 429가 아니며 잠금이 풀리면 앞 sync는 200이다(인수 1·3·11) | 구현 뒤에 써서 처음부터 통과했다(`--tests '…web.TerminalInFlightIntegrationTest'`, 2건). 판별력은 운영 코드를 잠깐 바꿔 확인하고 Edit로 되돌렸다. 인터셉터의 sync pattern을 틀리게 하면 sync 장면이 실패했다(sync 밖 요청이 429). `inFlight.acquire` 호출을 지우면 두 장면 모두 실패했다(429 대신 409. 겹친 요청이 3초 동안 잠금을 기다리다 대기 초과로 끝났다). 리뷰 반영: 잠금 대기 감지를 잠근 세션에 막힌 잠금만 세게 바꾸고, sync 밖 요청을 `POST /v1/orders`(201)로, checkout 대기 중 결제 시도 조회 GET이 200인지 단정을 더했다. GET 판정을 잠깐 끄면 장면 1이 실패했다 | 같은 명령, 2건 통과 | `--tests 'com.resilientpos.terminal.*'` 123건 통과 |
 
 ## 결과
 개발 전 작성. 개발 후 실행 결과, k6 전후 수치, 변경 이유를 추가한다.
