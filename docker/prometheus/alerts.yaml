@@ -153,9 +153,9 @@ groups:
         # shortcut: 10분은 근거 없는 시작값이다(#103 판정). 업무 락의 대기 초과가 장애 밖에서 생기면 다시 본다.
         expr: |
           sum by (lock, reason) (
-            increase(lock_fail_open_total{application="ResilientPOS", lock!~"platform:event-publication|payment:unknown-resolve"}[2m])
-            or
-            increase(lock_fail_open_total{application="ResilientPOS", reason="error"}[2m])
+            increase(lock_fail_open_total{application="ResilientPOS"}[2m])
+            unless
+            increase(lock_fail_open_total{application="ResilientPOS", lock=~"platform:event-publication|payment:unknown-resolve", reason="timeout"}[2m])
           ) > 0
         for: 10m
         labels:

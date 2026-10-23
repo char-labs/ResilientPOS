@@ -431,7 +431,7 @@ tests:
       # 처음 fail-open될 때 생기므로 첫 값이 1이다.
       - series: lock_fail_open_total{application="ResilientPOS", lock="order:create-lock", reason="error", instance="a"}
         values: 1+1x30
-      - series: lock_fail_open_total{application="ResilientPOS", lock="platform:event-publication", reason="timeout", instance="a"}
+      - series: lock_fail_open_total{application="ResilientPOS", lock="payment:checkout-lock", reason="timeout", instance="a"}
         values: _x3 1 2x26
       # 1~2분짜리 Redis 장애: 세 번 오르고 멈춘다. 회복한 뒤에 울리면 안 된다.
       - series: lock_fail_open_total{application="ResilientPOS", lock="payment:unknown-resolve", reason="error", instance="a"}
