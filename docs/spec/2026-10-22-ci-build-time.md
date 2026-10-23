@@ -65,12 +65,19 @@ PR 검사(`.github/workflows/pr-checks.yml`) 한 번이 5분 넘게 걸린다. �
 - 같은 커밋 재실행은 run id가 같고 attempt 번호만 오른다. 인수 조건 3은 run id와 attempt로 적고, attempt마다 시작부터 끝까지 잰다.
 - fork 2와 3의 CI 비교를 인수 조건에 넣는다. 인수 조건 3은 고른 값이 들어간 최종 커밋의 실행이다.
 
+**3. test를 CI job 2개로 나눈다(2026-10-23, 사용자 결정).** fork 2로 CI 전체가 4분 26초와 4분 14초였고 3분에 못 미쳤다(결과 절). fork 3은 더 느렸다. 컨텍스트 기동(58번, 102초)과 fork마다의 컨테이너 기동(약 20초)이 남고, Kafka fetch 대기를 줄여도 10~20초라 합의한 후보로는 3분에 닿지 않는다.
+- build job을 matrix로 둘 띄운다. 각 job이 `./gradlew build -PtestShard=번호/2`를 돌린다. 두 job 모두 준비·컴파일을 따로 하므로 러너 시간은 약 두 배가 된다.
+- 나누는 기준은 바깥 클래스 이름(중첩 클래스는 바깥 클래스를 따른다)의 해시다(사용자 결정). 모든 클래스가 정확히 한 job에서 돌고 관리할 목록이 없다. 대신 무거운 클래스가 한쪽에 몰릴 수 있다.
+- `testShard`가 없으면(로컬) 전부 돈다. 형식이 틀리면 빌드가 바로 실패한다.
+- job 안의 fork는 2개 그대로다(러너마다 4 vCPU).
+- 한 job이 실패해도 다른 job은 끝까지 돈다(`fail-fast: false`). 실패를 한 번에 보려는 것이다.
+- 제외 절의 "테스트를 여러 job·matrix로 나누기"를 범위로 옮긴다.
+
 계약: 업무 계약(HTTP·이벤트·토픽·consumer group)은 바뀌지 않는다. 바뀌는 것은 PR 검사 job 구성, Gradle 빌드 설정, 테스트 기반 설정이다.
 
 ## 제외
 - setup-gradle 캐시 쓰기 정책 변경(PR job에서도 저장). 결정 4.
 - Gradle configuration cache, 원격 build cache.
-- 테스트를 여러 job·matrix로 나누기. fork로 같은 러너 안에서 나눈다.
 - Testcontainers 컨테이너 reuse. fork끼리 DB를 같이 쓰게 된다.
 - 테스트 삭제·병합, 검증 동작을 약하게 하는 대기 시간 단축.
 - 모듈 분할.
@@ -106,6 +113,7 @@ PR 검사(`.github/workflows/pr-checks.yml`) 한 번이 5분 넘게 걸린다. �
 8. [개발 규칙](../wiki/development-workflow.md)의 "PR 워크플로" 절이 병렬 구성과 build cache를 적는다.
 9. 결과 절에 CI에서 잰 fork 2와 3의 run id·test step 시간과 고른 값이 있다.
 10. test가 캐시에서 와도 `build/generated-snippets`가 되살아난다. `OwnerSessionStoreOutageIntegrationTest`가 닫은 임시 포트를 쓰지 않는다.
+11. CI의 두 job이 돈 클래스와 테스트 수를 합치면 로컬 전체와 같다(빠지거나 겹친 클래스가 없다). 결과 절에 job별 시간이 있다.
 
 ## 검증
 - 개발 중: `python3 scripts/check_pr.py --base origin/main --worktree`
