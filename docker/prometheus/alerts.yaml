@@ -18,7 +18,7 @@ groups:
 
       - alert: EventPublicationOverdue
         # 경과 시간은 상태가 FAILED와 RESUBMITTED를 오가도 계속 는다. failed 개수는 재전송 중인 행을 세지 않아 브로커 장애 중에도 0이 될 수 있다.
-        # shortcut: 1시간은 처음 wiki가 정한 "failed가 한 시간 이어지면"을 옮긴 시작값이다. 부하테스트 뒤 조정한다.
+        # 1시간은 #77 측정의 가장 긴 회복(Kafka 재시작부터 미완료 0까지 27분)보다 길어 정상 회복에는 울지 않는다.
         expr: max(event_publication_incomplete_oldest_seconds{application="ResilientPOS"}) > 3600
         for: 5m
         labels:
@@ -77,7 +77,7 @@ groups:
 
       - alert: KafkaConsumerLag
         # Kafka 클라이언트가 같은 토픽을 점이 밑줄로 바뀐 이름으로 한 번 더 내므로 점이 있는 이름만 본다.
-        # shortcut: 1000은 근거 없는 시작값이다. 부하테스트 뒤 조정한다.
+        # shortcut: 1000은 판별만 확인된 값이다(#77: 정상 부하 lag 0, provider 1초 지연에 1분 2,398). 실제 PG 지연 분포가 생기면 다시 본다.
         expr: max by (topic, partition) (kafka_consumer_fetch_manager_records_lag{application="ResilientPOS", topic=~".+[.].+"}) > 1000
         for: 10m
         labels:
@@ -149,8 +149,14 @@ groups:
       - alert: LockFailOpen
         # 배포·재기동 중 한두 번은 넘기고 이어질 때만 본다. 이 counter는 처음 fail-open될 때 생겨 첫 증가는 세지 않는다.
         # Redis 장애 때는 주기 작업 둘이 pod마다 1분에 한 번 락을 잡아 2분 창이 끊기지 않는다.
-        # shortcut: 10분은 근거 없는 시작값이다. 부하테스트 뒤 락 시간과 함께 조정한다.
-        expr: sum by (lock, reason) (increase(lock_fail_open_total{application="ResilientPOS"}[2m])) > 0
+        # 주기 작업 락의 대기 초과는 보지 않는다. pod가 여럿이면 늦은 pod가 앞 pod의 긴 블록(회복 중 재전송, PG 조회)을 기다리다 매분 대기 한도(1.5초)를 넘기는 것이 정상이다.
+        # shortcut: 10분은 근거 없는 시작값이다(#103 판정). 업무 락의 대기 초과가 장애 밖에서 생기면 다시 본다.
+        expr: |
+          sum by (lock, reason) (
+            increase(lock_fail_open_total{application="ResilientPOS"}[2m])
+            unless
+            increase(lock_fail_open_total{application="ResilientPOS", lock=~"platform:event-publication|payment:unknown-resolve", reason="timeout"}[2m])
+          ) > 0
         for: 10m
         labels:
           severity: warning
@@ -199,3 +205,54 @@ groups:
         annotations:
           summary: 매장 단위 빈도 상한 거절이 5분 넘게 이어진다
           runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#inboundstoreratelimited
+
+      - alert: HttpLatencyAboveTarget
+        # 목표는 원문 NFR(시스템 설계 §7)이다. 생성 200ms, PG 제외 결제 처리 150ms(승인은 Kafka 뒤), sync는 가장 큰 배치(500 op)의 2초다.
+        # 429는 처리 없이 빨리 끝나 p95를 낮추므로 뺀다. 5분에 20건(1 ÷ (1 − 0.95)) 미만이면 요청 하나가 p95를 정하므로 판정하지 않는다.
+        # for 10분은 창 5분에 #77의 가장 긴 정상 튐(단말 100대 동시 재연결 40초, 1분으로 올림)을 더한 6분보다 길다.
+        expr: |
+          (
+            histogram_quantile(0.95, sum by (le, uri) (rate(http_server_requests_seconds_bucket{application="ResilientPOS", method="POST", uri="/v1/orders", status!="429"}[5m]))) > 0.2
+            or
+            histogram_quantile(0.95, sum by (le, uri) (rate(http_server_requests_seconds_bucket{application="ResilientPOS", method="POST", uri="/v1/orders/{orderId}/checkout", status!="429"}[5m]))) > 0.15
+            or
+            histogram_quantile(0.95, sum by (le, uri) (rate(http_server_requests_seconds_bucket{application="ResilientPOS", method="POST", uri="/v1/terminals/{terminalId}/sync", status!="429"}[5m]))) > 2
+          )
+          and on (uri)
+          sum by (uri) (increase(http_server_requests_seconds_count{application="ResilientPOS", method="POST", status!="429"}[5m])) >= 20
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.uri }} 요청의 p95가 10분 넘게 원문 목표를 넘는다"
+          runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#httplatencyabovetarget
+
+      - alert: HttpErrorBudgetBurn
+        # SLO는 원문 "주문 API 99.9%"를 단말 API(/v1)에 둔 것이고 예산 기간은 30일이다. 실패는 5xx이고 429(빈도 상한의 정상 거절)는 분모에서도 뺀다.
+        # Google SRE Workbook "Alerting on SLOs"의 page 두 쌍이다. 1시간·5분 14.4배는 예산의 2%를 1시간에, 6시간·30분 6배는 5%를 6시간에 쓴 것이다.
+        # 긴 창의 요청이 1 ÷ (배수 × 0.1%)건(70, 167) 미만이면 실패 한 건으로 배수를 넘으므로 판정하지 않는다. 짧은 창이 빨리 풀리게 하므로 for는 두지 않는다.
+        expr: |
+          (
+            sum(rate(http_server_requests_seconds_count{application="ResilientPOS", uri=~"/v1/.*", status=~"5.."}[1h]))
+              / sum(rate(http_server_requests_seconds_count{application="ResilientPOS", uri=~"/v1/.*", status!="429"}[1h])) > 14.4 * 0.001
+            and
+            sum(rate(http_server_requests_seconds_count{application="ResilientPOS", uri=~"/v1/.*", status=~"5.."}[5m]))
+              / sum(rate(http_server_requests_seconds_count{application="ResilientPOS", uri=~"/v1/.*", status!="429"}[5m])) > 14.4 * 0.001
+            and
+            sum(increase(http_server_requests_seconds_count{application="ResilientPOS", uri=~"/v1/.*", status!="429"}[1h])) >= 70
+          )
+          or
+          (
+            sum(rate(http_server_requests_seconds_count{application="ResilientPOS", uri=~"/v1/.*", status=~"5.."}[6h]))
+              / sum(rate(http_server_requests_seconds_count{application="ResilientPOS", uri=~"/v1/.*", status!="429"}[6h])) > 6 * 0.001
+            and
+            sum(rate(http_server_requests_seconds_count{application="ResilientPOS", uri=~"/v1/.*", status=~"5.."}[30m]))
+              / sum(rate(http_server_requests_seconds_count{application="ResilientPOS", uri=~"/v1/.*", status!="429"}[30m])) > 6 * 0.001
+            and
+            sum(increase(http_server_requests_seconds_count{application="ResilientPOS", uri=~"/v1/.*", status!="429"}[6h])) >= 167
+          )
+        labels:
+          severity: critical
+        annotations:
+          summary: "단말 API(/v1)의 5xx가 오류 예산(가용성 99.9%)을 빠르게 쓰고 있다"
+          runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#httperrorbudgetburn

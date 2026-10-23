@@ -66,7 +66,7 @@
 - 매장 refill 합계(250 × 8 = 2,000/s)는 인스턴스 용량보다 훨씬 크다. 이 상한은 매장 사이 공정성 장치이고 전역 용량 보호가 아니다.
 
 ## HTTP 지연 기준선
-지연 알림(#103)의 출발점은 원문 NFR(주문 p95 200ms)이다. 로컬 한 대는 외부화 상한(약 100 RPS) 아래에서 sync p95 134ms·생성 96ms·checkout 50ms(100 RPS), HTTP 상한 근처 300 RPS에서 sync 180ms·생성 127ms·checkout 77ms였다. 운영 기준선은 운영 환경의 첫 주 분포로 다시 잡는다.
+지연 알림(`HttpLatencyAboveTarget`)의 임계는 원문 NFR(생성 200ms, checkout 150ms, sync 500 op 배치 2초)이고 아래 측정값은 그 임계가 견딘 단계와 무너진 단계를 가르는지 보는 판별 근거다([slo-alert-baseline](../spec/2026-10-23-slo-alert-baseline.md)). 무너진 400 RPS에서는 세 경로 모두 p95가 3~5초로 임계를 넘었다. 로컬 한 대는 외부화 상한(약 100 RPS) 아래에서 sync p95 134ms·생성 96ms·checkout 50ms(100 RPS), HTTP 상한 근처 300 RPS에서 sync 180ms·생성 127ms·checkout 77ms였다. 운영 기준선은 운영 환경의 첫 주 분포로 다시 잡는다.
 
 ## Redisson이 필요해지는 시점
 지금 분산 락(`platform.Lock`, `RedisDistributedLock`)은 `SET key token NX PX 10s`로 얻고, 못 얻으면 해제 알림(채널 `platform:lock-released`)이나 재시도 간격(10ms에서 100ms까지 늘어나는 지터) 중 먼저 오는 것에 다시 시도해 1.5초까지 기다린 뒤 잠금 없이 진행한다(fail-open). 정합성의 정본은 DB 제약이고 락은 같은 요청이 겹칠 때 늦은 쪽이 앞 결과를 받게 하는 완화 수단이다. 업무 락(`order:create-lock`, `payment:checkout-lock`)의 블록은 외부 호출 없는 짧은 트랜잭션이다. `payment:unknown-resolve`는 블록 안에서 provider 조회를 최대 100건 하고 조회는 읽기라 겹쳐도 해가 없어, 아래 조건에서 뺀다. 해제 알림은 Spring Data Redis 구독으로 직접 두었다. 이 전제가 유지되는 동안 Redisson(watchdog, fencing, 공정 대기, 분산 semaphore·rate limiter)은 필요 없다. 아래 조건 중 하나가 생기면 그 항목에 맞춰 도입을 검토한다.
