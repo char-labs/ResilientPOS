@@ -46,6 +46,11 @@ class ObservabilityConfigurationTest(
         val refreshed = body.lines().firstOrNull { it.startsWith("event_publication_incomplete_refreshed_seconds{") }
         assertNotNull(refreshed, "event_publication_incomplete_refreshed_seconds가 없다")
         assertContains(refreshed, """application="ResilientPOS"""")
+        // SyncConvergenceBudgetBurn은 G-03 경계인 60초 bucket을 고른다. bucket이 바뀌면 분자가 비어 알림이 울지 않는다.
+        assertNotNull(
+            body.lines().firstOrNull { it.startsWith("sync_convergence_seconds_bucket{") && """le="60.0"""" in it },
+            "sync_convergence_seconds의 60초 bucket이 없다. 수렴 timer의 SLO bucket을 확인한다",
+        )
     }
 
     @Test
