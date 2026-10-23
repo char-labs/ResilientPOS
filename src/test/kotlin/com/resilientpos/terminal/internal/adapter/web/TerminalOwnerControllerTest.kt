@@ -56,7 +56,7 @@ import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
  */
 @WebMvcTest(TerminalOwnerController::class)
 @AutoConfigureRestDocs
-@MockitoBean(types = [TerminalManagement::class, RedisTerminalRateLimiter::class, TerminalQueryFacade::class, StoreManagement::class])
+@MockitoBean(types = [TerminalManagement::class, RedisTerminalRateLimiter::class, TerminalInFlightLimiter::class, TerminalQueryFacade::class, StoreManagement::class])
 class TerminalOwnerControllerTest(
     private val mockMvc: MockMvc,
     private val management: TerminalManagement,

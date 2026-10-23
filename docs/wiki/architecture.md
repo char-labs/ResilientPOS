@@ -8,7 +8,7 @@
 
 단말(POS)의 쓰기 요청 하나는 아래 순서로 처리된다. 점주 경로(`/owner/**`)는 1번만 다르다. Spring Security 체인(`platform.OwnerSecurityFilterChain`)이 Redis에 둔 세션 쿠키로 인증한다. 플랫폼 운영자 경로(`/admin/**`)는 `platform.AdminSecurityFilterChain`이 사내 IdP가 발급한 Bearer JWT로 인증하고 세션을 쓰지 않는다([platform-operator-dlt-redrive](../spec/2026-10-21-platform-operator-dlt-redrive.md)).
 
-1. **인증.** 단말은 `/v1/**`를 `Authorization: Bearer 토큰`으로 부른다. `terminal` 모듈의 `TerminalAuthenticationInterceptor`가 토큰 형식을 거르고 `TerminalManagement.authenticate`로 토큰 해시를 활성 credential과 대조한다. 성공하면 `AuthenticatedTerminal`(단말 ID, 매장 ID)을 요청 속성에 두고, 실패하면 401 `UNAUTHENTICATED`다. 인증된 요청은 같은 인터셉터에서 빈도 상한(`RedisTerminalRateLimiter`)을 거친다. 단말 bucket과 그 매장 bucket(Redis token bucket)을 한 번에 확인해 둘 중 하나라도 비면 Controller에 닿기 전에 429 `RATE_LIMITED`와 `Retry-After`(초)다. 거절은 상태를 바꾸지 않으므로 단말은 `error.errorCode`가 `RATE_LIMITED`이면 endpoint와 관계없이 같은 요청을 `Retry-After`에 0~1초 jitter를 더한 뒤 그대로 다시 보낸다. 429·`RATE_LIMITED`는 이 handler 전 거절에만 쓴다. 규약을 HTTP 상태가 아니라 code에 묶는 것은, 나중에 처리 도중의 거절이 429로 나가도 단말이 같은 요청의 재전송으로 다루지 않게 하려는 것이다. Redis 오류면 제한 없이 통과한다(fail-open)([inbound-rate-limit](../spec/2026-10-21-inbound-rate-limit.md)).
+1. **인증.** 단말은 `/v1/**`를 `Authorization: Bearer 토큰`으로 부른다. `terminal` 모듈의 `TerminalAuthenticationInterceptor`가 토큰 형식을 거르고 `TerminalManagement.authenticate`로 토큰 해시를 활성 credential과 대조한다. 성공하면 `AuthenticatedTerminal`(단말 ID, 매장 ID)을 요청 속성에 두고, 실패하면 401 `UNAUTHENTICATED`다. 인증된 요청은 같은 인터셉터에서 동시 요청 상한(`TerminalInFlightLimiter`)과 빈도 상한(`RedisTerminalRateLimiter`)을 차례로 거친다. 동시 요청 상한은 pod 메모리에서 단말마다 sync(`POST /v1/terminals/{terminalId}/sync`) 1개와 그 밖의 쓰기 요청 1개만 처리 중이게 한다. 결제 시도 조회(GET)는 행 잠금을 잡지 않는 읽기라 묶지 않는다. 같은 단말의 같은 묶음이 처리 중이면 Controller에 닿기 전에 429 `RATE_LIMITED`와 `Retry-After: 1`이고, 빈도 token을 쓰지 않는다. 자리는 요청이 끝날 때(예외 포함) 푼다. 이미 통과한 요청에서 인터셉터가 REQUEST가 아닌 dispatch로 다시 불리면(비동기 handler의 ASYNC dispatch) 아무것도 다시 판정하지 않는다. handler가 일한 뒤에 429를 내지 않기 위해서다. 잠금을 기다리며 커넥션을 쥐는 같은 단말의 겹친 요청을 막아, 한 단말의 쓰기 요청이 pod 하나의 커넥션 풀에서 handler 단계에 쥐는 커넥션을 2개 이하로 묶는다. 자리를 잡기 전의 인증 조회는 거절된 요청도 한 번 치른다([terminal-concurrency-limit](../spec/2026-10-23-terminal-concurrency-limit.md)). 빈도 상한은 단말 bucket과 그 매장 bucket(Redis token bucket)을 한 번에 확인해 둘 중 하나라도 비면 Controller에 닿기 전에 429 `RATE_LIMITED`와 `Retry-After`(초)다. `Retry-After`는 같은 요청을 다시 보내도 되는 가장 이른 시각이다. 응답은 동시 거절과 빈도 거절을 가르지 않는다. 거절은 상태를 바꾸지 않으므로 단말은 `error.errorCode`가 `RATE_LIMITED`이면 endpoint와 관계없이 같은 요청을 `Retry-After`에 0~1초 jitter를 더한 뒤 그대로 다시 보낸다. 429·`RATE_LIMITED`는 이 handler 전 거절에만 쓴다. 규약을 HTTP 상태가 아니라 code에 묶는 것은, 나중에 처리 도중의 거절이 429로 나가도 단말이 같은 요청의 재전송으로 다루지 않게 하려는 것이다. Redis 오류면 제한 없이 통과한다(fail-open)([inbound-rate-limit](../spec/2026-10-21-inbound-rate-limit.md)).
 2. **Controller.** 경로·본문의 단말과 매장을 `AuthenticatedTerminal`과 대조하고(다르면 403 `TERMINAL_MISMATCH`) Request DTO를 Command로 바꿔 Facade를 부른다. 판단은 하지 않는다.
 3. **Command Facade.** use case 하나의 진입점이고 트랜잭션을 연다(`Tx.masterTx`). 행을 잠그고 읽은 뒤 aggregate의 전이 메서드를 부른다.
 4. **Aggregate 전이.** aggregate는 자신을 바꾸지 않고 `Transition`(바뀐 새 aggregate와 그 전이가 낸 도메인 이벤트)을 돌려준다([도메인 모델 §4.1](domain-model.md#41-aggregate-상태-전이는-불변-객체가-새-인스턴스를-반환한다)). 불변식 위반은 `DomainException`이다.
@@ -43,14 +43,14 @@
 sequenceDiagram
     autonumber
     participant POS as POS 단말
-    participant AUTH as 인증·빈도 상한 interceptor<br/>(terminal)
+    participant AUTH as 인증·동시·빈도 상한 interceptor<br/>(terminal)
     participant SF as SyncCommandFacade<br/>(sync)
     participant OF as OrderCommandFacade<br/>(order)
     participant DB as PostgreSQL
     participant K as Kafka
 
     POS->>AUTH: POST /v1/terminals/{terminalId}/sync<br/>operation 최대 500개
-    opt 단말·매장 bucket이 비었다
+    opt 같은 단말의 sync가 처리 중이거나 단말·매장 bucket이 비었다
         AUTH-->>POS: 429 RATE_LIMITED + Retry-After. 같은 배치를 그 뒤 다시 보낸다
     end
     AUTH->>SF: SyncController가 경로 단말 대조 뒤 receiveBatch
@@ -77,7 +77,7 @@ sequenceDiagram
     DB-)K: 커밋 뒤 externalizer가 발행 기록을 읽어<br/>order.payment-requested로 보낸다(checkout 항목만)
 ```
 
-- 같은 단말의 배치 둘은 watermark 행 잠금으로 항목 단위로 줄 선다. 이 경로에는 Redis 락이 없다.
+- 같은 단말의 배치는 한 pod에서 하나만 처리된다. 겹쳐 온 배치(단말이 timeout으로 끊고 다시 보낸 배치 포함)는 앞 배치가 끝날 때까지 429다. pod가 다르면 배치 둘이 watermark 행 잠금으로 항목 단위로 줄 선다. 이 경로에는 Redis 락이 없다.
 - 배치 요청 하나는 빈도 상한에서 요청 하나로 센다. 단말이 쉬는 동안 bucket이 capacity까지 차므로, 오프라인에서 돌아온 단말은 capacity만큼의 배치를 바로 보내고 나머지는 `Retry-After`를 따라 이어 보낸다. 거절된 요청은 토큰을 쓰지 않아 정상 backlog가 영구히 막히지 않는다.
 - 단말의 결제 요청은 주문의 checkout 확정이다. 결제 시도 생성은 커밋 뒤 이벤트가 잇는다(§3.2의 7번부터). 그래서 sync는 `payment`를 부르지 않는다.
 - 잠금 대기 초과·DB 장애 같은 인프라 실패는 항목 결과가 아니다. 그 항목만 롤백되고 배치 요청이 실패한다. 앞서 커밋된 항목은 재전송 때 `DUPLICATE`로 돌아온다.
@@ -256,7 +256,7 @@ flowchart TB
 |---|---|---|---|
 | `owner` | bounded context | 점주 계정(이메일, 비밀번호 해시), 가입, 로그인 실패 제한 | `OwnerManagement`, `OwnerCommand`, `OwnerId` |
 | `store` | bounded context | 매장과 소유 점주. 판매 정책은 아직 없다 | `StoreManagement`, `StoreCommand`, `StoreView`, `StoreId` |
-| `terminal` | bounded context | 단말 코드, 소속 매장, 활성화, credential 회전 이력, 단말 인증, 단말·매장 빈도 상한 | `TerminalManagement`, `TerminalQueryFacade`, `TerminalCommand`, `TerminalQuery`, `TerminalView`, `TerminalId`, `TerminalCode`, `TerminalStatus`, `AuthenticatedTerminal` |
+| `terminal` | bounded context | 단말 코드, 소속 매장, 활성화, credential 회전 이력, 단말 인증, 단말별 동시 요청 상한, 단말·매장 빈도 상한 | `TerminalManagement`, `TerminalQueryFacade`, `TerminalCommand`, `TerminalQuery`, `TerminalView`, `TerminalId`, `TerminalCode`, `TerminalStatus`, `AuthenticatedTerminal` |
 | `order` | bounded context | 주문 line, checkout 금액, 주문 lifecycle | `OrderCommandFacade`, `OrderCommand`, `OrderEvent`, `OrderId`, `ClientOrderId`, `OrderStatus` |
 | `payment` | bounded context | 결제 시도, provider 결과 적용, 결제 정본 상태 | `PaymentManagement`, `PaymentQueryFacade`, `PaymentCommand`, `PaymentQuery`, `PaymentAttemptView`, `PaymentEvent`, `PaymentId`, `PaymentAttemptStatus` |
 | `sync` | bounded context | 단말 watermark, operation 접수·중복 제거, gap·conflict 판정 | 없음. HTTP endpoint만 있다 |
@@ -305,7 +305,7 @@ flowchart TB
 | `EntityVisibilityTest` | JPA 엔티티가 값을 받는 생성자와 public setter를 열지 않는다. 엔티티는 persistence adapter의 변환기로만 만들고 바꾼다 |
 | `TransactionDeclarationTest` | 클래스에 `@Transactional`을 달지 않고 `@Transactional(readOnly = true)`를 직접 쓰지 않는다. 트랜잭션 경계는 `Tx`로 선언한다 |
 | `KafkaEventDeliveryIntegrationTest` | `@KafkaListener`가 듣는 토픽이 기동 때 만드는 토픽 목록에 있다 |
-| `RateLimitedExceptionTest`, `RedisTerminalRateLimiterTest` | `RateLimitedException`은 `RedisTerminalRateLimiter`만 만들고 `acquire`는 `TerminalAuthenticationInterceptor`만 부른다. 429·`RATE_LIMITED`는 상태를 바꾸기 전의 거절이어야 단말이 같은 요청을 그대로 다시 보낼 수 있다. 양성 대조가 있어 시그니처가 바뀌어도 규칙이 비지 않는다 |
+| `RateLimitedExceptionTest`, `RedisTerminalRateLimiterTest`, `TerminalInFlightLimiterTest` | `RateLimitedException`은 `RedisTerminalRateLimiter`와 `TerminalInFlightLimiter`만 만들고, 두 limiter의 `acquire`와 동시 limiter의 `release`는 `TerminalAuthenticationInterceptor`만 부른다. 429·`RATE_LIMITED`는 상태를 바꾸기 전의 거절이어야 단말이 같은 요청을 그대로 다시 보낼 수 있다. 양성 대조가 있어 시그니처가 바뀌어도 규칙이 비지 않는다 |
 
 모든 테스트는 `./gradlew test`로 돈다(통합 테스트는 Docker가 필요하다).
 

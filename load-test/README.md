@@ -36,7 +36,7 @@ mkdir -p load-test/results
 |---|---|---|
 | S1 | 기준 혼합. 단계마다 2분 | `for r in 50 100 200 300 400 500; do k6 run -e RATE=$r $STATS --summary-export load-test/results/s1-rate$r.json load-test/s1-baseline.js; sleep 45; done`. 외부화 상한을 넘는 단계 뒤에는 위의 잔여 작업 확인을 거친다 |
 | S1 | #87 상한 검증. 오작동 단말 M대가 단말마다 초당 N번 | `k6 run -e RATE=<바탕 부하> -e ABUSIVE=<M> -e ABUSIVE_RATE=<N> $STATS --summary-export load-test/results/s1-abusive.json load-test/s1-baseline.js` |
-| S1 | #87 상한 검증. 단말 하나가 같은 sync 배치를 C개 동시에, 초마다 | `k6 run -e RATE=<바탕 부하> -e TERMINAL_BURST=<C> $STATS --summary-export load-test/results/s1-burst.json load-test/s1-baseline.js` |
+| S1 | #87·#101 고장 단말. 단말 하나가 같은 sync 배치를 C개 동시에, 간격마다(기본 1s) | `k6 run -e RATE=<바탕 부하> -e TERMINAL_BURST=<C> -e BURST_EVERY=5s $STATS --summary-export load-test/results/s1-burst.json load-test/s1-baseline.js`. 빈도 상한이 있으면 간격을 빈 bucket이 차는 시간(capacity ÷ refill, 권장값 5s) 이상으로 줘야 묶음마다 가득 찬 bucket으로 보낸다 |
 | S2 | 같은 키 경합. 동시 요청 수마다 | `for n in 2 5 10 20; do k6 run -e RATE=<바탕 부하> -e CONTENDERS=$n $STATS --summary-export load-test/results/s2-n$n.json load-test/s2-same-key.js; done` |
 | S3 | sync 배치 동시 실행 | `for t in 1 5 10 20 50 100; do k6 run -e TERMINALS=$t $STATS --summary-export load-test/results/s3-t$t.json load-test/s3-sync-batch.js; done` 뒤 단말 100대에서 `-e BATCH=100`·`250`·`500` |
 | S4 | 느린 provider. 지연마다 앱을 다시 띄운다 | `FAKE_GATEWAY_LATENCY=PT1S docker compose -f docker/docker-compose.yaml --profile app --profile obs up -d app` 뒤 `k6 run -e SALES_PER_SECOND=20 -e DURATION=60s -e SAMPLE=0.2 -e VUS=300 -e STORES=100 $STATS --summary-export load-test/results/s4-1s.json load-test/s4-slow-provider.js`. 지연은 `PT0S`·`PT0.3S`·`PT1S`·`PT2.9S`. `PT3S`는 provider deadline(3초)과 같아 모든 승인이 결과 불명이 된다. 표본 판매의 폴링(0.5초 간격)이 부하에 더해지므로 승인 처리량은 서버 metric(lag, 처리율)으로 읽는다 |
@@ -44,7 +44,7 @@ mkdir -p load-test/results
 
 바탕 부하는 외부화가 버티는 수준의 70%로 둔다. 2026-10-21 측정에서는 HTTP가 약 300 RPS까지 버텼지만 외부화가 약 100 RPS에서 막혀 70을 썼다([용량 기준](../docs/wiki/capacity.md)). 외부화 상한을 넘는 바탕 부하는 실행마다 잔여 작업을 쌓아 다음 실행을 오염시킨다.
 
-환경 변수: `BASE_URL`(기본 `http://localhost:8080`), `STORES`(매장 수, 매장마다 단말 4대, 기본 250), `RATE`(초당 요청), `DURATION`(기본 2분, S4는 3분), `SYNC_VUS`·`HTTP_VUS`(기본 300·100), `CONTENDERS`·`BURSTS_PER_SECOND`(S2), `TERMINALS`·`BACKLOG_SALES`·`BATCH`(S3), `SALES_PER_SECOND`·`SAMPLE`·`VUS`(S4).
+환경 변수: `BASE_URL`(기본 `http://localhost:8080`), `STORES`(매장 수, 매장마다 단말 4대, 기본 250), `RATE`(초당 요청), `DURATION`(기본 2분, S4는 3분), `SYNC_VUS`·`HTTP_VUS`(기본 300·100), `CONTENDERS`·`BURSTS_PER_SECOND`(S2), `TERMINAL_BURST`·`BURST_EVERY`·`BURST_SALES`(S1 고장 단말. `BURST_SALES=250`이면 첫 묶음에 500 op backlog를 쌓고 그 뒤로 같은 배치를 되풀이한다), `TERMINALS`·`BACKLOG_SALES`·`BATCH`(S3), `SALES_PER_SECOND`·`SAMPLE`·`VUS`(S4).
 
 `sync_gap_items`가 0이 아니거나 sync 응답 검사(`checks`의 항목 수, 확정 순번, CONFLICT·REJECTED)가 실패하면 스크립트가 단말 순번을 잘못 이은 것이라 그 실행은 버린다. `dropped_iterations`가 있으면 k6가 목표 도착률을 내지 못한 것이다. S1~S3에서는 앱이 포화한 것으로 읽는다(VU가 모두 응답을 기다린다). S4에서는 폴링하는 VU가 붙잡혀서도 생긴다.
 

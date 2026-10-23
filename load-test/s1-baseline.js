@@ -21,6 +21,10 @@ export const options = {
     'http_req_duration{traffic:burst}': ['p(95)>=0'],
     'http_req_duration{traffic:abusive}': ['p(95)>=0'],
     'http_req_failed{name:sync}': ['rate>=0'],
+    // 고장 단말(burst)의 기대된 429가 바탕 sync 실패율에 섞이지 않게 따로 본다.
+    'http_req_failed{traffic:normal}': ['rate>=0'],
+    'http_reqs{traffic:burst,status:200}': ['count>=0'],
+    'http_reqs{traffic:burst,status:429}': ['count>=0'],
     sync_gap_items: ['count>=0'],
   },
 };

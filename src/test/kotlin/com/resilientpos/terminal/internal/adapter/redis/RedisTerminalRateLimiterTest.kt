@@ -633,7 +633,7 @@ class RedisTerminalRateLimiterTest {
         noClasses().that().doNotBelongToAnyOf(TerminalAuthenticationInterceptor::class.java)
             .should().callMethodWhere(acquire)
             .check(production)
-        classes().that().belongToAnyOf(TerminalAuthenticationInterceptor::class.java)
+        classes().that().haveFullyQualifiedName(TerminalAuthenticationInterceptor::class.java.name)
             .should().callMethodWhere(acquire)
             .check(production)
     }

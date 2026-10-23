@@ -29,23 +29,28 @@ class RateLimitedExceptionTest {
      * handler 안에서 상태가 바뀐 뒤의 거절이 이 예외를 쓰면 단말이 이미 처리된 요청을 다시 보낸다.
      */
     @Test
-    fun `RateLimitedException은 handler 전에 판정하는 빈도 상한 limiter만 만든다`() {
+    fun `RateLimitedException은 handler 전에 판정하는 빈도·동시 상한 limiter만 만든다`() {
         val production = ClassFileImporter().withImportOption(ImportOption.Predefined.DO_NOT_INCLUDE_TESTS).importPackages("com.resilientpos")
         // 시그니처가 아니라 소유 타입으로 맞춘다. 기본값 인자를 더하면 Kotlin이 합성 생성자를 만들어 시그니처 규칙을 빠져나간다.
         val construct = target(owner(type(RateLimitedException::class.java)))
 
         // limiter 안의 람다·companion 같은 중첩 클래스(`RedisTerminalRateLimiter$…`)도 limiter로 본다.
-        noClasses().that().haveNameNotMatching(Pattern.quote(LIMITER) + "(\\$.*)?")
+        noClasses().that().haveNameNotMatching(LIMITERS.joinToString("|") { Pattern.quote(it) + "(\\$.*)?" })
             .should().callConstructorWhere(construct)
             .check(production)
         // 양성 대조. limiter의 이름이 바뀌면 위 규칙이 모든 생성을 금지한 채 이 규칙이 실패해 드러난다.
-        classes().that().haveFullyQualifiedName(LIMITER)
-            .should().callConstructorWhere(construct)
-            .check(production)
+        for (limiter in LIMITERS) {
+            classes().that().haveFullyQualifiedName(limiter)
+                .should().callConstructorWhere(construct)
+                .check(production)
+        }
     }
 
     private companion object {
         /** platform 테스트가 terminal 내부 타입을 import하지 않게 이름으로 가리킨다. 이름이 바뀌면 양성 대조가 실패한다. */
-        const val LIMITER = "com.resilientpos.terminal.internal.adapter.redis.RedisTerminalRateLimiter"
+        val LIMITERS = listOf(
+            "com.resilientpos.terminal.internal.adapter.redis.RedisTerminalRateLimiter",
+            "com.resilientpos.terminal.internal.adapter.web.TerminalInFlightLimiter",
+        )
     }
 }

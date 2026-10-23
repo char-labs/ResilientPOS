@@ -193,12 +193,12 @@ class SyncControllerTest(
                     AUTHORIZATION_HEADER, PATH_PARAMETERS,
                     requestFields(REQUEST_FIELDS),
                     responseHeaders(
-                        headerWithName("Retry-After").description("다시 보내기까지 기다릴 정수 초(1 이상). 같은 요청을 이 초에 0~1초 jitter를 더한 뒤 그대로 다시 보낸다"),
+                        headerWithName("Retry-After").description("같은 요청을 다시 보내도 되는 가장 이른 시각까지의 정수 초(1 이상). 같은 요청을 이 초에 0~1초 jitter를 더한 뒤 그대로 다시 보낸다"),
                     ),
                     responseFields(
                         fieldWithPath("result").type(JsonFieldType.STRING).description("FAIL"),
                         fieldWithPath("data").type(JsonFieldType.NULL).description("실패 응답에서는 null"),
-                        fieldWithPath("error.errorCode").type(JsonFieldType.STRING).description("RATE_LIMITED. 단말이나 매장의 요청 빈도가 상한을 넘었다. 어느 쪽인지는 구분하지 않는다"),
+                        fieldWithPath("error.errorCode").type(JsonFieldType.STRING).description("RATE_LIMITED. 단말이나 매장의 요청 빈도가 상한을 넘었거나, 같은 단말의 sync가 아직 처리 중이다(동시 거절의 Retry-After는 1). 어느 쪽인지는 구분하지 않는다. 서버 상태는 바뀌지 않았다"),
                         fieldWithPath("error.message").type(JsonFieldType.STRING).description("사람이 읽는 설명"),
                     ),
                 ),
