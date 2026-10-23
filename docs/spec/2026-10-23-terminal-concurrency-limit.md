@@ -131,7 +131,7 @@
 - `./gradlew test`: 전체 통과. `/v1` 웹 슬라이스 테스트가 새 limiter를 받아도 깨지지 않는다.
 - `python3 scripts/check_pr.py --base origin/main --worktree`(개발 중), 제출 전에 `--worktree` 없이 한 번 더.
 - PR 전 `resilientpos-multi-review`. 신뢰 경계의 입력 제한이라 보안 관점과 `spring-backend-specialist`를 넣는다.
-- k6 고장 단말 시나리오: origin/main 빌드(63b73bc, 빈도 상한 있음)와 이 브랜치 빌드를 같은 날 같은 compose 스택에서 잰다. 빌드마다 바탕만(`k6 run -e RATE=70 load-test/s1-baseline.js`)과 바탕에 고장 단말을 더한 실행(`-e TERMINAL_BURST=10 -e BURST_EVERY=5s`)을 2분씩 돌린다. `BURST_EVERY`는 이 PR이 `lib/baseline.js`에 더하는 묶음 간격이다. main에는 빈도 상한이 있어, 묶음을 초마다 보내면 bucket이 비어 고장 단말의 동시 요청이 초당 2개(refill)로 줄어 이슈의 장면(가득 찬 bucket으로 한꺼번에)이 재현되지 않는다. 5초는 빈 bucket이 가득 차는 시간(capacity 10 ÷ refill 2)이다. 측정 전에 `docker ps`와 다른 세션 상태를 확인하고, 다른 worktree가 띄운 스택은 내리지 않는다.
+- k6 고장 단말 시나리오: origin/main 빌드(이 브랜치를 rebase한 기준 커밋, 빈도 상한 있음)와 이 브랜치 빌드를 같은 날 같은 compose 스택에서 잰다. 빌드마다 바탕만(`k6 run -e RATE=70 load-test/s1-baseline.js`)과 바탕에 고장 단말을 더한 실행(`-e TERMINAL_BURST=10 -e BURST_EVERY=5s`)을 2분씩 돌린다. `BURST_EVERY`는 이 PR이 `lib/baseline.js`에 더하는 묶음 간격이다. main에는 빈도 상한이 있어, 묶음을 초마다 보내면 bucket이 비어 고장 단말의 동시 요청이 초당 2개(refill)로 줄어 이슈의 장면(가득 찬 bucket으로 한꺼번에)이 재현되지 않는다. 5초는 빈 bucket이 가득 차는 시간(capacity 10 ÷ refill 2)이다. 측정 전에 `docker ps`와 다른 세션 상태를 확인하고, 다른 worktree가 띄운 스택은 내리지 않는다.
 - 읽는 값: `max_over_time(hikaricp_connections_pending[1m])`와 `active`의 최대, `traffic=normal` sync의 p95/p99와 실패율(k6. 고장 단말의 기대된 429가 섞이지 않게 `s1-baseline.js`의 thresholds에 `traffic:normal`과 `traffic:burst` submetric을 더한다), 고장 단말 요청의 상태별 수(200·429), `inbound_rate_limited_total` scope별 증가. pending이 판정을 넘으면 인증 조회(거절된 요청도 치른다) 몫인지 먼저 가른다. 측정은 앱 한 대(단일 pod)다.
 - 판정 규칙(측정 전에 정한다): 바꾼 뒤 고장 단말 실행의 pending 최대와 active 최대가 같은 빌드의 바탕만 실행보다 각각 2 이하로 크고, `traffic=normal` sync p95가 바탕만 실행의 1.2배 안이며 실패율이 0.1% 아래면 통과다. 바꾸기 전 빌드에서 고장 단말 실행이 이 차이를 넘지 않으면(문제가 재현되지 않음) 그 사실과 수치를 결과에 적고 결론을 다시 묻는다.
 
@@ -149,6 +149,7 @@
 ## 분할 계획
 - 이 PR은 단말별 동시 요청 상한 하나의 개발 컨텍스트다. 인스턴스 전체의 sync 동시 실행 상한, 단말 sync timeout 규약, 행 잠금 대기 시간은 따로 둔다(제외).
 - 겹침 확인(2026-10-23, origin/main `63b73bc`): 열린 PR은 #94(draft, `refactor/modulith-2-1-2-resubmit`)뿐이고 그 경로(`build.gradle.kts`, `EventPublicationResubmitter`와 그 테스트, `domain-model.md`, 자기 spec)는 이 PR과 겹치지 않는다. 진행 중이지만 PR이 없는 브랜치 중 `feature/slo-alert-baseline`(#103)이 `docs/wiki/observability.md`를 고쳐 이 PR과 겹친다(같은 파일의 다른 항목일 가능성이 크다). `alerts.yaml`·`alerts.test.yaml`·`runbook.md`는 이 PR이 건드리지 않는다. `fix/boot-4-1-2`(`build.gradle.kts`)는 겹치지 않는다. push·PR 생성·머지 직전에 다시 확인하고 먼저 머지된 쪽에 맞춰 rebase한다.
+- rebase(2026-10-23, origin/main `0cb9b93`): 그 사이 #111(Boot 4.1.2)과 #94(Modulith 2.1.2)가 머지됐다. 두 PR의 경로(`build.gradle.kts`, `README.md`, `EventPublicationResubmitter`와 그 테스트, `domain-model.md`, `event-contract.md`, 두 spec)는 이 PR과 겹치지 않아 충돌 없이 옮겨졌다. 열린 PR은 없다. #103(`feature/slo-alert-baseline`)은 아직 PR이 없고 `observability.md`가 겹칠 수 있다.
 - 공용 헬퍼: main과 #94에 동시 요청 상한이나 in-flight 계수기가 없다. 로그 줄 수를 줄이는 헬퍼는 `RedisTerminalRateLimiter`의 private `Throttle` 하나뿐이라, 새로 만들지 않고 그것을 같은 모듈에서 함께 쓰도록 꺼낸다.
 
 ## TDD 검증 기록
