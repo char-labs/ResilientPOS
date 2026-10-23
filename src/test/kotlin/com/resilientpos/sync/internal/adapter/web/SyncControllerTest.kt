@@ -6,6 +6,7 @@ import com.resilientpos.order.OrderId
 import com.resilientpos.store.StoreId
 import com.resilientpos.sync.internal.application.SyncCommand
 import com.resilientpos.sync.internal.application.SyncCommandFacade
+import com.resilientpos.sync.internal.application.SyncFixtures
 import com.resilientpos.sync.internal.application.SyncItemStatus
 import com.resilientpos.sync.internal.domain.CheckoutPayload
 import com.resilientpos.sync.internal.domain.OperationPayload
@@ -26,7 +27,6 @@ import org.mockito.BDDMockito.given
 import org.mockito.BDDMockito.willThrow
 import org.mockito.Mockito.verify
 import org.mockito.Mockito.verifyNoInteractions
-import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.restdocs.test.autoconfigure.AutoConfigureRestDocs
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest
 import org.springframework.context.ApplicationContext
@@ -57,16 +57,13 @@ import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
 @MockTerminalRateLimiter
 @WebMvcTest(SyncController::class)
 @AutoConfigureRestDocs
+@MockitoBean(types = [SyncCommandFacade::class, TerminalManagement::class])
 class SyncControllerTest(
-    @Autowired private val mockMvc: MockMvc,
-    @Autowired private val context: ApplicationContext,
+    private val mockMvc: MockMvc,
+    private val context: ApplicationContext,
+    private val facade: SyncCommandFacade,
+    private val terminals: TerminalManagement,
 ) {
-
-    @MockitoBean
-    private lateinit var facade: SyncCommandFacade
-
-    @MockitoBean
-    private lateinit var terminals: TerminalManagement
 
     @BeforeEach
     fun authenticate() {
@@ -353,7 +350,7 @@ class SyncControllerTest(
             SyncCommand.ReceiveBatch.Operation(if (sequence == 1L) OPERATION_ID_1 else OPERATION_ID_2, sequence, payload, createdAt)
 
         private fun command(vararg operations: SyncCommand.ReceiveBatch.Operation) =
-            SyncCommand.ReceiveBatch(TerminalId(UUID.fromString(TERMINAL_ID)), StoreId(UUID.fromString(STORE_ID)), operations.toList())
+            SyncFixtures.receiveBatchCommand(TerminalId(UUID.fromString(TERMINAL_ID)), StoreId(UUID.fromString(STORE_ID)), operations.toList())
 
         private fun operationJson(operationId: UUID, sequence: Long, createdAt: String? = null) = """
             {

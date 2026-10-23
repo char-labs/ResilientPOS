@@ -22,7 +22,6 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 import org.springframework.beans.factory.ObjectProvider
-import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.TestConfiguration
 import org.springframework.context.ApplicationEventPublisher
 import org.springframework.context.annotation.Import
@@ -41,11 +40,11 @@ import org.springframework.transaction.support.TransactionOperations
  */
 @Import(EventPublicationMetricsTest.FailingProbeListener::class)
 class EventPublicationMetricsTest(
-    @Autowired private val jdbcTemplate: JdbcTemplate,
-    @Autowired private val transactions: TransactionOperations,
-    @Autowired private val eventPublisher: ApplicationEventPublisher,
-    @Autowired private val dataSource: DataSource,
-    @Autowired private val scheduledTasks: ObjectProvider<ScheduledTaskHolder>,
+    private val jdbcTemplate: JdbcTemplate,
+    private val transactions: TransactionOperations,
+    private val eventPublisher: ApplicationEventPublisher,
+    private val dataSource: DataSource,
+    private val scheduledTasks: ObjectProvider<ScheduledTaskHolder>,
 ) : PostgresIntegrationTest() {
 
     private val registry = SimpleMeterRegistry()

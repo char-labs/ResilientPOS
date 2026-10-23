@@ -16,7 +16,6 @@ import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
-import org.springframework.beans.factory.annotation.Autowired
 import org.apache.kafka.clients.producer.ProducerRecord
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.beans.factory.annotation.Value
@@ -30,11 +29,11 @@ import tools.jackson.databind.json.JsonMapper
  * 토픽 이름·consumer group·key는 저장 형식이라 클래스 상수를 다시 읽지 않고 리터럴로 고정한다.
  */
 class KafkaEventDeliveryIntegrationTest(
-    @Autowired private val orderFacade: OrderCommandFacade,
-    @Autowired private val jdbcTemplate: JdbcTemplate,
-    @Autowired private val kafkaTemplate: KafkaTemplate<Any, Any>,
-    @Autowired private val jsonMapper: JsonMapper,
-    @Autowired private val listenerRegistry: KafkaListenerEndpointRegistry,
+    private val orderFacade: OrderCommandFacade,
+    private val jdbcTemplate: JdbcTemplate,
+    private val kafkaTemplate: KafkaTemplate<Any, Any>,
+    private val jsonMapper: JsonMapper,
+    private val listenerRegistry: KafkaListenerEndpointRegistry,
     @Value("\${resilientpos.kafka.topics}") private val configuredTopics: List<String>,
 ) : PostgresIntegrationTest() {
 
@@ -55,7 +54,7 @@ class KafkaEventDeliveryIntegrationTest(
                 lines = listOf(OrderCommand.Create.Line("SKU-1", "아메리카노", Money.of("4500", OrderFixtures.krw), 1)),
             ),
         )
-        orderFacade.requestCheckout(OrderCommand.RequestCheckout(created.orderId, OrderFixtures.storeId, OrderFixtures.terminalId))
+        orderFacade.requestCheckout(OrderFixtures.requestCheckoutCommand(created.orderId, OrderFixtures.storeId, OrderFixtures.terminalId))
         return created.orderId.value
     }
 

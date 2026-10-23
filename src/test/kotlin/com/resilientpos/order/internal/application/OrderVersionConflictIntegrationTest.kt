@@ -1,7 +1,6 @@
 package com.resilientpos.order.internal.application
 
 import com.resilientpos.PostgresIntegrationTest
-import com.resilientpos.order.OrderCommand
 import com.resilientpos.order.OrderCommandFacade
 import com.resilientpos.order.OrderFixtures
 import com.resilientpos.order.OrderStatus
@@ -15,7 +14,6 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
-import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.dao.OptimisticLockingFailureException
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.transaction.support.TransactionTemplate
@@ -26,10 +24,10 @@ import org.springframework.transaction.support.TransactionTemplate
  * `requestCheckout`의 행 잠금을 지키는 테스트는 아니다. 그쪽은 `OrderRequestCheckoutIntegrationTest`가 본다.
  */
 class OrderVersionConflictIntegrationTest(
-    @Autowired private val facade: OrderCommandFacade,
-    @Autowired private val repository: OrderRepository,
-    @Autowired private val jdbcTemplate: JdbcTemplate,
-    @Autowired private val transaction: TransactionTemplate,
+    private val facade: OrderCommandFacade,
+    private val repository: OrderRepository,
+    private val jdbcTemplate: JdbcTemplate,
+    private val transaction: TransactionTemplate,
 ) : PostgresIntegrationTest() {
 
     @Test
@@ -41,7 +39,7 @@ class OrderVersionConflictIntegrationTest(
             assertFailsWith<OptimisticLockingFailureException> {
                 transaction.execute {
                     val stale = assertNotNull(repository.findById(orderId))
-                    executor.submit { facade.requestCheckout(OrderCommand.RequestCheckout(orderId, OrderFixtures.storeId, OrderFixtures.terminalId)) }.get(10, TimeUnit.SECONDS)
+                    executor.submit { facade.requestCheckout(OrderFixtures.requestCheckoutCommand(orderId, OrderFixtures.storeId, OrderFixtures.terminalId)) }.get(10, TimeUnit.SECONDS)
 
                     // checkout 행 없이 루트 status만 바꾼다. INSERT가 있으면 Hibernate가 INSERT를 먼저 flush해서 unique 위반이 먼저 걸린다.
                     repository.save(

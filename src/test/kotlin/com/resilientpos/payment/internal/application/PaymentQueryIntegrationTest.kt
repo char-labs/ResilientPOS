@@ -19,7 +19,6 @@ import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
-import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.transaction.support.TransactionOperations
 
 /**
@@ -27,9 +26,9 @@ import org.springframework.transaction.support.TransactionOperations
  * 테스트마다 다른 `orderId`를 쓰고 매장도 따로 만들어 서로 섞이지 않는다.
  */
 class PaymentQueryIntegrationTest(
-    @Autowired private val queryFacade: PaymentQueryFacade,
-    @Autowired private val repository: PaymentAttemptRepository,
-    @Autowired private val transactions: TransactionOperations,
+    private val queryFacade: PaymentQueryFacade,
+    private val repository: PaymentAttemptRepository,
+    private val transactions: TransactionOperations,
 ) : PostgresIntegrationTest() {
 
     private val krw: Currency = Currency.getInstance("KRW")

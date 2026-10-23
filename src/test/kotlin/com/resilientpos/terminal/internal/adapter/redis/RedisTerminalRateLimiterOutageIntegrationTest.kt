@@ -14,7 +14,6 @@ import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.measureTime
 import org.junit.jupiter.api.extension.ExtendWith
-import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.system.CapturedOutput
 import org.springframework.boot.test.system.OutputCaptureExtension
 import org.springframework.data.redis.connection.RedisStandaloneConfiguration
@@ -29,7 +28,7 @@ import org.testcontainers.containers.GenericContainer
  */
 @ExtendWith(OutputCaptureExtension::class)
 class RedisTerminalRateLimiterOutageIntegrationTest(
-    @Autowired private val appRedis: LettuceConnectionFactory,
+    private val appRedis: LettuceConnectionFactory,
 ) : PostgresIntegrationTest() {
 
     private val terminal = AuthenticatedTerminal(TerminalId(UUID.randomUUID()), StoreId(UUID.randomUUID()))

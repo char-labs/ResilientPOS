@@ -14,7 +14,6 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
-import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.data.redis.core.StringRedisTemplate
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.jdbc.core.queryForObject
@@ -30,11 +29,11 @@ import org.springframework.transaction.support.TransactionTemplate
  * 남기면 `SchemaMigrationTest`의 테이블 목록 검사가 실행 순서에 따라 깨진다.
  */
 class LockIntegrationTest(
-    @Autowired private val jdbcTemplate: JdbcTemplate,
-    @Autowired private val transactions: TransactionOperations,
-    @Autowired private val distributedLock: DistributedLock,
-    @Autowired private val redis: StringRedisTemplate,
-    @Autowired transactionManager: PlatformTransactionManager,
+    private val jdbcTemplate: JdbcTemplate,
+    private val transactions: TransactionOperations,
+    private val distributedLock: DistributedLock,
+    private val redis: StringRedisTemplate,
+    transactionManager: PlatformTransactionManager,
 ) : PostgresIntegrationTest() {
 
     private val requiresNew = TransactionTemplate(transactionManager).apply {

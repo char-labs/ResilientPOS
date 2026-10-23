@@ -4,7 +4,6 @@ import com.resilientpos.PostgresIntegrationTest
 import com.resilientpos.terminal.TerminalManagement
 import com.resilientpos.terminal.registerTerminal
 import io.micrometer.core.instrument.MeterRegistry
-import java.net.ServerSocket
 import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
@@ -16,7 +15,6 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
-import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.boot.test.web.server.LocalServerPort
 import org.springframework.test.context.DynamicPropertyRegistry
@@ -39,8 +37,8 @@ import org.springframework.test.context.DynamicPropertySource
 )
 class OwnerSessionStoreOutageIntegrationTest(
     @LocalServerPort private val port: Int,
-    @Autowired private val terminals: TerminalManagement,
-    @Autowired private val meterRegistry: MeterRegistry,
+    private val terminals: TerminalManagement,
+    private val meterRegistry: MeterRegistry,
 ) {
 
     private val client = HttpClient.newHttpClient()
@@ -156,9 +154,10 @@ class OwnerSessionStoreOutageIntegrationTest(
             registry.add("spring.datasource.password", PostgresIntegrationTest.postgres::getPassword)
             registry.add("spring.kafka.bootstrap-servers", PostgresIntegrationTest.kafka::getBootstrapServers)
             registry.add("spring.data.redis.host") { "localhost" }
-            registry.add("spring.data.redis.port") { unusedPort() }
+            registry.add("spring.data.redis.port") { REFUSED_PORT }
         }
 
-        private fun unusedPort(): Int = ServerSocket(0).use { it.localPort }
+        /** 아무도 듣지 않는 포트. 닫은 임시 포트는 병렬로 도는 다른 test fork의 컨테이너 매핑이나 웹 서버가 가져갈 수 있다. */
+        private const val REFUSED_PORT = 1
     }
 }

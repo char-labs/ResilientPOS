@@ -10,8 +10,6 @@ import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
-import org.springframework.beans.factory.annotation.Autowired
-import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc
 import org.springframework.http.MediaType
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.jdbc.core.queryForObject
@@ -22,12 +20,11 @@ import tools.jackson.databind.ObjectMapper
 /**
  * `POST /v1/orders`가 실제 Facade와 PostgreSQL까지 연결되는지 검사한다. Docker가 필요하다.
  */
-@AutoConfigureMockMvc
 class OrderApiIntegrationTest(
-    @Autowired private val mockMvc: MockMvc,
-    @Autowired private val jdbcTemplate: JdbcTemplate,
-    @Autowired private val objectMapper: ObjectMapper,
-    @Autowired private val terminals: TerminalManagement,
+    private val mockMvc: MockMvc,
+    private val jdbcTemplate: JdbcTemplate,
+    private val objectMapper: ObjectMapper,
+    private val terminals: TerminalManagement,
 ) : PostgresIntegrationTest() {
 
     /** 실제로 등록한 단말. 요청의 토큰과 본문의 storeId·terminalId가 모두 이 단말이다. */

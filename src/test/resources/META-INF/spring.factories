@@ -1,1 +1,2 @@
-org.springframework.test.context.TestExecutionListener=com.resilientpos.TxRebindingTestExecutionListener
+org.springframework.test.context.TestExecutionListener=com.resilientpos.TxRebindingTestExecutionListener,\
+  com.resilientpos.IntegrationTestIsolationListener

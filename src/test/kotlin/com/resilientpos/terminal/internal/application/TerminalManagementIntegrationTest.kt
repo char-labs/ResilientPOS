@@ -8,6 +8,7 @@ import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.AuthenticatedTerminal
 import com.resilientpos.terminal.TerminalCode
 import com.resilientpos.terminal.TerminalCommand
+import com.resilientpos.terminal.TerminalFixtures
 import com.resilientpos.terminal.TerminalId
 import com.resilientpos.terminal.TerminalManagement
 import com.resilientpos.terminal.TerminalStatus
@@ -22,18 +23,17 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
-import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.jdbc.core.queryForObject
 
 class TerminalManagementIntegrationTest(
-    @Autowired private val terminals: TerminalManagement,
-    @Autowired private val jdbcTemplate: JdbcTemplate,
+    private val terminals: TerminalManagement,
+    private val jdbcTemplate: JdbcTemplate,
 ) : PostgresIntegrationTest() {
 
     private val storeId = StoreId(UUID.randomUUID())
 
-    private fun register(code: TerminalCode = uniqueTerminalCode()) = terminals.register(TerminalCommand.Register(storeId, code))
+    private fun register(code: TerminalCode = uniqueTerminalCode()) = terminals.register(TerminalFixtures.registerCommand(storeId, code))
 
     private fun count(sql: String, vararg args: Any): Long = jdbcTemplate.queryForObject<Long>(sql, *args)!!
 
@@ -85,7 +85,7 @@ class TerminalManagementIntegrationTest(
         val code = uniqueTerminalCode()
         register(code)
 
-        val other = terminals.register(TerminalCommand.Register(StoreId(UUID.randomUUID()), code))
+        val other = terminals.register(TerminalFixtures.registerCommand(StoreId(UUID.randomUUID()), code))
 
         assertEquals(code, other.terminalCode)
         assertEquals(
@@ -106,7 +106,7 @@ class TerminalManagementIntegrationTest(
     fun `회전하면 새 토큰만 인증되고 옛 credential 행은 폐기된 채 남는다`() {
         val registered = register()
 
-        val rotated = terminals.rotateCredential(TerminalCommand.RotateCredential(storeId, registered.terminalId))
+        val rotated = terminals.rotateCredential(TerminalFixtures.rotateCredentialCommand(storeId, registered.terminalId))
 
         assertNull(terminals.authenticate(registered.token))
         assertEquals(AuthenticatedTerminal(registered.terminalId, storeId), terminals.authenticate(rotated.token))
@@ -127,7 +127,7 @@ class TerminalManagementIntegrationTest(
         val executor = Executors.newFixedThreadPool(2)
 
         val tokens = try {
-            List(2) { executor.submit<String> { terminals.rotateCredential(TerminalCommand.RotateCredential(storeId, registered.terminalId)).token } }
+            List(2) { executor.submit<String> { terminals.rotateCredential(TerminalFixtures.rotateCredentialCommand(storeId, registered.terminalId)).token } }
                 .map { it.get(15, TimeUnit.SECONDS) }
         } finally {
             executor.shutdownNow()
@@ -148,7 +148,7 @@ class TerminalManagementIntegrationTest(
             val late = Tx.masterTx {
                 jdbcTemplate.queryForObject<UUID>("select id from t_terminal where id = ? for update", registered.terminalId.value)
                 val late = executor.submit<TerminalCommand.RotateCredential.Result> {
-                    terminals.rotateCredential(TerminalCommand.RotateCredential(storeId, registered.terminalId))
+                    terminals.rotateCredential(TerminalFixtures.rotateCredentialCommand(storeId, registered.terminalId))
                 }
                 runCatching { late.get(500, TimeUnit.MILLISECONDS) }
                 assertFalse(late.isDone, "회전이 단말 행 잠금을 기다리지 않았다")
@@ -166,8 +166,8 @@ class TerminalManagementIntegrationTest(
     fun `비활성화는 멱등이고 그 단말의 토큰은 인증되지 않는다`() {
         val registered = register()
 
-        val first = terminals.deactivate(TerminalCommand.Deactivate(storeId, registered.terminalId))
-        val second = terminals.deactivate(TerminalCommand.Deactivate(storeId, registered.terminalId))
+        val first = terminals.deactivate(TerminalFixtures.deactivateCommand(storeId, registered.terminalId))
+        val second = terminals.deactivate(TerminalFixtures.deactivateCommand(storeId, registered.terminalId))
 
         assertEquals(TerminalCommand.Deactivate.Result(registered.terminalId, TerminalStatus.ACTIVE, TerminalStatus.INACTIVE), first)
         assertEquals(TerminalCommand.Deactivate.Result(registered.terminalId, TerminalStatus.INACTIVE, TerminalStatus.INACTIVE), second)
@@ -181,10 +181,10 @@ class TerminalManagementIntegrationTest(
     @Test
     fun `비활성 단말의 회전은 TERMINAL_INACTIVE이고 credential이 늘지 않는다`() {
         val registered = register()
-        terminals.deactivate(TerminalCommand.Deactivate(storeId, registered.terminalId))
+        terminals.deactivate(TerminalFixtures.deactivateCommand(storeId, registered.terminalId))
 
         val failure = assertFailsWith<DomainException> {
-            terminals.rotateCredential(TerminalCommand.RotateCredential(storeId, registered.terminalId))
+            terminals.rotateCredential(TerminalFixtures.rotateCredentialCommand(storeId, registered.terminalId))
         }
 
         assertEquals("TERMINAL_INACTIVE", failure.code)
@@ -201,7 +201,7 @@ class TerminalManagementIntegrationTest(
             val rotation = Tx.masterTx {
                 jdbcTemplate.queryForObject<UUID>("select id from t_terminal where id = ? for update", registered.terminalId.value)
                 val rotation = executor.submit<TerminalCommand.RotateCredential.Result> {
-                    terminals.rotateCredential(TerminalCommand.RotateCredential(storeId, registered.terminalId))
+                    terminals.rotateCredential(TerminalFixtures.rotateCredentialCommand(storeId, registered.terminalId))
                 }
                 runCatching { rotation.get(500, TimeUnit.MILLISECONDS) }
                 assertFalse(rotation.isDone, "회전이 단말 행 잠금을 기다리지 않았다")
@@ -224,8 +224,8 @@ class TerminalManagementIntegrationTest(
     fun `모르는 단말의 회전과 비활성화는 TERMINAL_NOT_FOUND다`() {
         val unknown = TerminalId(UUID.randomUUID())
 
-        val rotate = assertFailsWith<DomainException> { terminals.rotateCredential(TerminalCommand.RotateCredential(storeId, unknown)) }
-        val deactivate = assertFailsWith<DomainException> { terminals.deactivate(TerminalCommand.Deactivate(storeId, unknown)) }
+        val rotate = assertFailsWith<DomainException> { terminals.rotateCredential(TerminalFixtures.rotateCredentialCommand(storeId, unknown)) }
+        val deactivate = assertFailsWith<DomainException> { terminals.deactivate(TerminalFixtures.deactivateCommand(storeId, unknown)) }
 
         listOf(rotate, deactivate).forEach {
             assertEquals("TERMINAL_NOT_FOUND", it.code)
@@ -238,8 +238,8 @@ class TerminalManagementIntegrationTest(
         val registered = register()
         val otherStore = StoreId(UUID.randomUUID())
 
-        val rotate = assertFailsWith<DomainException> { terminals.rotateCredential(TerminalCommand.RotateCredential(otherStore, registered.terminalId)) }
-        val deactivate = assertFailsWith<DomainException> { terminals.deactivate(TerminalCommand.Deactivate(otherStore, registered.terminalId)) }
+        val rotate = assertFailsWith<DomainException> { terminals.rotateCredential(TerminalFixtures.rotateCredentialCommand(otherStore, registered.terminalId)) }
+        val deactivate = assertFailsWith<DomainException> { terminals.deactivate(TerminalFixtures.deactivateCommand(otherStore, registered.terminalId)) }
 
         listOf(rotate, deactivate).forEach {
             assertEquals("TERMINAL_NOT_FOUND", it.code)

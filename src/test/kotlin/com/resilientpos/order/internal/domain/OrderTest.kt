@@ -9,6 +9,7 @@ import com.resilientpos.order.ClientOrderId
 import com.resilientpos.order.OrderCommand
 import com.resilientpos.order.OrderEvent
 import com.resilientpos.contract.OrderPaymentRequested
+import com.resilientpos.order.OrderFixtures
 import com.resilientpos.order.OrderStatus
 import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.TerminalId
@@ -54,7 +55,7 @@ class OrderTest {
     private fun createOrderCommand(
         currency: Currency = krw,
         lines: List<OrderCommand.Create.Line> = listOf(orderLine()),
-    ) = OrderCommand.Create(storeId, terminalId, clientOrderId, currency, lines)
+    ) = OrderFixtures.createOrderCommand(storeId, terminalId, clientOrderId, currency, lines)
 
     @Test
     fun `유효한 명령으로 OPEN 주문과 OrderCreated를 만든다`() {

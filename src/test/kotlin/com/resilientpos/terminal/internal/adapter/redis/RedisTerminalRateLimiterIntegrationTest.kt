@@ -16,7 +16,6 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
-import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.data.redis.connection.RedisStandaloneConfiguration
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory
 import org.springframework.data.redis.core.RedisCallback
@@ -28,7 +27,7 @@ import org.springframework.data.redis.core.StringRedisTemplate
  * 기다리면 키 TTL(빈 bucket이 가득 차는 시간)이 끼어들어 결함이 있어도 가득 찬 bucket으로 통과하거나, 느린 환경에서 거짓으로 실패한다.
  */
 class RedisTerminalRateLimiterIntegrationTest(
-    @Autowired private val redis: StringRedisTemplate,
+    private val redis: StringRedisTemplate,
 ) : PostgresIntegrationTest() {
 
     private val storeId = StoreId(UUID.randomUUID())

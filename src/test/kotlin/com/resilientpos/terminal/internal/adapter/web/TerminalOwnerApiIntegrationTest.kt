@@ -11,10 +11,8 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import org.junit.jupiter.api.extension.ExtendWith
-import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.system.CapturedOutput
 import org.springframework.boot.test.system.OutputCaptureExtension
-import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc
 import org.springframework.http.HttpStatus
 import org.springframework.http.MediaType
 import org.springframework.test.web.servlet.MockMvc
@@ -27,10 +25,9 @@ import org.springframework.test.web.servlet.post
  * 실제 점주 세션·CSRF 체인, 단말 관리 API, 단말 인터셉터, 감사 로그를 한 흐름으로 잇는다. Docker가 필요하다.
  * 주문 생성(`POST /v1/orders`)이 단말 토큰이 유효한지의 대표다.
  */
-@AutoConfigureMockMvc
 @ExtendWith(OutputCaptureExtension::class)
 class TerminalOwnerApiIntegrationTest(
-    @Autowired private val mockMvc: MockMvc,
+    private val mockMvc: MockMvc,
 ) : PostgresIntegrationTest() {
 
     private val owner: OwnerSession by lazy { mockMvc.logInNewOwner() }

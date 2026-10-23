@@ -4,7 +4,6 @@ import com.resilientpos.PostgresIntegrationTest
 import com.resilientpos.awaitUntil
 import io.micrometer.core.instrument.MeterRegistry
 import kotlin.test.Test
-import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.test.context.TestPropertySource
 
 /**
@@ -13,7 +12,7 @@ import org.springframework.test.context.TestPropertySource
  */
 @TestPropertySource(properties = ["spring.modulith.moments.enabled=false"])
 class EventPublicationMetricsSchedulingTest(
-    @Autowired private val registry: MeterRegistry,
+    private val registry: MeterRegistry,
 ) : PostgresIntegrationTest() {
 
     @Test

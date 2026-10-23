@@ -2,7 +2,7 @@ package com.resilientpos.owner.internal.application
 
 import com.resilientpos.foundation.DomainException
 import com.resilientpos.foundation.UuidV7IdentifierGenerator
-import com.resilientpos.owner.OwnerCommand
+import com.resilientpos.owner.OwnerFixtures
 import com.resilientpos.owner.OwnerManagement
 import com.resilientpos.owner.internal.adapter.redis.RedisLoginFailureCounter
 import com.resilientpos.owner.internal.domain.LoginFailureCounter
@@ -39,16 +39,16 @@ class OwnerManagementTest {
     @BeforeTest
     fun initTx() = Tx.initialize(TxRunner())
 
-    private fun signUp() = management.signUp(OwnerCommand.SignUp(email, password))
+    private fun signUp() = management.signUp(OwnerFixtures.signUpCommand(email, password))
 
     private fun logInFails(pw: String = "wrong-password-value", mail: String = email) {
-        val e = assertFailsWith<UnauthenticatedException> { management.logIn(OwnerCommand.LogIn(mail, pw)) }
+        val e = assertFailsWith<UnauthenticatedException> { management.logIn(OwnerFixtures.logInCommand(mail, pw)) }
         assertEquals(null, e.challenge)
     }
 
     @Test
     fun `가입하면 정규화한 이메일과 새 id를 돌려주고 {bcrypt} 해시를 저장한다`() {
-        val result = management.signUp(OwnerCommand.SignUp("  Owner@Example.COM ", password))
+        val result = management.signUp(OwnerFixtures.signUpCommand("  Owner@Example.COM ", password))
 
         assertEquals(email, result.email)
         val saved = owners.byEmail.getValue(email)
@@ -59,8 +59,8 @@ class OwnerManagementTest {
 
     @Test
     fun `이메일이 틀리면 INVALID_EMAIL, 비밀번호가 틀리면 INVALID_PASSWORD로 가입을 거절한다`() {
-        assertEquals(Owner.INVALID_EMAIL, assertFailsWith<DomainException> { management.signUp(OwnerCommand.SignUp("nope", password)) }.code)
-        assertEquals(Owner.INVALID_PASSWORD, assertFailsWith<DomainException> { management.signUp(OwnerCommand.SignUp(email, "short")) }.code)
+        assertEquals(Owner.INVALID_EMAIL, assertFailsWith<DomainException> { management.signUp(OwnerFixtures.signUpCommand("nope", password)) }.code)
+        assertEquals(Owner.INVALID_PASSWORD, assertFailsWith<DomainException> { management.signUp(OwnerFixtures.signUpCommand(email, "short")) }.code)
         assertTrue(owners.byEmail.isEmpty())
     }
 
@@ -86,7 +86,7 @@ class OwnerManagementTest {
     fun `맞는 비밀번호로 로그인하면 가입한 점주의 id와 정규화한 이메일을 돌려준다`() {
         val signedUp = signUp()
 
-        val result = management.logIn(OwnerCommand.LogIn("  OWNER@example.com ", password))
+        val result = management.logIn(OwnerFixtures.logInCommand("  OWNER@example.com ", password))
 
         assertEquals(signedUp.ownerId, result.ownerId)
         assertEquals(email, result.email)
@@ -108,7 +108,7 @@ class OwnerManagementTest {
         signUp()
         repeat(4) { logInFails() }
 
-        management.logIn(OwnerCommand.LogIn(email, password))
+        management.logIn(OwnerFixtures.logInCommand(email, password))
     }
 
     @Test
@@ -138,11 +138,11 @@ class OwnerManagementTest {
         signUp()
         repeat(4) { logInFails() }
 
-        management.logIn(OwnerCommand.LogIn(email, password))
+        management.logIn(OwnerFixtures.logInCommand(email, password))
 
         assertEquals(null, counter.counts[email])
         repeat(4) { logInFails() }
-        management.logIn(OwnerCommand.LogIn(email, password))
+        management.logIn(OwnerFixtures.logInCommand(email, password))
     }
 
     @Test
@@ -157,11 +157,11 @@ class OwnerManagementTest {
         val closed = mock(StringRedisTemplate::class.java) { throw error }
         val owners = InMemoryOwners()
         val failClosed = OwnerManagement(owners, RedisLoginFailureCounter(closed), UuidV7IdentifierGenerator())
-        failClosed.signUp(OwnerCommand.SignUp(email, password))
+        failClosed.signUp(OwnerFixtures.signUpCommand(email, password))
         val lookupsBefore = owners.lookups
 
         listOf(password, "wrong-password-value").forEach { pw ->
-            val thrown = assertFailsWith<SessionStoreUnavailableException> { failClosed.logIn(OwnerCommand.LogIn(email, pw)) }
+            val thrown = assertFailsWith<SessionStoreUnavailableException> { failClosed.logIn(OwnerFixtures.logInCommand(email, pw)) }
             assertSame(error, thrown.cause)
         }
         assertEquals(lookupsBefore, owners.lookups)
@@ -176,9 +176,9 @@ class OwnerManagementTest {
             }
         }
         val failingClear = OwnerManagement(InMemoryOwners(), RedisLoginFailureCounter(template), UuidV7IdentifierGenerator())
-        val signedUp = failingClear.signUp(OwnerCommand.SignUp(email, password))
+        val signedUp = failingClear.signUp(OwnerFixtures.signUpCommand(email, password))
 
-        assertEquals(signedUp.ownerId, failingClear.logIn(OwnerCommand.LogIn(email, password)).ownerId)
+        assertEquals(signedUp.ownerId, failingClear.logIn(OwnerFixtures.logInCommand(email, password)).ownerId)
     }
 
     @Test

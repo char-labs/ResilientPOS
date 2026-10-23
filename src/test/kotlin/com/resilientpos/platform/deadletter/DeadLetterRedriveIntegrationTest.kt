@@ -28,10 +28,8 @@ import kotlin.test.assertTrue
 import org.apache.kafka.clients.consumer.ConsumerRecord
 import org.apache.kafka.common.TopicPartition
 import org.junit.jupiter.api.extension.ExtendWith
-import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.system.CapturedOutput
 import org.springframework.boot.test.system.OutputCaptureExtension
-import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc
 import org.springframework.context.annotation.Import
 import org.springframework.http.HttpHeaders
 import org.springframework.http.MediaType
@@ -60,16 +58,15 @@ private const val WINNER_OPERATOR = "operator-winner"
  * DLT 레코드는 consumer 실패처럼 `DeadLetterPublishingRecoverer`로 넣고(헤더 포함), 값은 지금 코드가 읽는 `OrderPaid` JSON이고, 읽기 검사는 그 JSON을 고친 값으로 본다.
  * 브로커와 DB를 다른 테스트와 함께 쓰므로 이 테스트가 만든 주문 key·DLT offset만 본다.
  */
-@AutoConfigureMockMvc
 @Import(OperatorTokens.IdpStub::class)
 @ExtendWith(OutputCaptureExtension::class)
 class DeadLetterRedriveIntegrationTest(
-    @Autowired private val mockMvc: MockMvc,
-    @Autowired private val kafkaTemplate: KafkaTemplate<Any, Any>,
-    @Autowired private val jsonMapper: JsonMapper,
-    @Autowired private val jdbcTemplate: JdbcTemplate,
-    @Autowired private val meterRegistry: MeterRegistry,
-    @Autowired private val transaction: TransactionTemplate,
+    private val mockMvc: MockMvc,
+    private val kafkaTemplate: KafkaTemplate<Any, Any>,
+    private val jsonMapper: JsonMapper,
+    private val jdbcTemplate: JdbcTemplate,
+    private val meterRegistry: MeterRegistry,
+    private val transaction: TransactionTemplate,
 ) : PostgresIntegrationTest() {
 
     private fun orderPaid(orderId: UUID): String = jsonMapper.writeValueAsString(

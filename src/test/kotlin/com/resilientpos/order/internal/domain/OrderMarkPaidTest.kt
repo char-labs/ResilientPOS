@@ -4,7 +4,6 @@ import com.resilientpos.foundation.DomainErrorKind
 import com.resilientpos.foundation.DomainException
 import com.resilientpos.foundation.IdentifierGenerator
 import com.resilientpos.foundation.Money
-import com.resilientpos.order.OrderCommand
 import com.resilientpos.order.CheckoutId
 import com.resilientpos.order.ClientOrderId
 import com.resilientpos.contract.OrderPaid
@@ -31,7 +30,7 @@ class OrderMarkPaidTest {
 
     /** 3500원 주문의 checkout 1회차를 요청한 상태. */
     private fun checkoutRequested(): Order {
-        val command = OrderCommand.Create(
+        val command = OrderFixtures.createOrderCommand(
             StoreId(UUID.randomUUID()),
             TerminalId(UUID.randomUUID()),
             ClientOrderId(UUID.randomUUID()),
@@ -88,7 +87,7 @@ class OrderMarkPaidTest {
     @Test
     fun `checkout을 요청하지 않은 주문의 승인이면 거절한다`() {
         val open = Order.create(
-            OrderCommand.Create(
+            OrderFixtures.createOrderCommand(
                 StoreId(UUID.randomUUID()), TerminalId(UUID.randomUUID()), ClientOrderId(UUID.randomUUID()), krw,
                 listOf(OrderFixtures.line("3500")),
             ),

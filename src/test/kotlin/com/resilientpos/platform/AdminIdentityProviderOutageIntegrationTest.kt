@@ -7,10 +7,8 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import org.junit.jupiter.api.extension.ExtendWith
-import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.system.CapturedOutput
 import org.springframework.boot.test.system.OutputCaptureExtension
-import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc
 import org.springframework.http.HttpHeaders
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.get
@@ -19,10 +17,9 @@ import org.springframework.test.web.servlet.get
  * 운영자 IdP에 닿지 못하는 상태를 검사한다. [OperatorTokens.IdpStub]을 import하지 않아 테스트 issuer(`.test`)가 해석되지 않으므로
  * 첫 토큰 검증의 issuer discovery가 실패한다. 다른 MockMvc 통합 테스트와 같은 설정이라 공유 컨텍스트를 그대로 쓴다.
  */
-@AutoConfigureMockMvc
 @ExtendWith(OutputCaptureExtension::class)
 class AdminIdentityProviderOutageIntegrationTest(
-    @Autowired private val mockMvc: MockMvc,
+    private val mockMvc: MockMvc,
 ) : PostgresIntegrationTest() {
 
     @Test

@@ -15,10 +15,8 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import org.junit.jupiter.api.extension.ExtendWith
-import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.system.CapturedOutput
 import org.springframework.boot.test.system.OutputCaptureExtension
-import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc
 import org.springframework.context.annotation.Import
 import org.springframework.http.HttpHeaders
 import org.springframework.http.MediaType
@@ -34,12 +32,11 @@ private const val ADMIN_PATH = "/admin/v1/chain-probe"
  * `/admin` 아래 운영자 체인을 실제 Boot decoder 구성(issuer·audience·서명·만료 검사)으로 검사한다. Docker가 필요하다.
  * IdP의 discovery·JWK Set 응답만 [OperatorTokens.IdpStub]이 대신 준다. 그 설정 때문에 컨텍스트가 하나 더 뜬다(받아들임).
  */
-@AutoConfigureMockMvc
 @ExtendWith(OutputCaptureExtension::class)
 @Import(OperatorTokens.IdpStub::class)
 class AdminSecurityIntegrationTest(
-    @Autowired private val mockMvc: MockMvc,
-    @Autowired private val terminals: TerminalManagement,
+    private val mockMvc: MockMvc,
+    private val terminals: TerminalManagement,
 ) : PostgresIntegrationTest() {
 
     private fun callAdmin(authorization: String? = null, cookie: Cookie? = null): MockHttpServletResponse =

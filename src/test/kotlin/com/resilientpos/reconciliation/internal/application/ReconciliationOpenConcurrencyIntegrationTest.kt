@@ -26,11 +26,9 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 import org.mockito.ArgumentMatchers.any
 import org.mockito.Mockito.doAnswer
-import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.context.ApplicationEventPublisher
 import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.jdbc.core.JdbcTemplate
-import org.springframework.test.context.bean.override.mockito.MockitoSpyBean
 import org.springframework.transaction.support.TransactionOperations
 
 /**
@@ -41,15 +39,14 @@ import org.springframework.transaction.support.TransactionOperations
  * 바깥 트랜잭션이 B의 커밋을 붙잡고, 그동안 앞쪽(A)을 다른 스레드에서 끝까지 커밋시킨다. B의 삽입은 커밋에서 flush되므로 A는 B를 기다리지 않는다.
  */
 class ReconciliationOpenConcurrencyIntegrationTest(
-    @Autowired private val transactions: TransactionOperations,
-    @Autowired private val jdbcTemplate: JdbcTemplate,
-    @Autowired private val repository: ReconciliationCaseRepository,
-    @Autowired private val identifierGenerator: IdentifierGenerator,
-    @Autowired private val eventPublisher: ApplicationEventPublisher,
+    private val transactions: TransactionOperations,
+    private val jdbcTemplate: JdbcTemplate,
+    private val repository: ReconciliationCaseRepository,
+    private val identifierGenerator: IdentifierGenerator,
+    private val eventPublisher: ApplicationEventPublisher,
+    // 테스트 기반 클래스가 spy로 둔다.
+    private val management: ReconciliationManagement,
 ) : PostgresIntegrationTest() {
-
-    @MockitoSpyBean
-    private lateinit var management: ReconciliationManagement
 
     private fun openCommand(paymentId: PaymentId, orderId: UUID = UUID.randomUUID()) =
         ReconciliationFixtures.open().copy(paymentId = paymentId, orderId = orderId)
@@ -93,8 +90,10 @@ class ReconciliationOpenConcurrencyIntegrationTest(
         val executor = Executors.newSingleThreadExecutor()
         // 첫 호출(consumer)만 겹침을 만든다. 같은 시도를 다른 스레드의 A가 먼저 커밋하고, 바깥 트랜잭션이 커밋될 때 B가 unique에 걸려 던진다.
         // 두 번째 호출(A)과 consumer의 재시도(세 번째)는 실제 동작을 탄다.
+        // 컨텍스트를 다른 클래스와 같이 써서 앞 클래스가 남긴 메시지도 이 spy를 부를 수 있다. 이 시도의 호출만 센다.
         doAnswer { invocation ->
-            if (calls.incrementAndGet() == 1) {
+            val forThisAttempt = invocation.getArgument<ReconciliationCommand.Open>(0).paymentId == paymentId
+            if (forThisAttempt && calls.incrementAndGet() == 1) {
                 transactions.executeWithoutResult {
                     invocation.callRealMethod()
                     executor.submit { management.open(invocation.getArgument<ReconciliationCommand.Open>(0)) }.get(10, TimeUnit.SECONDS)

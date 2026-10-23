@@ -13,7 +13,6 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import org.junit.jupiter.api.extension.ExtendWith
-import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.beans.factory.config.BeanPostProcessor
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.boot.test.context.TestConfiguration
@@ -46,7 +45,7 @@ import org.springframework.session.data.redis.RedisSessionRepository
 )
 class OwnerSessionSaveFailureIntegrationTest(
     @LocalServerPort private val port: Int,
-    @Autowired private val saveFails: AtomicBoolean,
+    private val saveFails: AtomicBoolean,
 ) : PostgresIntegrationTest() {
 
     private val client = HttpClient.newHttpClient()

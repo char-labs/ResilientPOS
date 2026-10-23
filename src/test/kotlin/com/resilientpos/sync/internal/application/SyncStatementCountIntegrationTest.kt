@@ -16,7 +16,6 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import org.hibernate.SessionFactory
 import org.hibernate.stat.Statistics
-import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.jdbc.core.queryForObject
 
@@ -27,10 +26,10 @@ import org.springframework.jdbc.core.queryForObject
  * 통계는 SessionFactory 전체의 누적값이라 테스트 병렬 실행을 켜면 이 측정은 격리가 필요하다(OrderInsertStatementCountIntegrationTest와 같다).
  */
 class SyncStatementCountIntegrationTest(
-    @Autowired private val facade: SyncCommandFacade,
-    @Autowired private val orders: OrderCommandFacade,
-    @Autowired private val jdbcTemplate: JdbcTemplate,
-    @Autowired entityManagerFactory: EntityManagerFactory,
+    private val facade: SyncCommandFacade,
+    private val orders: OrderCommandFacade,
+    private val jdbcTemplate: JdbcTemplate,
+    entityManagerFactory: EntityManagerFactory,
 ) : PostgresIntegrationTest() {
 
     private val statistics: Statistics = entityManagerFactory.unwrap(SessionFactory::class.java).statistics
@@ -68,7 +67,7 @@ class SyncStatementCountIntegrationTest(
         (0 until ATTEMPTS).minOf { attempt ->
             awaitPublicationsDone(clientOrderId)
             val before = statistics.prepareStatementCount
-            facade.receiveBatch(SyncCommand.ReceiveBatch(terminalId, OrderFixtures.storeId, listOf(operation(attempt))))
+            facade.receiveBatch(SyncFixtures.receiveBatchCommand(terminalId, OrderFixtures.storeId, listOf(operation(attempt))))
             statistics.prepareStatementCount - before
         }
 
@@ -81,7 +80,7 @@ class SyncStatementCountIntegrationTest(
         orders.create(command)
         // 첫 요청(OPEN에서 적용)은 커밋 직후 비동기 문장이 측정에 섞여 세지 않는다. 뒤 둘이 그것이 가라앉은 뒤에 센다.
         awaitPublicationsDone(command.clientOrderId)
-        facade.receiveBatch(SyncCommand.ReceiveBatch(terminalId, OrderFixtures.storeId, listOf(checkout(1, command.clientOrderId))))
+        facade.receiveBatch(SyncFixtures.receiveBatchCommand(terminalId, OrderFixtures.storeId, listOf(checkout(1, command.clientOrderId))))
         // 순번 2..(1+ATTEMPTS)는 새 operationId의 멱등 요청이다. 그 뒤 순번 2를 다시 보내면 재전송이다.
         val operations = (0 until ATTEMPTS).map { checkout(2L + it, command.clientOrderId) }
 

@@ -22,10 +22,8 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import org.junit.jupiter.api.extension.ExtendWith
-import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.system.CapturedOutput
 import org.springframework.boot.test.system.OutputCaptureExtension
-import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc
 import org.springframework.http.MediaType
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.test.web.servlet.MockMvc
@@ -38,12 +36,11 @@ import org.springframework.test.web.servlet.post
  * case는 `ReconciliationManagement.open`으로 만들고(넘김 사실을 받은 상태), 시도는 SQL로 넘긴 `UNKNOWN` 행을 넣는다.
  * DB를 다른 테스트와 함께 쓰므로 단언은 이 테스트가 만든 매장·case·시도만 본다.
  */
-@AutoConfigureMockMvc
 @ExtendWith(OutputCaptureExtension::class)
 class ReconciliationCaseOwnerApiIntegrationTest(
-    @Autowired private val mockMvc: MockMvc,
-    @Autowired private val management: ReconciliationManagement,
-    @Autowired private val jdbcTemplate: JdbcTemplate,
+    private val mockMvc: MockMvc,
+    private val management: ReconciliationManagement,
+    private val jdbcTemplate: JdbcTemplate,
 ) : PostgresIntegrationTest() {
 
     private val owner: OwnerSession by lazy { mockMvc.logInNewOwner() }

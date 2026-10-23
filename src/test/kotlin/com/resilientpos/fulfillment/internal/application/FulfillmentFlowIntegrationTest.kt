@@ -8,13 +8,12 @@ import com.resilientpos.order.OrderFixtures
 import com.resilientpos.order.createAndRequestCheckout
 import java.util.UUID
 import kotlin.test.Test
-import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.jdbc.core.JdbcTemplate
 
 /** checkout부터 결제 승인, 주문 `PAID`, fulfillment 생성까지 리스너 셋이 잇따라 도는 흐름. */
 class FulfillmentFlowIntegrationTest(
-    @Autowired private val orderFacade: OrderCommandFacade,
-    @Autowired private val jdbcTemplate: JdbcTemplate,
+    private val orderFacade: OrderCommandFacade,
+    private val jdbcTemplate: JdbcTemplate,
 ) : PostgresIntegrationTest() {
 
     private fun fulfillments(orderId: UUID) =

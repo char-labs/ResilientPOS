@@ -7,9 +7,8 @@ import com.resilientpos.terminal.registerTerminal
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import org.springframework.beans.factory.annotation.Autowired
-import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc
 import org.springframework.http.MediaType
+import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.get
 import org.springframework.test.web.servlet.post
@@ -22,11 +21,11 @@ import tools.jackson.databind.ObjectMapper
  * 금액 끝자리 1은 [com.resilientpos.payment.internal.adapter.gateway.FakePaymentGateway]가 거절한다.
  * 같은 금액의 재결제도 다시 거절되므로 새 시도의 결말은 단언하지 않고 개수·순서·paymentId만 본다.
  */
-@AutoConfigureMockMvc
 class PaymentAttemptApiIntegrationTest(
-    @Autowired private val mockMvc: MockMvc,
-    @Autowired private val objectMapper: ObjectMapper,
-    @Autowired private val terminals: TerminalManagement,
+    private val mockMvc: MockMvc,
+    private val objectMapper: ObjectMapper,
+    private val terminals: TerminalManagement,
+    private val jdbcTemplate: JdbcTemplate,
 ) : PostgresIntegrationTest() {
 
     private val terminal = terminals.registerTerminal()
@@ -61,16 +60,25 @@ class PaymentAttemptApiIntegrationTest(
         return List(data.size()) { data.get(it) }
     }
 
+    /**
+     * 첫 시도가 DECLINED가 될 때까지 DB로 기다린다. 조회 API로 기다리면 20ms마다 보내는 요청이 단말 rate limit(10건, 초당 2건)을 다 써서
+     * 거절이 조금만 늦어도 기다린 뒤의 요청이 429가 된다.
+     */
+    private fun awaitFirstAttemptDeclined(orderId: String) =
+        awaitUntil("첫 시도가 DECLINED가 된다", diagnostics = { ". 현재: ${attemptStatuses(orderId)}" }) { attemptStatuses(orderId) == listOf("DECLINED") }
+
+    private fun attemptStatuses(orderId: String): List<String?> =
+        jdbcTemplate.queryForList("select status from t_payment_attempt where order_id = ?", String::class.java, UUID.fromString(orderId))
+
     private fun retry(paymentId: String, bearer: String) =
         mockMvc.post("/v1/payment-attempts/$paymentId/retry") { header("Authorization", bearer) }
 
     @Test
     fun `거절된 주문은 조회에서 DECLINED 시도를 보이고 재결제하면 같은 회차에 시도가 둘이 되며 재요청은 같은 paymentId다`() {
         val orderId = checkoutDeclinedOrder()
-        awaitUntil("첫 시도가 DECLINED로 조회된다", diagnostics = { ". 현재: ${attempts(orderId, terminal.bearer)}" }) {
-            attempts(orderId, terminal.bearer).singleOrNull()?.get("status")?.asString() == "DECLINED"
-        }
+        awaitFirstAttemptDeclined(orderId)
         val declined = attempts(orderId, terminal.bearer).single()
+        assertEquals("DECLINED", declined.get("status").asString())
         assertEquals(1, declined.get("checkoutNo").asInt())
         assertEquals("4501", declined.get("amount").asString())
         val declinedId = declined.get("paymentId").asString()
@@ -90,9 +98,7 @@ class PaymentAttemptApiIntegrationTest(
     @Test
     fun `다른 매장의 단말은 조회가 200 빈 배열이고 재결제는 404 PAYMENT_ATTEMPT_NOT_FOUND이며 시도가 늘지 않는다`() {
         val orderId = checkoutDeclinedOrder()
-        awaitUntil("첫 시도가 DECLINED로 조회된다", diagnostics = { ". 현재: ${attempts(orderId, terminal.bearer)}" }) {
-            attempts(orderId, terminal.bearer).singleOrNull()?.get("status")?.asString() == "DECLINED"
-        }
+        awaitFirstAttemptDeclined(orderId)
         val declinedId = attempts(orderId, terminal.bearer).single().get("paymentId").asString()
         val otherStore = terminals.registerTerminal()
 

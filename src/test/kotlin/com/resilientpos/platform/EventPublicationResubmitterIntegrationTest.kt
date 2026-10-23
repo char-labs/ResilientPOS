@@ -27,7 +27,6 @@ import jakarta.persistence.EntityManagerFactory
 import org.hibernate.SessionFactory
 import org.hibernate.stat.EntityStatistics
 import org.springframework.beans.factory.ObjectProvider
-import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.modulith.events.CompletedEventPublications
 import org.springframework.modulith.events.FailedEventPublications
@@ -39,15 +38,15 @@ import org.springframework.scheduling.config.ScheduledTaskHolder
  * 다시 보내므로 단언은 이 테스트의 행(주문 ID·가짜 이벤트 타입)만 본다.
  */
 class EventPublicationResubmitterIntegrationTest(
-    @Autowired private val resubmitter: EventPublicationResubmitter,
-    @Autowired private val failed: FailedEventPublications,
-    @Autowired private val completed: CompletedEventPublications,
-    @Autowired private val orderFacade: OrderCommandFacade,
-    @Autowired private val jdbcTemplate: JdbcTemplate,
-    @Autowired private val dataSource: DataSource,
-    @Autowired private val distributedLock: DistributedLock,
-    @Autowired private val scheduledTasks: ObjectProvider<ScheduledTaskHolder>,
-    @Autowired entityManagerFactory: EntityManagerFactory,
+    private val resubmitter: EventPublicationResubmitter,
+    private val failed: FailedEventPublications,
+    private val completed: CompletedEventPublications,
+    private val orderFacade: OrderCommandFacade,
+    private val jdbcTemplate: JdbcTemplate,
+    private val dataSource: DataSource,
+    private val distributedLock: DistributedLock,
+    private val scheduledTasks: ObjectProvider<ScheduledTaskHolder>,
+    entityManagerFactory: EntityManagerFactory,
 ) : PostgresIntegrationTest() {
 
     private val statistics = entityManagerFactory.unwrap(SessionFactory::class.java).statistics
@@ -80,7 +79,7 @@ class EventPublicationResubmitterIntegrationTest(
                 lines = listOf(OrderCommand.Create.Line("SKU-1", "아메리카노", Money.of("4500", OrderFixtures.krw), 1)),
             ),
         )
-        orderFacade.requestCheckout(OrderCommand.RequestCheckout(created.orderId, OrderFixtures.storeId, OrderFixtures.terminalId))
+        orderFacade.requestCheckout(OrderFixtures.requestCheckoutCommand(created.orderId, OrderFixtures.storeId, OrderFixtures.terminalId))
         val orderId = created.orderId.value
         awaitUntil("order.paid 발행 기록이 완료된다") { findOrderPaidRow(orderId)?.get("completion_date") != null }
         return orderId

@@ -1,11 +1,11 @@
 package com.resilientpos.order
 
-import com.navercorp.fixturemonkey.FixtureMonkey
-import com.navercorp.fixturemonkey.kotlin.KotlinPlugin
 import com.navercorp.fixturemonkey.kotlin.giveMeKotlinBuilder
+import com.resilientpos.TestFixtureMonkey
 import com.resilientpos.foundation.Money
 import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.TerminalId
+import java.math.BigDecimal
 import java.util.Currency
 import java.util.UUID
 
@@ -14,10 +14,6 @@ import java.util.UUID
  * ID는 매 호출 새로 만들되 테스트가 필요하면 인자로 고정할 수 있다.
  */
 object OrderFixtures {
-
-    private val fixtureMonkey: FixtureMonkey = FixtureMonkey.builder()
-        .plugin(KotlinPlugin())
-        .build()
 
     val krw: Currency = Currency.getInstance("KRW")
 
@@ -36,11 +32,11 @@ object OrderFixtures {
         // 비동기로 주문을 PAID로 바꾸지 않게 해서, checkout 직후 상태를 읽는 테스트가 경합에 걸리지 않는다.
         // 끝자리 규칙은 FakePaymentGatewayTest의 `끝자리가 2이면 결과를 모른다`가 고정한다.
         lines: List<OrderCommand.Create.Line> = listOf(
-            OrderCommand.Create.Line("SKU-1", "아메리카노", Money.of("1001", krw), 2),
-            OrderCommand.Create.Line("SKU-2", "카페라떼", Money.of("500", krw), 3),
+            line("1001", quantity = 2),
+            line("500", quantity = 3, productCode = "SKU-2", productName = "카페라떼"),
         ),
     ): OrderCommand.Create =
-        fixtureMonkey.giveMeKotlinBuilder<OrderCommand.Create>()
+        TestFixtureMonkey.instance.giveMeKotlinBuilder<OrderCommand.Create>()
             .setExp(OrderCommand.Create::storeId, storeId)
             .setExp(OrderCommand.Create::terminalId, terminalId)
             .setExp(OrderCommand.Create::clientOrderId, clientOrderId)
@@ -49,8 +45,41 @@ object OrderFixtures {
             .sample()
 
     /** 단가와 수량만 정한 line. 결제 결말은 FakePaymentGateway가 합계의 끝자리로 정한다. */
-    fun line(unitPrice: String, quantity: Int = 1): OrderCommand.Create.Line =
-        OrderCommand.Create.Line("SKU-1", "아메리카노", Money.of(unitPrice, krw), quantity)
+    fun line(
+        unitPrice: String,
+        quantity: Int = 1,
+        productCode: String = "SKU-1",
+        productName: String = "아메리카노",
+    ): OrderCommand.Create.Line =
+        TestFixtureMonkey.instance.giveMeKotlinBuilder<OrderCommand.Create.Line>()
+            .setExp(OrderCommand.Create.Line::productCode, productCode)
+            .setExp(OrderCommand.Create.Line::productName, productName)
+            .setExp(OrderCommand.Create.Line::unitPrice, Money.of(unitPrice, krw))
+            .setExp(OrderCommand.Create.Line::quantity, quantity)
+            .sample()
+
+    /** 기본 매장·단말의 checkout 요청. 주문의 매장과 같아야 하므로 주문을 기본 매장으로 만들었으면 그대로 쓴다. */
+    fun requestCheckoutCommand(
+        orderId: OrderId,
+        storeId: StoreId = OrderFixtures.storeId,
+        terminalId: TerminalId = OrderFixtures.terminalId,
+    ): OrderCommand.RequestCheckout =
+        TestFixtureMonkey.instance.giveMeKotlinBuilder<OrderCommand.RequestCheckout>()
+            .setExp(OrderCommand.RequestCheckout::orderId, orderId)
+            .setExp(OrderCommand.RequestCheckout::storeId, storeId)
+            .setExp(OrderCommand.RequestCheckout::terminalId, terminalId)
+            .sample()
+
+    fun requestCheckoutByClientOrderIdCommand(
+        terminalId: TerminalId,
+        clientOrderId: ClientOrderId,
+        expectedAmount: BigDecimal,
+    ): OrderCommand.RequestCheckoutByClientOrderId =
+        TestFixtureMonkey.instance.giveMeKotlinBuilder<OrderCommand.RequestCheckoutByClientOrderId>()
+            .setExp(OrderCommand.RequestCheckoutByClientOrderId::terminalId, terminalId)
+            .setExp(OrderCommand.RequestCheckoutByClientOrderId::clientOrderId, clientOrderId)
+            .setExp(OrderCommand.RequestCheckoutByClientOrderId::expectedAmount, expectedAmount)
+            .sample()
 }
 
 /**
@@ -59,6 +88,6 @@ object OrderFixtures {
  */
 fun OrderCommandFacade.createAndRequestCheckout(command: OrderCommand.Create = OrderFixtures.createOrderCommand()): OrderId {
     val created = create(command)
-    requestCheckout(OrderCommand.RequestCheckout(created.orderId, command.storeId, command.terminalId))
+    requestCheckout(OrderFixtures.requestCheckoutCommand(created.orderId, command.storeId, command.terminalId))
     return created.orderId
 }

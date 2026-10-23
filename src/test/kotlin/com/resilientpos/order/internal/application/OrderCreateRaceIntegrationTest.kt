@@ -15,7 +15,6 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
-import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.dao.ConcurrencyFailureException
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.jdbc.core.queryForObject
@@ -27,10 +26,10 @@ import org.springframework.transaction.support.TransactionTemplate
  * 겹침은 앞 트랜잭션을 커밋 전에 붙들어 두고, 뒤 INSERT가 그 트랜잭션에 막혀 기다리는 것을 `pg_blocking_pids`로 확인해 만든다.
  */
 class OrderCreateRaceIntegrationTest(
-    @Autowired private val orders: OrderCommandFacade,
-    @Autowired private val jdbcTemplate: JdbcTemplate,
-    @Autowired private val transaction: TransactionTemplate,
-    @Autowired private val entityManager: EntityManager,
+    private val orders: OrderCommandFacade,
+    private val jdbcTemplate: JdbcTemplate,
+    private val transaction: TransactionTemplate,
+    private val entityManager: EntityManager,
 ) : PostgresIntegrationTest() {
 
     private val command = OrderFixtures.createOrderCommand()

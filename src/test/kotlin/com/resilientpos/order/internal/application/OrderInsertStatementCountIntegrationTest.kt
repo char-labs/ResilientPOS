@@ -20,7 +20,6 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import org.hibernate.SessionFactory
 import org.hibernate.stat.Statistics
-import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.transaction.support.TransactionTemplate
 
 /**
@@ -31,12 +30,12 @@ import org.springframework.transaction.support.TransactionTemplate
  * 병렬 실행을 켜면 다른 클래스의 SQL이 섞이므로 그때 클래스 격리나 세션별 측정으로 바꾼다.
  */
 class OrderInsertStatementCountIntegrationTest(
-    @Autowired private val facade: OrderCommandFacade,
-    @Autowired private val repository: OrderRepository,
-    @Autowired private val transaction: TransactionTemplate,
-    @Autowired private val identifierGenerator: IdentifierGenerator,
-    @Autowired private val clock: Clock,
-    @Autowired entityManagerFactory: EntityManagerFactory,
+    private val facade: OrderCommandFacade,
+    private val repository: OrderRepository,
+    private val transaction: TransactionTemplate,
+    private val identifierGenerator: IdentifierGenerator,
+    private val clock: Clock,
+    entityManagerFactory: EntityManagerFactory,
 ) : PostgresIntegrationTest() {
 
     private val statistics: Statistics = entityManagerFactory.unwrap(SessionFactory::class.java).statistics

@@ -7,6 +7,7 @@ import com.resilientpos.foundation.Money
 import com.resilientpos.payment.PaymentAttemptStatus
 import com.resilientpos.payment.PaymentAttemptView
 import com.resilientpos.payment.PaymentCommand
+import com.resilientpos.payment.PaymentFixtures
 import com.resilientpos.payment.PaymentId
 import com.resilientpos.payment.PaymentManagement
 import com.resilientpos.payment.PaymentQuery
@@ -26,7 +27,6 @@ import org.junit.jupiter.api.BeforeEach
 import org.mockito.BDDMockito.given
 import org.mockito.Mockito.verify
 import org.mockito.Mockito.verifyNoInteractions
-import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.restdocs.test.autoconfigure.AutoConfigureRestDocs
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest
 import org.springframework.dao.CannotAcquireLockException
@@ -53,18 +53,13 @@ import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
 @MockTerminalRateLimiter
 @WebMvcTest(PaymentAttemptController::class)
 @AutoConfigureRestDocs
+@MockitoBean(types = [PaymentQueryFacade::class, PaymentManagement::class, TerminalManagement::class])
 class PaymentAttemptControllerTest(
-    @Autowired private val mockMvc: MockMvc,
+    private val mockMvc: MockMvc,
+    private val queryFacade: PaymentQueryFacade,
+    private val management: PaymentManagement,
+    private val terminals: TerminalManagement,
 ) {
-
-    @MockitoBean
-    private lateinit var queryFacade: PaymentQueryFacade
-
-    @MockitoBean
-    private lateinit var management: PaymentManagement
-
-    @MockitoBean
-    private lateinit var terminals: TerminalManagement
 
     @BeforeEach
     fun authenticate() {
@@ -252,7 +247,7 @@ class PaymentAttemptControllerTest(
         private const val DECLINED_ID = "018f6b1a-0000-7000-8000-0000000000b1"
         private const val RETRIED_ID = "018f6b1a-0000-7000-8000-0000000000b2"
         private val QUERY = PaymentQuery.FindAttempts(UUID.fromString(ORDER_ID), StoreId(UUID.fromString(STORE_ID)))
-        private val RETRY = PaymentCommand.RetryAuthorization(PaymentId(UUID.fromString(DECLINED_ID)), StoreId(UUID.fromString(STORE_ID)))
+        private val RETRY = PaymentFixtures.retryAuthorizationCommand(PaymentId(UUID.fromString(DECLINED_ID)), StoreId(UUID.fromString(STORE_ID)))
         private val krw: Currency = Currency.getInstance("KRW")
         private val usd: Currency = Currency.getInstance("USD")
 

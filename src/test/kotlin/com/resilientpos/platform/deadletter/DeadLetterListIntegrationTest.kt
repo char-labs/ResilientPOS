@@ -16,8 +16,6 @@ import org.apache.kafka.clients.consumer.ConsumerRecord
 import org.apache.kafka.clients.producer.ProducerRecord
 import org.apache.kafka.common.TopicPartition
 import org.apache.kafka.common.header.internals.RecordHeader
-import org.springframework.beans.factory.annotation.Autowired
-import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc
 import org.springframework.context.annotation.Import
 import org.springframework.http.HttpHeaders
 import org.springframework.kafka.core.KafkaTemplate
@@ -36,11 +34,10 @@ private const val ORIGINAL_OFFSET = 42L
  * `AdminSecurityIntegrationTest`와 같은 구성이라 컨텍스트를 함께 쓴다.
  * 테스트 Kafka는 partition이 하나이고 다른 테스트도 DLT에 레코드를 넣으므로, 이 테스트가 넣은 레코드의 offset을 기준으로 단언한다.
  */
-@AutoConfigureMockMvc
 @Import(OperatorTokens.IdpStub::class)
 class DeadLetterListIntegrationTest(
-    @Autowired private val mockMvc: MockMvc,
-    @Autowired private val kafkaTemplate: KafkaTemplate<Any, Any>,
+    private val mockMvc: MockMvc,
+    private val kafkaTemplate: KafkaTemplate<Any, Any>,
 ) : PostgresIntegrationTest() {
 
     private fun list(vararg params: Pair<String, String>): ResultActionsDsl =

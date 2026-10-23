@@ -3,6 +3,7 @@ package com.resilientpos.owner.internal.adapter.web
 import com.resilientpos.foundation.DomainErrorKind
 import com.resilientpos.foundation.DomainException
 import com.resilientpos.owner.OwnerCommand
+import com.resilientpos.owner.OwnerFixtures
 import com.resilientpos.owner.OwnerId
 import com.resilientpos.owner.OwnerManagement
 import com.resilientpos.owner.internal.domain.Owner
@@ -21,7 +22,6 @@ import org.junit.jupiter.api.extension.ExtendWith
 import org.mockito.BDDMockito.given
 import org.mockito.Mockito.verify
 import org.mockito.Mockito.verifyNoInteractions
-import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.restdocs.test.autoconfigure.AutoConfigureRestDocs
 import org.springframework.boot.test.system.CapturedOutput
 import org.springframework.boot.test.system.OutputCaptureExtension
@@ -60,16 +60,12 @@ import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
 @WebMvcTest(OwnerController::class)
 @AutoConfigureRestDocs
 @ExtendWith(OutputCaptureExtension::class)
+// 슬라이스에 단말 인증 인터셉터 설정이 실린다. 이 테스트의 경로는 v1이 아니라 인증을 타지 않지만 의존성은 채워야 한다.
+@MockitoBean(types = [OwnerManagement::class, TerminalManagement::class])
 class OwnerControllerTest(
-    @Autowired private val mockMvc: MockMvc,
+    private val mockMvc: MockMvc,
+    private val management: OwnerManagement,
 ) {
-
-    @MockitoBean
-    private lateinit var management: OwnerManagement
-
-    // 슬라이스에 단말 인증 인터셉터 설정이 실린다. 이 테스트의 경로는 v1이 아니라 인증을 타지 않지만 의존성은 채워야 한다.
-    @MockitoBean
-    private lateinit var terminals: TerminalManagement
 
     private fun postJson(url: String, body: String): ResultActions =
         mockMvc.perform(post(url).withCsrf().contentType(MediaType.APPLICATION_JSON).content(body))
@@ -83,7 +79,7 @@ class OwnerControllerTest(
     @Test
     fun `가입하면 201과 ownerId email을 돌려주고 로그인시키지 않으며 감사 로그에 비밀번호와 이메일이 없다`(output: CapturedOutput) {
         val mark = output.all.length // 이 테스트가 낸 출력만 본다. 클래스 단위 캡처에는 앞 테스트의 출력도 남는다
-        given(management.signUp(OwnerCommand.SignUp(EMAIL, PASSWORD))).willReturn(OwnerCommand.SignUp.Result(OwnerId(OWNER_ID), EMAIL))
+        given(management.signUp(OwnerFixtures.signUpCommand(EMAIL, PASSWORD))).willReturn(OwnerCommand.SignUp.Result(OwnerId(OWNER_ID), EMAIL))
 
         val result = signUp()
             .andExpect(status().isCreated)
@@ -107,7 +103,7 @@ class OwnerControllerTest(
                 ),
             ).andReturn()
 
-        verify(management).signUp(OwnerCommand.SignUp(EMAIL, PASSWORD))
+        verify(management).signUp(OwnerFixtures.signUpCommand(EMAIL, PASSWORD))
         assertNull(result.request.getSession(false), "가입은 세션을 만들지 않는다")
         val audit = output.all.lines().single { "action=OWNER_SIGNED_UP" in it }
         assertTrue("ownerId=$OWNER_ID" in audit, audit)
@@ -116,7 +112,7 @@ class OwnerControllerTest(
 
     @Test
     fun `이메일 형식이 틀리면 400 INVALID_EMAIL이고 감사 로그를 남기지 않는다`(output: CapturedOutput) {
-        given(management.signUp(OwnerCommand.SignUp("not-an-email", PASSWORD)))
+        given(management.signUp(OwnerFixtures.signUpCommand("not-an-email", PASSWORD)))
             .willThrow(DomainException(Owner.INVALID_EMAIL, "이메일 형식이 올바르지 않습니다", DomainErrorKind.INVALID))
 
         signUp("not-an-email")
@@ -143,7 +139,7 @@ class OwnerControllerTest(
 
     @Test
     fun `비밀번호 정책을 못 맞추면 400 INVALID_PASSWORD다`() {
-        given(management.signUp(OwnerCommand.SignUp(EMAIL, "short")))
+        given(management.signUp(OwnerFixtures.signUpCommand(EMAIL, "short")))
             .willThrow(DomainException(Owner.INVALID_PASSWORD, "비밀번호는 15자 이상이어야 합니다", DomainErrorKind.INVALID))
 
         signUp(password = "short")
@@ -154,7 +150,7 @@ class OwnerControllerTest(
 
     @Test
     fun `같은 이메일이면 409 OWNER_EMAIL_DUPLICATED다`() {
-        given(management.signUp(OwnerCommand.SignUp(EMAIL, PASSWORD)))
+        given(management.signUp(OwnerFixtures.signUpCommand(EMAIL, PASSWORD)))
             .willThrow(DomainException(Owner.OWNER_EMAIL_DUPLICATED, "이미 가입한 이메일입니다", DomainErrorKind.CONFLICT))
 
         signUp()
@@ -166,7 +162,7 @@ class OwnerControllerTest(
     @Test
     fun `로그인하면 200과 ownerId email을 돌려주고 세션에 점주 ID 인증을 저장하며 새 CSRF 토큰 쿠키를 심는다`(output: CapturedOutput) {
         val mark = output.all.length // 이 테스트가 낸 출력만 본다. 클래스 단위 캡처에는 앞 테스트의 출력도 남는다
-        given(management.logIn(OwnerCommand.LogIn(EMAIL, PASSWORD))).willReturn(OwnerCommand.LogIn.Result(OwnerId(OWNER_ID), EMAIL))
+        given(management.logIn(OwnerFixtures.logInCommand(EMAIL, PASSWORD))).willReturn(OwnerCommand.LogIn.Result(OwnerId(OWNER_ID), EMAIL))
 
         val result = logIn()
             .andExpect(status().isOk)
@@ -203,7 +199,7 @@ class OwnerControllerTest(
 
     @Test
     fun `자격이 틀리면 401 UNAUTHENTICATED이고 WWW-Authenticate 없이 세션을 만들지 않으며 감사 로그가 없다`(output: CapturedOutput) {
-        given(management.logIn(OwnerCommand.LogIn(EMAIL, "wrong-password-value"))).willThrow(UnauthenticatedException())
+        given(management.logIn(OwnerFixtures.logInCommand(EMAIL, "wrong-password-value"))).willThrow(UnauthenticatedException())
 
         val result = logIn("wrong-password-value")
             .andExpect(status().isUnauthorized)

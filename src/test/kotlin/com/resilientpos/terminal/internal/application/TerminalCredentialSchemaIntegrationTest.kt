@@ -8,7 +8,6 @@ import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
-import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.dao.DuplicateKeyException
 import org.springframework.jdbc.core.JdbcTemplate
@@ -19,8 +18,8 @@ import org.springframework.transaction.support.TransactionTemplate
  * V012의 unique(해시)와 V018의 exclusion 제약(단말당 유효 credential 하나, 커밋 때 검사)을 서비스를 거치지 않고 직접 SQL로 확인한다. Docker가 필요하다.
  */
 class TerminalCredentialSchemaIntegrationTest(
-    @Autowired private val jdbcTemplate: JdbcTemplate,
-    @Autowired private val transactionTemplate: TransactionTemplate,
+    private val jdbcTemplate: JdbcTemplate,
+    private val transactionTemplate: TransactionTemplate,
 ) : PostgresIntegrationTest() {
 
     private val now = Timestamp.from(Instant.parse("2026-10-05T01:00:00Z"))

@@ -27,11 +27,9 @@ import kotlin.test.assertTrue
 import org.apache.kafka.clients.consumer.ConsumerRecord
 import org.apache.kafka.common.TopicPartition
 import org.junit.jupiter.api.extension.ExtendWith
-import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.boot.test.system.CapturedOutput
 import org.springframework.boot.test.system.OutputCaptureExtension
-import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc
 import org.springframework.context.annotation.Import
 import org.springframework.http.HttpHeaders
 import org.springframework.http.MediaType
@@ -59,18 +57,17 @@ private const val WINNER_OPERATOR = "operator-winner"
  * `DeadLetterRedriveIntegrationTest`와 같은 구성이라 컨텍스트를 함께 쓴다. DLT 레코드는 consumer 실패처럼 `DeadLetterPublishingRecoverer`로 넣는다.
  * 브로커와 DB를 다른 테스트와 함께 쓰므로 이 테스트가 만든 주문 key·DLT offset만 본다.
  */
-@AutoConfigureMockMvc
 @Import(OperatorTokens.IdpStub::class)
 @ExtendWith(OutputCaptureExtension::class)
 class DeadLetterDismissIntegrationTest(
-    @Autowired private val mockMvc: MockMvc,
-    @Autowired private val kafkaTemplate: KafkaTemplate<Any, Any>,
-    @Autowired private val jsonMapper: JsonMapper,
-    @Autowired private val jdbcTemplate: JdbcTemplate,
-    @Autowired private val transaction: TransactionTemplate,
-    @Autowired private val kafkaAdmin: KafkaAdmin,
-    @Autowired private val queries: DeadLetterHandledQueries,
-    @Autowired private val clock: Clock,
+    private val mockMvc: MockMvc,
+    private val kafkaTemplate: KafkaTemplate<Any, Any>,
+    private val jsonMapper: JsonMapper,
+    private val jdbcTemplate: JdbcTemplate,
+    private val transaction: TransactionTemplate,
+    private val kafkaAdmin: KafkaAdmin,
+    private val queries: DeadLetterHandledQueries,
+    private val clock: Clock,
     @Value("\${resilientpos.kafka.topics}") private val topics: List<String>,
 ) : PostgresIntegrationTest() {
 

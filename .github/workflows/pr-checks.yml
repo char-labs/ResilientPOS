@@ -20,8 +20,16 @@ on:
 
 jobs:
   build:
-    name: Gradle build
+    name: Gradle build (${{ matrix.shard }}/${{ matrix.total }})
     runs-on: ubuntu-latest
+    # test를 러너 둘에 나눠 돌린다. 나누는 기준은 build.gradle.kts의 testShard다.
+    strategy:
+      # 한쪽이 실패해도 다른 쪽을 끝까지 돌려 실패를 한 번에 본다.
+      fail-fast: false
+      matrix:
+        # job을 늘리면 shard와 total을 함께 바꾼다.
+        shard: [1, 2]
+        total: [2]
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
@@ -35,16 +43,16 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v6
 
-      # 통합 테스트는 Testcontainers로 실제 PostgreSQL을 띄운다.
+      # 통합 테스트는 Testcontainers로 PostgreSQL·Redis·Kafka를 띄운다.
       # ubuntu-latest 러너에 Docker가 있어 별도 설치 단계가 필요 없다.
       - name: Build and test
-        run: ./gradlew build --console=plain
+        run: ./gradlew build --console=plain -PtestShard=${{ matrix.shard }}/${{ matrix.total }}
 
   migration_version_check:
     name: Flyway version gate
     # push에는 비교할 기준 브랜치가 없다. PR에서만 의미가 있다.
     if: github.event_name == 'pull_request'
-    needs: build
+    # 빌드 산출물을 쓰지 않으므로 빌드를 기다리지 않고 함께 돈다.
     runs-on: ubuntu-latest
     steps:
       # 기준 브랜치와 비교해야 하므로 전체 이력을 받는다.
