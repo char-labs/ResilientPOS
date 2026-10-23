@@ -108,6 +108,7 @@ PR 검사(`.github/workflows/pr-checks.yml`) 한 번이 5분 넘게 걸린다. �
 - src/test/resources/junit-platform.properties
 - src/test/kotlin/com/resilientpos/**
 - docs/wiki/development-workflow.md
+- docs/wiki/testing-strategy.md
 
 ## 인수 조건
 1. PR 실행에서 Gradle build와 Flyway version gate가 함께 시작한다(`needs` 없음).
@@ -134,6 +135,7 @@ PR 검사(`.github/workflows/pr-checks.yml`) 한 번이 5분 넘게 걸린다. �
 
 ## Wiki 영향
 - [개발 규칙](../wiki/development-workflow.md)의 "PR 워크플로" 절: 두 단계를 순서대로 돈다는 서술과 "빌드를 앞에 두는 이유"를 병렬 구성과 build cache로 고친다.
+- [테스트 전략](../wiki/testing-strategy.md)에 "통합 테스트 컨텍스트" 절을 더한다(범위 조정 4). 하위 클래스에서 `@MockitoBean`·`@MockitoSpyBean`을 새로 선언하지 않는 규칙, 클래스 정렬, 단말 API를 기다림 안에서 부르지 않는 규칙이다.
 - 업무 요구사항·도메인 모델은 무영향이다. 업무 동작과 운영 설정을 바꾸지 않는다.
 - Modulith·Kafka 키워드 문서(볼트, 저장소 추적 대상 아님)는 결정 10에 해당할 때만 고친다.
 
