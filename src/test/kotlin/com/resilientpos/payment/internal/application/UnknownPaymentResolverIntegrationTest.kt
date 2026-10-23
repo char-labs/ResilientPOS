@@ -10,10 +10,8 @@ import com.resilientpos.payment.PaymentAttemptStatus
 import com.resilientpos.payment.PaymentId
 import com.resilientpos.payment.PaymentManagement
 import com.resilientpos.payment.internal.adapter.gateway.FakePaymentGateway
-import com.resilientpos.payment.internal.domain.AuthorizationOutcome
-import com.resilientpos.payment.internal.domain.AuthorizationRequest
+import com.resilientpos.payment.internal.adapter.gateway.ScriptedPaymentGateway
 import com.resilientpos.payment.internal.domain.PaymentAttemptRepository
-import com.resilientpos.payment.internal.domain.PaymentGateway
 import com.resilientpos.platform.DistributedLock
 import io.micrometer.core.instrument.MeterRegistry
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry
@@ -22,8 +20,6 @@ import java.time.Clock
 import java.time.Duration
 import java.time.Instant
 import java.util.UUID
-import java.util.concurrent.CopyOnWriteArrayList
-import java.util.concurrent.CopyOnWriteArraySet
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
@@ -36,57 +32,27 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 import org.hibernate.SessionFactory
 import org.springframework.beans.factory.ObjectProvider
-import org.springframework.beans.factory.annotation.Autowired
-import org.springframework.boot.test.context.TestConfiguration
-import org.springframework.context.annotation.Bean
-import org.springframework.context.annotation.Primary
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.scheduling.config.ScheduledTaskHolder
 
 /**
  * 주기 작업의 본문을 직접 부른다. 테스트 컨텍스트는 주기를 하루로 늘려(`PostgresIntegrationTest`) 작업이 스스로 돌지 않는다.
  * DB를 다른 테스트와 함께 쓰므로 작업은 다른 테스트가 남긴 `UNKNOWN` 시도도 함께 집는다. 단언은 이 테스트가 만든 시도만 본다.
- * 시도는 [FakePaymentGateway]의 끝자리(2·3·4)로 `UNKNOWN`까지 태워 만든다.
+ * 시도는 [FakePaymentGateway]의 끝자리(2·3·4)로 `UNKNOWN`까지 태워 만든다. 조회 순서와 한 건 실패는 공용 [ScriptedPaymentGateway]로 보고 건다.
  */
 class UnknownPaymentResolverIntegrationTest(
-    @Autowired private val resolver: UnknownPaymentResolver,
-    @Autowired private val orderFacade: OrderCommandFacade,
-    @Autowired private val jdbcTemplate: JdbcTemplate,
-    @Autowired private val gateway: RecordingGateway,
-    @Autowired private val distributedLock: DistributedLock,
-    @Autowired private val scheduledTasks: ObjectProvider<ScheduledTaskHolder>,
-    @Autowired private val repository: PaymentAttemptRepository,
-    @Autowired private val meterRegistry: MeterRegistry,
-    @Autowired private val paymentManagement: PaymentManagement,
-    @Autowired private val clock: Clock,
-    @Autowired entityManagerFactory: EntityManagerFactory,
+    private val resolver: UnknownPaymentResolver,
+    private val orderFacade: OrderCommandFacade,
+    private val jdbcTemplate: JdbcTemplate,
+    private val gateway: ScriptedPaymentGateway,
+    private val distributedLock: DistributedLock,
+    private val scheduledTasks: ObjectProvider<ScheduledTaskHolder>,
+    private val repository: PaymentAttemptRepository,
+    private val meterRegistry: MeterRegistry,
+    private val paymentManagement: PaymentManagement,
+    private val clock: Clock,
+    entityManagerFactory: EntityManagerFactory,
 ) : PostgresIntegrationTest() {
-
-    /**
-     * [FakePaymentGateway]에 위임하면서 `query`가 불린 순서를 적고, 지정한 시도에서는 던진다.
-     * 계약상 gateway는 던지지 않는다. 한 건 실패가 배치를 막지 않는지를 보려고, 확정 트랜잭션의 DB 오류나 잠금 대기 초과 같은
-     * 한 건짜리 실패를 이 방법으로 흉내 낸다.
-     */
-    class RecordingGateway : PaymentGateway {
-        private val delegate = FakePaymentGateway()
-        val queried = CopyOnWriteArrayList<PaymentId>()
-        val failFor = CopyOnWriteArraySet<PaymentId>()
-
-        override fun authorize(request: AuthorizationRequest): AuthorizationOutcome = delegate.authorize(request)
-
-        override fun query(request: AuthorizationRequest): AuthorizationOutcome {
-            queried += request.paymentId
-            if (request.paymentId in failFor) error("조회 실패를 흉내 낸다")
-            return delegate.query(request)
-        }
-    }
-
-    @TestConfiguration
-    class RecordingGatewayConfiguration {
-        @Bean
-        @Primary
-        fun recordingGateway() = RecordingGateway()
-    }
 
     private val created = mutableListOf<PaymentId>()
     private val statistics = entityManagerFactory.unwrap(SessionFactory::class.java).statistics
@@ -108,8 +74,6 @@ class UnknownPaymentResolverIntegrationTest(
         created.forEach { jdbcTemplate.update("update t_payment_attempt set status = 'DECLINED' where id = ? and status = 'UNKNOWN'", it.value) }
         // 커서가 이 테스트의 행 사이에 남지 않게 한 바퀴를 돌려 끝에 닿게 한다(닫은 행은 조회되지 않는다).
         resolver.resolveUnknown()
-        gateway.failFor.clear()
-        gateway.queried.clear()
     }
 
     private val cancellationId = UUID.randomUUID()
@@ -142,8 +106,8 @@ class UnknownPaymentResolverIntegrationTest(
         assertEquals("UNKNOWN", status(staysUnknown))
         assertEquals("APPROVED", status(approvedAtOnce))
         assertEquals("DECLINED", status(declinedAtOnce))
-        assertTrue(gateway.queried.containsAll(listOf(resolvesToApproved, resolvesToDeclined, staysUnknown)))
-        assertTrue(approvedAtOnce !in gateway.queried && declinedAtOnce !in gateway.queried, "UNKNOWN이 아닌 시도는 조회하지 않는다")
+        assertTrue(gateway.queried().containsAll(listOf(resolvesToApproved, resolvesToDeclined, staysUnknown)))
+        assertTrue(approvedAtOnce !in gateway.queried() && declinedAtOnce !in gateway.queried(), "UNKNOWN이 아닌 시도는 조회하지 않는다")
     }
 
     /** 주문 없이 승인 시도 행만 JDBC로 넣는다. 주문마다 새 `order_id`라 진행 중 승인 unique에 걸리지 않는다. */
@@ -193,7 +157,7 @@ class UnknownPaymentResolverIntegrationTest(
 
         resolver.resolveUnknown()
 
-        assertTrue(PaymentId(cancellationId) !in gateway.queried, "취소 시도를 조회했다")
+        assertTrue(PaymentId(cancellationId) !in gateway.queried(), "취소 시도를 조회했다")
         assertEquals("UNKNOWN", status(PaymentId(cancellationId)))
     }
 
@@ -220,7 +184,7 @@ class UnknownPaymentResolverIntegrationTest(
 
         resolver.resolveUnknown()
 
-        assertEquals(listOf(first, second, third), gateway.queried.filter { it in setOf(first, second, third) })
+        assertEquals(listOf(first, second, third), gateway.queried().filter { it in setOf(first, second, third) })
     }
 
     @Test
@@ -228,14 +192,14 @@ class UnknownPaymentResolverIntegrationTest(
         val before = attemptAt("4642", PaymentAttemptStatus.UNKNOWN)
         val failing = attemptAt("4652", PaymentAttemptStatus.UNKNOWN)
         val after = attemptAt("4662", PaymentAttemptStatus.UNKNOWN)
-        gateway.failFor += failing
+        gateway.failQuery(failing)
 
         resolver.resolveUnknown()
 
         assertEquals("APPROVED", status(before))
         assertEquals("UNKNOWN", status(failing))
         assertEquals("APPROVED", status(after))
-        assertTrue(failing in gateway.queried)
+        assertTrue(failing in gateway.queried())
     }
 
     @Test
@@ -247,11 +211,11 @@ class UnknownPaymentResolverIntegrationTest(
         try {
             val run = executor.submit { resolver.resolveUnknown() }
             assertFailsWith<TimeoutException> { run.get(500, TimeUnit.MILLISECONDS) }
-            assertTrue(gateway.queried.isEmpty(), "락을 쥔 동안 조회했다: ${gateway.queried}")
+            assertTrue(gateway.queried().isEmpty(), "락을 쥔 동안 조회했다: ${gateway.queried()}")
             distributedLock.release(UnknownPaymentResolver.LOCK_KEY, token)
             released = true
             run.get(5, TimeUnit.SECONDS)
-            assertTrue(waiting in gateway.queried, "락이 풀린 뒤 조회하지 않았다")
+            assertTrue(waiting in gateway.queried(), "락이 풀린 뒤 조회하지 않았다")
         } finally {
             if (!released) distributedLock.release(UnknownPaymentResolver.LOCK_KEY, token)
             executor.shutdownNow()
@@ -288,7 +252,7 @@ class UnknownPaymentResolverIntegrationTest(
 
         resolver.resolveUnknown()
 
-        assertTrue(handedOver !in gateway.queried, "넘긴 시도를 조회했다")
+        assertTrue(handedOver !in gateway.queried(), "넘긴 시도를 조회했다")
         assertEquals("UNKNOWN", status(handedOver))
         assertEquals("APPROVED", status(resolvable))
         assertTrue(handedOver !in repository.findUnknownAuthorizationIds(null, 10_000))

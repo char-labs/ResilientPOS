@@ -8,7 +8,6 @@ import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
-import org.springframework.beans.factory.annotation.Autowired
 
 /**
  * 컬럼 타입과 폭을 값으로 고정한다.
@@ -18,7 +17,7 @@ import org.springframework.beans.factory.annotation.Autowired
  * 그래서 `numeric(19,0)`이나 `varchar(8)`로 좁히는 변경이 조용히 지나가고 운영에서야 값이 잘린다.
  */
 class PaymentAttemptSchemaTest(
-    @Autowired private val dataSource: DataSource,
+    private val dataSource: DataSource,
 ) : PostgresIntegrationTest() {
 
     @Test

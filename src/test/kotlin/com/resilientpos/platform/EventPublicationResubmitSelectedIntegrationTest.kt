@@ -10,7 +10,6 @@ import io.micrometer.core.instrument.MeterRegistry
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
-import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.jdbc.core.queryForObject
 
@@ -20,10 +19,10 @@ import org.springframework.jdbc.core.queryForObject
  * 작업은 다른 테스트가 남긴 `FAILED` 행도 읽으므로 기대값은 호출 직전의 `FAILED` 행 수다.
  */
 class EventPublicationResubmitSelectedIntegrationTest(
-    @Autowired private val resubmitter: EventPublicationResubmitter,
-    @Autowired private val orderFacade: OrderCommandFacade,
-    @Autowired private val jdbcTemplate: JdbcTemplate,
-    @Autowired private val meterRegistry: MeterRegistry,
+    private val resubmitter: EventPublicationResubmitter,
+    private val orderFacade: OrderCommandFacade,
+    private val jdbcTemplate: JdbcTemplate,
+    private val meterRegistry: MeterRegistry,
 ) : PostgresIntegrationTest() {
 
     /** 4500원은 끝자리가 0이라 FakePaymentGateway가 승인한다. fulfillment까지 끝나면 `order.paid` 발행 기록도 완료돼 있다. */
@@ -33,7 +32,7 @@ class EventPublicationResubmitSelectedIntegrationTest(
                 lines = listOf(OrderCommand.Create.Line("SKU-1", "아메리카노", Money.of("4500", OrderFixtures.krw), 1)),
             ),
         )
-        orderFacade.requestCheckout(OrderCommand.RequestCheckout(created.orderId, OrderFixtures.storeId, OrderFixtures.terminalId))
+        orderFacade.requestCheckout(OrderFixtures.requestCheckoutCommand(created.orderId, OrderFixtures.storeId, OrderFixtures.terminalId))
         val orderId = created.orderId.value
         awaitUntil("order.paid 발행 기록이 완료된다") {
             jdbcTemplate.queryForObject<Long>(

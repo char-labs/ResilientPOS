@@ -14,7 +14,6 @@ import kotlin.test.assertFails
 import kotlin.test.assertNull
 import kotlin.test.fail
 import org.apache.kafka.clients.consumer.ConsumerRecord
-import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.context.annotation.ClassPathScanningCandidateComponentProvider
 import org.springframework.core.io.support.PathMatchingResourcePatternResolver
 import org.springframework.core.type.filter.AnnotationTypeFilter
@@ -35,12 +34,12 @@ import tools.jackson.databind.node.ObjectNode
  * 규칙과 fixture 갱신 방법은 `docs/wiki/event-contract.md`가 정본이다.
  */
 class EventContractCompatibilityTest(
-    @Autowired private val converter: RecordMessageConverter,
-    @Autowired private val eventSerializer: EventSerializer,
-    @Autowired private val jsonMapper: JsonMapper,
-    @Autowired private val kafkaTemplate: KafkaTemplate<Any, Any>,
-    @Autowired private val meterRegistry: MeterRegistry,
-    @Autowired private val jdbcTemplate: JdbcTemplate,
+    private val converter: RecordMessageConverter,
+    private val eventSerializer: EventSerializer,
+    private val jsonMapper: JsonMapper,
+    private val kafkaTemplate: KafkaTemplate<Any, Any>,
+    private val meterRegistry: MeterRegistry,
+    private val jdbcTemplate: JdbcTemplate,
 ) : PostgresIntegrationTest() {
 
     @Test

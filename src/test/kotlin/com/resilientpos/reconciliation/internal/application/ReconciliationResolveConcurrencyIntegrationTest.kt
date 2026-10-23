@@ -18,7 +18,6 @@ import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
-import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.jdbc.core.JdbcTemplate
 
 /**
@@ -28,9 +27,9 @@ import org.springframework.jdbc.core.JdbcTemplate
  * 두 요청은 사유가 다르다. 해소 기록은 둘 중 하나의 사유와 일치해야 한다.
  */
 class ReconciliationResolveConcurrencyIntegrationTest(
-    @Autowired private val reconciliationManagement: ReconciliationManagement,
-    @Autowired private val jdbcTemplate: JdbcTemplate,
-    @Autowired private val meterRegistry: MeterRegistry,
+    private val reconciliationManagement: ReconciliationManagement,
+    private val jdbcTemplate: JdbcTemplate,
+    private val meterRegistry: MeterRegistry,
 ) : PostgresIntegrationTest() {
 
     @Test

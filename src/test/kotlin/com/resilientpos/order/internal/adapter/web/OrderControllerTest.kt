@@ -25,7 +25,6 @@ import org.junit.jupiter.api.BeforeEach
 import org.mockito.BDDMockito.given
 import org.mockito.Mockito.verify
 import org.mockito.Mockito.verifyNoInteractions
-import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.restdocs.test.autoconfigure.AutoConfigureRestDocs
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest
 import org.springframework.dao.ConcurrencyFailureException
@@ -52,7 +51,7 @@ import org.springframework.test.web.servlet.post
 @WebMvcTest(OrderController::class)
 @AutoConfigureRestDocs
 class OrderControllerTest(
-    @Autowired private val mockMvc: MockMvc,
+    private val mockMvc: MockMvc,
 ) {
 
     @MockitoBean
@@ -390,7 +389,7 @@ class OrderControllerTest(
 
         private fun command(
             lines: List<OrderCommand.Create.Line> = listOf(OrderFixtures.line("4500", 2)),
-        ) = OrderCommand.Create(
+        ) = OrderFixtures.createOrderCommand(
             storeId = StoreId(UUID.fromString(STORE_ID)),
             terminalId = TerminalId(UUID.fromString(TERMINAL_ID)),
             clientOrderId = ClientOrderId(UUID.fromString(CLIENT_ORDER_ID)),

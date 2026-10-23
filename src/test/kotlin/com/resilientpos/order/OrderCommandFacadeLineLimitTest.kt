@@ -40,7 +40,7 @@ class OrderCommandFacadeLineLimitTest {
 
     private fun command(lineCount: Int): OrderCommand.Create {
         val krw = Currency.getInstance("KRW")
-        return OrderCommand.Create(
+        return OrderFixtures.createOrderCommand(
             storeId = StoreId(UUID.randomUUID()),
             terminalId = TerminalId(UUID.randomUUID()),
             clientOrderId = ClientOrderId(UUID.randomUUID()),

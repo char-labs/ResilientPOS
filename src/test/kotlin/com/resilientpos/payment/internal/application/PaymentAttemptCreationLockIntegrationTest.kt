@@ -5,6 +5,7 @@ import com.resilientpos.foundation.IdentifierGenerator
 import com.resilientpos.foundation.Money
 import com.resilientpos.order.OrderFixtures
 import com.resilientpos.payment.PaymentCommand
+import com.resilientpos.payment.PaymentFixtures
 import com.resilientpos.payment.PaymentManagement
 import com.resilientpos.payment.internal.domain.PaymentAttempt
 import com.resilientpos.payment.internal.domain.PaymentAttemptRepository
@@ -19,7 +20,6 @@ import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
-import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.jdbc.core.JdbcTemplate
 
 /**
@@ -30,11 +30,11 @@ import org.springframework.jdbc.core.JdbcTemplate
  * 락이 없으면 늦은 요청은 시도를 찾지 못하고 넣다가 unique에 걸려 실패한다.
  */
 class PaymentAttemptCreationLockIntegrationTest(
-    @Autowired private val paymentManagement: PaymentManagement,
-    @Autowired private val repository: PaymentAttemptRepository,
-    @Autowired private val identifierGenerator: IdentifierGenerator,
-    @Autowired private val clock: Clock,
-    @Autowired private val jdbcTemplate: JdbcTemplate,
+    private val paymentManagement: PaymentManagement,
+    private val repository: PaymentAttemptRepository,
+    private val identifierGenerator: IdentifierGenerator,
+    private val clock: Clock,
+    private val jdbcTemplate: JdbcTemplate,
 ) : PostgresIntegrationTest() {
 
     private fun attempts(orderId: UUID): List<Map<String, Any?>> = jdbcTemplate.queryForList(
@@ -45,7 +45,7 @@ class PaymentAttemptCreationLockIntegrationTest(
     @Test
     fun `같은 checkout의 생성이 겹치면 늦은 요청이 앞 요청의 시도를 돌려받는다`() {
         val orderId = UUID.randomUUID()
-        val command = PaymentCommand.CreateAttempt(
+        val command = PaymentFixtures.createAttemptCommand(
             orderId = orderId,
             storeId = StoreId(UUID.randomUUID()),
             terminalId = TerminalId(UUID.randomUUID()),

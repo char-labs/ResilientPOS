@@ -5,6 +5,7 @@ import com.resilientpos.foundation.DomainException
 import com.resilientpos.foundation.Money
 import com.resilientpos.order.OrderCommand
 import com.resilientpos.order.OrderCommandFacade
+import com.resilientpos.order.OrderFixtures
 import com.resilientpos.order.OrderId
 import com.resilientpos.order.OrderStatus
 import com.resilientpos.store.StoreId
@@ -22,7 +23,6 @@ import org.junit.jupiter.api.BeforeEach
 import org.mockito.BDDMockito.given
 import org.mockito.Mockito.verify
 import org.mockito.Mockito.verifyNoInteractions
-import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.restdocs.test.autoconfigure.AutoConfigureRestDocs
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest
 import org.springframework.dao.CannotAcquireLockException
@@ -49,7 +49,7 @@ import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
 @WebMvcTest(OrderController::class)
 @AutoConfigureRestDocs
 class OrderCheckoutControllerTest(
-    @Autowired private val mockMvc: MockMvc,
+    private val mockMvc: MockMvc,
 ) {
 
     @MockitoBean
@@ -172,7 +172,7 @@ class OrderCheckoutControllerTest(
         private const val STORE_ID = "018f6b1a-0000-7000-8000-0000000000a1"
         private const val TERMINAL_ID = "018f6b1a-0000-7000-8000-0000000000a2"
         private const val ORDER_ID = "00000000-0000-0000-0000-0000000000a1"
-        private val COMMAND = OrderCommand.RequestCheckout(OrderId(UUID.fromString(ORDER_ID)), StoreId(UUID.fromString(STORE_ID)), TerminalId(UUID.fromString(TERMINAL_ID)))
+        private val COMMAND = OrderFixtures.requestCheckoutCommand(OrderId(UUID.fromString(ORDER_ID)), StoreId(UUID.fromString(STORE_ID)), TerminalId(UUID.fromString(TERMINAL_ID)))
         private val krw: Currency = Currency.getInstance("KRW")
 
         private val PATH_PARAMETERS = pathParameters(parameterWithName("orderId").description("checkout을 요청할 주문 ID(UUID)"))

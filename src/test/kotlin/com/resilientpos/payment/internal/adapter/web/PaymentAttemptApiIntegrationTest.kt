@@ -7,8 +7,6 @@ import com.resilientpos.terminal.registerTerminal
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import org.springframework.beans.factory.annotation.Autowired
-import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc
 import org.springframework.http.MediaType
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.test.web.servlet.MockMvc
@@ -23,12 +21,11 @@ import tools.jackson.databind.ObjectMapper
  * 금액 끝자리 1은 [com.resilientpos.payment.internal.adapter.gateway.FakePaymentGateway]가 거절한다.
  * 같은 금액의 재결제도 다시 거절되므로 새 시도의 결말은 단언하지 않고 개수·순서·paymentId만 본다.
  */
-@AutoConfigureMockMvc
 class PaymentAttemptApiIntegrationTest(
-    @Autowired private val mockMvc: MockMvc,
-    @Autowired private val objectMapper: ObjectMapper,
-    @Autowired private val terminals: TerminalManagement,
-    @Autowired private val jdbcTemplate: JdbcTemplate,
+    private val mockMvc: MockMvc,
+    private val objectMapper: ObjectMapper,
+    private val terminals: TerminalManagement,
+    private val jdbcTemplate: JdbcTemplate,
 ) : PostgresIntegrationTest() {
 
     private val terminal = terminals.registerTerminal()

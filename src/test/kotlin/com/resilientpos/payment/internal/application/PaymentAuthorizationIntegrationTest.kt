@@ -3,6 +3,7 @@ package com.resilientpos.payment.internal.application
 import com.resilientpos.KafkaTestSupport
 import com.resilientpos.PostgresIntegrationTest
 import com.resilientpos.awaitUntil
+import com.resilientpos.foundation.Money
 import com.resilientpos.order.OrderCommand
 import com.resilientpos.order.OrderCommandFacade
 import com.resilientpos.order.OrderFixtures
@@ -12,77 +13,32 @@ import com.resilientpos.payment.PaymentCommand
 import com.resilientpos.payment.PaymentEvent
 import com.resilientpos.payment.PaymentId
 import com.resilientpos.payment.PaymentManagement
-import com.resilientpos.payment.internal.adapter.gateway.FakePaymentGateway
-import com.resilientpos.payment.internal.domain.AuthorizationOutcome
-import com.resilientpos.payment.internal.domain.AuthorizationRequest
-import com.resilientpos.payment.internal.domain.PaymentGateway
-import jakarta.persistence.EntityManagerFactory
-import java.math.BigInteger
+import com.resilientpos.payment.internal.adapter.gateway.ScriptedPaymentGateway
 import java.util.UUID
-import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
-import org.springframework.beans.factory.annotation.Autowired
-import org.springframework.boot.test.context.TestConfiguration
-import org.springframework.context.annotation.Bean
-import org.springframework.context.annotation.Primary
-import javax.sql.DataSource
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.jdbc.core.queryForList
 import org.springframework.jdbc.core.queryForObject
 import org.springframework.transaction.support.TransactionOperations
-import org.springframework.transaction.support.TransactionSynchronizationManager
 
 /**
  * checkout 요청부터 provider 결과가 시도에 적용되기까지를 끝까지 태운다.
  * 경로는 금액으로 고른다. [FakePaymentGateway]가 최소 단위 끝자리를 보고 결말을 정한다.
  *
- * 호출 횟수를 **시도별로** 센다. 컨텍스트 하나에 카운터 하나를 두면 앞 테스트의 늦게 도착한 호출이
- * 다음 테스트에 섞인다 — 리스너가 다른 스레드에서 돌기 때문이다.
+ * 호출 횟수와 호출 순간의 DB 자원은 공용 [ScriptedPaymentGateway]가 **시도별로** 적는다. 컨텍스트 하나에 카운터 하나를 두면
+ * 앞 테스트의 늦게 도착한 호출이 다음 테스트에 섞인다 — 리스너가 다른 스레드에서 돌기 때문이다.
  */
 class PaymentAuthorizationIntegrationTest(
-    @Autowired private val orderFacade: OrderCommandFacade,
-    @Autowired private val paymentManagement: PaymentManagement,
-    @Autowired private val jdbcTemplate: JdbcTemplate,
-    @Autowired private val gateway: ProbingGateway,
-    @Autowired private val transactions: TransactionOperations,
+    private val orderFacade: OrderCommandFacade,
+    private val paymentManagement: PaymentManagement,
+    private val jdbcTemplate: JdbcTemplate,
+    private val gateway: ScriptedPaymentGateway,
+    private val transactions: TransactionOperations,
 ) : PostgresIntegrationTest() {
-
-    /**
-     * [FakePaymentGateway]에 위임하면서 시도별 호출 횟수와, 호출 순간 이 스레드에 DB 자원(EntityManager·커넥션)이
-     * 묶여 있었는지를 적는다. 트랜잭션 여부만 보면 빈 트랜잭션 스코프에 묶인 EntityManager를 놓친다.
-     * 끝자리 3이면 어댑터가 포트 계약을 어기고 던진 경우를 흉내 낸다.
-     */
-    class ProbingGateway(private val emf: EntityManagerFactory, private val dataSource: DataSource) : PaymentGateway {
-        private val delegate = FakePaymentGateway()
-        private val calls = ConcurrentHashMap<PaymentId, AtomicInteger>()
-        private val resourceBound = ConcurrentHashMap<PaymentId, Boolean>()
-
-        override fun authorize(request: AuthorizationRequest): AuthorizationOutcome {
-            calls.computeIfAbsent(request.paymentId) { AtomicInteger() }.incrementAndGet()
-            resourceBound[request.paymentId] =
-                TransactionSynchronizationManager.hasResource(emf) || TransactionSynchronizationManager.hasResource(dataSource)
-            if (request.amount.amount.unscaledValue().mod(BigInteger.TEN).toInt() == 3) error("어댑터가 던졌다")
-            return delegate.authorize(request)
-        }
-
-        override fun query(request: AuthorizationRequest): AuthorizationOutcome = delegate.query(request)
-
-        fun callsFor(paymentId: PaymentId) = calls[paymentId]?.get() ?: 0
-
-        fun resourceBoundDuringCall(paymentId: PaymentId) = resourceBound[paymentId]
-    }
-
-    @TestConfiguration
-    class ProbingGatewayConfiguration {
-        @Bean
-        @Primary
-        fun probingGateway(emf: EntityManagerFactory, dataSource: DataSource) = ProbingGateway(emf, dataSource)
-    }
 
     private fun checkoutOrder(unitPrice: String): UUID =
         orderFacade.createAndRequestCheckout(OrderFixtures.createOrderCommand(lines = listOf(OrderFixtures.line(unitPrice)))).value
@@ -159,7 +115,7 @@ class PaymentAuthorizationIntegrationTest(
         assertEquals(false, deadLettered)
         val row = requireNotNull(attempt(orderId))
         assertEquals(PaymentAttemptStatus.APPROVED.name, row["status"])
-        assertEquals(0, gateway.callsFor(paymentId(row)))
+        assertEquals(0, gateway.authorizeCallsFor(paymentId(row)))
     }
 
     @Test
@@ -169,7 +125,7 @@ class PaymentAuthorizationIntegrationTest(
         val row = awaitStatus(orderId, PaymentAttemptStatus.APPROVED)
 
         // 쥐고 있으면 provider가 답할 때까지 커넥션이 묶인다(도메인 모델 §4.6·§6).
-        assertEquals(false, gateway.resourceBoundDuringCall(paymentId(row)))
+        assertEquals(false, gateway.resourceBoundDuringAuthorize(paymentId(row)))
     }
 
     @Test
@@ -191,8 +147,8 @@ class PaymentAuthorizationIntegrationTest(
             outer.setRollbackOnly()
         }
 
-        assertEquals(1, gateway.callsFor(paymentId))
-        assertEquals(false, gateway.resourceBoundDuringCall(paymentId))
+        assertEquals(1, gateway.authorizeCallsFor(paymentId))
+        assertEquals(false, gateway.resourceBoundDuringAuthorize(paymentId))
         assertEquals(
             PaymentAttemptStatus.APPROVED.name,
             jdbcTemplate.queryForObject<String>("select status from t_payment_attempt where id = ?", paymentId.value),
@@ -201,6 +157,7 @@ class PaymentAuthorizationIntegrationTest(
 
     @Test
     fun `어댑터가 모르는 예외를 던지면 재시도 없이 시도는 REQUESTED인 채 DLT로 간다`() {
+        gateway.throwOnAuthorize(Money.of("4503", OrderFixtures.krw))
         val orderId = checkoutOrder("4503")
 
         val deadLettered = awaitAuthorizationConsumed(orderId)
@@ -209,7 +166,7 @@ class PaymentAuthorizationIntegrationTest(
         val row = requireNotNull(attempt(orderId))
         assertEquals(PaymentAttemptStatus.REQUESTED.name, row["status"])
         // 재시도 허용 목록 밖이라 provider를 다시 부르지 않는다. 다시 부르면 멱등 키 없는 provider에서 이중 승인 위험이다.
-        assertEquals(1, gateway.callsFor(paymentId(row)))
+        assertEquals(1, gateway.authorizeCallsFor(paymentId(row)))
     }
 
     @Test
@@ -221,6 +178,6 @@ class PaymentAuthorizationIntegrationTest(
         val result = paymentManagement.authorize(PaymentCommand.Authorize(paymentId))
 
         assertEquals(PaymentAttemptStatus.APPROVED, result.status)
-        assertEquals(1, gateway.callsFor(paymentId))
+        assertEquals(1, gateway.authorizeCallsFor(paymentId))
     }
 }

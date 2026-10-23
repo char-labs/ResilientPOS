@@ -115,7 +115,7 @@ class PaymentManagementTest {
         }
     }
 
-    private fun command(amount: String) = PaymentCommand.CreateAttempt(
+    private fun command(amount: String) = PaymentFixtures.createAttemptCommand(
         orderId = orderId,
         storeId = StoreId(UUID.randomUUID()),
         terminalId = TerminalId(UUID.randomUUID()),
@@ -309,7 +309,7 @@ class PaymentManagementTest {
 
     /** 그 시도가 속한 매장의 단말이 보내는 재결제 요청. */
     private fun retryCommand(repository: RecordingRepository, paymentId: PaymentId) =
-        PaymentCommand.RetryAuthorization(paymentId, repository.stored.getValue(paymentId).storeId)
+        PaymentFixtures.retryAuthorizationCommand(paymentId, repository.stored.getValue(paymentId).storeId)
 
     @Test
     fun `다른 매장의 재결제는 없는 시도와 같아 거절하고 새 시도도 이벤트도 만들지 않는다`() {
@@ -321,7 +321,7 @@ class PaymentManagementTest {
         publisher.published.clear()
 
         val failure = assertFailsWith<DomainException> {
-            management.retryAuthorization(PaymentCommand.RetryAuthorization(declined, StoreId(UUID.randomUUID())))
+            management.retryAuthorization(PaymentFixtures.retryAuthorizationCommand(declined, StoreId(UUID.randomUUID())))
         }
 
         assertEquals(PaymentAttempt.PAYMENT_ATTEMPT_NOT_FOUND, failure.code)
@@ -409,7 +409,7 @@ class PaymentManagementTest {
         publisher.published.clear()
 
         val failure = assertFailsWith<DomainException> {
-            management.retryAuthorization(PaymentCommand.RetryAuthorization(cancellation.id, cancellation.storeId))
+            management.retryAuthorization(PaymentFixtures.retryAuthorizationCommand(cancellation.id, cancellation.storeId))
         }
 
         assertEquals(PaymentAttempt.PAYMENT_NOT_RETRYABLE, failure.code)
@@ -423,7 +423,7 @@ class PaymentManagementTest {
         val management = management(RecordingRepository(), RecordingPublisher())
 
         val failure = assertFailsWith<DomainException> {
-            management.retryAuthorization(PaymentCommand.RetryAuthorization(PaymentId(UUID.randomUUID()), StoreId(UUID.randomUUID())))
+            management.retryAuthorization(PaymentFixtures.retryAuthorizationCommand(PaymentId(UUID.randomUUID()), StoreId(UUID.randomUUID())))
         }
 
         assertEquals(PaymentAttempt.PAYMENT_ATTEMPT_NOT_FOUND, failure.code)
@@ -592,7 +592,7 @@ class PaymentManagementTest {
         publisher.updatedBeforePublish.clear()
 
         val result = management.resolveFromReconciliation(
-            PaymentCommand.ResolveFromReconciliation(unknown, PaymentCommand.ResolveFromReconciliation.Conclusion.APPROVED, "REF-9"),
+            PaymentFixtures.resolveFromReconciliationCommand(unknown, PaymentCommand.ResolveFromReconciliation.Conclusion.APPROVED, "REF-9"),
         )
 
         assertEquals(PaymentCommand.ResolveFromReconciliation.Result(unknown, PaymentAttemptStatus.APPROVED), result)
@@ -614,7 +614,7 @@ class PaymentManagementTest {
         val unknown = handedOverAttempt(management, publisher, repository)
 
         val result = management.resolveFromReconciliation(
-            PaymentCommand.ResolveFromReconciliation(unknown, PaymentCommand.ResolveFromReconciliation.Conclusion.DECLINED, null),
+            PaymentFixtures.resolveFromReconciliationCommand(unknown, PaymentCommand.ResolveFromReconciliation.Conclusion.DECLINED, null),
         )
 
         assertEquals(PaymentCommand.ResolveFromReconciliation.Result(unknown, PaymentAttemptStatus.DECLINED), result)
@@ -634,7 +634,7 @@ class PaymentManagementTest {
         publisher.published.clear()
 
         val result = management.resolveFromReconciliation(
-            PaymentCommand.ResolveFromReconciliation(unknown, PaymentCommand.ResolveFromReconciliation.Conclusion.DECLINED, null),
+            PaymentFixtures.resolveFromReconciliationCommand(unknown, PaymentCommand.ResolveFromReconciliation.Conclusion.DECLINED, null),
         )
 
         assertEquals(PaymentCommand.ResolveFromReconciliation.Result(unknown, PaymentAttemptStatus.APPROVED), result)
@@ -651,7 +651,7 @@ class PaymentManagementTest {
 
         val failure = assertFailsWith<DomainException> {
             management.resolveFromReconciliation(
-                PaymentCommand.ResolveFromReconciliation(unknown, PaymentCommand.ResolveFromReconciliation.Conclusion.APPROVED, "REF"),
+                PaymentFixtures.resolveFromReconciliationCommand(unknown, PaymentCommand.ResolveFromReconciliation.Conclusion.APPROVED, "REF"),
             )
         }
 
@@ -666,7 +666,7 @@ class PaymentManagementTest {
 
         val failure = assertFailsWith<DomainException> {
             management.resolveFromReconciliation(
-                PaymentCommand.ResolveFromReconciliation(PaymentId(UUID.randomUUID()), PaymentCommand.ResolveFromReconciliation.Conclusion.DECLINED, null),
+                PaymentFixtures.resolveFromReconciliationCommand(PaymentId(UUID.randomUUID()), PaymentCommand.ResolveFromReconciliation.Conclusion.DECLINED, null),
             )
         }
 

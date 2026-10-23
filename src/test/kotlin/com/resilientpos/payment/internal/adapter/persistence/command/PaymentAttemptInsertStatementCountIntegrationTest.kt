@@ -3,7 +3,7 @@ package com.resilientpos.payment.internal.adapter.persistence.command
 import com.resilientpos.PostgresIntegrationTest
 import com.resilientpos.foundation.IdentifierGenerator
 import com.resilientpos.foundation.Money
-import com.resilientpos.payment.PaymentCommand
+import com.resilientpos.payment.PaymentFixtures
 import com.resilientpos.payment.internal.domain.PaymentAttempt
 import com.resilientpos.payment.internal.domain.PaymentAttemptRepository
 import com.resilientpos.store.StoreId
@@ -18,7 +18,6 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import org.hibernate.SessionFactory
 import org.hibernate.stat.Statistics
-import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.transaction.support.TransactionTemplate
 
 /**
@@ -33,11 +32,11 @@ import org.springframework.transaction.support.TransactionTemplate
  * 제대로 고치려면 `statement_inspector`로 자기 스레드의 문장만 세야 하고, 그것은 별도 PR이 한다.
  */
 class PaymentAttemptInsertStatementCountIntegrationTest(
-    @Autowired private val repository: PaymentAttemptRepository,
-    @Autowired private val transaction: TransactionTemplate,
-    @Autowired private val identifierGenerator: IdentifierGenerator,
-    @Autowired private val clock: Clock,
-    @Autowired entityManagerFactory: EntityManagerFactory,
+    private val repository: PaymentAttemptRepository,
+    private val transaction: TransactionTemplate,
+    private val identifierGenerator: IdentifierGenerator,
+    private val clock: Clock,
+    entityManagerFactory: EntityManagerFactory,
 ) : PostgresIntegrationTest() {
 
     private val krw: Currency = Currency.getInstance("KRW")
@@ -58,7 +57,7 @@ class PaymentAttemptInsertStatementCountIntegrationTest(
     @Test
     fun `새 시도 저장은 INSERT 한 번으로 끝난다`() {
         val attempt = PaymentAttempt.create(
-            PaymentCommand.CreateAttempt(
+            PaymentFixtures.createAttemptCommand(
                 orderId = UUID.randomUUID(),
                 storeId = StoreId(UUID.randomUUID()),
                 terminalId = TerminalId(UUID.randomUUID()),

@@ -7,8 +7,6 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
-import org.springframework.beans.factory.annotation.Autowired
-import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc
 import org.springframework.data.redis.connection.RedisConnectionFactory
 import org.springframework.data.redis.serializer.JdkSerializationRedisSerializer
 import org.springframework.test.web.servlet.MockMvc
@@ -20,10 +18,9 @@ import jakarta.servlet.http.Cookie
  * 세션 속성이 Redis에 JSON으로 저장되고, 허용 목록 밖 타입이나 JDK 형식으로 남은 세션은 역직렬화되지 않고 401(다시 로그인)이 되는지
  * 실제 Redis로 검사한다. Docker가 필요하다.
  */
-@AutoConfigureMockMvc
 class OwnerSessionSerializationIntegrationTest(
-    @Autowired private val mockMvc: MockMvc,
-    @Autowired private val redis: RedisConnectionFactory,
+    private val mockMvc: MockMvc,
+    private val redis: RedisConnectionFactory,
 ) : PostgresIntegrationTest() {
 
     private val context = "sessionAttr:SPRING_SECURITY_CONTEXT".toByteArray()

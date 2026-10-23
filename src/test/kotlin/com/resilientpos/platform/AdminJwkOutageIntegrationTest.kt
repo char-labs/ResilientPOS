@@ -10,12 +10,10 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.extension.ExtendWith
-import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.security.oauth2.server.resource.autoconfigure.JwkSetUriJwtDecoderBuilderCustomizer
 import org.springframework.boot.test.context.TestConfiguration
 import org.springframework.boot.test.system.CapturedOutput
 import org.springframework.boot.test.system.OutputCaptureExtension
-import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Import
 import org.springframework.http.HttpHeaders
@@ -36,11 +34,10 @@ private val SECURITY_HEADERS = listOf("X-Content-Type-Options", "X-Frame-Options
  * `AuthenticationServiceException`이라, resource server 실패 처리기가 다시 던지는 동작에 기대는지 실제 체인으로 고정한다.
  * JWK 응답을 바꾸는 설정 때문에 컨텍스트가 하나 더 뜬다(받아들임).
  */
-@AutoConfigureMockMvc
 @ExtendWith(OutputCaptureExtension::class)
 @Import(AdminJwkOutageIntegrationTest.JwkOutageStub::class)
 class AdminJwkOutageIntegrationTest(
-    @Autowired private val mockMvc: MockMvc,
+    private val mockMvc: MockMvc,
 ) : PostgresIntegrationTest() {
 
     @AfterEach

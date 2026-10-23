@@ -6,7 +6,7 @@ import com.resilientpos.foundation.DomainException
 import com.resilientpos.foundation.IdentifierGenerator
 import com.resilientpos.foundation.Money
 import com.resilientpos.payment.PaymentAttemptStatus
-import com.resilientpos.payment.PaymentCommand
+import com.resilientpos.payment.PaymentFixtures
 import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.TerminalId
 import java.time.Instant
@@ -36,7 +36,7 @@ class PaymentAttemptConfirmationTest {
 
     private fun requested(): PaymentAttempt =
         PaymentAttempt.create(
-            PaymentCommand.CreateAttempt(
+            PaymentFixtures.createAttemptCommand(
                 orderId = UUID.fromString("00000000-0000-0000-0000-0000000000a1"),
                 storeId = StoreId(UUID.randomUUID()),
                 terminalId = TerminalId(UUID.randomUUID()),

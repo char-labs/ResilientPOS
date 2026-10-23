@@ -5,24 +5,20 @@ import com.resilientpos.awaitUntil
 import com.resilientpos.foundation.DomainErrorKind
 import com.resilientpos.foundation.DomainException
 import com.resilientpos.foundation.Money
-import com.resilientpos.order.OrderCommand
 import com.resilientpos.order.OrderCommandFacade
 import com.resilientpos.order.OrderFixtures
 import com.resilientpos.order.createAndRequestCheckout
 import com.resilientpos.order.orderStatus
 import com.resilientpos.payment.PaymentAttemptStatus
 import com.resilientpos.payment.PaymentCommand
+import com.resilientpos.payment.PaymentFixtures
 import com.resilientpos.payment.PaymentId
 import com.resilientpos.payment.PaymentManagement
-import com.resilientpos.payment.internal.adapter.gateway.FakePaymentGateway
-import com.resilientpos.payment.internal.domain.AuthorizationOutcome
-import com.resilientpos.payment.internal.domain.AuthorizationRequest
+import com.resilientpos.payment.internal.adapter.gateway.ScriptedPaymentGateway
 import com.resilientpos.payment.internal.domain.PaymentAttempt
 import com.resilientpos.payment.internal.domain.PaymentAttemptRepository
-import com.resilientpos.payment.internal.domain.PaymentGateway
 import com.resilientpos.store.StoreId
 import java.util.UUID
-import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -30,10 +26,6 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
-import org.springframework.beans.factory.annotation.Autowired
-import org.springframework.boot.test.context.TestConfiguration
-import org.springframework.context.annotation.Bean
-import org.springframework.context.annotation.Primary
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.jdbc.core.queryForObject
 import org.springframework.transaction.support.TransactionOperations
@@ -42,38 +34,21 @@ import org.springframework.transaction.support.TransactionOperations
  * 거절된 결제를 같은 checkout 회차에서 다시 시도해 주문이 결제되기까지를 끝까지 태운다.
  *
  * [FakePaymentGateway]는 금액으로만 결말을 정해서 같은 회차(같은 금액)의 재결제가 늘 다시 거절된다.
- * 그래서 이 테스트만 금액마다 **처음 한 번은 거절하고 그다음은 승인하는** gateway를 쓴다. 테스트마다 금액이 달라야 한다.
+ * 그래서 이 테스트는 공용 [ScriptedPaymentGateway]에 주문 금액마다 **처음 한 번은 거절하고 그다음은 승인하라고** 건다. 테스트마다 금액이 달라야 한다.
  */
 class PaymentRetryIntegrationTest(
-    @Autowired private val orderFacade: OrderCommandFacade,
-    @Autowired private val paymentManagement: PaymentManagement,
-    @Autowired private val jdbcTemplate: JdbcTemplate,
-    @Autowired private val transactions: TransactionOperations,
-    @Autowired private val repository: PaymentAttemptRepository,
+    private val orderFacade: OrderCommandFacade,
+    private val paymentManagement: PaymentManagement,
+    private val jdbcTemplate: JdbcTemplate,
+    private val transactions: TransactionOperations,
+    private val repository: PaymentAttemptRepository,
+    private val gateway: ScriptedPaymentGateway,
 ) : PostgresIntegrationTest() {
 
-    class DeclineFirstGateway : PaymentGateway {
-        private val declined = ConcurrentHashMap.newKeySet<Money>()
-
-        override fun authorize(request: AuthorizationRequest): AuthorizationOutcome =
-            if (declined.add(request.amount)) {
-                AuthorizationOutcome.Declined("DECLINED-${request.paymentId.value}")
-            } else {
-                AuthorizationOutcome.Approved("APPROVED-${request.paymentId.value}", request.amount)
-            }
-
-        override fun query(request: AuthorizationRequest): AuthorizationOutcome = AuthorizationOutcome.Unknown
+    private fun checkoutOrder(unitPrice: String): UUID {
+        gateway.declineFirstThenApprove(Money.of(unitPrice, OrderFixtures.krw))
+        return orderFacade.createAndRequestCheckout(OrderFixtures.createOrderCommand(lines = listOf(OrderFixtures.line(unitPrice)))).value
     }
-
-    @TestConfiguration
-    class DeclineFirstGatewayConfiguration {
-        @Bean
-        @Primary
-        fun declineFirstGateway() = DeclineFirstGateway()
-    }
-
-    private fun checkoutOrder(unitPrice: String): UUID =
-        orderFacade.createAndRequestCheckout(OrderFixtures.createOrderCommand(lines = listOf(OrderFixtures.line(unitPrice)))).value
 
     private fun attempts(orderId: UUID): List<Map<String, Any?>> = jdbcTemplate.queryForList(
         "select id, checkout_no, status from t_payment_attempt where order_id = ? order by id",
@@ -92,7 +67,7 @@ class PaymentRetryIntegrationTest(
         val orderId = checkoutOrder("4701")
         val declined = awaitDeclined(orderId)
 
-        val retried = paymentManagement.retryAuthorization(PaymentCommand.RetryAuthorization(declined, OrderFixtures.storeId))
+        val retried = paymentManagement.retryAuthorization(PaymentFixtures.retryAuthorizationCommand(declined, OrderFixtures.storeId))
 
         awaitUntil("주문이 PAID가 된다. 현재: ${jdbcTemplate.orderStatus(orderId)} ${attempts(orderId)}") {
             jdbcTemplate.orderStatus(orderId) == "PAID"
@@ -115,7 +90,7 @@ class PaymentRetryIntegrationTest(
                 executor.submit<PaymentCommand.RetryAuthorization.Result> {
                     ready.countDown()
                     ready.await(5, TimeUnit.SECONDS)
-                    paymentManagement.retryAuthorization(PaymentCommand.RetryAuthorization(declined, OrderFixtures.storeId))
+                    paymentManagement.retryAuthorization(PaymentFixtures.retryAuthorizationCommand(declined, OrderFixtures.storeId))
                 }
             }.map { it.get(15, TimeUnit.SECONDS) }
         } finally {
@@ -145,7 +120,7 @@ class PaymentRetryIntegrationTest(
 
             val other = executor.submit<DomainException> {
                 assertFailsWith<DomainException> {
-                    paymentManagement.retryAuthorization(PaymentCommand.RetryAuthorization(declined, StoreId(UUID.randomUUID())))
+                    paymentManagement.retryAuthorization(PaymentFixtures.retryAuthorizationCommand(declined, StoreId(UUID.randomUUID())))
                 }
             }
             // 매장 조건으로 잠그면 잠긴 행이 조회에 걸리지 않아 즉시 끝난다. 잠금 대기 한도는 3초다.
@@ -171,7 +146,7 @@ class PaymentRetryIntegrationTest(
 
         // 바깥 트랜잭션을 멈추고 새 시도를 따로 커밋하므로, 바깥을 롤백해도 새 시도는 남는다.
         transactions.executeWithoutResult { outer ->
-            paymentManagement.retryAuthorization(PaymentCommand.RetryAuthorization(declined, OrderFixtures.storeId))
+            paymentManagement.retryAuthorization(PaymentFixtures.retryAuthorizationCommand(declined, OrderFixtures.storeId))
             outer.setRollbackOnly()
         }
 

@@ -18,7 +18,6 @@ import java.time.Instant
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.context.ApplicationEventPublisher
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.jdbc.core.queryForList
@@ -26,10 +25,10 @@ import org.springframework.transaction.support.TransactionOperations
 
 /** checkout부터 결제 승인, 주문 `PAID`까지 리스너 셋이 잇따라 도는 흐름. */
 class OrderMarkPaidIntegrationTest(
-    @Autowired private val orderFacade: OrderCommandFacade,
-    @Autowired private val jdbcTemplate: JdbcTemplate,
-    @Autowired private val transactions: TransactionOperations,
-    @Autowired private val eventPublisher: ApplicationEventPublisher,
+    private val orderFacade: OrderCommandFacade,
+    private val jdbcTemplate: JdbcTemplate,
+    private val transactions: TransactionOperations,
+    private val eventPublisher: ApplicationEventPublisher,
 ) : PostgresIntegrationTest() {
 
     private fun status(orderId: OrderId) =

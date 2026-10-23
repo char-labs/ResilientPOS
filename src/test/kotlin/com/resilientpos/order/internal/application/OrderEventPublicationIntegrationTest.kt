@@ -4,7 +4,6 @@ import com.resilientpos.PostgresIntegrationTest
 import com.resilientpos.awaitUntil
 import com.resilientpos.foundation.Money
 import com.resilientpos.ofType
-import com.resilientpos.order.OrderCommand
 import com.resilientpos.order.OrderCommandFacade
 import com.resilientpos.order.OrderEvent
 import com.resilientpos.order.OrderFixtures
@@ -24,7 +23,6 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFails
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
-import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.TestConfiguration
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Import
@@ -42,11 +40,11 @@ import org.springframework.transaction.support.TransactionTemplate
 @Import(OrderEventPublicationIntegrationTest.ListenerConfiguration::class)
 @RecordApplicationEvents
 class OrderEventPublicationIntegrationTest(
-    @Autowired private val facade: OrderCommandFacade,
-    @Autowired private val listener: PaymentRequestedListener,
-    @Autowired private val eventSerializer: EventSerializer,
-    @Autowired private val jdbcTemplate: JdbcTemplate,
-    @Autowired private val transaction: TransactionTemplate,
+    private val facade: OrderCommandFacade,
+    private val listener: PaymentRequestedListener,
+    private val eventSerializer: EventSerializer,
+    private val jdbcTemplate: JdbcTemplate,
+    private val transaction: TransactionTemplate,
 ) : PostgresIntegrationTest() {
 
     /**
@@ -99,7 +97,7 @@ class OrderEventPublicationIntegrationTest(
     @Test
     fun `리스너가 성공하면 발행 기록이 완료로 표시된다`() {
         val orderId = facade.create(OrderFixtures.createOrderCommand()).orderId
-        facade.requestCheckout(OrderCommand.RequestCheckout(orderId, OrderFixtures.storeId, OrderFixtures.terminalId))
+        facade.requestCheckout(OrderFixtures.requestCheckoutCommand(orderId, OrderFixtures.storeId, OrderFixtures.terminalId))
 
         awaitUntil("발행 기록에 완료 시각이 찍힌다", publicationDump) { publications(orderId).singleOrNull()?.get("completion_date") != null }
         val publication = publications(orderId).single()
@@ -114,7 +112,7 @@ class OrderEventPublicationIntegrationTest(
         val orderId = facade.create(OrderFixtures.createOrderCommand()).orderId
         listener.failing = true
 
-        val result = facade.requestCheckout(OrderCommand.RequestCheckout(orderId, OrderFixtures.storeId, OrderFixtures.terminalId))
+        val result = facade.requestCheckout(OrderFixtures.requestCheckoutCommand(orderId, OrderFixtures.storeId, OrderFixtures.terminalId))
 
         assertEquals(OrderStatus.CHECKOUT_REQUESTED, result.status)
         assertEquals(
@@ -131,7 +129,7 @@ class OrderEventPublicationIntegrationTest(
         val orderId = facade.create(OrderFixtures.createOrderCommand()).orderId
 
         transaction.executeWithoutResult { status ->
-            facade.requestCheckout(OrderCommand.RequestCheckout(orderId, OrderFixtures.storeId, OrderFixtures.terminalId))
+            facade.requestCheckout(OrderFixtures.requestCheckoutCommand(orderId, OrderFixtures.storeId, OrderFixtures.terminalId))
             status.setRollbackOnly()
         }
 
@@ -139,7 +137,7 @@ class OrderEventPublicationIntegrationTest(
 
         // 시간에 기대지 않으려고 다른 주문의 이벤트가 끝까지 처리되는 것을 기다린다. 롤백된 이벤트가 전달됐다면 그 전에 도착했다.
         val otherOrderId = facade.create(OrderFixtures.createOrderCommand()).orderId
-        facade.requestCheckout(OrderCommand.RequestCheckout(otherOrderId, OrderFixtures.storeId, OrderFixtures.terminalId))
+        facade.requestCheckout(OrderFixtures.requestCheckoutCommand(otherOrderId, OrderFixtures.storeId, OrderFixtures.terminalId))
         awaitUntil("뒤에 발행한 이벤트가 완료된다", publicationDump) { publications(otherOrderId).singleOrNull()?.get("completion_date") != null }
         assertEquals(emptyList(), received(orderId))
         assertEquals("OPEN", jdbcTemplate.orderStatus(orderId.value))
@@ -148,7 +146,7 @@ class OrderEventPublicationIntegrationTest(
     @Test
     fun `저장된 이벤트를 복원하면 발행한 값과 같다`(events: ApplicationEvents) {
         val orderId = facade.create(OrderFixtures.createOrderCommand()).orderId
-        facade.requestCheckout(OrderCommand.RequestCheckout(orderId, OrderFixtures.storeId, OrderFixtures.terminalId))
+        facade.requestCheckout(OrderFixtures.requestCheckoutCommand(orderId, OrderFixtures.storeId, OrderFixtures.terminalId))
         awaitUntil("리스너가 이벤트를 받는다", publicationDump) { received(orderId).size == 1 }
         val published = received(orderId).single()
 

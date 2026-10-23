@@ -9,7 +9,7 @@ import com.resilientpos.order.OrderFixtures
 import com.resilientpos.contract.PaymentAttemptKind
 import com.resilientpos.order.createAndRequestCheckout
 import com.resilientpos.payment.PaymentAttemptStatus
-import com.resilientpos.payment.PaymentCommand
+import com.resilientpos.payment.PaymentFixtures
 import com.resilientpos.payment.PaymentManagement
 import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.TerminalId
@@ -17,7 +17,6 @@ import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals
-import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.jdbc.core.JdbcTemplate
 
 /**
@@ -25,9 +24,9 @@ import org.springframework.jdbc.core.JdbcTemplate
  * 리스너가 비동기라 조건이 만족될 때까지 짧게 반복해서 기다린다.
  */
 class PaymentAttemptFromOrderEventIntegrationTest(
-    @Autowired private val orderFacade: OrderCommandFacade,
-    @Autowired private val paymentManagement: PaymentManagement,
-    @Autowired private val jdbcTemplate: JdbcTemplate,
+    private val orderFacade: OrderCommandFacade,
+    private val paymentManagement: PaymentManagement,
+    private val jdbcTemplate: JdbcTemplate,
 ) : PostgresIntegrationTest() {
 
     private fun attempts(orderId: UUID) = jdbcTemplate.queryForList(
@@ -71,7 +70,7 @@ class PaymentAttemptFromOrderEventIntegrationTest(
 
         // 리스너가 같은 이벤트를 다시 받은 것과 같은 상황이다.
         val again = paymentManagement.createAttempt(
-            PaymentCommand.CreateAttempt(
+            PaymentFixtures.createAttemptCommand(
                 orderId = orderId,
                 storeId = StoreId(UUID.randomUUID()),
                 terminalId = TerminalId(UUID.randomUUID()),
@@ -94,7 +93,7 @@ class PaymentAttemptFromOrderEventIntegrationTest(
 
         // 같은 OrderPaymentRequested가 재배달된 것과 같은 상황이다. 재결제 의도가 아니라 같은 사실이다.
         val again = paymentManagement.createAttempt(
-            PaymentCommand.CreateAttempt(
+            PaymentFixtures.createAttemptCommand(
                 orderId = orderId,
                 storeId = StoreId(UUID.randomUUID()),
                 terminalId = TerminalId(UUID.randomUUID()),

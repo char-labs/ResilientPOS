@@ -16,12 +16,10 @@ import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import org.junit.jupiter.api.extension.ExtendWith
-import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.micrometer.tracing.test.autoconfigure.AutoConfigureTracing
 import org.springframework.boot.test.context.TestConfiguration
 import org.springframework.boot.test.system.CapturedOutput
 import org.springframework.boot.test.system.OutputCaptureExtension
-import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Import
 import org.springframework.http.MediaType
@@ -36,15 +34,14 @@ import tools.jackson.databind.json.JsonMapper
  * Modulith 모듈 span(`모듈 > 메서드`)은 보지 않는다. Modulith가 모듈별 interceptor를 정적 캐시(`ModuleEntryInterceptor.CACHE`, 2.1.1)에 두어
  * JVM에서 먼저 뜬 다른 테스트 컨텍스트의 `ObservationRegistry`를 계속 쓰기 때문이다. 단독 실행에서만 보이므로 compose 실측으로 확인한다.
  */
-@AutoConfigureMockMvc
 @AutoConfigureTracing
 @Import(TracePropagationIntegrationTest.SpanCapture::class)
 @ExtendWith(OutputCaptureExtension::class)
 class TracePropagationIntegrationTest(
-    @Autowired private val mockMvc: MockMvc,
-    @Autowired private val terminals: TerminalManagement,
-    @Autowired private val spans: InMemorySpanExporter,
-    @Autowired private val tracerProvider: SdkTracerProvider,
+    private val mockMvc: MockMvc,
+    private val terminals: TerminalManagement,
+    private val spans: InMemorySpanExporter,
+    private val tracerProvider: SdkTracerProvider,
 ) : PostgresIntegrationTest() {
 
     @TestConfiguration(proxyBeanMethods = false)

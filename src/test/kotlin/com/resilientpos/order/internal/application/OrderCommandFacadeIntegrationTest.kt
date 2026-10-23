@@ -26,7 +26,6 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
-import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.jdbc.core.queryForList
@@ -37,10 +36,10 @@ import org.springframework.transaction.support.TransactionTemplate
 
 @RecordApplicationEvents
 class OrderCommandFacadeIntegrationTest(
-    @Autowired private val facade: OrderCommandFacade,
-    @Autowired private val repository: OrderRepository,
-    @Autowired private val jdbcTemplate: JdbcTemplate,
-    @Autowired private val transaction: TransactionTemplate,
+    private val facade: OrderCommandFacade,
+    private val repository: OrderRepository,
+    private val jdbcTemplate: JdbcTemplate,
+    private val transaction: TransactionTemplate,
 ) : PostgresIntegrationTest() {
 
     private fun orderRowCount(terminalId: TerminalId, clientOrderId: ClientOrderId): Long =

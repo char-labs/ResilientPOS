@@ -3,7 +3,6 @@ package com.resilientpos.platform
 import com.resilientpos.terminal.MockTerminalRateLimiter
 import com.resilientpos.terminal.TerminalManagement
 import kotlin.test.Test
-import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest
 import org.springframework.test.context.ActiveProfiles
 import org.springframework.test.context.bean.override.mockito.MockitoBean
@@ -17,7 +16,7 @@ private const val DEMO_PAGE = "/terminal/index.html"
  */
 @MockTerminalRateLimiter
 @WebMvcTest(ApiAdviceTestController::class)
-class DemoPageHiddenByDefaultTest(@Autowired private val mockMvc: MockMvc) {
+class DemoPageHiddenByDefaultTest(private val mockMvc: MockMvc) {
 
     // 웹 슬라이스가 인증 인터셉터를 함께 띄우므로 그 의존을 채운다. 이 경로는 인터셉터 범위(v1) 밖이다.
     @MockitoBean
@@ -35,7 +34,7 @@ class DemoPageHiddenByDefaultTest(@Autowired private val mockMvc: MockMvc) {
 @MockTerminalRateLimiter
 @WebMvcTest(ApiAdviceTestController::class)
 @ActiveProfiles("demo")
-class DemoPageOpenInDemoProfileTest(@Autowired private val mockMvc: MockMvc) {
+class DemoPageOpenInDemoProfileTest(private val mockMvc: MockMvc) {
 
     @MockitoBean
     private lateinit var terminals: TerminalManagement

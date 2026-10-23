@@ -4,7 +4,6 @@ import com.resilientpos.PostgresIntegrationTest
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertFailsWith
-import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.jdbc.core.JdbcTemplate
 
@@ -14,7 +13,7 @@ import org.springframework.jdbc.core.JdbcTemplate
  * DB 제약 자체를 본다.
  */
 class FulfillmentUniqueOrderIntegrationTest(
-    @Autowired private val jdbcTemplate: JdbcTemplate,
+    private val jdbcTemplate: JdbcTemplate,
 ) : PostgresIntegrationTest() {
 
     private fun insert(orderId: UUID) {

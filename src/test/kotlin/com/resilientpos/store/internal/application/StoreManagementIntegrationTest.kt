@@ -4,7 +4,7 @@ import com.resilientpos.PostgresIntegrationTest
 import com.resilientpos.foundation.DomainErrorKind
 import com.resilientpos.foundation.DomainException
 import com.resilientpos.owner.OwnerId
-import com.resilientpos.store.StoreCommand
+import com.resilientpos.store.StoreFixtures
 import com.resilientpos.store.StoreId
 import com.resilientpos.store.StoreManagement
 import com.resilientpos.store.StoreView
@@ -13,19 +13,18 @@ import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
-import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.jdbc.core.queryForObject
 
 class StoreManagementIntegrationTest(
-    @Autowired private val stores: StoreManagement,
-    @Autowired private val jdbcTemplate: JdbcTemplate,
+    private val stores: StoreManagement,
+    private val jdbcTemplate: JdbcTemplate,
 ) : PostgresIntegrationTest() {
 
     private val ownerId = OwnerId(UUID.randomUUID())
     private val otherOwnerId = OwnerId(UUID.randomUUID())
 
-    private fun create(name: String, owner: OwnerId = ownerId) = stores.create(StoreCommand.Create(owner, name))
+    private fun create(name: String, owner: OwnerId = ownerId) = stores.create(StoreFixtures.createStoreCommand(owner, name))
 
     @Test
     fun `생성하면 trim한 이름과 점주로 한 행이 저장된다`() {

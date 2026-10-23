@@ -19,7 +19,6 @@ import kotlin.test.assertTrue
 import org.apache.kafka.clients.admin.AdminClientConfig
 import org.apache.kafka.common.TopicPartition
 import org.apache.kafka.common.errors.TimeoutException
-import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.kafka.core.KafkaAdmin
@@ -37,12 +36,12 @@ private const val REFRESHED_GAUGE = "event.kafka.dead-letter.unhandled.refreshed
  * 미처리 DLT gauge를 실제 브로커·DB로 센다. Docker가 필요하다. DLT 토픽과 두 기록 표를 다른 테스트와 함께 쓰므로 증가분으로 단언하고, 넣은 기록 행은 끝에 지운다.
  */
 class UnhandledDeadLetterMetricsIntegrationTest(
-    @Autowired private val kafkaTemplate: KafkaTemplate<Any, Any>,
-    @Autowired private val kafkaAdmin: KafkaAdmin,
-    @Autowired private val queries: DeadLetterHandledQueries,
-    @Autowired private val jdsl: JdslQueryExecutor,
-    @Autowired private val jdbcTemplate: JdbcTemplate,
-    @Autowired private val clock: Clock,
+    private val kafkaTemplate: KafkaTemplate<Any, Any>,
+    private val kafkaAdmin: KafkaAdmin,
+    private val queries: DeadLetterHandledQueries,
+    private val jdsl: JdslQueryExecutor,
+    private val jdbcTemplate: JdbcTemplate,
+    private val clock: Clock,
     @Value("\${resilientpos.kafka.topics}") private val topics: List<String>,
 ) : PostgresIntegrationTest() {
 

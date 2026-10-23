@@ -13,7 +13,6 @@ import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
-import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.context.ApplicationEventPublisher
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.modulith.events.core.EventSerializer
@@ -21,10 +20,10 @@ import org.springframework.transaction.support.TransactionOperations
 
 /** `OrderPaid`를 받으면 그 주문의 `Fulfillment`가 하나 생긴다. */
 class OrderPaidListenerIntegrationTest(
-    @Autowired private val jdbcTemplate: JdbcTemplate,
-    @Autowired private val transactions: TransactionOperations,
-    @Autowired private val eventPublisher: ApplicationEventPublisher,
-    @Autowired private val eventSerializer: EventSerializer,
+    private val jdbcTemplate: JdbcTemplate,
+    private val transactions: TransactionOperations,
+    private val eventPublisher: ApplicationEventPublisher,
+    private val eventSerializer: EventSerializer,
 ) : PostgresIntegrationTest() {
 
     private val krw: Currency = Currency.getInstance("KRW")

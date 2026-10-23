@@ -26,7 +26,6 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
-import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.jdbc.core.queryForObject
@@ -36,10 +35,10 @@ import org.springframework.jdbc.core.queryForObject
  * 커밋된 행을 JDBC로 세어 확인한다. 항목 트랜잭션이 하나인지는 Facade 결과가 아니라 롤백 뒤 남은 행으로 본다.
  */
 class SyncCommandFacadeIntegrationTest(
-    @Autowired private val facade: SyncCommandFacade,
-    @Autowired private val orders: OrderCommandFacade,
-    @Autowired private val jdbcTemplate: JdbcTemplate,
-    @Autowired private val meterRegistry: MeterRegistry,
+    private val facade: SyncCommandFacade,
+    private val orders: OrderCommandFacade,
+    private val jdbcTemplate: JdbcTemplate,
+    private val meterRegistry: MeterRegistry,
 ) : PostgresIntegrationTest() {
 
     private val terminalId = TerminalId(UUID.randomUUID())
@@ -86,7 +85,7 @@ class SyncCommandFacadeIntegrationTest(
     }
 
     private fun receive(vararg operations: SyncCommand.ReceiveBatch.Operation) =
-        facade.receiveBatch(SyncCommand.ReceiveBatch(terminalId, OrderFixtures.storeId, operations.toList()))
+        facade.receiveBatch(SyncFixtures.receiveBatchCommand(terminalId, OrderFixtures.storeId, operations.toList()))
 
     private fun orderRows(): Long =
         checkNotNull(jdbcTemplate.queryForObject<Long>("select count(*) from t_order where terminal_id = ?", terminalId.value))

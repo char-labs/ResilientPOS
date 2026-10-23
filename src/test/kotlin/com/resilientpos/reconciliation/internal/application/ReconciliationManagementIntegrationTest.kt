@@ -31,7 +31,6 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
-import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.jdbc.core.JdbcTemplate
 
 /**
@@ -40,9 +39,9 @@ import org.springframework.jdbc.core.JdbcTemplate
  * DB를 다른 테스트와 함께 쓰므로 단언은 이 테스트가 만든 case·시도만 보고, counter는 호출 전후의 차이로 본다.
  */
 class ReconciliationManagementIntegrationTest(
-    @Autowired private val reconciliationManagement: ReconciliationManagement,
-    @Autowired private val jdbcTemplate: JdbcTemplate,
-    @Autowired private val meterRegistry: MeterRegistry,
+    private val reconciliationManagement: ReconciliationManagement,
+    private val jdbcTemplate: JdbcTemplate,
+    private val meterRegistry: MeterRegistry,
 ) : PostgresIntegrationTest() {
 
     private fun opened(reason: PaymentReconciliationReason) = meterRegistry.counter("reconciliation.case.opened", "reason", reason.name).count()

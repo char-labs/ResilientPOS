@@ -7,22 +7,14 @@ import com.resilientpos.order.OrderCommandFacade
 import com.resilientpos.order.OrderFixtures
 import com.resilientpos.order.createAndRequestCheckout
 import com.resilientpos.order.orderStatus
-import com.resilientpos.payment.PaymentCommand
+import com.resilientpos.payment.PaymentFixtures
 import com.resilientpos.payment.PaymentId
 import com.resilientpos.payment.PaymentManagement
-import com.resilientpos.payment.internal.adapter.gateway.FakePaymentGateway
-import com.resilientpos.payment.internal.domain.AuthorizationOutcome
-import com.resilientpos.payment.internal.domain.AuthorizationRequest
-import com.resilientpos.payment.internal.domain.PaymentGateway
+import com.resilientpos.payment.internal.adapter.gateway.ScriptedPaymentGateway
 import java.util.UUID
-import java.util.concurrent.ConcurrentHashMap
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import org.springframework.beans.factory.annotation.Autowired
-import org.springframework.boot.test.context.TestConfiguration
-import org.springframework.context.annotation.Bean
-import org.springframework.context.annotation.Primary
 import org.springframework.jdbc.core.JdbcTemplate
 
 /**
@@ -31,38 +23,12 @@ import org.springframework.jdbc.core.JdbcTemplate
  * DB를 다른 테스트와 함께 쓰므로 단언은 이 테스트가 만든 주문·시도만 본다.
  */
 class PaymentUnknownToOrderIntegrationTest(
-    @Autowired private val resolver: UnknownPaymentResolver,
-    @Autowired private val orderFacade: OrderCommandFacade,
-    @Autowired private val paymentManagement: PaymentManagement,
-    @Autowired private val jdbcTemplate: JdbcTemplate,
+    private val resolver: UnknownPaymentResolver,
+    private val orderFacade: OrderCommandFacade,
+    private val paymentManagement: PaymentManagement,
+    private val jdbcTemplate: JdbcTemplate,
+    private val gateway: ScriptedPaymentGateway,
 ) : PostgresIntegrationTest() {
-
-    /**
-     * [FakePaymentGateway]에 위임하되 [RETRY_APPROVED_AMOUNT]에서만 같은 금액의 두 번째 paymentId(재결제)를 승인한다.
-     * Fake는 같은 금액을 다시 결과 불명으로 만들어 재결제 승인 경로를 밟을 수 없기 때문이다.
-     */
-    class RetryApprovingGateway : PaymentGateway {
-        private val delegate = FakePaymentGateway()
-        private val firstSeen = ConcurrentHashMap<Money, PaymentId>()
-
-        override fun authorize(request: AuthorizationRequest): AuthorizationOutcome {
-            val first = firstSeen.putIfAbsent(request.amount, request.paymentId)
-            return if (request.amount.amount.toPlainString().startsWith(RETRY_APPROVED_AMOUNT) && first != null && first != request.paymentId) {
-                AuthorizationOutcome.Approved("APPROVED-${request.paymentId.value}", request.amount)
-            } else {
-                delegate.authorize(request)
-            }
-        }
-
-        override fun query(request: AuthorizationRequest): AuthorizationOutcome = delegate.query(request)
-    }
-
-    @TestConfiguration
-    class RetryApprovingGatewayConfiguration {
-        @Bean
-        @Primary
-        fun retryApprovingGateway() = RetryApprovingGateway()
-    }
 
     private val created = mutableListOf<UUID>()
 
@@ -98,6 +64,8 @@ class PaymentUnknownToOrderIntegrationTest(
 
     @Test
     fun `조회로 거절된 시도를 재결제하면 새 시도가 승인되어 주문이 PAID가 된다`() {
+        // 기본 동작은 같은 금액의 재결제를 다시 결과 불명으로 만든다. 이 금액만 재결제를 승인하게 건다.
+        gateway.approveRetries(Money.of(RETRY_APPROVED_AMOUNT, OrderFixtures.krw))
         val orderId = checkoutOrder(RETRY_APPROVED_AMOUNT)
         val unknown = awaitFirstAttempt(orderId, "UNKNOWN")
 
@@ -107,7 +75,7 @@ class PaymentUnknownToOrderIntegrationTest(
         assertEquals(listOf("DECLINED"), attempts(orderId).map { it["status"] })
         assertEquals("CHECKOUT_REQUESTED", jdbcTemplate.orderStatus(orderId))
 
-        val retried = paymentManagement.retryAuthorization(PaymentCommand.RetryAuthorization(unknown, OrderFixtures.storeId))
+        val retried = paymentManagement.retryAuthorization(PaymentFixtures.retryAuthorizationCommand(unknown, OrderFixtures.storeId))
 
         awaitUntil("주문이 PAID가 된다. 현재: ${jdbcTemplate.orderStatus(orderId)} ${attempts(orderId)}") {
             jdbcTemplate.orderStatus(orderId) == "PAID"

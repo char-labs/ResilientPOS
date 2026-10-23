@@ -6,10 +6,9 @@ import org.flywaydb.core.Flyway
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
-import org.springframework.beans.factory.annotation.Autowired
 
 class SchemaMigrationTest(
-    @Autowired private val dataSource: DataSource,
+    private val dataSource: DataSource,
 ) : PostgresIntegrationTest() {
 
     @Test

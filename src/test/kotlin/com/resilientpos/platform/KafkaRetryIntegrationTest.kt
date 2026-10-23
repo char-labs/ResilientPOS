@@ -25,7 +25,6 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import org.mockito.ArgumentMatchers.any
 import org.mockito.Mockito.doAnswer
-import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.context.ApplicationEventPublisher
 import org.springframework.dao.TransientDataAccessResourceException
 import org.springframework.jdbc.core.JdbcTemplate
@@ -42,15 +41,14 @@ import org.springframework.transaction.support.TransactionOperations
  * 재시도 간격은 테스트 기반 클래스가 짧게 바꾸고 횟수는 운영 기본값(5회)을 그대로 쓴다.
  */
 class KafkaRetryIntegrationTest(
-    @Autowired private val orderFacade: OrderCommandFacade,
-    @Autowired private val jdbcTemplate: JdbcTemplate,
-    @Autowired private val transactions: TransactionOperations,
-    @Autowired private val eventPublisher: ApplicationEventPublisher,
-    @Autowired private val kafkaTemplate: KafkaTemplate<Any, Any>,
-    @Autowired private val meterRegistry: MeterRegistry,
-    // 두 Facade는 테스트 기반 클래스가 spy로 둔다. orderFacade와 같은 빈이고, 실패를 주입하는 쪽을 이름으로 구분한다.
-    @Autowired private val fulfillmentFacade: FulfillmentCommandFacade,
-    @Autowired private val spiedOrderFacade: OrderCommandFacade,
+    // 두 Facade는 테스트 기반 클래스가 spy로 둔다. 실패는 이 테스트가 만든 주문에만 건다.
+    private val orderFacade: OrderCommandFacade,
+    private val jdbcTemplate: JdbcTemplate,
+    private val transactions: TransactionOperations,
+    private val eventPublisher: ApplicationEventPublisher,
+    private val kafkaTemplate: KafkaTemplate<Any, Any>,
+    private val meterRegistry: MeterRegistry,
+    private val fulfillmentFacade: FulfillmentCommandFacade,
 ) : PostgresIntegrationTest() {
 
     /** 주문별로 남은 실패 횟수와 던질 예외. */
@@ -73,7 +71,7 @@ class KafkaRetryIntegrationTest(
         doAnswer { invocation ->
             markPaidCalls.computeIfAbsent(invocation.getArgument<OrderCommand.MarkPaid>(0).orderId.value) { AtomicInteger() }.incrementAndGet()
             invocation.callRealMethod()
-        }.`when`(spiedOrderFacade).markPaid(anyOf(OrderCommand.MarkPaid::class.java))
+        }.`when`(orderFacade).markPaid(anyOf(OrderCommand.MarkPaid::class.java))
     }
 
     /** Mockito의 `any`는 null을 돌려주어 Kotlin의 non-null 검사에 걸린다. 매처만 등록하고 검사를 건너뛴다. */
@@ -101,7 +99,7 @@ class KafkaRetryIntegrationTest(
         )
         failures?.let { failuresLeft[created.orderId.value] = AtomicInteger(it) }
         exception?.let { failure[created.orderId.value] = it }
-        orderFacade.requestCheckout(OrderCommand.RequestCheckout(created.orderId, OrderFixtures.storeId, OrderFixtures.terminalId))
+        orderFacade.requestCheckout(OrderFixtures.requestCheckoutCommand(created.orderId, OrderFixtures.storeId, OrderFixtures.terminalId))
         return created.orderId.value
     }
 
@@ -168,7 +166,7 @@ class KafkaRetryIntegrationTest(
         val before = deadLetters("payment.approved", "PAYMENT_APPROVAL_MISMATCH")
         // 픽스처 합계 3502원은 결과가 미확인이라 진짜 승인이 오지 않는다. 확정값과 다른 승인을 직접 낸다.
         val created = orderFacade.create(OrderFixtures.createOrderCommand())
-        orderFacade.requestCheckout(OrderCommand.RequestCheckout(created.orderId, OrderFixtures.storeId, OrderFixtures.terminalId))
+        orderFacade.requestCheckout(OrderFixtures.requestCheckoutCommand(created.orderId, OrderFixtures.storeId, OrderFixtures.terminalId))
         val orderId = created.orderId.value
         transactions.executeWithoutResult {
             eventPublisher.publishEvent(

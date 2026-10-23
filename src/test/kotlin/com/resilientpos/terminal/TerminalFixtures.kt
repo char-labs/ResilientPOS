@@ -1,5 +1,7 @@
 package com.resilientpos.terminal
 
+import com.navercorp.fixturemonkey.kotlin.giveMeKotlinBuilder
+import com.resilientpos.TestFixtureMonkey
 import com.resilientpos.store.StoreId
 import java.util.UUID
 import org.springframework.restdocs.headers.HeaderDocumentation.headerWithName
@@ -15,6 +17,25 @@ object TerminalFixtures {
     val AUTHORIZATION_HEADER = requestHeaders(
         headerWithName("Authorization").description("단말 토큰. Bearer 형식이며 없거나 유효하지 않으면 401 UNAUTHENTICATED"),
     )
+
+    /** `TerminalCommand` fixture. 파라미터 이름과 순서는 커맨드 생성자와 같다. */
+    fun registerCommand(storeId: StoreId = StoreId(UUID.randomUUID()), terminalCode: TerminalCode = uniqueTerminalCode()): TerminalCommand.Register =
+        TestFixtureMonkey.instance.giveMeKotlinBuilder<TerminalCommand.Register>()
+            .setExp(TerminalCommand.Register::storeId, storeId)
+            .setExp(TerminalCommand.Register::terminalCode, terminalCode)
+            .sample()
+
+    fun rotateCredentialCommand(storeId: StoreId, terminalId: TerminalId): TerminalCommand.RotateCredential =
+        TestFixtureMonkey.instance.giveMeKotlinBuilder<TerminalCommand.RotateCredential>()
+            .setExp(TerminalCommand.RotateCredential::storeId, storeId)
+            .setExp(TerminalCommand.RotateCredential::terminalId, terminalId)
+            .sample()
+
+    fun deactivateCommand(storeId: StoreId, terminalId: TerminalId): TerminalCommand.Deactivate =
+        TestFixtureMonkey.instance.giveMeKotlinBuilder<TerminalCommand.Deactivate>()
+            .setExp(TerminalCommand.Deactivate::storeId, storeId)
+            .setExp(TerminalCommand.Deactivate::terminalId, terminalId)
+            .sample()
 }
 
 /** 실제 [TerminalManagement.register]로 만든 단말. 통합 테스트가 본문·경로에 쓸 식별자와 요청 헤더를 한 곳에서 얻는다. */
@@ -26,6 +47,6 @@ data class RegisteredTerminal(val terminalId: TerminalId, val storeId: StoreId, 
 fun uniqueTerminalCode(): TerminalCode = TerminalCode("T-" + UUID.randomUUID().toString().take(8).uppercase())
 
 fun TerminalManagement.registerTerminal(storeId: StoreId = StoreId(UUID.randomUUID())): RegisteredTerminal {
-    val registered = register(TerminalCommand.Register(storeId, uniqueTerminalCode()))
+    val registered = register(TerminalFixtures.registerCommand(storeId))
     return RegisteredTerminal(registered.terminalId, storeId, registered.token)
 }

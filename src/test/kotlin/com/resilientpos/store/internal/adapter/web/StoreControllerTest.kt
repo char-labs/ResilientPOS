@@ -5,6 +5,7 @@ import com.resilientpos.foundation.DomainException
 import com.resilientpos.owner.OwnerId
 import com.resilientpos.platform.withCsrf
 import com.resilientpos.store.StoreCommand
+import com.resilientpos.store.StoreFixtures
 import com.resilientpos.store.StoreId
 import com.resilientpos.store.StoreManagement
 import com.resilientpos.store.StoreView
@@ -17,7 +18,6 @@ import kotlin.test.assertTrue
 import org.junit.jupiter.api.extension.ExtendWith
 import org.mockito.BDDMockito.given
 import org.mockito.Mockito.verifyNoInteractions
-import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.restdocs.test.autoconfigure.AutoConfigureRestDocs
 import org.springframework.boot.test.system.CapturedOutput
 import org.springframework.boot.test.system.OutputCaptureExtension
@@ -50,7 +50,7 @@ import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
 @AutoConfigureRestDocs
 @ExtendWith(OutputCaptureExtension::class)
 class StoreControllerTest(
-    @Autowired private val mockMvc: MockMvc,
+    private val mockMvc: MockMvc,
 ) {
 
     @MockitoBean
@@ -68,7 +68,7 @@ class StoreControllerTest(
 
     @Test
     fun `생성하면 201과 storeId name을 돌려주고 감사 로그에 점주와 매장만 남긴다`(output: CapturedOutput) {
-        given(management.create(StoreCommand.Create(OwnerId(OWNER_ID), "강남점"))).willReturn(StoreCommand.Create.Result(StoreId(STORE_ID), "강남점"))
+        given(management.create(StoreFixtures.createStoreCommand(OwnerId(OWNER_ID), "강남점"))).willReturn(StoreCommand.Create.Result(StoreId(STORE_ID), "강남점"))
 
         create("강남점")
             .andExpect(status().isCreated)
@@ -97,7 +97,7 @@ class StoreControllerTest(
 
     @Test
     fun `이름이 틀리면 400 INVALID_STORE_NAME이고 감사 로그가 없다`(output: CapturedOutput) {
-        given(management.create(StoreCommand.Create(OwnerId(OWNER_ID), " ")))
+        given(management.create(StoreFixtures.createStoreCommand(OwnerId(OWNER_ID), " ")))
             .willThrow(DomainException(Store.INVALID_STORE_NAME, "매장 이름은 1~100자여야 합니다", DomainErrorKind.INVALID))
 
         create(" ")

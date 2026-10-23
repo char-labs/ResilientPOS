@@ -15,7 +15,6 @@ import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
-import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.jdbc.core.queryForObject
 
@@ -26,11 +25,11 @@ import org.springframework.jdbc.core.queryForObject
  * 락이 없으면 늦은 요청은 주문을 찾지 못하고 넣다가 unique에 걸려 실패한다.
  */
 class OrderCreateLockIntegrationTest(
-    @Autowired private val facade: OrderCommandFacade,
-    @Autowired private val repository: OrderRepository,
-    @Autowired private val identifierGenerator: IdentifierGenerator,
-    @Autowired private val clock: Clock,
-    @Autowired private val jdbcTemplate: JdbcTemplate,
+    private val facade: OrderCommandFacade,
+    private val repository: OrderRepository,
+    private val identifierGenerator: IdentifierGenerator,
+    private val clock: Clock,
+    private val jdbcTemplate: JdbcTemplate,
 ) : PostgresIntegrationTest() {
 
     @Test

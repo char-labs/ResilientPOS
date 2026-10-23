@@ -10,7 +10,6 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import org.slf4j.LoggerFactory
-import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory
 import com.resilientpos.PostgresIntegrationTest
 import org.springframework.transaction.support.AbstractPlatformTransactionManager
@@ -22,11 +21,11 @@ import tools.jackson.databind.ObjectMapper
  * 프로퍼티 이름이 틀리면 Spring은 조용히 무시하므로, 적었다는 사실만으로는 적용됐다고 말할 수 없다.
  */
 class ResourceLimitConfigurationTest(
-    @Autowired private val mapper: ObjectMapper,
-    @Autowired private val dataSource: DataSource,
-    @Autowired private val entityManagerFactory: EntityManagerFactory,
-    @Autowired private val transactionManager: PlatformTransactionManager,
-    @Autowired private val redisConnectionFactory: LettuceConnectionFactory,
+    private val mapper: ObjectMapper,
+    private val dataSource: DataSource,
+    private val entityManagerFactory: EntityManagerFactory,
+    private val transactionManager: PlatformTransactionManager,
+    private val redisConnectionFactory: LettuceConnectionFactory,
 ) : PostgresIntegrationTest() {
 
     @Test

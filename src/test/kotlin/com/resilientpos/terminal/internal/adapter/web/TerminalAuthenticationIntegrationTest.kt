@@ -2,7 +2,7 @@ package com.resilientpos.terminal.internal.adapter.web
 
 import com.resilientpos.PostgresIntegrationTest
 import com.resilientpos.terminal.RegisteredTerminal
-import com.resilientpos.terminal.TerminalCommand
+import com.resilientpos.terminal.TerminalFixtures
 import com.resilientpos.terminal.TerminalManagement
 import com.resilientpos.terminal.registerTerminal
 import java.util.UUID
@@ -13,8 +13,6 @@ import kotlin.test.assertTrue
 import org.junit.jupiter.api.extension.ExtendWith
 import org.springframework.boot.test.system.CapturedOutput
 import org.springframework.boot.test.system.OutputCaptureExtension
-import org.springframework.beans.factory.annotation.Autowired
-import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc
 import org.springframework.http.MediaType
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.jdbc.core.queryForObject
@@ -28,12 +26,11 @@ import org.springframework.test.web.servlet.post
  * 인터셉터에서 던진 예외가 실제 advice를 거쳐 401 envelope가 되는지, 어떤 원인이든 같은 응답이고 쓰기가 일어나지 않는지 검사한다.
  * Docker가 필요하다. 요청 하나는 `POST /v1/orders`로 대표한다. 세 endpoint는 같은 인터셉터 경로를 지난다.
  */
-@AutoConfigureMockMvc
 @ExtendWith(OutputCaptureExtension::class)
 class TerminalAuthenticationIntegrationTest(
-    @Autowired private val mockMvc: MockMvc,
-    @Autowired private val jdbcTemplate: JdbcTemplate,
-    @Autowired private val terminals: TerminalManagement,
+    private val mockMvc: MockMvc,
+    private val jdbcTemplate: JdbcTemplate,
+    private val terminals: TerminalManagement,
 ) : PostgresIntegrationTest() {
 
     private val clientOrderId = UUID.randomUUID()
@@ -150,7 +147,7 @@ class TerminalAuthenticationIntegrationTest(
     @Test
     fun `회전된 옛 토큰은 401이고 새 토큰은 통과한다`() {
         val terminal = terminals.registerTerminal()
-        val rotated = terminals.rotateCredential(TerminalCommand.RotateCredential(terminal.storeId, terminal.terminalId))
+        val rotated = terminals.rotateCredential(TerminalFixtures.rotateCredentialCommand(terminal.storeId, terminal.terminalId))
 
         assertUnauthenticatedAndNothingWritten(createOrder(terminal, terminal.bearer))
         createOrder(terminal, "Bearer ${rotated.token}").andExpect { status { isCreated() } }
@@ -159,7 +156,7 @@ class TerminalAuthenticationIntegrationTest(
     @Test
     fun `비활성 단말의 토큰은 401이고 주문이 생기지 않는다`() {
         val terminal = terminals.registerTerminal()
-        terminals.deactivate(TerminalCommand.Deactivate(terminal.storeId, terminal.terminalId))
+        terminals.deactivate(TerminalFixtures.deactivateCommand(terminal.storeId, terminal.terminalId))
 
         assertUnauthenticatedAndNothingWritten(createOrder(terminal, terminal.bearer))
     }

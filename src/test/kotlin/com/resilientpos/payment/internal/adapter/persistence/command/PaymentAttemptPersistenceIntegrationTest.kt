@@ -6,7 +6,7 @@ import com.resilientpos.foundation.Money
 import com.resilientpos.foundation.UuidV7IdentifierGenerator
 import com.resilientpos.contract.PaymentAttemptKind
 import com.resilientpos.payment.PaymentAttemptStatus
-import com.resilientpos.payment.PaymentCommand
+import com.resilientpos.payment.PaymentFixtures
 import com.resilientpos.payment.PaymentId
 import com.resilientpos.payment.internal.domain.PaymentAttempt
 import com.resilientpos.payment.internal.domain.PaymentAttemptRepository
@@ -25,7 +25,6 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
-import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.dao.PessimisticLockingFailureException
 import org.springframework.transaction.support.TransactionOperations
@@ -43,9 +42,9 @@ import org.springframework.transaction.support.TransactionOperations
  * 격리는 테스트마다 다른 `orderId`를 쓰는 것으로 한다. 행은 JVM 수명 동안 남으므로 전체 개수를 세는 단언을 두지 않는다.
  */
 class PaymentAttemptPersistenceIntegrationTest(
-    @Autowired private val repository: PaymentAttemptRepository,
-    @Autowired private val queries: JdslQueryExecutor,
-    @Autowired private val transactions: TransactionOperations,
+    private val repository: PaymentAttemptRepository,
+    private val queries: JdslQueryExecutor,
+    private val transactions: TransactionOperations,
 ) : PostgresIntegrationTest() {
 
     private val krw: Currency = Currency.getInstance("KRW")
@@ -54,7 +53,7 @@ class PaymentAttemptPersistenceIntegrationTest(
 
     private fun authorization(orderId: UUID, amount: String = "4500", checkoutNo: Int = 1) =
         PaymentAttempt.create(
-            PaymentCommand.CreateAttempt(
+            PaymentFixtures.createAttemptCommand(
                 orderId = orderId,
                 storeId = StoreId(UUID.randomUUID()),
                 terminalId = TerminalId(UUID.randomUUID()),

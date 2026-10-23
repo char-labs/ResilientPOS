@@ -1,11 +1,11 @@
 package com.resilientpos.reconciliation
 
-import com.navercorp.fixturemonkey.FixtureMonkey
-import com.navercorp.fixturemonkey.kotlin.KotlinPlugin
 import com.navercorp.fixturemonkey.kotlin.giveMeKotlinBuilder
+import com.resilientpos.TestFixtureMonkey
 import com.resilientpos.contract.PaymentReconciliationReason
 import com.resilientpos.contract.PaymentUnknownReason
 import com.resilientpos.foundation.Money
+import com.resilientpos.order.OrderFixtures
 import com.resilientpos.owner.OwnerId
 import com.resilientpos.payment.PaymentId
 import com.resilientpos.store.StoreId
@@ -19,11 +19,7 @@ import java.util.UUID
  */
 object ReconciliationFixtures {
 
-    private val fixtureMonkey: FixtureMonkey = FixtureMonkey.builder()
-        .plugin(KotlinPlugin())
-        .build()
-
-    val krw: Currency = Currency.getInstance("KRW")
+    val krw: Currency = OrderFixtures.krw
     val usd: Currency = Currency.getInstance("USD")
     val handedAt: Instant = Instant.parse("2026-10-20T00:30:00Z")
     val storeId = StoreId(UUID.fromString("00000000-0000-0000-0000-0000000000b1"))
@@ -39,7 +35,7 @@ object ReconciliationFixtures {
         reportedProviderReference: String? = null,
         unknownReason: PaymentUnknownReason = PaymentUnknownReason.RESULT_UNCONFIRMED,
     ): ReconciliationCommand.Open =
-        fixtureMonkey.giveMeKotlinBuilder<ReconciliationCommand.Open>()
+        TestFixtureMonkey.instance.giveMeKotlinBuilder<ReconciliationCommand.Open>()
             .setExp(ReconciliationCommand.Open::occurredAt, handedAt)
             .setExp(ReconciliationCommand.Open::paymentId, paymentId)
             .setExp(ReconciliationCommand.Open::orderId, orderId)
@@ -59,7 +55,7 @@ object ReconciliationFixtures {
         approvedAmount: Money? = amount,
         note: String = "PG 가맹점 화면에서 승인 확인",
     ): ReconciliationCommand.Resolve =
-        fixtureMonkey.giveMeKotlinBuilder<ReconciliationCommand.Resolve>()
+        TestFixtureMonkey.instance.giveMeKotlinBuilder<ReconciliationCommand.Resolve>()
             .setExp(ReconciliationCommand.Resolve::caseId, caseId)
             .setExp(ReconciliationCommand.Resolve::storeId, storeId)
             .setExp(ReconciliationCommand.Resolve::ownerId, ownerId)

@@ -7,88 +7,33 @@ import com.resilientpos.order.OrderFixtures
 import com.resilientpos.order.createAndRequestCheckout
 import com.resilientpos.payment.PaymentAttemptStatus
 import com.resilientpos.payment.PaymentCommand
-import com.resilientpos.payment.PaymentEvent
+import com.resilientpos.payment.PaymentDeclinedRecorder
+import com.resilientpos.payment.PaymentFixtures
 import com.resilientpos.payment.PaymentId
 import com.resilientpos.payment.PaymentManagement
-import com.resilientpos.payment.internal.adapter.gateway.FakePaymentGateway
-import com.resilientpos.payment.internal.domain.AuthorizationOutcome
-import com.resilientpos.payment.internal.domain.AuthorizationRequest
-import com.resilientpos.payment.internal.domain.PaymentGateway
+import com.resilientpos.payment.internal.adapter.gateway.ScriptedPaymentGateway
 import com.resilientpos.platform.Tx
-import jakarta.persistence.EntityManagerFactory
 import java.util.UUID
-import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.CopyOnWriteArrayList
-import java.util.concurrent.atomic.AtomicInteger
-import javax.sql.DataSource
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
-import org.springframework.beans.factory.annotation.Autowired
-import org.springframework.boot.test.context.TestConfiguration
-import org.springframework.context.annotation.Bean
-import org.springframework.context.annotation.Primary
-import org.springframework.context.event.EventListener
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.jdbc.core.queryForObject
-import org.springframework.transaction.support.TransactionSynchronizationManager
 
 /**
  * 결과를 모른 채 남은 시도를 provider 조회로 확정하는 `resolveUnknown`을 실제 DB·발행 기록과 함께 본다.
  * 시도는 [FakePaymentGateway]의 끝자리(2·3·4)로 `UNKNOWN`까지 태워 만든다. 테스트마다 금액이 달라야 한다.
  */
 class PaymentUnknownResolutionIntegrationTest(
-    @Autowired private val orderFacade: OrderCommandFacade,
-    @Autowired private val paymentManagement: PaymentManagement,
-    @Autowired private val jdbcTemplate: JdbcTemplate,
-    @Autowired private val gateway: ProbingGateway,
-    @Autowired private val declinedEvents: DeclinedRecorder,
+    private val orderFacade: OrderCommandFacade,
+    private val paymentManagement: PaymentManagement,
+    private val jdbcTemplate: JdbcTemplate,
+    private val gateway: ScriptedPaymentGateway,
+    private val declinedEvents: PaymentDeclinedRecorder,
 ) : PostgresIntegrationTest() {
-
-    /** 거절 사실은 소비자가 없어 발행 기록에 남지 않는다. 같은 프로세스에서 발행된 것을 직접 받아 적는다. */
-    class DeclinedRecorder {
-        private val received = CopyOnWriteArrayList<PaymentEvent.Declined>()
-
-        @EventListener
-        fun record(event: PaymentEvent.Declined) {
-            received += event
-        }
-
-        fun countFor(paymentId: PaymentId) = received.count { it.paymentId == paymentId }
-    }
-
-    /** [FakePaymentGateway]에 위임하면서 `query`의 시도별 호출 횟수와, 호출 순간 이 스레드에 DB 자원이 묶여 있었는지를 적는다. */
-    class ProbingGateway(private val emf: EntityManagerFactory, private val dataSource: DataSource) : PaymentGateway {
-        private val delegate = FakePaymentGateway()
-        private val queryCalls = ConcurrentHashMap<PaymentId, AtomicInteger>()
-        private val resourceBound = ConcurrentHashMap<PaymentId, Boolean>()
-
-        override fun authorize(request: AuthorizationRequest): AuthorizationOutcome = delegate.authorize(request)
-
-        override fun query(request: AuthorizationRequest): AuthorizationOutcome {
-            queryCalls.computeIfAbsent(request.paymentId) { AtomicInteger() }.incrementAndGet()
-            resourceBound[request.paymentId] =
-                TransactionSynchronizationManager.hasResource(emf) || TransactionSynchronizationManager.hasResource(dataSource)
-            return delegate.query(request)
-        }
-
-        fun queryCallsFor(paymentId: PaymentId) = queryCalls[paymentId]?.get() ?: 0
-
-        fun resourceBoundDuringQuery(paymentId: PaymentId) = resourceBound[paymentId]
-    }
-
-    @TestConfiguration
-    class ProbingGatewayConfiguration {
-        @Bean
-        @Primary
-        fun probingGateway(emf: EntityManagerFactory, dataSource: DataSource) = ProbingGateway(emf, dataSource)
-
-        @Bean
-        fun declinedRecorder() = DeclinedRecorder()
-    }
 
     private fun attempt(orderId: UUID): Map<String, Any?>? = jdbcTemplate.queryForList(
         "select id, status, provider_reference from t_payment_attempt where order_id = ?",
@@ -291,7 +236,7 @@ class PaymentUnknownResolutionIntegrationTest(
     }
 
     private fun conclude(paymentId: PaymentId) = paymentManagement.resolveFromReconciliation(
-        PaymentCommand.ResolveFromReconciliation(paymentId, PaymentCommand.ResolveFromReconciliation.Conclusion.APPROVED, "RECON-REF"),
+        PaymentFixtures.resolveFromReconciliationCommand(paymentId, PaymentCommand.ResolveFromReconciliation.Conclusion.APPROVED, "RECON-REF"),
     )
 
     @Test

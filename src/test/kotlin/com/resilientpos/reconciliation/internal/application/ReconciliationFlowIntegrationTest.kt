@@ -10,12 +10,10 @@ import com.resilientpos.order.createAndRequestCheckout
 import com.resilientpos.order.orderStatus
 import com.resilientpos.payment.PaymentAttemptStatus
 import com.resilientpos.payment.PaymentCommand
+import com.resilientpos.payment.PaymentFixtures
 import com.resilientpos.payment.PaymentId
+import com.resilientpos.payment.internal.adapter.gateway.ScriptedPaymentGateway
 import com.resilientpos.payment.PaymentManagement
-import com.resilientpos.payment.internal.adapter.gateway.FakePaymentGateway
-import com.resilientpos.payment.internal.domain.AuthorizationOutcome
-import com.resilientpos.payment.internal.domain.AuthorizationRequest
-import com.resilientpos.payment.internal.domain.PaymentGateway
 import com.resilientpos.reconciliation.ReconciliationCaseId
 import com.resilientpos.reconciliation.ReconciliationDecision
 import com.resilientpos.reconciliation.ReconciliationFixtures
@@ -25,17 +23,12 @@ import com.resilientpos.reconciliation.attemptRow
 import com.resilientpos.reconciliation.caseCountFor
 import com.resilientpos.reconciliation.publicationCount
 import java.util.UUID
-import java.util.concurrent.ConcurrentHashMap
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import org.apache.kafka.clients.producer.ProducerRecord
-import org.springframework.beans.factory.annotation.Autowired
-import org.springframework.boot.test.context.TestConfiguration
-import org.springframework.context.annotation.Bean
-import org.springframework.context.annotation.Primary
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.kafka.core.KafkaTemplate
 
@@ -46,39 +39,13 @@ import org.springframework.kafka.core.KafkaTemplate
  * DB를 다른 테스트와 함께 쓰므로 단언은 이 테스트가 만든 주문·시도·case만 본다.
  */
 class ReconciliationFlowIntegrationTest(
-    @Autowired private val orderFacade: OrderCommandFacade,
-    @Autowired private val paymentManagement: PaymentManagement,
-    @Autowired private val reconciliationManagement: ReconciliationManagement,
-    @Autowired private val jdbcTemplate: JdbcTemplate,
-    @Autowired private val kafkaTemplate: KafkaTemplate<Any, Any>,
+    private val orderFacade: OrderCommandFacade,
+    private val paymentManagement: PaymentManagement,
+    private val reconciliationManagement: ReconciliationManagement,
+    private val jdbcTemplate: JdbcTemplate,
+    private val kafkaTemplate: KafkaTemplate<Any, Any>,
+    private val gateway: ScriptedPaymentGateway,
 ) : PostgresIntegrationTest() {
-
-    /**
-     * [FakePaymentGateway]에 위임하되 같은 금액의 두 번째 paymentId(재결제)는 승인한다.
-     * Fake는 같은 금액을 다시 결과 불명으로 만들어 재결제 승인 경로를 밟을 수 없기 때문이다.
-     */
-    class RetryApprovingGateway : PaymentGateway {
-        private val delegate = FakePaymentGateway()
-        private val firstSeen = ConcurrentHashMap<Money, PaymentId>()
-
-        override fun authorize(request: AuthorizationRequest): AuthorizationOutcome {
-            val first = firstSeen.putIfAbsent(request.amount, request.paymentId)
-            return if (first != null && first != request.paymentId) {
-                AuthorizationOutcome.Approved("APPROVED-${request.paymentId.value}", request.amount)
-            } else {
-                delegate.authorize(request)
-            }
-        }
-
-        override fun query(request: AuthorizationRequest): AuthorizationOutcome = delegate.query(request)
-    }
-
-    @TestConfiguration
-    class RetryApprovingGatewayConfiguration {
-        @Bean
-        @Primary
-        fun retryApprovingGateway() = RetryApprovingGateway()
-    }
 
     private val created = mutableListOf<UUID>()
 
@@ -88,8 +55,11 @@ class ReconciliationFlowIntegrationTest(
         created.forEach { jdbcTemplate.update("update t_payment_attempt set status = 'DECLINED' where order_id = ? and status = 'UNKNOWN'", it) }
     }
 
-    private fun checkoutOrder(unitPrice: String): UUID =
-        orderFacade.createAndRequestCheckout(OrderFixtures.createOrderCommand(lines = listOf(OrderFixtures.line(unitPrice)))).value.also { created += it }
+    /** 기본 동작은 같은 금액의 재결제를 다시 결과 불명으로 만든다. 이 금액은 재결제(다른 paymentId)를 승인하게 건다. */
+    private fun checkoutOrder(unitPrice: String): UUID {
+        gateway.approveRetries(Money.of(unitPrice, OrderFixtures.krw))
+        return orderFacade.createAndRequestCheckout(OrderFixtures.createOrderCommand(lines = listOf(OrderFixtures.line(unitPrice)))).value.also { created += it }
+    }
 
     private fun attempts(orderId: UUID): List<Map<String, Any?>> =
         jdbcTemplate.queryForList("select id, status from t_payment_attempt where order_id = ? order by id", orderId)
@@ -181,7 +151,7 @@ class ReconciliationFlowIntegrationTest(
         assertEquals("DECLINED", jdbcTemplate.attemptRow(paymentId)["status"])
         assertEquals("CHECKOUT_REQUESTED", jdbcTemplate.orderStatus(orderId))
 
-        paymentManagement.retryAuthorization(PaymentCommand.RetryAuthorization(paymentId, OrderFixtures.storeId))
+        paymentManagement.retryAuthorization(PaymentFixtures.retryAuthorizationCommand(paymentId, OrderFixtures.storeId))
 
         awaitUntil("주문이 PAID가 된다. 현재: ${jdbcTemplate.orderStatus(orderId)} ${attempts(orderId)}") { jdbcTemplate.orderStatus(orderId) == "PAID" }
         assertEquals(listOf("DECLINED", "APPROVED"), attempts(orderId).map { it["status"] })

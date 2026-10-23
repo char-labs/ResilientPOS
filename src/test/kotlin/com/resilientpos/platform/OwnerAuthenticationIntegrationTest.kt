@@ -12,10 +12,8 @@ import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
-import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.context.ApplicationContext
 import org.springframework.security.core.userdetails.UserDetailsService
-import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc
 import org.springframework.http.HttpHeaders
 import org.springframework.http.MediaType
 import org.springframework.jdbc.core.JdbcTemplate
@@ -32,13 +30,12 @@ import org.springframework.test.web.servlet.post
  * `/owner` 아래 점주 세션 체인을 실제 Postgres·Redis·Spring Session으로 검사한다. Docker가 필요하다.
  * MockMvc는 쿠키를 보관하지 않으므로 응답의 `Set-Cookie`를 다음 요청에 직접 싣는다.
  */
-@AutoConfigureMockMvc
 class OwnerAuthenticationIntegrationTest(
-    @Autowired private val mockMvc: MockMvc,
-    @Autowired private val terminals: TerminalManagement,
-    @Autowired private val sessionRepository: SessionRepository<*>,
-    @Autowired private val jdbcTemplate: JdbcTemplate,
-    @Autowired private val context: ApplicationContext,
+    private val mockMvc: MockMvc,
+    private val terminals: TerminalManagement,
+    private val sessionRepository: SessionRepository<*>,
+    private val jdbcTemplate: JdbcTemplate,
+    private val context: ApplicationContext,
 ) : PostgresIntegrationTest() {
 
     // Redis 저장소는 SessionRepository<RedisSession>이라 제네릭 주입이 맞지 않는다. 이 테스트는 Session 계약만 쓴다.

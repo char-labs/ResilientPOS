@@ -8,6 +8,7 @@ import com.resilientpos.store.StoreId
 import com.resilientpos.store.StoreManagement
 import com.resilientpos.terminal.TerminalCode
 import com.resilientpos.terminal.TerminalCommand
+import com.resilientpos.terminal.TerminalFixtures
 import com.resilientpos.terminal.TerminalId
 import com.resilientpos.terminal.TerminalManagement
 import com.resilientpos.terminal.internal.adapter.redis.RedisTerminalRateLimiter
@@ -22,7 +23,6 @@ import org.mockito.BDDMockito.given
 import org.mockito.BDDMockito.willThrow
 import org.mockito.Mockito.verify
 import org.mockito.Mockito.verifyNoInteractions
-import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.restdocs.test.autoconfigure.AutoConfigureRestDocs
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest
 import org.springframework.http.MediaType
@@ -57,7 +57,7 @@ import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
 @WebMvcTest(TerminalOwnerController::class)
 @AutoConfigureRestDocs
 class TerminalOwnerControllerTest(
-    @Autowired private val mockMvc: MockMvc,
+    private val mockMvc: MockMvc,
 ) {
 
     @MockitoBean
@@ -136,7 +136,7 @@ class TerminalOwnerControllerTest(
 
     @Test
     fun `회전하면 200과 새 token을 돌려준다`() {
-        given(management.rotateCredential(TerminalCommand.RotateCredential(StoreId(UUID.fromString(STORE_ID)), TerminalId(UUID.fromString(TERMINAL_ID))))).willReturn(TerminalCommand.RotateCredential.Result(TOKEN))
+        given(management.rotateCredential(TerminalFixtures.rotateCredentialCommand(StoreId(UUID.fromString(STORE_ID)), TerminalId(UUID.fromString(TERMINAL_ID))))).willReturn(TerminalCommand.RotateCredential.Result(TOKEN))
 
         postJson("/owner/v1/stores/{storeId}/terminals/{terminalId}/credential/rotate", null, STORE_ID, TERMINAL_ID)
             .andExpect(status().isOk)
@@ -156,7 +156,7 @@ class TerminalOwnerControllerTest(
 
     @Test
     fun `회전할 단말이 없으면 404 TERMINAL_NOT_FOUND다`() {
-        given(management.rotateCredential(TerminalCommand.RotateCredential(StoreId(UUID.fromString(STORE_ID)), TerminalId(UUID.fromString(TERMINAL_ID)))))
+        given(management.rotateCredential(TerminalFixtures.rotateCredentialCommand(StoreId(UUID.fromString(STORE_ID)), TerminalId(UUID.fromString(TERMINAL_ID)))))
             .willThrow(DomainException("TERMINAL_NOT_FOUND", "단말을 찾을 수 없습니다", DomainErrorKind.NOT_FOUND))
 
         postJson("/owner/v1/stores/{storeId}/terminals/{terminalId}/credential/rotate", null, STORE_ID, TERMINAL_ID)
@@ -167,7 +167,7 @@ class TerminalOwnerControllerTest(
 
     @Test
     fun `비활성 단말의 회전은 409 TERMINAL_INACTIVE다`() {
-        given(management.rotateCredential(TerminalCommand.RotateCredential(StoreId(UUID.fromString(STORE_ID)), TerminalId(UUID.fromString(TERMINAL_ID)))))
+        given(management.rotateCredential(TerminalFixtures.rotateCredentialCommand(StoreId(UUID.fromString(STORE_ID)), TerminalId(UUID.fromString(TERMINAL_ID)))))
             .willThrow(DomainException("TERMINAL_INACTIVE", "비활성 단말입니다", DomainErrorKind.CONFLICT))
 
         postJson("/owner/v1/stores/{storeId}/terminals/{terminalId}/credential/rotate", null, STORE_ID, TERMINAL_ID)
@@ -179,7 +179,7 @@ class TerminalOwnerControllerTest(
     @Test
     fun `비활성화하면 200과 terminalId와 INACTIVE를 돌려주고 이미 비활성이어도 같다`() {
         val id = TerminalId(UUID.fromString(TERMINAL_ID))
-        given(management.deactivate(TerminalCommand.Deactivate(StoreId(UUID.fromString(STORE_ID)), id)))
+        given(management.deactivate(TerminalFixtures.deactivateCommand(StoreId(UUID.fromString(STORE_ID)), id)))
             .willReturn(TerminalCommand.Deactivate.Result(id, TerminalStatus.ACTIVE, TerminalStatus.INACTIVE))
             .willReturn(TerminalCommand.Deactivate.Result(id, TerminalStatus.INACTIVE, TerminalStatus.INACTIVE))
 
@@ -205,7 +205,7 @@ class TerminalOwnerControllerTest(
 
     @Test
     fun `비활성화할 단말이 없으면 404 TERMINAL_NOT_FOUND다`() {
-        given(management.deactivate(TerminalCommand.Deactivate(StoreId(UUID.fromString(STORE_ID)), TerminalId(UUID.fromString(TERMINAL_ID)))))
+        given(management.deactivate(TerminalFixtures.deactivateCommand(StoreId(UUID.fromString(STORE_ID)), TerminalId(UUID.fromString(TERMINAL_ID)))))
             .willThrow(DomainException("TERMINAL_NOT_FOUND", "단말을 찾을 수 없습니다", DomainErrorKind.NOT_FOUND))
 
         postJson("/owner/v1/stores/{storeId}/terminals/{terminalId}/deactivate", null, STORE_ID, TERMINAL_ID)
@@ -303,7 +303,7 @@ class TerminalOwnerControllerTest(
         private const val OTHER_TERMINAL_ID = "018f6b1a-0000-7000-8000-0000000000a3"
         private const val CODE = "POS-1"
         private const val TOKEN = "dGVzdC10ZXJtaW5hbC10b2tlbi1maXh0dXJlLTAwMDA"
-        private val REGISTER = TerminalCommand.Register(StoreId(UUID.fromString(STORE_ID)), TerminalCode(CODE))
+        private val REGISTER = TerminalFixtures.registerCommand(StoreId(UUID.fromString(STORE_ID)), TerminalCode(CODE))
 
         private val CSRF_HEADER = requestHeaders(
             headerWithName("X-XSRF-TOKEN").description("`GET /owner/v1/csrf`가 심은 `__Host-XSRF-TOKEN` 쿠키의 값. 없거나 쿠키와 다르면 403 ACCESS_DENIED. 세션 쿠키가 없거나 만료되면 401 UNAUTHENTICATED"),

@@ -15,7 +15,6 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
-import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.boot.test.web.server.LocalServerPort
 import org.springframework.test.context.DynamicPropertyRegistry
@@ -38,8 +37,8 @@ import org.springframework.test.context.DynamicPropertySource
 )
 class OwnerSessionStoreOutageIntegrationTest(
     @LocalServerPort private val port: Int,
-    @Autowired private val terminals: TerminalManagement,
-    @Autowired private val meterRegistry: MeterRegistry,
+    private val terminals: TerminalManagement,
+    private val meterRegistry: MeterRegistry,
 ) {
 
     private val client = HttpClient.newHttpClient()

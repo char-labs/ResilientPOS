@@ -4,7 +4,7 @@ import com.resilientpos.PostgresIntegrationTest
 import com.resilientpos.awaitUntil
 import com.resilientpos.foundation.Money
 import com.resilientpos.order.OrderFixtures
-import com.resilientpos.payment.PaymentCommand
+import com.resilientpos.payment.PaymentFixtures
 import com.resilientpos.payment.PaymentManagement
 import com.resilientpos.foundation.IdentifierGenerator
 import com.resilientpos.payment.internal.domain.PaymentAttempt
@@ -20,10 +20,8 @@ import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
-import org.springframework.beans.factory.annotation.Autowired
-import org.springframework.boot.test.context.TestConfiguration
-import org.springframework.context.annotation.Bean
-import org.springframework.context.annotation.Primary
+import org.mockito.ArgumentMatchers.contains
+import org.mockito.Mockito.doReturn
 import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.transaction.support.TransactionOperations
@@ -39,26 +37,17 @@ import org.springframework.transaction.support.TransactionOperations
  *
  * A는 Facade로 직접 만든다. 주문 이벤트로 만들면 리스너가 세 번째 호출자로 끼어든다.
  *
- * 분산 락은 빈 구현으로 바꾼다. 이 테스트는 잠금이 통하지 않을 때(Redis 장애·대기 초과) DB 방어선만 보는 것이다.
+ * 분산 락은 이 주문의 키에서만 잠금 없이 통과시킨다(기반 클래스의 spy). 이 테스트는 잠금이 통하지 않을 때(Redis 장애·대기 초과) DB 방어선만 보는 것이다.
  */
 class PaymentAttemptCreationConcurrencyIntegrationTest(
-    @Autowired private val paymentManagement: PaymentManagement,
-    @Autowired private val transactions: TransactionOperations,
-    @Autowired private val jdbcTemplate: JdbcTemplate,
-    @Autowired private val repository: PaymentAttemptRepository,
-    @Autowired private val identifierGenerator: IdentifierGenerator,
-    @Autowired private val clock: Clock,
+    private val paymentManagement: PaymentManagement,
+    private val transactions: TransactionOperations,
+    private val jdbcTemplate: JdbcTemplate,
+    private val repository: PaymentAttemptRepository,
+    private val identifierGenerator: IdentifierGenerator,
+    private val clock: Clock,
+    private val distributedLock: DistributedLock,
 ) : PostgresIntegrationTest() {
-
-    @TestConfiguration
-    class NoDistributedLockConfiguration {
-        @Bean
-        @Primary
-        fun noDistributedLock() = object : DistributedLock {
-            override fun tryAcquire(key: String): String? = null
-            override fun release(key: String, token: String) = Unit
-        }
-    }
 
     private fun attempts(orderId: UUID): List<Map<String, Any?>> = jdbcTemplate.queryForList(
         "select id, status from t_payment_attempt where order_id = ? and kind = 'AUTHORIZATION' order by id",
@@ -68,8 +57,9 @@ class PaymentAttemptCreationConcurrencyIntegrationTest(
     @Test
     fun `같은 checkout의 생성이 겹쳐 앞 시도가 거절되어도 시도는 하나다`() {
         val orderId = UUID.randomUUID()
+        doReturn(null).`when`(distributedLock).tryAcquire(contains(orderId.toString()))
         // 4501원은 끝자리가 1이라 Fake가 거절한다.
-        val command = PaymentCommand.CreateAttempt(
+        val command = PaymentFixtures.createAttemptCommand(
             orderId = orderId,
             storeId = StoreId(UUID.randomUUID()),
             terminalId = TerminalId(UUID.randomUUID()),
