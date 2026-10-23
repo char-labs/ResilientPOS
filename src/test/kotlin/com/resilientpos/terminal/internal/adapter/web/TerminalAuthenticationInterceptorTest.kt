@@ -30,11 +30,14 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.ResultActionsDsl
 import org.springframework.test.web.servlet.get
+import org.springframework.test.web.servlet.post
+import org.springframework.test.web.servlet.put
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.asyncDispatch
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers
-import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PathVariable
+import org.springframework.web.bind.annotation.PutMapping
 import org.springframework.web.bind.annotation.RequestMapping
+import org.springframework.web.bind.annotation.RequestMethod
 import org.springframework.web.bind.annotation.RestController
 
 /** 인터셉터의 헤더 해석을 테스트 전용 v1 Controller로 검사한다. 응답 변환은 실제 `ApiControllerAdvice`를 거친다. */
@@ -57,6 +60,10 @@ class TerminalAuthenticationInterceptorTest(
 
     private fun get(authorization: String, path: String = "/v1/test-interceptor"): ResultActionsDsl =
         mockMvc.get(path) { header("Authorization", authorization) }
+
+    /** 동시 상한은 GET·HEAD가 아닌 요청만 센다. 자리를 잡는지 보는 테스트는 POST로 보낸다. */
+    private fun post(authorization: String, path: String = "/v1/test-interceptor"): ResultActionsDsl =
+        mockMvc.post(path) { header("Authorization", authorization) }
 
     @Test
     fun `Bearer 스킴은 대소문자를 구분하지 않는다`() {
@@ -131,7 +138,7 @@ class TerminalAuthenticationInterceptorTest(
     fun `성공 요청은 동시 상한 빈도 상한 Controller 순서로 지나고 끝나면 REQUEST 자리를 한 번 푼다`() {
         InterceptorTestController.calls = 0
 
-        get("Bearer $TOKEN").andExpect { status { isOk() } }
+        post("Bearer $TOKEN").andExpect { status { isOk() } }
 
         inOrder(inFlight, rateLimiter).apply {
             verify(inFlight).acquire(terminal, Kind.REQUEST)
@@ -143,7 +150,7 @@ class TerminalAuthenticationInterceptorTest(
 
     @Test
     fun `단말 sync 경로 패턴은 SYNC 묶음으로 자리를 잡고 푼다`() {
-        mockMvc.get("/v1/terminals/${terminal.terminalId.value}/sync") { header("Authorization", "Bearer $TOKEN") }
+        mockMvc.put("/v1/terminals/${terminal.terminalId.value}/sync") { header("Authorization", "Bearer $TOKEN") }
             .andExpect { status { isOk() } }
 
         verify(inFlight).acquire(terminal, Kind.SYNC)
@@ -156,7 +163,7 @@ class TerminalAuthenticationInterceptorTest(
         willThrow(RateLimitedException(1, "kind=request")).given(inFlight).acquire(terminal, Kind.REQUEST)
         InterceptorTestController.calls = 0
 
-        get("Bearer $TOKEN").andExpect {
+        post("Bearer $TOKEN").andExpect {
             status { isTooManyRequests() }
             header { string("Retry-After", "1") }
             jsonPath("$.error.errorCode") { value("RATE_LIMITED") }
@@ -171,7 +178,7 @@ class TerminalAuthenticationInterceptorTest(
     fun `빈도 상한이 거절하면 잡은 자리를 푼다`() {
         willThrow(RateLimitedException(2, "scope=terminal")).given(rateLimiter).acquire(terminal)
 
-        get("Bearer $TOKEN").andExpect { status { isTooManyRequests() } }
+        post("Bearer $TOKEN").andExpect { status { isTooManyRequests() } }
 
         verify(inFlight).acquire(terminal, Kind.REQUEST)
         verify(inFlight, times(1)).release(terminal, Kind.REQUEST)
@@ -179,49 +186,59 @@ class TerminalAuthenticationInterceptorTest(
 
     @Test
     fun `handler가 예외를 던져도 자리를 한 번 푼다`() {
-        runCatching { mockMvc.get("/v1/test-interceptor/fail") { header("Authorization", "Bearer $TOKEN") } }
+        runCatching { mockMvc.post("/v1/test-interceptor/fail") { header("Authorization", "Bearer $TOKEN") } }
 
         verify(inFlight).acquire(terminal, Kind.REQUEST)
         verify(inFlight, times(1)).release(terminal, Kind.REQUEST)
     }
 
     @Test
-    fun `비동기 dispatch는 자리를 다시 잡지 않고 마지막에 한 번 푼다`() {
-        val started = get("Bearer $TOKEN", "/v1/test-interceptor/async").andExpect { request { asyncStarted() } }.andReturn()
+    fun `비동기 dispatch는 자리와 인증과 빈도 상한을 다시 하지 않고 마지막에 한 번 푼다`() {
+        val started = post("Bearer $TOKEN", "/v1/test-interceptor/async").andExpect { request { asyncStarted() } }.andReturn()
         verify(inFlight, never()).release(terminal, Kind.REQUEST) // 비동기가 끝나기 전에는 자리를 쥐고 있다
 
         mockMvc.perform(asyncDispatch(started)).andExpect(MockMvcResultMatchers.status().isOk)
 
         verify(inFlight, times(1)).acquire(terminal, Kind.REQUEST)
         verify(inFlight, times(1)).release(terminal, Kind.REQUEST)
-        verify(rateLimiter, times(2)).acquire(terminal) // 빈도 상한은 dispatch마다 다시 돈다
+        verify(terminals, times(1)).authenticate(TOKEN)
+        verify(rateLimiter, times(1)).acquire(terminal)
     }
 
     @Test
-    fun `비동기 dispatch에서 빈도 상한이 던져도 자리를 푼다`() {
-        val started = get("Bearer $TOKEN", "/v1/test-interceptor/async").andExpect { request { asyncStarted() } }.andReturn()
+    fun `비동기 dispatch는 인증과 빈도 상한을 다시 하지 않는다`() {
+        val started = post("Bearer $TOKEN", "/v1/test-interceptor/async").andExpect { request { asyncStarted() } }.andReturn()
+        given(terminals.authenticate(TOKEN)).willReturn(null)
         willThrow(RateLimitedException(1, "scope=terminal")).given(rateLimiter).acquire(terminal)
 
-        mockMvc.perform(asyncDispatch(started))
+        val result = mockMvc.perform(asyncDispatch(started)).andReturn()
 
-        verify(inFlight, times(1)).acquire(terminal, Kind.REQUEST)
+        assertEquals(200, result.response.status, "handler가 일한 뒤 401·429를 내면 429면 처리되지 않았다는 계약이 깨진다")
         verify(inFlight, times(1)).release(terminal, Kind.REQUEST)
+    }
+
+    @Test
+    fun `GET은 자리를 잡지 않고 인증과 빈도 상한만 한다`() {
+        get("Bearer $TOKEN").andExpect { status { isOk() } }
+
+        verifyNoInteractions(inFlight)
+        verify(rateLimiter).acquire(terminal)
     }
 }
 
 @RestController
 @RequestMapping("/v1/test-interceptor")
 class InterceptorTestController {
-    @GetMapping
+    @RequestMapping(method = [RequestMethod.GET, RequestMethod.POST])
     fun ok(): Sample {
         calls++
         return Sample("ok")
     }
 
-    @GetMapping("/fail")
+    @RequestMapping("/fail", method = [RequestMethod.GET, RequestMethod.POST])
     fun fail(): Sample = throw IllegalStateException("handler 실패")
 
-    @GetMapping("/async")
+    @RequestMapping("/async", method = [RequestMethod.GET, RequestMethod.POST])
     fun async(): Callable<Sample> = Callable { Sample("async") }
 
     data class Sample(val value: String)
@@ -232,9 +249,9 @@ class InterceptorTestController {
     }
 }
 
-/** 진짜 `SyncController`는 이 슬라이스에 없다. 같은 매핑 패턴으로 SYNC 묶음 판별만 검사한다. */
+/** 진짜 `SyncController`는 이 슬라이스에 없다. 같은 매핑 패턴으로 SYNC 묶음 판별만 검사한다(실제 앱에서는 POST 매핑과 겹치지 않게 PUT). */
 @RestController
 class InterceptorSyncTestController {
-    @GetMapping("/v1/terminals/{terminalId}/sync")
+    @PutMapping("/v1/terminals/{terminalId}/sync")
     fun sync(@PathVariable terminalId: String) = InterceptorTestController.Sample("sync")
 }

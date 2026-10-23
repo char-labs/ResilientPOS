@@ -18,7 +18,7 @@ class LogThrottle {
 
     fun pass(nowMillis: Long): Logged? {
         val last = lastMillis.get()
-        // 거절 경로는 Redis를 부르기 전 시각이라 동시 요청의 완료 순서가 뒤바뀌면 조금 음수가 된다. 간격보다 크게 뒤로 간 것만 시계 역행으로 본다.
+        // 호출자가 시각을 읽은 뒤 다른 스레드가 먼저 기록할 수 있어 조금 음수가 된다. 간격보다 크게 뒤로 간 것만 시계 역행으로 본다.
         val interval = LOG_INTERVAL.toMillis()
         val due = last == NEVER || nowMillis - last !in -interval until interval
         if (!due || !lastMillis.compareAndSet(last, nowMillis)) {

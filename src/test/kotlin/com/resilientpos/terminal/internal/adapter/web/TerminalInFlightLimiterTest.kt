@@ -72,7 +72,8 @@ class TerminalInFlightLimiterTest {
 
     @Test
     fun `거절마다 in_flight scope counter가 1 오르고 처음부터 0으로 있다`() {
-        assertEquals(0.0, inFlightRejects())
+        // counter(...)는 없으면 만들어 주므로 등록 여부를 못 가린다. find는 생성자가 등록한 것만 본다.
+        assertEquals(0.0, meterRegistry.find(METRIC).tag("scope", "in_flight").counter()?.count())
         limiter.acquire(terminal, Kind.SYNC)
 
         repeat(3) { assertFailsWith<RateLimitedException> { limiter.acquire(terminal, Kind.SYNC) } }
@@ -95,8 +96,8 @@ class TerminalInFlightLimiterTest {
         val lines = output.rejectLines(mark)
         assertEquals(2, lines.size, lines.joinToString("\n"))
         lines.forEach { assertContains(it, "INFO") }
-        assertContains(lines[0], "kind=sync terminalId=${terminal.terminalId.value} storeId=${storeId.value} suppressedSinceLast=0 lastLoggedAt=none")
-        assertContains(lines[1], "suppressedSinceLast=3 lastLoggedAt=2026-10-21T00:00:00Z")
+        assertContains(lines[0], "kind=sync terminalId=${terminal.terminalId.value} storeId=${storeId.value} heldForMs=0 suppressedSinceLast=0 lastLoggedAt=none")
+        assertContains(lines[1], "heldForMs=10000 suppressedSinceLast=3 lastLoggedAt=2026-10-21T00:00:00Z")
     }
 
     @Test
@@ -114,19 +115,22 @@ class TerminalInFlightLimiterTest {
 
     /**
      * 429·`RATE_LIMITED`는 handler 전의 거절이어야 단말이 같은 요청을 그대로 다시 보낼 수 있다. 그래서 동시 상한도 인증 인터셉터만 부른다.
-     * 양성 대조가 있어 `acquire`의 시그니처가 바뀌면 규칙이 비지 않고 실패한다.
+     * `release`를 다른 곳에서 부르면 상한이 조용히 깨지므로 같이 건다. 인터셉터의 중첩 클래스는 인터셉터로 본다(음성 규칙).
+     * 양성 대조는 인터셉터 본체가 부르는지 이름으로 본다. 시그니처가 바뀌면 규칙이 비지 않고 실패한다.
      */
     @Test
-    fun `acquire는 인증 인터셉터만 부른다`() {
+    fun `acquire와 release는 인증 인터셉터만 부른다`() {
         val production = ClassFileImporter().withImportOption(ImportOption.Predefined.DO_NOT_INCLUDE_TESTS).importPackages("com.resilientpos")
-        val acquire = target(name("acquire")).and(target(owner(type(TerminalInFlightLimiter::class.java))))
 
-        noClasses().that().doNotBelongToAnyOf(TerminalAuthenticationInterceptor::class.java)
-            .should().callMethodWhere(acquire)
-            .check(production)
-        classes().that().belongToAnyOf(TerminalAuthenticationInterceptor::class.java)
-            .should().callMethodWhere(acquire)
-            .check(production)
+        listOf("acquire", "release").forEach { method ->
+            val call = target(name(method)).and(target(owner(type(TerminalInFlightLimiter::class.java))))
+            noClasses().that().doNotBelongToAnyOf(TerminalAuthenticationInterceptor::class.java)
+                .should().callMethodWhere(call)
+                .check(production)
+            classes().that().haveFullyQualifiedName(TerminalAuthenticationInterceptor::class.java.name)
+                .should().callMethodWhere(call)
+                .check(production)
+        }
     }
 
     private companion object {

@@ -12,7 +12,6 @@ import java.util.concurrent.TimeUnit
 import javax.sql.DataSource
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertNotEquals
 import org.springframework.http.MediaType
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.jdbc.core.queryForObject
@@ -43,13 +42,16 @@ class TerminalInFlightIntegrationTest(
         try {
             val first = RowLock("select id from t_order where id = ? for update", UUID.fromString(orderId)).use { lock ->
                 val pending = executor.submit(Callable { checkout(orderId).andReturn().response.status })
-                awaitLockWait("t_order")
+                awaitLockWait(lock)
 
                 checkout(orderId).andExpect {
                     status { isTooManyRequests() }
                     header { string("Retry-After", "1") }
                     jsonPath("$.error.errorCode") { value("RATE_LIMITED") }
                 }
+                // 결제 시도 조회(GET)는 자리를 잡지 않으므로 같은 단말의 checkout이 잠금을 기다리는 동안에도 동시 상한에 걸리지 않는다.
+                mockMvc.get("/v1/orders/$orderId/payment-attempts") { header("Authorization", terminal.bearer) }
+                    .andExpect { status { isOk() } }
                 lock.release()
                 pending
             }
@@ -68,17 +70,14 @@ class TerminalInFlightIntegrationTest(
         try {
             val first = RowLock("select terminal_id from t_sync_watermark where terminal_id = ? for update", terminal.terminalId.value).use { lock ->
                 val pending = executor.submit(Callable { sync(2).andReturn().response.status })
-                awaitLockWait("t_sync_watermark")
+                awaitLockWait(lock)
 
                 sync(3).andExpect {
                     status { isTooManyRequests() }
                     header { string("Retry-After", "1") }
                     jsonPath("$.error.errorCode") { value("RATE_LIMITED") }
                 }
-                val other = mockMvc.get("/v1/orders/${UUID.randomUUID()}/payment-attempts") {
-                    header("Authorization", terminal.bearer)
-                }.andReturn().response.status
-                assertNotEquals(429, other, "sync 밖 요청은 sync 묶음의 동시 상한에 걸리지 않는다")
+                createOrder() // sync 밖 쓰기 요청은 sync 묶음의 동시 상한에 걸리지 않고 201이다
                 lock.release()
                 pending
             }
@@ -115,12 +114,12 @@ class TerminalInFlightIntegrationTest(
         """.trimIndent()
     }
 
-    /** [table]을 다루는 문장이 행 잠금을 기다리는 것을 `pg_stat_activity`로 본다. */
-    private fun awaitLockWait(table: String) =
-        awaitUntil("$table 행 잠금을 기다리는 요청이 있다") {
+    /** [lock]을 쥔 세션에 막혀 아직 얻지 못한 잠금이 있는 것을 본다. 다른 테스트나 리스너의 잠금 대기는 세지 않는다. */
+    private fun awaitLockWait(lock: RowLock) =
+        awaitUntil("행 잠금을 기다리는 요청이 있다") {
             (jdbcTemplate.queryForObject<Long>(
-                "select count(*) from pg_stat_activity where wait_event_type = 'Lock' and query like ?",
-                "%$table%",
+                "select count(*) from pg_locks where not granted and ? = any(pg_blocking_pids(pid))",
+                lock.pid,
             ) ?: 0L) > 0L
         }
 
@@ -135,6 +134,9 @@ class TerminalInFlightIntegrationTest(
                 throw e
             }
         }
+
+        /** 이 커넥션의 backend pid. */
+        val pid: Int = connection.createStatement().use { st -> st.executeQuery("select pg_backend_pid()").use { rs -> rs.next(); rs.getInt(1) } }
 
         fun release() {
             if (connection.isClosed) return
