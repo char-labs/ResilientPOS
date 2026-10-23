@@ -40,7 +40,7 @@
 - 동시 상한을 빈도 상한보다 먼저 본다. 동시 상한이 거절한 요청은 token을 쓰지 않는다(#87 결정 6의 "거절된 요청은 토큰을 쓰지 않는다"). 고장 단말이 동시에 보낸 9개가 bucket을 비우지 않으므로 같은 단말의 다음 정상 요청이 빈도 상한에 걸리지 않는다.
 - 빈도 상한이 거절하면 잡은 자리를 그 자리에서 푼다. `afterCompletion`은 그 인터셉터의 `preHandle`이 끝까지 돌아 `true`를 돌려줄 때만 불리기 때문이다([HandlerInterceptor](https://docs.spring.io/spring-framework/docs/current/javadoc-api/org/springframework/web/servlet/HandlerInterceptor.html)).
 - 자리는 `afterCompletion`에서 푼다. handler의 결과와 관계없이(예외 포함) 불린다.
-- 자리는 요청 속성에 두고 `afterCompletion`이 그것을 푼다. 앞 dispatch의 `preHandle`이 끝까지 통과한 요청(인증 결과 속성이 있다)에서 `preHandle`이 다시 불리면 인증과 두 상한을 다시 하지 않고 통과한다. 자리 표시가 아니라 인증 결과로 가르는 것은 자리를 잡지 않는 GET에도 같은 규칙이 걸리게 하려는 것이다. 비동기 handler가 생기면 ASYNC dispatch가 `preHandle`을 다시 부르는데(첫 dispatch에서는 `afterCompletion`이 불리지 않는다), 그때는 handler가 이미 일했다. 다시 인증·빈도 상한을 돌려 401·429를 내면 "429면 처리되지 않았으니 그대로 다시 보낸다"는 계약(결정 5)이 깨지고, 다시 자리를 잡으면 pod 메모리의 자리가 새서 그 단말이 재시작까지 거절만 받는다. 자리는 마지막 `afterCompletion`이 한 번 푼다. 지금 `/v1`에는 비동기 handler가 없다.
+- 자리는 요청 속성에 두고 `afterCompletion`이 그것을 푼다. 앞 dispatch의 `preHandle`이 끝까지 통과한 요청(인증 결과 속성이 있다)에서 REQUEST가 아닌 dispatch로 `preHandle`이 다시 불리면 인증과 두 상한을 다시 하지 않고 통과한다. 첫 REQUEST dispatch는 속성이 있어도 언제나 판정한다. 같은 이름의 속성을 미리 두는 코드(필터, 테스트 지원)가 생겨도 인증과 상한이 조용히 꺼지지 않게 하려는 것이다. 자리 표시가 아니라 인증 결과로 가르는 것은 자리를 잡지 않는 GET에도 같은 규칙이 걸리게 하려는 것이다. 비동기 handler가 생기면 ASYNC dispatch가 `preHandle`을 다시 부르는데(첫 dispatch에서는 `afterCompletion`이 불리지 않는다), 그때는 handler가 이미 일했다. 다시 인증·빈도 상한을 돌려 401·429를 내면 "429면 처리되지 않았으니 그대로 다시 보낸다"는 계약(결정 5)이 깨지고, 다시 자리를 잡으면 pod 메모리의 자리가 새서 그 단말이 재시작까지 거절만 받는다. 자리는 마지막 `afterCompletion`이 한 번 푼다. 지금 `/v1`에는 비동기 handler가 없다.
 - 한계(비동기 handler가 생길 때 다시 본다): ASYNC dispatch가 오지 않는 handler(timeout 없는 `DeferredResult`)는 자리를 계속 쥐므로 비동기 handler에는 timeout이 있어야 한다. 비동기 timeout으로 자리가 풀려도 작업 스레드는 아직 커넥션을 쥐고 있을 수 있다.
 - 한 인터셉터 안에서 한다. 별도 인터셉터를 두면 순서가 `addInterceptors`의 등록 순서에 기대서 두 파일을 함께 봐야 보인다(#87 결정 2와 같은 이유).
 - 인증에 실패한 요청은 자리를 잡지 않는다.
@@ -60,7 +60,7 @@
 
 **결정 7: 관측은 기존 counter의 scope 하나와 거절 INFO 로그다. 알림은 두지 않는다.**
 - counter `inbound.rate.limited{scope}`(Prometheus 이름 `inbound_rate_limited_total`)에 `scope="in_flight"`를 더한다. label 키는 그대로이고 기동할 때 0으로 등록한다. 그래서 counter 합계가 `RATE_LIMITED` 응답 수와 계속 같다. 단말·매장 ID와 묶음은 label로 쓰지 않는다.
-- 거절 로그는 limiter가 묶음별로 10초에 한 줄 INFO(`동시 요청 상한으로 거절했다 kind=sync|request terminalId=… storeId=… heldForMs=… suppressedSinceLast=… lastLoggedAt=…`)로 남긴다. `heldForMs`는 지금 자리를 쥔 요청이 잡은 뒤 지난 시간이다. 요청 timeout(트랜잭션 30초, 위 업로드 정지 60초)보다 길면 자리가 샌 것이라 고장 단말의 거절과 가를 수 있다. 줄은 묶음마다 하나라 여러 단말이 함께 거절되면(부하 때 정상 단말의 재전송) 표본 한 단말만 보인다. 줄 수를 줄이는 방식은 빈도 상한 거절 로그와 같은 것을 쓴다. 그래서 `RedisTerminalRateLimiter`의 private `Throttle`을 terminal 모듈 안에서 함께 쓰도록 꺼낸다(동작은 바뀌지 않는다). advice는 429를 남기지 않는다(지금과 같다).
+- 거절 로그는 limiter가 묶음별로 10초에 한 줄 INFO(`동시 요청 상한으로 거절했다 kind=sync|request terminalId=… storeId=… heldForMs=… suppressedSinceLast=… lastLoggedAt=…`)로 남긴다. `heldForMs`는 지금 자리를 쥔 요청이 잡은 뒤 지난 시간(벽시계 기준, 0 아래는 0)이다. 누수를 의심할 신호이지 증거가 아니다. `request` 묶음은 트랜잭션 하나(30초)가 기준이다. `sync` 묶음은 배치 전체에 상한이 없어(항목마다 트랜잭션, 최대 500개, 부하 때 #77에서 39초) 길다는 것만으로는 가를 수 없고, 그 단말의 `t_sync_operation` 접수 시각(`created_at`)이 `heldForMs` 동안 멈춰 있을 때 샌 것으로 본다. 그때 그 pod를 재시작한다. 줄은 묶음마다 하나라 여러 단말이 함께 거절되면(부하 때 정상 단말의 재전송) 표본 한 단말만 보인다. 줄 수를 줄이는 방식은 빈도 상한 거절 로그와 같은 것을 쓴다. 그래서 `RedisTerminalRateLimiter`의 private `Throttle`을 terminal 모듈 안에서 함께 쓰도록 꺼낸다(동작은 바뀌지 않는다). advice는 429를 남기지 않는다(지금과 같다).
 - 알림을 두지 않는 이유: 부하 때 정상 단말의 재전송이 줄줄이 거절돼도 앞 배치가 끝나면 풀리고, 고장 단말의 거절은 상한이 제 일을 하는 것이다. 둘 다 사람이 손대지 않아도 풀린다. 고장 단말은 counter의 증가율과 로그의 `terminalId`로 찾는다.
 
 **계약.** HTTP 오류 code, 응답 모양, 이벤트, 토픽, DB 스키마는 바뀌지 않는다. 429 `RATE_LIMITED`가 같은 단말의 겹친 요청에도 나가고, 그때 `Retry-After`는 1이다. REST Docs의 429 설명과 [아키텍처](../wiki/architecture.md)의 요청 흐름에 적는다.
@@ -68,11 +68,17 @@
 **복구.** 거절은 handler 전이라 상태를 바꾸지 않는다. 단말은 `Retry-After` 뒤에 같은 요청을 다시 보낸다.
 
 **범위 조정(2026-10-23, multi-review 반영).** Claude 84점, Codex(점수 없음, MEDIUM 1·LOW 2), spring-backend-specialist(P0·P1 없음, P2 1·P3 3·P4 3)였다. Gemini는 CLI가 없어 돌리지 않았다. 셋 모두 영구 차단·우회·정보 노출 경로는 찾지 못했다. 반영한 것:
-- 셋 공통: ASYNC 재진입에서 인증과 빈도 상한을 다시 돌려 handler가 일한 뒤 401·429가 나갈 수 있었다. 자리를 잡은 요청은 다시 아무것도 하지 않고 통과한다(결정 4, 인수 7). #87 이후 인증 조회와 token 차감이 ASYNC dispatch에서 두 번 일어나던 것도 함께 사라진다.
+- 셋 공통: ASYNC 재진입에서 인증과 빈도 상한을 다시 돌려 handler가 일한 뒤 401·429가 나갈 수 있었다. 앞 dispatch에서 통과한 요청은 다시 아무것도 하지 않고 통과한다(결정 4, 인수 7). #87 이후 인증 조회와 token 차감이 ASYNC dispatch에서 두 번 일어나던 것도 함께 사라진다.
 - 셋 공통: "커넥션을 쓰지 않는다·2개 이하"를 인증 조회를 빼고 말했다. handler 단계로 좁혀 적는다(기대 결과, 결정 3).
 - 사용자 결정 둘: 결제 시도 조회 GET은 자리를 잡지 않는다(Claude·specialist, 결정 3, 인수 15). 업로드 정지로 자리를 쥐는 시간은 설정을 바꾸지 않고 한계와 배포 확인으로 적는다(specialist P2, 결정 4).
 - 하나: 자리를 쥔 시간을 거절 로그에 남겨 누수와 고장 단말을 가른다(Claude·specialist, 결정 7). `release`도 구조 규칙에 넣는다(Claude). counter 테스트가 생성 시 등록을 판별하게 고친다. 통합 테스트의 잠금 대기 감지를 잠근 세션에 막힌 잠금만 세는 기존 방식(`OrderCreateRaceIntegrationTest`의 `pg_blocking_pids`)으로 바꾸고 GET 응답 상태를 정확히 단정한다. `Retry-After` 1을 이름 있는 상수로 둔다. `HeldSlot`이 인터셉터 안에 중첩될 수 있게 구조 테스트의 양성 대조를 이름으로 좁힌다. k6 요약이 `traffic=normal` 실패율을 따로 보이게 한다. pod 사이 재전송 겹침, `Retry-After` 1의 재시도 비용, 비동기 handler의 timeout 조건, 표본 한 단말, 단일 pod 측정을 결정과 검증에 적는다. 엔티티 맵의 동시 주문 생성 문장을 고친다.
 - 받지 않은 것: 자리 획득과 요청 속성 기록 사이의 실패(Codex LOW 1. 그 사이는 객체 하나 만들고 속성 하나 두는 것뿐이다). 다른 endpoint REST Docs의 429 사례(GET을 빼서 남는 쓰기 endpoint의 규약은 sync 문서와 아키텍처 wiki가 말한다). sync 판별을 표식 애너테이션으로 바꾸는 것(specialist P4, 통합 테스트가 실제 매핑으로 고정한다). SYNC 동시 거절의 `Retry-After`를 단말 timeout(5초)으로 올리는 것(k6로 재시도 비용을 본 뒤 정한다). 누수 진단용 gauge(거절 로그의 자리를 쥔 시간으로 대신한다). `TerminalOwnerControllerTest`를 메타 애너테이션으로 바꾸는 것과 아키텍처 §1 문단 나누기(동작과 무관).
+
+**범위 조정(2026-10-23, 재리뷰 반영).** 재리뷰는 Claude 89(+5), Codex(점수 없음, LOW 2), spring-backend-specialist(P0·P1·P2 없음, P3 2·P4 3)였다. 셋 모두 1차 지적이 바르게 고쳐졌고 재진입·GET 제외·`heldForMs`에서 새 우회·누수 경로가 없다고 봤다. 반영한 것:
+- 셋 공통: `heldForMs`로 누수를 가르는 기준이 sync에는 맞지 않았다(배치 전체에 상한이 없다). 묶음별 기준으로 고친다(결정 7). `heldForMs`가 음수로 찍히지 않게 0 아래를 자른다.
+- 둘: 재진입 단락을 첫 REQUEST dispatch에는 걸지 않는다(Claude·specialist, 결정 4). HEAD도 자리를 잡지 않는지 테스트한다.
+- 하나: `/v1` GET pattern 목록을 테스트로 고정한다(specialist, 인수 15). 통합 테스트의 429가 동시 상한에서 왔는지 `scope="in_flight"` counter로 단정한다(specialist). 업로드 정지의 상한 문구, 아키텍처의 "쓰기 요청" 문구와 §6.4의 `release`, 엔티티 맵 §4.5, 통합 테스트 이름을 고친다(Claude).
+- 받지 않은 것: `release`가 자기가 잡은 자리만 풀게 하는 토큰과 비동기 handler의 끊김·timeout 동작 실측(Claude·specialist. 지금 경로에서는 같은 자리를 두 번 풀지 않고, 비동기 handler를 들이는 PR에서 `AsyncListener`와 함께 본다).
 
 ## 제외
 - 매장 단위 동시 상한. 매장 전체가 함께 재연결하는 정상 회복(#77 시나리오 2, 4대)도 막게 되고, 매장 총량은 빈도 상한(매장 bucket)이 맡는다.
@@ -83,7 +89,7 @@
 - 상한 값의 설정화. 결정 3.
 - checkout을 동시에 보내는 k6 시나리오. 거절 동작은 실제 동시 요청을 보내는 통합 테스트로 확인한다.
 - 알림. 결정 7.
-- 배포 확인: 앞단(ingress)이 요청 본문을 끝까지 받아 앱에 넘기는지(nginx `proxy_request_buffering` 기본 on). 넘기지 않으면 업로드가 멈춘 연결이 최대 60초 그 단말의 sync 자리를 쥔다(결정 4의 한계).
+- 배포 확인: 앞단(ingress)이 요청 본문을 끝까지 받아 앱에 넘기는지(nginx `proxy_request_buffering` 기본 on). 넘기지 않으면 업로드가 멈춘 연결은 60초, 본문을 조금씩 흘려 보내는 연결은 상한 없이 그 단말의 sync 자리를 쥔다(그 단말 자신만 막힌다, 결정 4의 한계).
 
 ## 관련 문서
 없음
@@ -110,7 +116,7 @@
 4. 다른 단말(같은 매장 포함)의 요청은 영향을 받지 않는다.
 5. 동시 상한이 거절한 요청은 빈도 token을 쓰지 않는다. 빈도 상한이 거절하면 잡은 자리를 바로 풀어서 같은 단말의 다음 요청이 동시 상한에 걸리지 않는다.
 6. handler가 예외로 끝나도 자리가 풀린다.
-7. 앞 dispatch에서 통과한 요청에서 `preHandle`이 다시 불리면(ASYNC dispatch) 인증·동시 상한·빈도 상한을 다시 하지 않고 통과하고, 마지막 `afterCompletion`이 한 번 풀면 그 단말이 다시 통과한다.
+7. 앞 dispatch에서 통과한 요청에서 REQUEST가 아닌 dispatch로 `preHandle`이 다시 불리면(ASYNC dispatch) 인증·동시 상한·빈도 상한을 다시 하지 않고 통과하고, 마지막 `afterCompletion`이 한 번 풀면 그 단말이 다시 통과한다.
 8. 인증에 실패한 요청은 자리를 잡지 않고 401이다.
 9. 동시 거절마다 `inbound_rate_limited_total{scope="in_flight"}`가 1 오르고, 이 시계열은 limiter를 만들 때 0으로 등록된다(첫 거절 전에 조회된다). 거절 INFO는 묶음별로 10초에 한 줄이고 kind·terminalId·storeId·자리를 쥔 시간·건수·직전 시각을 담는다. 토큰과 `Authorization` 값은 남지 않는다.
 10. `RateLimitedException`은 두 limiter만 만들고, 빈도 limiter의 `acquire`와 동시 limiter의 `acquire`·`release`는 인증 인터셉터만 부른다.
@@ -118,7 +124,7 @@
 12. REST Docs의 429 설명이 빈도 거절과 동시 거절을 함께 말한다.
 13. k6 고장 단말 시나리오를 바꾸기 전과 후 빌드에서 재고 원시 수치·환경·재현 명령을 결과에 남긴다. 판정은 검증 절의 규칙을 따른다.
 14. 기존 테스트가 하나도 깨지지 않는다.
-15. GET·HEAD 요청은 자리를 잡지 않는다(인증과 빈도 상한은 한다). 같은 단말의 쓰기 요청이 처리 중이어도 결제 시도 조회는 동시 상한에 걸리지 않는다.
+15. GET·HEAD 요청은 자리를 잡지 않는다(인증과 빈도 상한은 한다). `/v1`의 GET pattern은 결제 시도 조회 하나로 고정되어 있어, 새 GET을 더하면 그것이 행 잠금·`Lock`을 잡지 않는지 확인해야 테스트가 통과한다. 같은 단말의 쓰기 요청이 처리 중이어도 결제 시도 조회는 동시 상한에 걸리지 않는다.
 
 ## 검증
 - `./gradlew test --tests 'com.resilientpos.terminal.*'`: limiter와 인터셉터. 동시성은 실제 스레드로 handler 안에 머무는 요청을 만들어 확인한다.
