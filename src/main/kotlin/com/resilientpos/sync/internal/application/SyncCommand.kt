@@ -14,11 +14,13 @@ object SyncCommand {
     /**
      * 한 단말이 오프라인에서 만든 operation 배치. 항목의 `payload`는 단말이 보낸 내용 그대로([OperationPayload])이고
      * `order` 명령으로의 변환은 Facade가 항목 트랜잭션 안에서 한다. 단말 ID와 `storeId`(인증된 단말의 매장)는 배치에만 있다.
+     * `reconnectedAt`은 단말이 끊긴 뒤 서버에 닿은 첫 요청의 전송 시각(ISO-8601 offset 시각)이다. 선택이고 저장하지 않으며 수렴 시간의 기준점에만 쓴다.
      */
     data class ReceiveBatch(
         val terminalId: TerminalId,
         val storeId: StoreId,
         val operations: List<Operation>,
+        val reconnectedAt: String? = null,
     ) {
         data class Operation(
             val operationId: UUID,

@@ -18,6 +18,7 @@ import io.micrometer.core.instrument.MeterRegistry
 import io.micrometer.core.instrument.Timer
 import java.time.Clock
 import java.time.Duration
+import java.time.Instant
 import java.time.OffsetDateTime
 import java.time.format.DateTimeParseException
 import org.springframework.dao.DataIntegrityViolationException
@@ -49,6 +50,7 @@ class SyncCommandFacade(
         // 한 번도 일어나지 않은 status도 0으로 나가야 알림의 increase()가 첫 증가를 잡는다.
         SyncItemStatus.entries.forEach { meterRegistry.counter(OPERATION_METRIC, "status", it.name) }
         meterRegistry.counter(CREATED_AT_INVALID_METRIC)
+        meterRegistry.counter(RECONNECTED_AT_INVALID_METRIC)
     }
 
     // Micrometer 기본 bucket의 상한(30초)으로는 오프라인 수렴(분~시간)을 담지 못해 SLO bucket만 낸다.
@@ -62,6 +64,8 @@ class SyncCommandFacade(
             throw DomainException(SYNC_BATCH_TOO_LARGE, "한 배치의 operation은 ${MAX_OPERATIONS}개를 넘을 수 없습니다")
         }
 
+        val reconnectedAt = parseReconnectedAt(command.reconnectedAt)
+
         if (command.operations.isNotEmpty()) ensureWatermark(command.terminalId)
 
         // 순번 오름차순이라 한 번 gap이면 뒤는 모두 gap이다. 트랜잭션과 행 잠금 없이 채운다.
@@ -73,7 +77,7 @@ class SyncCommandFacade(
                 applyOperation(command.terminalId, command.storeId, operation).also {
                     gapped = it.status == SyncItemStatus.GAP
                     countItem(it)
-                    recordConvergence(operation, it)
+                    recordConvergence(operation, reconnectedAt, it)
                 }
             }
         }
@@ -90,8 +94,22 @@ class SyncCommandFacade(
         meterRegistry.counter(OPERATION_METRIC, "status", item.status.name).increment()
     }
 
-    /** 이번 배치에서 처음 확정된 항목(APPLIED·REJECTED)만 단말이 만든 시각부터 지금까지를 잰다. 앞선 항목이 커밋된 뒤 배치가 실패해도 남는다(재전송은 DUPLICATE라 중복 기록은 없다). 형식이 틀린 `createdAt`은 기록하지 않고 [CREATED_AT_INVALID_METRIC]을 센다. */
-    private fun recordConvergence(operation: SyncCommand.ReceiveBatch.Operation, item: SyncCommand.ReceiveBatch.Item) {
+    /** 형식이 틀린 `reconnectedAt`은 배치를 거절하지 않고 없는 것으로 다루며 배치당 한 번 [RECONNECTED_AT_INVALID_METRIC]을 센다. */
+    private fun parseReconnectedAt(raw: String?): Instant? {
+        if (raw == null) return null
+        return try {
+            OffsetDateTime.parse(raw).toInstant()
+        } catch (invalid: DateTimeParseException) {
+            meterRegistry.counter(RECONNECTED_AT_INVALID_METRIC).increment()
+            null
+        }
+    }
+
+    /**
+     * 이번 배치에서 처음 확정된 항목(APPLIED·REJECTED)만 단말이 만든 시각과 재연결 시각(`reconnectedAt`) 가운데 늦은 쪽부터 지금까지를 잰다. 재연결 뒤에 만든 항목은 만든 시각부터 잰다.
+     * 앞선 항목이 커밋된 뒤 배치가 실패해도 남는다(재전송은 DUPLICATE라 중복 기록은 없다). `createdAt`이 없으면 기록하지 않고, 형식이 틀리면 기록하지 않고 [CREATED_AT_INVALID_METRIC]을 센다.
+     */
+    private fun recordConvergence(operation: SyncCommand.ReceiveBatch.Operation, reconnectedAt: Instant?, item: SyncCommand.ReceiveBatch.Item) {
         val raw = operation.createdAt ?: return
         if (item.status != SyncItemStatus.APPLIED && item.status != SyncItemStatus.REJECTED) return
         val createdAt = try {
@@ -100,7 +118,7 @@ class SyncCommandFacade(
             meterRegistry.counter(CREATED_AT_INVALID_METRIC).increment()
             return
         }
-        val elapsed = Duration.between(createdAt, clock.instant())
+        val elapsed = Duration.between(maxOf(createdAt, reconnectedAt ?: createdAt), clock.instant())
         if (!elapsed.isNegative) convergence.record(elapsed)
     }
 
@@ -199,6 +217,7 @@ class SyncCommandFacade(
         private const val OPERATION_METRIC = "sync.operation"
         private const val CONVERGENCE_METRIC = "sync.convergence"
         private const val CREATED_AT_INVALID_METRIC = "sync.created-at.invalid"
+        private const val RECONNECTED_AT_INVALID_METRIC = "sync.reconnected-at.invalid"
         private val CONVERGENCE_SLOS = arrayOf(
             Duration.ofSeconds(1), Duration.ofSeconds(10), Duration.ofMinutes(1), Duration.ofMinutes(5),
             Duration.ofMinutes(15), Duration.ofHours(1), Duration.ofHours(6), Duration.ofHours(24),

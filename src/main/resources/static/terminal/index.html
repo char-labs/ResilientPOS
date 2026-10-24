@@ -346,7 +346,7 @@ function restore(json) { // S를 저장된 모양으로 되돌린다(저장 실�
 }
 
 // 화면 상태(새로 고치면 사라져도 되는 것)
-const U = { syncError: '', again: false, kstep: 'home', remote: null, lastResultId: null, faceFail: false, kiosk: Q.has('kiosk'), view: 'order', cat: '즐겨찾는 메뉴', dining: '매장', cart: [], sel: -1, overlay: null, flushing: false };
+const U = { syncError: '', again: false, kstep: 'home', remote: null, lastResultId: null, faceFail: false, kiosk: Q.has('kiosk'), view: 'order', cat: '즐겨찾는 메뉴', dining: '매장', cart: [], sel: -1, overlay: null, flushing: false, retryAt: 0 };
 
 const won = n => (Number(n) || 0).toLocaleString('ko-KR'); // 숫자가 아닌 값이 화면에 그대로 들어가지 않게 한다
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -367,11 +367,11 @@ const orderIdOf = op => op.clientOrderId || op.order.clientOrderId;
 // ---- sync: 대기열을 순번대로 보내고 항목 판정을 반영한다 ----
 function enqueueOrder(method, cart, channel, dining) {
   const snap = JSON.stringify(S);
-  const clientOrderId = uuid(), amount = cart.reduce((a, l) => a + l.price * l.qty, 0);
+  const clientOrderId = uuid(), amount = cart.reduce((a, l) => a + l.price * l.qty, 0), createdAt = new Date().toISOString(); // 서버가 수렴 시간을 재는 기준
   const lines = cart.map(l => ({ productCode: l.code, productName: l.name, unitPrice: String(l.price), quantity: String(l.qty) }));
   const ops = [
-    { operationId: uuid(), sequence: S.seq + 1, kind: 'CREATE_ORDER', order: { storeId: S.storeId, clientOrderId, currency: 'KRW', lines } },
-    { operationId: uuid(), sequence: S.seq + 2, kind: 'REQUEST_CHECKOUT', clientOrderId, amount: String(amount) },
+    { operationId: uuid(), sequence: S.seq + 1, kind: 'CREATE_ORDER', createdAt, order: { storeId: S.storeId, clientOrderId, currency: 'KRW', lines } },
+    { operationId: uuid(), sequence: S.seq + 2, kind: 'REQUEST_CHECKOUT', createdAt, clientOrderId, amount: String(amount) },
   ];
   S.seq += 2;
   S.outbox.push(...ops);
@@ -401,11 +401,22 @@ function applyAck(state, data) {
   }
 }
 
+// 재연결 시각: 서버는 createdAt과 이 값 가운데 늦은 쪽부터 수렴 시간을 재므로 매장 네트워크가 끊겼던 시간은 빠진다.
+// 끊긴 동안은 요청마다 전송 시각을 싣고, 서버에 닿으면(HTTP 응답이나 timeout) 다음 끊김까지 그 값을 유지한다.
+const link = { down: true, reconnectedAt: null }; // 페이지를 연 직후는 끊긴 것으로 본다
+function stampLink(l, now) { if (l.down) l.reconnectedAt = now; return l.reconnectedAt; }
+function settleLink(l, error) { l.down = !!error && error.name !== 'TimeoutError'; } // 네트워크 오류만 끊김이다
+
 async function postSync(operations) {
-  const res = await fetch(`/v1/terminals/${S.terminalId}/sync`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ operations }), signal: AbortSignal.timeout(5000),
-  });
+  const reconnectedAt = stampLink(link, new Date().toISOString());
+  let res;
+  try {
+    res = await fetch(`/v1/terminals/${S.terminalId}/sync`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reconnectedAt, operations }), signal: AbortSignal.timeout(30000),
+    });
+  } catch (e) { settleLink(link, e); throw e; }
+  settleLink(link, null);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return (await res.json()).data;
 }
@@ -415,19 +426,22 @@ async function mockSync(operations) {
 }
 
 async function flush() {
-  if (ROLE !== 'pos' || !S.outbox.length || !isOnline()) return;
+  if (ROLE !== 'pos' || !S.outbox.length || !isOnline() || Date.now() < U.retryAt) return;
   if (U.flushing) { U.again = true; return; }
   U.flushing = true; U.again = false;
   if (U.view === 'status' && !U.overlay) render(); // 기다릴 것이 있을 때만 진행 상태를 보인다
   const before = S.outbox.length;
   try {
-    // ponytail: 한 번에 50개. 서버 상한은 500이지만 항목마다 잠금을 잡아 큰 배치는 5초 제한에 걸릴 수 있다.
+    // ponytail: 한 번에 50개, timeout 30초(slo-alert-followups 결정 7). 서버 상한은 500이지만 동시 재연결 부하에서 큰 배치는 timeout에 걸려 다시 보내게 된다.
     applyAck(S, await (MOCK ? mockSync : postSync)(S.outbox.slice(0, 50)));
     save();
     const first = S.outbox[0];
     U.syncError = first && S.outbox.length === before
       ? `순번이 맞지 않아 전송이 멈췄습니다(서버 확정 ${S.lastAcked}, 대기 첫 순번 ${first.sequence}). 단말 초기화가 필요할 수 있습니다` : '';
   } catch (e) {
+    // 실패하면 5초 뒤에 다시 보낸다(429의 Retry-After 1초보다 길다). 요청 중에 쌓인 다음 전송 요청도 그때까지 미룬다.
+    U.retryAt = Date.now() + 5000;
+    setTimeout(flush, 5000);
     U.syncError = `서버 전송 실패(${e.message}). 5초마다 다시 시도합니다`;
     console.warn('sync 실패, 대기열을 유지합니다:', e.message);
   } finally {
@@ -919,7 +933,7 @@ const ACT = {
   faceMode: () => { U.faceFail = !U.faceFail; },
   done: leave,
   flush: () => { flush(); },
-  net: () => { S.forcedOffline = !S.forcedOffline; save(); if (!S.forcedOffline) flush(); },
+  net: () => { S.forcedOffline = !S.forcedOffline; save(); if (S.forcedOffline) link.down = true; else flush(); },
   reset: () => {
     if (!resetArmed) {
       const b = document.getElementById('resetBtn');
@@ -981,7 +995,22 @@ function selfTest() {
   try { ok4 = enqueueOrder('CARD', [{ code: 'AM-HOT', name: 't', price: 1, qty: 1 }], 'POS') === null && JSON.stringify(S) === before; }
   finally { Storage.prototype.setItem = setItem; }
   console.assert(ok4, 'selftest 실패: 저장 실패 되돌리기');
-  if (!ok3 || !ok4) return false;
+  // 대기열의 operation은 서버가 파싱할 수 있는 offset 시각으로 만든 시각을 싣는다
+  let ok5;
+  Storage.prototype.setItem = () => {};
+  try { enqueueOrder('CARD', [{ code: 'AM-HOT', name: 't', price: 1, qty: 1 }], 'POS'); ok5 = S.outbox.slice(-2).every(o => /^\d{4}-.+Z$/.test(o.createdAt)); }
+  finally { Storage.prototype.setItem = setItem; restore(before); }
+  console.assert(ok5, 'selftest 실패: createdAt');
+  // 재연결 시각: 끊긴 동안은 요청마다 전송 시각이고, 서버에 닿은(응답이나 timeout) 뒤로는 다음 끊김까지 그 값이다
+  const l = { down: true, reconnectedAt: null }, sent = [];
+  sent.push(stampLink(l, 't1')); settleLink(l, new TypeError('Failed to fetch'));
+  sent.push(stampLink(l, 't2')); settleLink(l, new DOMException('signal timed out', 'TimeoutError'));
+  sent.push(stampLink(l, 't3')); settleLink(l, null);
+  sent.push(stampLink(l, 't4')); l.down = true; // 오프라인 표시
+  sent.push(stampLink(l, 't5'));
+  const ok6 = sent.join() === 't1,t2,t2,t2,t5';
+  console.assert(ok6, 'selftest 실패: 재연결 시각', sent);
+  if (!ok3 || !ok4 || !ok5 || !ok6) return false;
   console.assert(ok, 'selftest 실패', st);
   console.log(ok ? 'selftest 통과' : 'selftest 실패');
   return ok;
@@ -1032,7 +1061,7 @@ addEventListener('keydown', e => {
 });
 addEventListener('resize', fit);
 addEventListener('online', () => { render(); flush(); });
-addEventListener('offline', render);
+addEventListener('offline', () => { link.down = true; render(); });
 setInterval(flush, 5000);          // 요청이 실패했을 때의 재시도
 setInterval(() => { if (!U.overlay) render(); }, 30000); // 시계와 경과 시간
 fit(); render(); flush();
