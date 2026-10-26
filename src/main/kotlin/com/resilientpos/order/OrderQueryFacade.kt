@@ -19,4 +19,7 @@ class OrderQueryFacade(
     fun getOrder(query: OrderQuery.GetOrder): OrderDetailView =
         orders.getOrder(query.orderId, query.storeId)
             ?: throw DomainException(Order.ORDER_NOT_FOUND, "주문을 찾을 수 없습니다", DomainErrorKind.NOT_FOUND)
+
+    fun findOrders(query: OrderQuery.FindOrders): OrderQuery.FindOrders.Result =
+        orders.findOrders(query.storeId, query.criteria)
 }

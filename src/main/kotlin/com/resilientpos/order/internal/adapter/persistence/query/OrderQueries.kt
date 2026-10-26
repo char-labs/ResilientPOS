@@ -4,6 +4,8 @@ import com.resilientpos.foundation.Money
 import com.resilientpos.order.ClientOrderId
 import com.resilientpos.order.OrderDetailView
 import com.resilientpos.order.OrderId
+import com.resilientpos.order.OrderQuery
+import com.resilientpos.order.OrderSummaryView
 import com.resilientpos.order.internal.adapter.persistence.command.OrderCheckoutEntity
 import com.resilientpos.order.internal.adapter.persistence.command.OrderEntity
 import com.resilientpos.order.internal.adapter.persistence.command.OrderLineEntity
@@ -11,6 +13,7 @@ import com.resilientpos.platform.JdslQueryExecutor
 import com.resilientpos.platform.ReadOnlyTransactional
 import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.TerminalId
+import java.math.BigDecimal
 import java.util.Currency
 import org.springframework.stereotype.Component
 
@@ -47,6 +50,65 @@ class OrderQueries(
                 .orderBy(path(OrderLineEntity::lineNo).asc())
         }
         return order.toView(lines, checkouts)
+    }
+
+    /**
+     * 매장의 주문을 `occurred_at desc, id desc`로 한 페이지 읽는다. 쿼리는 하나다.
+     * `total`은 select 절의 상관 subquery라 limit으로 자른 페이지의 행에만 계산한다.
+     * line join + group by 뒤에 order by·limit을 걸면 PostgreSQL이 매장 이력 전체를 집계한 뒤 자른다(PR spec의 실측).
+     * keyset 술어의 앞 조건(`occurred_at <= 시각`)은 중복이지만 인덱스의 범위 조건이 된다. OR만 쓰면 Filter가 되어 앞 행을 다시 읽는다.
+     */
+    @ReadOnlyTransactional
+    fun findOrders(storeId: StoreId, criteria: OrderQuery.FindOrders.Criteria): OrderQuery.FindOrders.Result {
+        val rows = queries.findAll(limit = criteria.size + 1) {
+            val order = entity(OrderEntity::class)
+            val line = entity(OrderLineEntity::class)
+            val total = select<BigDecimal>(
+                sum(
+                    // 단가(BigDecimal)와 수량(Int)은 DSL의 times가 같은 타입만 받아 template으로 곱한다.
+                    customExpression(BigDecimal::class, "{0} * {1}", path(OrderLineEntity::unitPrice), path(OrderLineEntity::quantity)),
+                ),
+            )
+                .from(line)
+                .where(path(OrderLineEntity::orderId).eq(path(OrderEntity::id)))
+                .asSubquery()
+            val after = criteria.after
+            select(Any::class, order, total)
+                .from(order)
+                .where(
+                    and(
+                        path(OrderEntity::storeId).eq(storeId.value),
+                        criteria.from?.let { path(OrderEntity::occurredAt).ge(it) },
+                        criteria.to?.let { path(OrderEntity::occurredAt).lt(it) },
+                        criteria.status?.let { path(OrderEntity::status).eq(it) },
+                        after?.let {
+                            and(
+                                path(OrderEntity::occurredAt).le(it.occurredAt),
+                                or(
+                                    path(OrderEntity::occurredAt).lt(it.occurredAt),
+                                    path(OrderEntity::id).lt(it.orderId.value),
+                                ),
+                            )
+                        },
+                    ),
+                )
+                .orderBy(path(OrderEntity::occurredAt).desc(), path(OrderEntity::id).desc())
+        }
+        val page = rows.take(criteria.size).map { row ->
+            val columns = row as Array<*>
+            val order = columns[0] as OrderEntity
+            val currency = Currency.getInstance(order.currency)
+            OrderSummaryView(
+                orderId = OrderId(order.id),
+                terminalId = TerminalId(order.terminalId),
+                status = order.status,
+                currency = currency,
+                total = (columns[1] as BigDecimal?)?.let { Money.of(it, currency) } ?: Money.zero(currency),
+                occurredAt = order.occurredAt,
+            )
+        }
+        val next = if (rows.size > criteria.size) page.last().let { OrderQuery.FindOrders.Cursor(it.occurredAt, it.orderId) } else null
+        return OrderQuery.FindOrders.Result(page, next)
     }
 }
 
