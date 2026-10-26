@@ -13,7 +13,7 @@ import java.util.UUID
 
 /**
  * `POST /v1/terminals/{terminalId}/sync`의 요청 본문. 형식 오류는 Jackson 역직렬화가 거절하므로 여기서는 검증하지 않는다.
- * 항목의 `createdAt`(ISO-8601 offset 시각)은 선택이고 저장하지 않으며 수렴 시간 metric에만 쓰인다. 형식이 틀리면 없는 것으로 다루고 Facade가 센다. payload에 넣지 않아 payload hash에 영향이 없다.
+ * 항목의 `createdAt`(ISO-8601 offset 시각)은 선택이다. 수렴 시간 metric에 쓰이고 `CREATE_ORDER` 항목이면 주문의 발생 시각이 된다(규칙은 `Order.create`). 형식이 틀리면 없는 것으로 다루고 Facade가 센다. payload에 넣지 않아 payload hash에 영향이 없다.
  * 최상위 `reconnectedAt`(같은 형식)도 선택이고 같은 방식으로 다룬다. 단말이 끊긴 뒤 서버에 닿은 첫 요청의 전송 시각이며, 수렴 시간은 `createdAt`과 이 값 가운데 늦은 쪽부터 잰다.
  * 항목의 `order`는 `POST /v1/orders` 본문에서 `terminalId`를 뺀 모양이다. 단말 ID는 경로에서만 온다. 두 입구의 수용 범위는 다르다(`quantity`는 여기서 소수도 받아 그 항목을 거절한다).
  * 항목은 `kind`로 종류가 갈린다. `kind`가 없거나 모르는 값이면 기본 종류로 빠지지 않고 역직렬화가 거절해 배치 전체가 400이다.

@@ -78,6 +78,9 @@
 - src/main/resources/db/migration/**
 - src/test/kotlin/com/resilientpos/order/**
 - src/test/kotlin/com/resilientpos/sync/**
+- src/test/kotlin/com/resilientpos/FixtureFactoriesTest.kt
+- src/test/kotlin/com/resilientpos/SchemaMigrationTest.kt
+- src/test/kotlin/com/resilientpos/terminal/internal/adapter/web/TerminalInFlightIntegrationTest.kt
 - src/test/resources/**
 - docs/wiki/domain-model.md
 - docs/wiki/entity-map.md
@@ -117,7 +120,7 @@
 7. 락: 컬럼 추가는 nullable이라 메타데이터 변경, `update`는 전체 행을 다시 쓰고, `set not null`은 `ACCESS EXCLUSIVE`로 전체를 스캔한다. 배포 환경이 없고 개발 데이터만 있어 한 마이그레이션에 둔다. 배포된 큰 테이블이었다면 nullable 추가 → 배치 backfill → `NOT VALID` check → `VALIDATE` 순서다. 마이그레이션에 `SET LOCAL lock_timeout`을 둔다. 인덱스는 `create index concurrently` 단독 마이그레이션이고 `if not exists`를 쓰지 않는다. 실패 시 INVALID 인덱스와 `flyway_schema_history` 실패 행 정리는 domain-model §4.7 질문 7 절차다. 위반 행: `occurred_at`은 같은 마이그레이션이 모두 채우므로 NOT NULL 위반 행이 없다.
 8. 이전 버전 호환: 기본값 없는 NOT NULL이라 이전 버전의 INSERT가 실패한다. 배포 환경이 없어 expand 순서를 밟지 않는다. 배포된 뒤 같은 변경이라면 nullable로 먼저 내보냈어야 한다.
 9. 이벤트·캐시: `OrderEvent.Created`는 발행 기록이 없고 payload에 시각을 더하지 않는다. 캐시가 없다.
-- 대조 기록: 미작성. PR 제출 전 구현자가 아닌 리뷰어가 마이그레이션·엔티티·조회 코드와 대조해 채운다.
+- 대조 기록: code-reviewer 에이전트가 2026-10-26 HEAD a3b620e에서 V021·V022·V023, OrderEntity(from에서만 occurredAt 세팅, apply 미사용), Order(occurredAtOf·verifySamePayload), OrderCommand, OrderQueries(인덱스 앞 컬럼과 맞는 술어·정렬, 단건 left join 한 쿼리), SyncCommandFacade, OrderPayload.hash를 질문 1~9 답과 대조했고 불일치 항목 없음(SyncBatchRequest.kt 16행 KDoc의 "metric에만 쓰인다"가 낡은 것은 별건이며 같은 PR에서 고쳤다).
 
 ## 검증
 - 정상: 단건 조회의 각 필드, checkout 뒤 상태·회차, 목록의 정렬·keyset 끝까지 넘김·기간·상태 필터·합계, sync 시각의 경계(미래, 7일 초과, 없음, 형식 오류).
@@ -148,4 +151,13 @@
 | 두 endpoint의 매핑·인증·소유 확인·400 변환과 REST Docs (인수 1·2·6·7·10). `OrderGetControllerTest`(6건)의 `인증 단말의 매장으로 조회하고 200과 주문 필드와 line과 checkout을 돌려준다`, `checkout 전 OPEN 주문은 200과 빈 checkouts다`, `인증 단말의 매장이 조회에 실린다`, `주문이 없거나 다른 매장의 것이면 404 ORDER_NOT_FOUND다`, `Authorization 헤더가 없으면 401 ...`, `orderId가 UUID 형식이 아니면 400 ...`. `OrderOwnerControllerTest`(10건)의 `기간 상태 크기 cursor를 조회에 싣고 200과 items와 nextCursor를 돌려준다`, `다음 페이지가 없으면 nextCursor는 null이다`, `파라미터가 없으면 기본 크기와 필터 없이 조회한다`, `크기 경계 1과 50은 통과하고 조회에 그대로 실린다`, `offset의 플러스를 퍼센트 인코딩한 URI가 통과하고 같은 시각으로 읽힌다`, `남의 매장이거나 없는 매장이면 404 STORE_NOT_FOUND ...`, `로그인하지 않으면 401 UNAUTHENTICATED ...`, `해석할 수 없는 cursor는 종류마다 400 ...`, `크기가 범위 밖이거나 숫자가 아니면 400 ...`, `모르는 status와 형식이 틀린 시각은 400 ...`. `OrderCursorCodecTest`(3건)의 왕복(고정 문자열·패딩 없음), 범위 끝 왕복, 실패 종류별 400 | `./gradlew test --tests 'com.resilientpos.order.internal.adapter.web.*'` 58건 중 15건 실패. 최소 선언(GET 단건은 빈 값 응답, 목록은 파라미터·소유 확인 없이 빈 items, 코덱은 고정 값)이라 모두 assertion 실패(필드 불일치, `WantedButNotInvoked`, 400 기대에 200). 스텁과 같아 통과한 것: 단건의 401과 UUID 아님 400(Facade 앞에서 정해짐), 목록의 401, 단건 OPEN 빈 checkouts(스텁 값이 OPEN·빈 목록과 우연히 같았음. 이후 orderId 단언을 더함) | 같은 명령, BUILD SUCCESSFUL. 신규 19건 전부 통과. `OrderController`에 `OrderQueryFacade`를 더했고 기존 `OrderControllerTest`·`OrderCheckoutControllerTest`는 mock 타입에 `OrderQueryFacade`만 더했다. 새 `OrderOwnerController`는 `requireOwned`를 먼저 부르고 `size` 범위와 cursor 해석 실패를 `ResponseStatusException(BAD_REQUEST)`로 끊는다(`OffsetDateTime` 파라미터를 Instant로 바꿈). cursor는 `OrderCursorCodec`(web adapter 안, 마이크로초와 id, 연도 1~9999 밖은 400). REST Docs 스니펫 `orders-get`, `orders-get-not-found`, `orders-get-bad-request`, `owner-orders-list`, `owner-orders-list-bad-request`, `owner-orders-list-store-not-found`, `owner-orders-list-unauthenticated`. `owner-orders-list`의 curl에 `from=...Z`와 `to=...%2B09:00`이 함께 나옴 | `./gradlew test --tests 'com.resilientpos.order.*' --tests 'com.resilientpos.platform.*' --tests '*ModuleStructureTest' --tests '*TransactionDeclaration*' --tests '*EntityVisibility*' --tests '*DependencyDirection*'` BUILD SUCCESSFUL, 401건 실패 0. 동작을 지워 빨개지는지(requireOwned, size 검사)는 미실행 이어서 리뷰 전 보완: 저장할 수 없는 연도의 `from`·`to`(`%2B10000-…`, `-0001-…`)가 500이던 것을 RED(`Status expected 400 but was 500`)로 확인하고 cursor와 같은 연도 1~9999 검사(`OrderCursorCodec.requireStorable`)를 걸어 GREEN. 동작 제거 확인: `requireOwned`를 지우면 2건(404, 200 정상) 실패, size 검사를 지우면 크기 테스트 1건 실패, 원복 뒤 `OrderOwnerControllerTest` 10건 통과 |
 
 ## 결과
-개발 전 작성. 개발 후 실행 결과와 변경 이유를 추가한다.
+**generic plan 실측(인수 9).** 구현이 렌더한 목록 SQL(Hibernate 로그 원문, select 절 상관 subquery와 범위 절의 keyset 술어)을 같은 일회용 컨테이너(주문 1,000만, 인덱스 A·B)에서 `PREPARE`하고 `plan_cache_mode = force_generic_plan`으로 `EXPLAIN (ANALYZE, BUFFERS) EXECUTE`했다. 두 번째 실행 기준이다.
+
+| 경우 | 계획 | 시간 | buffers |
+|---|---|---|---|
+| 필터 없는 첫 페이지(매장 1, 21건) | Index Scan Backward, 인덱스 A | 0.33ms | 151 |
+| 깊은 페이지(cursor 2026-08-01, 이력의 약 3분의 1 지점) | Index Scan Backward, 인덱스 A, 시각 상한이 Index Cond | 0.18ms | 151 |
+| 0건인 상태(매장 2의 `CHECKOUT_REQUESTED`) | Index Scan Backward, 인덱스 B | 0.05ms | 4 |
+| 1건인 상태(매장 1의 `CHECKOUT_REQUESTED`) | Index Scan Backward, 인덱스 B | 0.04ms | 11 |
+
+상태 값이 파라미터인 generic plan에서도 B를 고른다. 0건 상태는 B에서 이력 길이와 무관하므로 1년치 시드를 따로 재지 않았다. 측정 뒤 컨테이너는 지운다.
