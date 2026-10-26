@@ -7,6 +7,7 @@ import com.resilientpos.order.OrderCommand
 import com.resilientpos.order.OrderCommandFacade
 import com.resilientpos.order.OrderFixtures
 import com.resilientpos.order.OrderId
+import com.resilientpos.order.OrderQueryFacade
 import com.resilientpos.order.OrderStatus
 import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.AuthenticatedTerminal
@@ -50,7 +51,7 @@ import org.springframework.test.web.servlet.post
 @MockTerminalRateLimiter
 @WebMvcTest(OrderController::class)
 @AutoConfigureRestDocs
-@MockitoBean(types = [OrderCommandFacade::class, TerminalManagement::class])
+@MockitoBean(types = [OrderCommandFacade::class, OrderQueryFacade::class, TerminalManagement::class])
 class OrderControllerTest(
     private val mockMvc: MockMvc,
     private val facade: OrderCommandFacade,

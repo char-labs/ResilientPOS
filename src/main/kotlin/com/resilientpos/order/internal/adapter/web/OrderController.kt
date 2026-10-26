@@ -3,11 +3,14 @@ package com.resilientpos.order.internal.adapter.web
 import com.resilientpos.order.OrderCommand
 import com.resilientpos.order.OrderCommandFacade
 import com.resilientpos.order.OrderId
+import com.resilientpos.order.OrderQuery
+import com.resilientpos.order.OrderQueryFacade
 import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.AuthenticatedTerminal
 import com.resilientpos.terminal.TerminalId
 import java.util.UUID
 import org.springframework.http.HttpStatus
+import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PathVariable
 import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestBody
@@ -20,7 +23,12 @@ import org.springframework.web.bind.annotation.RestController
  */
 @RestController
 @RequestMapping("/v1/orders")
-class OrderController(private val facade: OrderCommandFacade) {
+class OrderController(private val facade: OrderCommandFacade, private val queryFacade: OrderQueryFacade) {
+
+    /** 인증 단말의 매장 기준이다. 다른 매장의 주문과 없는 주문은 같은 `404 ORDER_NOT_FOUND`다. */
+    @GetMapping("/{orderId}")
+    fun getOrder(@PathVariable orderId: UUID, terminal: AuthenticatedTerminal): OrderDetailResponse =
+        OrderDetailResponse.from(queryFacade.getOrder(OrderQuery.GetOrder(OrderId(orderId), terminal.storeId)))
 
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
