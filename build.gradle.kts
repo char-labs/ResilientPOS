@@ -34,7 +34,7 @@ dependencyManagement {
     dependencies {
         // kafka-clients 4.2.2가 쓰는 lz4-java 1.11.2: CVE-2026-106449·106450·106451(1.11.4에서 수정). Kafka 4.2 브랜치에는 수정이 없다.
         // Boot BOM이 lz4-java 1.11.4 이상을 쓰는 kafka-clients를 가져오는 Boot 패치로 올리는 PR에서 지운다.
-        dependency("at.yawk.lz4:lz4-java:1.11.4")
+        dependency("at.yawk.lz4:lz4-java:1.11.2")
     }
 }
 
