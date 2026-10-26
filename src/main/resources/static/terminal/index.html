@@ -301,7 +301,8 @@ const DEFAULT_MENU = { currency: 'KRW', items: [
   ['TE-ROOI', '루이보스티', '6000', '허브티'], ['TE-MINT', '페퍼민트티', '5000', '허브티'], ['TE-CAMO', '카모마일티', '5000', '허브티'],
   ['TS-KAYA', '카야잼 토스트', '4000', '베이커리'],
 ].map(([code, name, price, category]) => ({ code, name, price, category })) };
-const ALL = '전체';
+const ALL = ''; // 합성 '전체' 탭의 키. 분류는 빈 값일 수 없어 실제 분류와 겹치지 않는다
+const catLabel = c => c === ALL ? '전체' : esc(c);
 const OPTIONS = ['샷추가 (500)', '사이즈업 (500)', '연하게', '두유(500)', '미지근하게', '시럽추가', '우유많이', '시즌원두', '얼음X'];
 
 // ---- 역할: 포스(주문·대기열·sync)와 고객 단말(결제 화면)은 서로 다른 포트에서 뜬다 ----
@@ -345,7 +346,7 @@ function restore(json) { // S를 저장된 모양으로 되돌린다(저장 실�
 const U = { syncError: '', again: false, kstep: 'home', remote: null, lastResultId: null, faceFail: false, kiosk: Q.has('kiosk'), view: 'order', cat: ALL, dining: '매장', cart: [], sel: -1, overlay: null, flushing: false, retryTimer: 0 };
 
 const won = n => (Number(n) || 0).toLocaleString('ko-KR'); // 숫자가 아닌 값이 화면에 그대로 들어가지 않게 한다
-const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const isOnline = () => ROLE === 'terminal' ? R.online : !S.forcedOffline && navigator.onLine;
 const faceFails = () => ROLE === 'terminal' ? R.faceFail : U.faceFail;
 const customerKiosk = () => U.kiosk && (ROLE === 'terminal' || !connected()); // 지금 이 창이 고객용 키오스크 화면인가
@@ -353,15 +354,15 @@ const customerKiosk = () => U.kiosk && (ROLE === 'terminal' || !connected()); //
 // ---- 메뉴: 서버가 정본이고 포스는 받은 사본으로 판다. 고객 단말은 포스가 보낸 메뉴를 그린다 ----
 const MENU_KEY = 'rpos.menu.v1';
 const MENU_REFRESH_MS = 5 * 60 * 1000;
-const PRICE = /^\d{1,15}(\.\d{1,4})?$/;
+const PRICE = /^\d{1,15}$/;
 const text = (v, max) => typeof v === 'string' && v.trim() !== '' && [...v].length <= max && !v.includes('\0');
-// 서버 응답·저장된 사본·포스가 보낸 메뉴를 정해진 모양일 때만 받는다. 가격은 decimal string이나 0 이상의 숫자이고 화면 계산용 숫자로 바꾼다.
-// shortcut: 가격을 숫자로 바꿔 소수 통화의 자릿수("4.50")를 잃는다. 시연 메뉴는 KRW라 그대로 둔다. 소수 통화를 시연하면 문자열을 끝까지 들고 간다.
+// 서버 응답·저장된 사본·포스가 보낸 메뉴를 정해진 모양일 때만 받는다. 가격은 decimal string 그대로 들고 다니고 금액은 BigInt로 센다(totalOf).
+// shortcut: 정수 단위 가격만 받아 소수 통화("4.50") 메뉴는 통째로 쓰지 않는다. 소수 통화를 시연하면 통화 자릿수로 BigInt를 맞춘다.
 function cleanMenu(d) {
   if (!d || typeof d.currency !== 'string' || !/^[A-Z]{3}$/.test(d.currency) || !Array.isArray(d.items) || d.items.length > 200) return null;
   const items = d.items.map(i => i && text(i.code, 64) && text(i.name, 255) && text(i.category, 50)
-    && (typeof i.price === 'string' ? PRICE.test(i.price) : Number.isFinite(i.price) && i.price >= 0)
-    ? { code: i.code, name: i.name, price: Number(i.price), category: i.category } : null);
+    && typeof i.price === 'string' && PRICE.test(i.price)
+    ? { code: i.code, name: i.name, price: i.price, category: i.category } : null);
   return items.includes(null) || new Set(items.map(i => i.code)).size !== items.length ? null : { currency: d.currency, items };
 }
 function loadMenu() {
@@ -373,25 +374,39 @@ const menu = () => ROLE === 'terminal' && R.menu ? R.menu : M; // 지금 화면�
 const cats = () => [ALL, ...new Set(menu().items.map(i => i.category))];
 const catItems = () => U.cat === ALL ? menu().items : menu().items.filter(i => i.category === U.cat);
 const product = code => M.items.find(i => i.code === code);
-// 포스: 끊긴 동안이나 실패하면 남은 사본으로 판다. 304면 사본이 최신이다.
+// 받은 메뉴로 바꾼다. 통화가 바뀌면 담아 둔 장바구니는 다른 통화의 값이라 비운다.
+function adoptMenu(m, etag) {
+  if (m.currency !== M.currency) { U.cart = []; U.sel = -1; }
+  M = { ...m, etag };
+  if (!cats().includes(U.cat)) U.cat = ALL;
+}
+// 포스: 끊긴 동안이나 실패하면 남은 사본으로 판다. 304면 사본이 최신이다. 한 번에 하나만 보내 늦게 온 옛 응답이 새 메뉴를 덮지 않게 한다.
+let menuFetching = false;
 async function fetchMenu() {
-  if (ROLE !== 'pos' || MOCK || !isOnline()) return;
+  if (ROLE !== 'pos' || MOCK || !isOnline() || menuFetching) return;
+  menuFetching = true;
   try {
     const res = await fetch('/v1/menu', { cache: 'no-store', headers: M.etag ? { 'If-None-Match': M.etag } : {}, signal: AbortSignal.timeout(10000) });
     if (!res.ok) return; // 304, 401(시연 단말은 토큰이 없다), 404, 5xx
     const data = (await res.json()).data, m = cleanMenu(data);
     if (!m) return console.warn('서버 메뉴의 모양이 맞지 않아 남은 사본을 씁니다');
-    M = { ...m, etag: res.headers.get('ETag') };
+    adoptMenu(m, res.headers.get('ETag'));
     try { localStorage.setItem(MENU_KEY, JSON.stringify({ etag: M.etag, data })); } catch { /* 사본을 못 남겨도 지금 화면은 새 메뉴로 판다 */ }
-    if (!cats().includes(U.cat)) U.cat = ALL;
     render();
   } catch (e) { console.warn('메뉴를 받지 못해 남은 사본을 씁니다:', e.message); }
+  finally { menuFetching = false; }
 }
 // 단말(다른 origin)이 보낸 주문은 상품 코드와 수량만 받고 이름과 가격은 포스의 메뉴에서 다시 읽는다
 function trustedLines(lines) {
   if (!Array.isArray(lines) || !lines.length) return null;
   const out = lines.map(l => l && product(l.code) && Number.isInteger(l.qty) && l.qty > 0 && l.qty <= 99 ? { ...product(l.code), qty: l.qty } : null);
   return out.includes(null) ? null : out;
+}
+const totalOf = lines => lines.reduce((a, l) => a + BigInt(l.price) * BigInt(l.qty), 0n); // 정확한 합계. 화면 표시만 Number로 바꾼다
+// 키오스크 주문: 포스 사본으로 다시 읽은 합계가 키오스크가 보인 합계와 같을 때만 받는다(그 사이 메뉴가 바뀌었으면 거절)
+function trustedKioskOrder(lines, total) {
+  const out = trustedLines(lines);
+  return out && typeof total === 'string' && String(totalOf(out)) === total ? out : null;
 }
 const total = () => U.cart.reduce((a, l) => a + l.price * l.qty, 0);
 const count = () => U.cart.reduce((a, l) => a + l.qty, 0);
@@ -400,11 +415,11 @@ const orderIdOf = op => op.clientOrderId || op.order.clientOrderId;
 // ---- sync: 대기열을 순번대로 보내고 항목 판정을 반영한다 ----
 function enqueueOrder(method, cart, channel, dining) {
   const snap = JSON.stringify(S);
-  const clientOrderId = uuid(), amount = cart.reduce((a, l) => a + l.price * l.qty, 0), createdAt = new Date().toISOString(); // 서버가 수렴 시간을 재는 기준
+  const clientOrderId = uuid(), exact = totalOf(cart), amount = Number(exact), createdAt = new Date().toISOString(); // 서버가 수렴 시간을 재는 기준
   const lines = cart.map(l => ({ productCode: l.code, productName: l.name, unitPrice: String(l.price), quantity: String(l.qty) }));
   const ops = [
     { operationId: uuid(), sequence: S.seq + 1, kind: 'CREATE_ORDER', createdAt, order: { storeId: S.storeId, clientOrderId, currency: M.currency, lines } },
-    { operationId: uuid(), sequence: S.seq + 2, kind: 'REQUEST_CHECKOUT', createdAt, clientOrderId, amount: String(amount) },
+    { operationId: uuid(), sequence: S.seq + 2, kind: 'REQUEST_CHECKOUT', createdAt, clientOrderId, amount: String(exact) },
   ];
   S.seq += 2;
   S.outbox.push(...ops);
@@ -441,6 +456,7 @@ function stampLink(l, now) { if (l.down) l.reconnectedAt = now; return l.reconne
 function settleLink(l, error) { l.down = !!error && error.name !== 'TimeoutError'; } // 네트워크 오류만 끊김이다
 
 async function postSync(operations) {
+  const wasDown = link.down;
   const reconnectedAt = stampLink(link, new Date().toISOString());
   let res;
   try {
@@ -450,6 +466,7 @@ async function postSync(operations) {
     });
   } catch (e) { settleLink(link, e); throw e; }
   settleLink(link, null);
+  if (wasDown) fetchMenu(); // 끊겼다 서버에 다시 닿았다
   if (!res.ok) {
     const body = await res.json().catch(() => null); // 본문이 JSON이 아니면(ingress 등) code가 없다
     throw Object.assign(new Error(`HTTP ${res.status}`), { errorCode: body?.error?.errorCode, retryAfter: res.headers.get('Retry-After') });
@@ -586,7 +603,9 @@ function cleanState(m) {
   };
 }
 function applyRemote(raw) {
+  const prevCurrency = menu().currency;
   const m = R = cleanState(raw); U.kiosk = m.kiosk;
+  if (menu().currency !== prevCurrency) { U.cart = []; U.sel = -1; }
   if (!cats().includes(U.cat)) U.cat = ALL;
   const o = U.overlay;
   if (m.result) {
@@ -657,11 +676,11 @@ function kioskView() {
       <button class="k-more" data-act="kgo" data-s="menu">메뉴 더 추가 +</button></div>
     <button class="btn-xl fill pay k-cta" data-act="pay" ${n ? '' : 'disabled'}><i>${n}</i>${won(total())}원 결제하기</button>`;
   return `${kioskTop('kback')}
-    <div class="k-cats" role="tablist">${cats().map(c => `<button role="tab" aria-selected="${c === U.cat}" data-act="cat" data-c="${esc(c)}">${esc(c)}</button>`).join('')}</div>
-    <section class="k-menu"><h2>${esc(U.cat)}</h2>
+    <div class="k-cats" role="tablist">${cats().map(c => `<button role="tab" aria-selected="${c === U.cat}" data-act="cat" data-c="${esc(c)}">${catLabel(c)}</button>`).join('')}</div>
+    <section class="k-menu"><h2>${catLabel(U.cat)}</h2>
       <div class="k-grid">${catItems().map(({ code, name, price }, i) => {
         const q = U.cart.find(l => l.code === code)?.qty, b = BADGE[code];
-        return `<button class="k-item" data-act="add" data-i="${i}"><span class="k-img" style="background:${TINT[i % TINT.length]}">${esc([...name.replace(/^(HOT|ICE) /, '')][0])}</span>
+        return `<button class="k-item" data-act="add" data-i="${i}"><span class="k-img" style="background:${TINT[i % TINT.length]}">${esc([...name.replace(/^(HOT|ICE) /, '')][0] || [...name][0])}</span>
           ${b ? `<i class="k-badge ${b[1]}">${b[0]}</i>` : ''}${q ? `<em>${q}</em>` : ''}${esc(name)}<small>${won(price)}원</small></button>`;
       }).join('')}</div></section>
     ${n ? `<button class="btn-xl fill pay k-cta" data-act="kgo" data-s="cart"><i>${n}</i>${won(total())}원 확인하기</button>` : ''}`;
@@ -673,7 +692,7 @@ function orderView() {
   return `<div class="main">
     <section class="left">
       <div class="tabs">
-        <div class="tab-scroll" role="tablist">${cs.map(c => `<button class="tab" role="tab" aria-selected="${c === U.cat}" data-act="cat" data-c="${esc(c)}">${esc(c)}</button>`).join('')}</div>
+        <div class="tab-scroll" role="tablist">${cs.map(c => `<button class="tab" role="tab" aria-selected="${c === U.cat}" data-act="cat" data-c="${esc(c)}">${catLabel(c)}</button>`).join('')}</div>
         <span class="pager"><button data-act="catStep" data-d="-1" aria-label="이전 분류" ${ci > 0 ? '' : 'disabled'}>‹</button><button data-act="catStep" data-d="1" aria-label="다음 분류" ${ci < cs.length - 1 ? '' : 'disabled'}>›</button></span>
       </div>
       <div class="grid">
@@ -893,7 +912,7 @@ function complete(method, lines, dining) {
 function paid(method) {
   if (ROLE !== 'terminal') return complete(method);
   const own = !U.overlay.remote; // 키오스크에서 고객이 직접 담은 주문
-  send({ t: 'paid', method, dining: U.dining, lines: own ? U.cart.map(({ code, qty }) => ({ code, qty })) : null });
+  send({ t: 'paid', method, dining: U.dining, lines: own ? U.cart.map(({ code, qty }) => ({ code, qty })) : null, total: own ? String(totalOf(U.cart)) : null });
   // 장바구니는 포스의 답을 받은 뒤에 비운다. 5초 안에 답이 없으면 접수되지 않았다고 알린다.
   U.overlay = { ...U.overlay, step: 'sent', own };
   clearTimeout(sentTimer);
@@ -987,7 +1006,7 @@ const ACT = {
       setTimeout(() => { resetArmed = false; b.textContent = '단말 초기화'; }, 4000); // 한참 뒤의 실수 한 번으로 지워지지 않게 한다
       return 'skip';
     }
-    localStorage.removeItem(KEY); location.reload(); return 'skip';
+    localStorage.removeItem(KEY); localStorage.removeItem(MENU_KEY); location.reload(); return 'skip';
   },
   todo: () => 'todo',
 };
@@ -1023,32 +1042,45 @@ function selfTest() {
     && st.orders[0].status === 'SYNCED' && st.orders[0].orderId === 'srv-A'
     && st.orders[1].status === 'REJECTED' && st.orders[1].errorCode === 'INVALID_QUANTITY' // 첫 거절 사유를 유지한다
     && st.orders[2].status === 'PENDING';
-  const savedMenu = M;
-  M = { ...cleanMenu(DEFAULT_MENU), etag: null }; // 브라우저에 남은 사본과 무관하게 내장 메뉴로 본다
-  const t = trustedLines([{ code: 'AM-HOT', qty: 2, price: 1 }]);
-  const ok2 = t && t[0].price === 4000 && t[0].qty === 2 // 단말이 보낸 가격은 쓰지 않는다
-    && !trustedLines([{ code: 'NOPE', qty: 1 }]) && !trustedLines([{ code: 'AM-HOT', qty: 0 }]) && !trustedLines([{ code: 'AM-HOT', qty: 1.5 }]) && !trustedLines([]);
+  const savedMenu = M, savedCart = U.cart;
+  let ok2, okMenu, okCats, okSwap, okKiosk, okEsc, okMoney, okAdopt;
+  try {
+    M = { ...cleanMenu(DEFAULT_MENU), etag: null }; // 브라우저에 남은 사본과 무관하게 내장 메뉴로 본다
+    const t = trustedLines([{ code: 'AM-HOT', qty: 2, price: 1 }]);
+    ok2 = t && t[0].price === '4000' && t[0].qty === 2 // 단말이 보낸 가격은 쓰지 않는다
+      && !trustedLines([{ code: 'NOPE', qty: 1 }]) && !trustedLines([{ code: 'AM-HOT', qty: 0 }]) && !trustedLines([{ code: 'AM-HOT', qty: 1.5 }]) && !trustedLines([]);
+    // 메뉴: 정해진 모양만 받고, 분류는 처음 나온 순서이며, 교체하면 포스가 새 가격으로 다시 읽는다
+    const it = (o = {}) => ({ code: 'X', name: '이름', price: '100', category: '분류', ...o });
+    okMenu = !!cleanMenu(DEFAULT_MENU) && cleanMenu({ currency: 'KRW', items: [] }).items.length === 0
+      && [{ price: '-1' }, { price: '1.2.3' }, { price: -1 }, { price: 100 }, { price: '1.5' }, { price: '1e3' }, { price: '1'.repeat(16) }, { name: ' ' }, { name: 'a\0' }, { name: 'a'.repeat(256) }, { code: 'c'.repeat(65) }, { category: 7 }]
+        .every(o => cleanMenu({ currency: 'KRW', items: [it(o)] }) === null)
+      && cleanMenu({ currency: 'KRW', items: [it({ name: '😀'.repeat(255) })] }) !== null // 글자 수는 code point로 센다
+      && cleanMenu({ currency: 'krw', items: [] }) === null && cleanMenu({ currency: 'KRW', items: [it(), it()] }) === null
+      && cleanMenu({ currency: 'KRW', items: Array.from({ length: 201 }, (_, i) => it({ code: 'c' + i })) }) === null && cleanMenu(null) === null;
+    // 큰 금액도 자릿수를 잃지 않는다
+    okMoney = totalOf([{ price: '999999999999999', qty: 99 }, { price: '1', qty: 2 }]) === 98999999999999903n;
+    M = { ...cleanMenu({ currency: 'KRW', items: [it({ code: 'B', category: '음료' }), it({ code: 'A', category: '2' }), it({ code: 'P', category: '__proto__' }), it({ code: 'W', category: '전체' }), it({ code: 'AM-HOT', price: '4500', category: '음료' })] }), etag: '"s.1"' };
+    okCats = cats().join() === [ALL, '음료', '2', '__proto__', '전체'].join() && (U.cat = '2', catItems().map(i => i.code).join() === 'A')
+      && (U.cat = '전체', catItems().map(i => i.code).join() === 'W') && (U.cat = ALL, catItems().length === 5); // 실제 '전체' 분류와 합성 탭이 따로 선다
+    okSwap = trustedLines([{ code: 'AM-HOT', qty: 1 }])[0].price === '4500' && !trustedLines([{ code: 'LT-CAFE', qty: 1 }])
+      && trustedKioskOrder([{ code: 'AM-HOT', qty: 2 }], '9000') !== null && trustedKioskOrder([{ code: 'AM-HOT', qty: 2 }], '8000') === null // 키오스크가 옛 가격을 보였으면 받지 않는다
+      && trustedKioskOrder([{ code: 'AM-HOT', qty: 2 }], 9000) === null;
+    // 통화가 바뀐 메뉴를 받으면 담아 둔 장바구니를 비운다. 같은 통화면 그대로다
+    U.cart = [{ code: 'AM-HOT', name: 'x', price: '4500', qty: 1 }];
+    adoptMenu(cleanMenu({ currency: 'KRW', items: [it()] }), '"s.2"');
+    const keep = U.cart.length === 1;
+    adoptMenu(cleanMenu({ currency: 'USD', items: [it()] }), '"s.3"');
+    okAdopt = keep && U.cart.length === 0 && M.etag === '"s.3"' && M.currency === 'USD';
+    // 키오스크는 포스가 보낸 메뉴만 모양을 확인해 받는다
+    okKiosk = cleanState({ menu: { currency: 'KRW', items: [it()] } }).menu.items[0].code === 'X' && cleanState({ menu: { currency: 'KRW', items: [it({ price: 'x' })] } }).menu === null;
+    // 점주가 입력한 이름·분류가 화면에 태그로 들어가지 않는다
+    M = { ...cleanMenu({ currency: 'KRW', items: [it({ name: '<img src=x onerror=alert(1)>', category: '"><b>' }), it({ code: 'Q', name: "'onmouseover='x" })] }), etag: null };
+    const view = orderView();
+    okEsc = !view.includes('<img') && !view.includes('"><b>') && !view.includes("'onmouseover");
+  } finally { M = savedMenu; U.cart = savedCart; U.cat = ALL; }
   console.assert(ok2, 'selftest 실패: trustedLines');
-  // 메뉴: 정해진 모양만 받고, 분류는 처음 나온 순서이며, 교체하면 포스가 새 가격으로 다시 읽는다
-  const it = (o = {}) => ({ code: 'X', name: '이름', price: '100', category: '분류', ...o });
-  const okMenu = !!cleanMenu(DEFAULT_MENU) && cleanMenu({ currency: 'KRW', items: [] }).items.length === 0
-    && [{ price: '-1' }, { price: '1.2.3' }, { price: -1 }, { price: '1e3' }, { name: ' ' }, { name: 'a\0' }, { name: 'a'.repeat(256) }, { code: 'c'.repeat(65) }, { category: 7 }]
-      .every(o => cleanMenu({ currency: 'KRW', items: [it(o)] }) === null)
-    && cleanMenu({ currency: 'KRW', items: [it({ name: '😀'.repeat(255) })] }) !== null // 글자 수는 code point로 센다
-    && cleanMenu({ currency: 'krw', items: [] }) === null && cleanMenu({ currency: 'KRW', items: [it(), it()] }) === null
-    && cleanMenu({ currency: 'KRW', items: Array.from({ length: 201 }, (_, i) => it({ code: 'c' + i })) }) === null && cleanMenu(null) === null;
-  M = { ...cleanMenu({ currency: 'KRW', items: [it({ code: 'B', category: '음료' }), it({ code: 'A', category: '2' }), it({ code: 'P', category: '__proto__' }), it({ code: 'AM-HOT', price: '4500', category: '음료' })] }), etag: '"s.1"' };
-  const okCats = cats().join() === [ALL, '음료', '2', '__proto__'].join() && (U.cat = '2', catItems().map(i => i.code).join() === 'A');
-  U.cat = ALL;
-  const okSwap = trustedLines([{ code: 'AM-HOT', qty: 1 }])[0].price === 4500 && !trustedLines([{ code: 'LT-CAFE', qty: 1 }]);
-  // 키오스크는 포스가 보낸 메뉴만 모양을 확인해 받는다
-  const okKiosk = cleanState({ menu: { currency: 'KRW', items: [it()] } }).menu.items[0].code === 'X' && cleanState({ menu: { currency: 'KRW', items: [it({ price: 'x' })] } }).menu === null;
-  // 점주가 입력한 이름·분류가 화면에 태그로 들어가지 않는다
-  M = { ...cleanMenu({ currency: 'KRW', items: [it({ name: '<img src=x onerror=alert(1)>', category: '"><b>' })] }), etag: null };
-  const view = orderView(), okEsc = !view.includes('<img') && !view.includes('"><b>');
-  M = savedMenu; U.cat = ALL;
-  console.assert(okMenu && okCats && okSwap && okKiosk && okEsc, 'selftest 실패: 메뉴', { okMenu, okCats, okSwap, okKiosk, okEsc });
-  if (!ok2 || !okMenu || !okCats || !okSwap || !okKiosk || !okEsc) return false;
+  console.assert(okMenu && okCats && okSwap && okKiosk && okEsc && okMoney && okAdopt, 'selftest 실패: 메뉴', { okMenu, okCats, okSwap, okKiosk, okEsc, okMoney, okAdopt });
+  if (!ok2 || !okMenu || !okCats || !okSwap || !okKiosk || !okEsc || !okMoney || !okAdopt) return false;
   // 바깥에서 온 값은 화면에 그대로 들어가지 않는다
   const bad = cleanState({ online: 'yes', kiosk: 1, pay: { amount: '<img src=x>' }, result: { status: 'SYNCED', amount: 100, no: '<b>', method: 'X', errorCode: 7 } });
   const ok3 = !won('<img src=x>').includes('<') && bad.pay === null && bad.online === false && bad.kiosk === false
@@ -1104,7 +1136,7 @@ addEventListener('message', e => {
   if (m.t === 'paid') {
     const method = m.method === 'FACE' ? 'FACE' : 'CARD';
     let ok = false;
-    if (m.lines) { const lines = U.kiosk && trustedLines(m.lines); ok = !!lines && complete(method, lines, m.dining === '포장' ? '포장' : '매장'); if (ok) note = '고객 단말에서 주문과 결제 요청이 들어왔습니다'; }
+    if (m.lines) { const lines = U.kiosk && trustedKioskOrder(m.lines, m.total); ok = !!lines && complete(method, lines, m.dining === '포장' ? '포장' : '매장'); if (ok) note = '고객 단말에서 주문과 결제 요청이 들어왔습니다'; }
     else if (U.remote) { ok = complete(method); if (ok) note = '결제 요청을 접수했습니다'; }
     if (!ok) send({ t: 'rejected' }); // 받지 못한 주문이 단말에서 소리 없이 사라지지 않게 알린다
   } else if (m.t === 'cancel' && U.remote) { U.remote = null; U.view = 'order'; note = '고객이 결제를 취소했습니다'; }
