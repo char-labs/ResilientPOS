@@ -154,6 +154,7 @@ create table t_menu (
 ## 분할 계획
 - 이 PR은 메뉴 하나의 컨텍스트다. 주문 조회(Phase 1, `feature/order-query`)와 동시에 진행한다. 겹칠 수 있는 곳은 마이그레이션 번호(V021), `SchemaMigrationTest`, `TerminalInFlightIntegrationTest`의 `/v1` GET 목록(Phase 1이 주문 조회 GET을 더하면 같은 줄), `docs/wiki/domain-model.md`다. push 전에 origin/main과 그 브랜치의 마지막 번호를 확인하고 나중에 머지하는 쪽이 번호를 바꾼다. domain-model.md는 서로 다른 절을 고친다.
 - 2026-10-26 확인: origin/main bb14c86, 열린 PR 없음, `feature/order-query`는 아직 push 전. main과 열린 PR에 ETag·조건부 요청 처리 헬퍼가 없다.
+- 2026-10-26 제출 전 확인: origin/main은 그대로 bb14c86이고 열린 PR이 없다. `feature/order-query`는 로컬 worktree에만 있고(push 전) `V021`~`V023`(order)을 쓰며 `docs/wiki/domain-model.md`·`docs/wiki/entity-map.md`를 고친다. 겹치는 것은 마이그레이션 번호 `V021`, 두 wiki 파일(서로 다른 절), `SchemaMigrationTest`의 목록이다. 먼저 머지된 쪽에 맞춰 나중 쪽이 rebase하고 번호를 바꾼다. 그쪽의 커서 처리(`OrderCursorCodec`)와 이 PR의 `MenuEtag`는 겹치지 않는다.
 
 ## 설계 검토 반영
 spring-backend-specialist가 커밋 전에 검토했다(P0 없음). 반영한 것: PUT 응답 ETag를 같은 트랜잭션의 관리 엔티티 version에서 얻고 수정마다 version을 올린다(P1), ETag에 매장 ID를 넣는다(P1), 304는 Spring 조건부 처리에 맡기고 envelope가 붙지 않는지 단언한다, 조건 헤더 문법과 둘 다 있을 때, `Long? = null` version·`persist`·PK 이름 명시와 Facade의 경합 번역, 주문 line과 같은 판정(`isBlank`·NUL·code point), 시연 단말의 escape·분류 순서·`PRODUCT` 재생성·`no-store`, price decimal string, 통화 검증의 빈틈(항목 0개, `String` DTO), soft delete 금지, `SchemaMigrationTest` 경로, SLO 분모 영향. HTTP 상태는 검토 추천대로 409·400으로 정했다(사용자 결정). jsonb는 `String` 필드 + adapter의 `JsonMapper`, 수정 경합은 `@Version`으로 정했다.
@@ -195,6 +196,23 @@ multi-review(Claude 86/100, Codex 79/100, Gemini CLI 없음)와 spring-backend-s
 | 실제 체인·DB(인수 2·3·5·6·7): `MenuApiIntegrationTest` 8개(PUT 응답 ETag = 이어지는 GET ETag, 단말 200/304, 옛 ETag 409 뒤 저장본 유지, 헤더 오류가 500이 아님, CSRF 403·비로그인 401) | RED 없음. 위 슬라이스가 RED→GREEN을 거친 뒤 쓴 characterization이라 결함 주입으로 판별력을 따로 재지 않았다 | 통과 | 위와 같음 |
 | 같은 내용 재저장의 경합(인수 4, 리뷰 반영): `같은 내용을 다시 저장하는 중에 다른 트랜잭션이 먼저 커밋해도 MENU_VERSION_MISMATCH이고 먼저 커밋한 내용이 남는다` | RED 없음(이미 구현된 `OPTIMISTIC_FORCE_INCREMENT` 경로의 characterization) | `--tests '…catalog.internal.application.MenuManagementIntegrationTest'` 통과 | 아래 전체 테스트 |
 | `/v1` GET 고정 목록(결정 6): `TerminalInFlightIntegrationTest`의 GET pattern 목록에 `/v1/menu` | 전체 `./gradlew test`에서 이 테스트만 실패(목록에 없는 새 GET). 의도한 경고다 | 메뉴 조회가 행을 잠그지 않는 PK 읽기임을 확인하고 목록에 더해 통과 | 같은 명령 통과 |
+| 시연 단말 리뷰 반영(코드 리뷰 반영 절): `?selftest`의 숫자·소수·16자리 가격 거절, 큰 금액 `BigInt` 합계, 키오스크 합계 불일치 거절, 통화가 바뀌면 장바구니 비움, 실제 '전체' 분류와 합성 탭 공존, 홑따옴표 escape | 결함 주입 다섯(합계를 `Number`로, 키오스크 합계 무시, 통화가 바뀌어도 장바구니 유지, 합성 탭 키를 '전체'로, `esc`에서 홑따옴표 제외)을 각각 넣은 복사본에서 `selftest 실패` | 헤드리스 Chrome `?mock&selftest` 통과 | 가짜 서버에서 단계마다 `fetchMenu`를 둘씩 동시에 불러도 요청은 5번(단계당 하나)이고 사본 교체 순서는 그대로 |
+| 읽기 재검증 제거(코드 리뷰 반영): `읽기는 저장 문서를 다시 검증하지 않아 규칙 밖 문서도 그대로 돌려준다`, `저장 문서를 읽지 못하면 DomainException이 아니라 원인을 가진 IllegalStateException이다`와 HTTP 쪽 `저장 문서가 지금 규칙 밖이어도 점주와 단말 GET은 200으로 그대로 돌려준다`, `저장 문서를 읽지 못하면 GET은 400이 아니라 500이다` | `--tests '…catalog.internal.application.MenuManagementIntegrationTest'`. 이름 300자 문서에서 `DomainException`(INVALID_MENU), 통화 `XX1`에서 `IllegalArgumentException`이 나와 실패. HTTP 두 개는 구현 뒤 쓴 characterization | 같은 명령 통과. MockMvc에서 500 관측 | catalog·`ConstraintTranslationTest`·`TransactionDeclarationTest`·`DependencyDirectionTest`·`EntityVisibilityTest` 통과 |
+| 조건 헤더(코드 리뷰 반영): `If-Match` 409 목록에 `.01`·`.00`, `If-None-Match는 앞뒤 공백을 지우고 별표를 본다` | `--tests '*MenuOwnerControllerTest'`. `.01`이 version 1로 읽혀 409가 아닌 응답, `"* "`가 200이 아닌 409로 실패 | 같은 명령 통과 | 위와 같음 |
+| `Money` 위반 위치(코드 리뷰 반영): `Money 위반 메시지에 몇 번째 항목인지 붙고 code와 kind는 그대로다` | 통합 테스트 명령. 메시지에 위치 접두어가 없어 실패 | 통과 | 위와 같음 |
+| `Menu` 같음(코드 리뷰 반영): `같음은 storeId로 판단하고 내용이 달라도 같은 매장이면 같다` | `--tests '*MenuTest'`. assertEquals 실패 | 통과 | 위와 같음 |
+| 모르는 필드 무시·null 원소(코드 리뷰 반영): `저장 문서의 모르는 필드는 무시하고 읽는다`, `items에 null 원소가 있으면 500이 아니라 400 BAD_REQUEST이고 Facade를 부르지 않는다` | RED 없음. 둘 다 처음부터 통과(characterization) | 통과 | 위와 같음 |
 
 ## 결과
-개발 전 작성.
+- 서버: 새 `catalog` 모듈이 `t_menu`(V021) 한 표로 매장 메뉴를 소유한다. 점주는 `GET`·`PUT /owner/v1/stores/{storeId}/menu`로 메뉴 전체를 읽고 바꾸고(`If-Match`·`If-None-Match: *` 필수), 단말은 `GET /v1/menu`로 받고 바뀌지 않았으면 304다. 동시 수정은 `@Version`과 PK가 막고 `MENU_VERSION_MISMATCH`(409)로 번역한다. 새 오류 code는 `INVALID_MENU`·`MENU_NOT_FOUND`·`MENU_VERSION_MISMATCH`·`MENU_PRECONDITION_REQUIRED` 넷이다.
+- 시연 단말: 포스가 열 때·다시 연결될 때·5분마다 메뉴를 받아 사본(`rpos.menu.v1`)으로 두고 키오스크 창에 넘긴다. 실서버에서는 토큰이 없어 401이고 내장 메뉴로 판다.
+- 스키마는 컬럼 셋(`store_id`·`menu`·`version`)과 `BaseEntity` 공통 컬럼뿐이다. 분류·통화는 문서 안 값이고 색·정렬 값·이력·통화 컬럼은 두지 않았다(스키마 변경 검토 질문 3).
+
+검증(2026-10-26):
+- `./gradlew test` 전체: 997개 통과, 실패 0(리뷰 반영 뒤 HEAD 3194de7). 리뷰 반영 전 전체 실행(987개)에서는 `/v1` GET 고정 목록 테스트 하나가 새 GET을 알렸고 목록에 `/v1/menu`를 더해 닫았다.
+- 시연 단말: 헤드리스 Chrome `?mock&selftest` 통과. 결함 주입 여덟(상품 타일 `esc` 제거, `trustedLines` 고정 가격, 객체 키 분류, 합계 `Number`, 키오스크 합계 무시, 통화가 바뀌어도 장바구니 유지, 합성 탭 키 충돌, 홑따옴표 escape 제외)은 각각 `selftest 실패`였다.
+- 가짜 서버(Python 표준 라이브러리, 스크립트는 scratchpad)로 `?mock` 없이 연 포스: `GET /v1/menu`가 200(`If-None-Match` 없음) → 304(`"s.0"`) → 200(`"s.0"`, 4,100원이 4,500원으로) → 401 → 끊김 순서로 답했고, 사본 ETag는 `"s.0"` → `"s.0"` → `"s.1"` → `"s.1"` → `"s.1"`로 바뀌어 실패 때 남은 사본을 썼다. 사본 없이 첫 받기가 401이면 내장 메뉴 16개(4,000원)로 판다. 단계마다 `fetchMenu`를 둘씩 동시에 불러도 서버 요청은 5번이었다. 고치기 전 HEAD는 `GET /v1/menu`를 한 번도 부르지 않았다.
+- `python3 scripts/check_pr.py --base origin/main --worktree` 통과. 제출 전 `--worktree` 없이 한 번 더 돌린다.
+- 볼트 `current-state.md`에 `catalog` 모듈과 메뉴 API·알려진 빈틈을 더했다.
+
+따로 둔 것: 시연 단말 토큰 연동, 서버 캐시와 조회 측정(Phase 4), 점주 화면, `postMessage` 상대 포트 신뢰(이 PR 이전 구조).
