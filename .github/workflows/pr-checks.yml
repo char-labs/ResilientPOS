@@ -1,11 +1,11 @@
 name: PR checks
 
-# dev 흐름은 main 단일 브랜치다. main으로 향하는 PR에서 빌드와 Flyway 버전 검사를 게이트로 둔다.
+# dev 흐름은 main 단일 브랜치다. main으로 향하는 PR에서 빌드, Flyway 버전 검사, 의존성 취약점 검사를 게이트로 둔다.
 # 로컬 check_pr.py는 실행 시점의 기준으로만 판정하므로, 병렬 PR에서 먼저 머지된 변경을 반영한
 # 재판정 주체가 필요하다. 이 워크플로가 머지 결과 위에서 다시 돈다.
 on:
   # main에서도 빌드를 돌린다. setup-gradle은 기본 브랜치 job에서만 캐시를 쓰므로,
-  # 이 트리거가 없으면 PR 실행이 매번 빈 캐시로 시작한다.
+  # 이 트리거가 없으면 PR 실행이 매번 빈 캐시로 시작한다. Dependabot alert가 보는 main 의존성 그래프도 여기서 올린다.
   push:
     branches:
       - main
@@ -70,3 +70,46 @@ jobs:
       # spec 이력 검사는 머지 결과 위에서 의미가 달라지므로 로컬 검사가 계속 담당한다.
       - name: Detect duplicate migration versions
         run: python3 scripts/check_pr.py --base "origin/${{ github.base_ref }}" --migrations-only
+
+  dependency_submission:
+    name: Dependency submission
+    # Gradle이 해석한 의존성(BOM이 정한 전이 의존성과 buildscript classpath 포함)을 의존성 그래프에 올린다.
+    # main 그래프는 Dependabot alert의 기준이고 PR 그래프는 dependency_review가 비교한다. 빌드를 기다리지 않고 함께 돈다.
+    runs-on: ubuntu-latest
+    permissions:
+      # 의존성 제출 API가 요구한다. fork에서 온 PR은 이 권한을 받지 못해 실패한다.
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Setup JDK 25
+        uses: actions/setup-java@v6
+        with:
+          distribution: corretto
+          java-version: '25'
+
+      - name: Submit dependency graph
+        uses: gradle/actions/dependency-submission@v6
+        env:
+          # runtimeClasspath만 runtime이고 테스트·buildscript classpath는 development다. 정하지 않으면 scope가 비어 alert에서 둘을 가르지 못한다.
+          DEPENDENCY_GRAPH_RUNTIME_INCLUDE_CONFIGURATIONS: runtimeClasspath
+
+  dependency_review:
+    name: Dependency review
+    # PR이 새로 들이는 취약 버전을 막는다. 이미 있던 의존성에 새로 공개된 CVE는 막지 않고 Dependabot alert가 알린다.
+    if: github.event_name == 'pull_request'
+    needs: dependency_submission
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Review dependency changes
+        uses: actions/dependency-review-action@v5
+        with:
+          # 노출이 좁아도 고친다. 고친 버전이 없어 들일 수밖에 없으면 allow-ghsas에 GHSA ID를 넣고 주석에 이유와 다시 볼 조건을 단다.
+          fail-on-severity: low
+          # development는 테스트·빌드 도구이고 unknown은 scope가 없는 워크플로 uses다.
+          fail-on-scopes: runtime, development, unknown
+          # 제출한 그래프가 아직 반영되지 않았으면 기다린다.
+          retry-on-snapshot-warnings: true
