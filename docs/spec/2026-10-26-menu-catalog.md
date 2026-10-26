@@ -60,7 +60,7 @@
 **결정 7: 검증은 주문 line과 같은 판정을 쓴다.**
 - 코드 1~64자, 이름 1~255자(주문 line과 같다. 메뉴로 만든 line이 sync에서 영구 거절되지 않게), 분류 1~50자. `OrderLine`과 같은 판정이다. 글자 수는 code point로 세고, 공백은 Kotlin `isBlank()`(NBSP·U+3000 포함)로, NUL(U+0000)은 포함 여부로 본다. 공용 함수는 사용처가 둘뿐이라 만들지 않는다.
 - 메뉴 안에서 코드가 겹치면 거절한다. 항목은 0~200개다(시연 메뉴는 16개).
-- 통화는 항목 수와 무관하게 `Money.zero(currency)`로 검증한다. 항목이 0개여도 `XXX` 같은 통화가 저장되지 않는다. DTO는 통화를 `String`으로 받고 `Currency.getInstance`의 실패를 `INVALID_MENU`로 바꾼다(`Currency` 타입으로 받으면 역직렬화 실패라 `BAD_REQUEST`가 된다).
+- 통화는 항목 수와 무관하게 `Money.zero(currency)`로 검증한다. 항목이 0개여도 `XXX` 같은 통화가 저장되지 않는다(이때 code는 `Money`의 `UNSUPPORTED_CURRENCY`). DTO는 통화를 `String`으로 받고 `Currency.getInstance`의 실패를 `INVALID_MENU`로 바꾼다(`Currency` 타입으로 받으면 역직렬화 실패라 `BAD_REQUEST`가 된다).
 - 위반은 `DomainException(INVALID_MENU, 메시지, INVALID)` 하나로 던지고 메시지에 몇 번째 항목의 무엇인지 적는다. `Money`가 던지는 code는 그대로 나간다. 필수 필드가 빠지거나 null이면 주문과 같이 역직렬화 단계의 `BAD_REQUEST`다.
 
 **결정 8: 시연 단말은 포스가 받아 사본으로 두고 키오스크에 넘긴다. 토큰 연동은 하지 않는다(사용자 결정).**
@@ -105,7 +105,7 @@
 5. 조건 헤더가 없거나 둘 다 있는 PUT은 400 `MENU_PRECONDITION_REQUIRED`다. `If-Match`가 `*`·weak·여러 값·해석할 수 없는 값이면 409 `MENU_VERSION_MISMATCH`이고 500이 아니다.
 6. 남의 매장·없는 매장의 GET·PUT은 404 `STORE_NOT_FOUND`이고, CSRF 토큰 없는 PUT은 403이며, 로그인하지 않은 요청은 401이다.
 7. 단말은 경로로 매장을 고를 수 없고 자기 매장 메뉴만 받는다. 메뉴가 없으면 404 `MENU_NOT_FOUND`, 토큰이 없으면 401이다.
-8. 코드·이름·분류의 길이(서로게이트 쌍은 한 글자), 공백만 있는 값(NBSP·U+3000 포함), NUL, 코드 중복, 항목 201개, 모르는 통화(항목 0개 포함, 소문자 포함)는 400 `INVALID_MENU`, 음수 가격은 `INVALID_MENU`, 통화 자릿수를 넘는 가격은 `Money`의 code이고 저장되지 않는다.
+8. 코드·이름·분류의 길이(서로게이트 쌍은 한 글자), 공백만 있는 값(NBSP·U+3000 포함), NUL, 코드 중복, 항목 201개, `Currency`가 모르는 통화 코드(`krw`·`ZZZ`, 항목 0개 포함)는 400 `INVALID_MENU`, 음수 가격은 `INVALID_MENU`다. `Currency`는 알지만 `Money`가 지원하지 않는 통화(`XXX`, 항목 0개 포함)와 통화 자릿수를 넘는 가격은 `Money`의 code(`UNSUPPORTED_CURRENCY`·`INVALID_MONEY_SCALE`)다. 모두 저장되지 않는다.
 9. 저장된 jsonb 문서가 리터럴 JSON(`currency`, `items[].code/name/price/category`, `price`는 decimal string)과 같다.
 10. 주문 생성·sync는 메뉴가 있든 없든, 메뉴와 다른 이름·가격이든 지금처럼 동작한다.
 11. 시연 단말: 서버 메뉴를 받아 탭과 타일에 그리고, 304면 사본을 유지하며, 받기가 실패하면 남은 사본(없으면 내장 메뉴)으로 판다. 키오스크 창이 포스와 같은 메뉴를 그리고, 키오스크 주문의 이름·가격·통화가 포스 사본에서 온다. img 태그와 onerror 속성이 든 상품명이 글자로 보인다. `?selftest`가 통과한다.
