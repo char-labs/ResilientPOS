@@ -43,7 +43,7 @@
   - RFC 9110 §13.1.1은 If-Match 실패에 412를 요구한다. `DomainErrorKind`는 HTTP 숫자가 아니라 업무 의미이고(`DomainException.kt`), 저장소의 다른 버전 충돌도 409로 나간다. 소비자가 점주 화면 하나라 412에 기대는 중간 캐시가 없어 이 이탈을 받아들인다.
 - 저장 절차:
   - 비교와 저장은 한 `Tx.masterTx` 블록 안에서 한다. 그 블록이 찾은 관리 엔티티의 version과 `If-Match`를 비교하고 같은 엔티티를 바꾼다. 비교용 읽기를 따로 하면 `@Version`이 지키는 것이 두 번째 읽기 값이 되어 옛 화면이 새 저장을 덮어쓴다.
-  - 수정은 내용이 같아도 version을 한 번 올린다(`LockModeType.OPTIMISTIC_FORCE_INCREMENT`로 찾는다. dirty 변경과 겹쳐도 한 번만 오르는지 테스트로 확인한다). 응답 version은 "읽은 값 + 1"이다. 생성 응답은 0이다. 응답 ETag가 DB와 어긋나면 점주 화면의 다음 저장이 계속 409가 된다.
+  - 수정은 내용이 같아도 version을 한 번 올린다. 관리 엔티티를 평범한 `find`로 읽고, 내용이 바뀌면 dirty UPDATE가, 같으면(JSON 값으로 비교, jsonb가 공백을 정규화해 문자열 비교는 늘 다르다) `entityManager.lock(엔티티, OPTIMISTIC_FORCE_INCREMENT)`가 올린다. (개발 중 범위 조정) 처음 안은 `find`에 `OPTIMISTIC_FORCE_INCREMENT`를 주는 것이었는데, dirty 변경과 겹치면 한 번 수정에 version이 0에서 2로 올랐다(실측). 응답 version은 "읽은 값 + 1"이다. 생성 응답은 0이다. 응답 ETag가 DB와 어긋나면 점주 화면의 다음 저장이 계속 409가 된다.
   - 엔티티는 `@Version var version: Long? = null`이고 생성은 `EntityManager.persist`다. version이 0으로 시작하면 Spring Data `save`가 merge로 가서, 생성 경합의 늦은 쪽이 먼저 커밋된 행을 읽고 덮어쓴다.
   - 경합의 마지막 방어선은 DB다. 수정 경합은 `@Version`의 조건부 UPDATE가, 생성 경합은 PK `t_menu_pkey`가 막는다. Facade가 `Tx` 블록 밖에서 `OptimisticLockingFailureException`과 `isUniqueViolationOf("t_menu_pkey")`를 잡아 둘 다 `MENU_VERSION_MISMATCH`로 바꾼다(선례 `OrderCommandFacade.create`). 바꾸지 않으면 advice가 `CONCURRENT_REQUEST`로 낸다.
 - 삭제는 PUT에서 빼는 것이다. 과거 주문 line은 판매 시점 값이라 그대로다. 메뉴 자체를 지우는 명령은 두지 않는다.
