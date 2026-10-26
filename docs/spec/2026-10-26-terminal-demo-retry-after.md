@@ -20,7 +20,7 @@
 - 버린 것: 5초 고정. 함께 끊긴 단말들의 박자가 그대로 남는다.
 
 **3. `Retry-After`가 이상하면 결정 2로 다루고, 큰 값은 서버 값을 따른다(사용자 결정).**
-- `RATE_LIMITED`인데 `Retry-After`가 없거나 1 이상의 정수(RFC 9110 delta-seconds)가 아니면(HTTP-date, 0, 소수, 음수) 5초에 jitter를 더한다. 서버는 늘 1 이상의 정수를 보낸다(`RateLimitedException`).
+- `Retry-After`는 RFC 9110 delta-seconds(숫자만) 가운데 1 이상만 따른다. 0과 HTTP-date는 RFC상 유효하지만 서버가 보내지 않는다(`RateLimitedException`은 1 이상만 받는다). 그래서 `RATE_LIMITED`인데 `Retry-After`가 없거나 0, HTTP-date, 소수, 음수면 5초에 jitter를 더한다.
 - 큰 값은 자르지 않는다. `Retry-After`는 같은 요청을 다시 보내도 되는 가장 이른 시각이라 줄이면 규약을 어긴다. 상한은 서버 설정 검증(capacity 1 이상, 빈 bucket이 하루 안에 참)이 하루(86,400초)로 묶는다. 화면은 기다릴 시간을 "N초 뒤 다시 시도합니다"로 보인다.
 - 치르는 것: 설정을 잘못 넣으면 단말이 그만큼 멈춰 있다.
 - 버린 것: 60초(G-03 창)에서 자르는 안. 단말이 1분 넘게 멈추지 않지만, 서버가 허락하기 전에 보내고 거절마다 인증 조회를 치른다.
@@ -37,7 +37,8 @@
 - `postSync`는 응답이 실패면 본문의 `error.errorCode`와 `Retry-After` 헤더를 오류에 싣는다. 본문이 JSON이 아니면(ingress의 HTML 등) code가 없어 결정 2다. 오류 메시지는 지금처럼 `HTTP 상태`다.
 
 **6. S3는 바꾸지 않고 계약 문장을 고친다(사용자 결정).**
-- `load-test/s3-sync-batch.js`는 실패 종류와 관계없이 jitter 없이 5초 뒤 다시 보낸다. 서버의 `Retry-After`(지금 1초)보다 길어 규약 안이다. [용량 기준](../wiki/capacity.md)의 "시연 단말과 S3가 이 계약을 따른다"를 시연 단말과 S3로 나눠 적는다.
+- `load-test/s3-sync-batch.js`는 실패 종류와 관계없이 jitter 없이 5초 뒤 다시 보낸다. 서버의 `Retry-After`(지금 1초)보다 늦게 보내 하한은 지키지만 jitter는 없다. [용량 기준](../wiki/capacity.md)의 "시연 단말과 S3가 이 계약을 따른다"를 시연 단말과 S3로 나눠 적는다.
+- 범위 조정(2026-10-26, 리뷰 반영): S3의 동작은 그대로 두고, 이 PR 뒤로 틀린 주석("실패한 배치는 시연 단말처럼 5초 뒤")만 고친다. 주석도 이 결정의 "문서"에 든다고 본다.
 - 버린 것: S3도 맞추는 안. 앞 배치가 도는 동안의 429 5번이 약 7초 안에 차서 "수렴 못 함"으로 세어지므로 실패 한도를 다시 정하고 S3를 다시 재야 한다. 지금까지의 S3 결과와도 비교할 수 없게 된다.
 
 **7. 배치 50과 timeout 30초는 그대로다(slo-alert-followups 결정 7).**
@@ -54,6 +55,8 @@
 
 ## 한계
 - selftest는 순수 함수 `retryDelay`만 고정한다. `postSync`·`flush`의 배선과 실제 재전송 간격은 이 PR에서 가짜 서버로 한 번 잰 것이고, 다시 돌리는 자동 검사는 없다. 이 페이지의 전송 경로를 고치는 PR은 같은 방법(검증 절)으로 다시 잰다.
+- 본문을 읽는 도중의 timeout과 JSON이 아닌 실패 본문은 코드로만 확인했다(둘 다 code가 없어 결정 2). 실측의 31초 지연은 응답 헤더 전이다.
+- `U.retryAt`은 탭 메모리에 있다. 새로고침이나 단말 초기화 직후, 같은 단말의 다른 탭은 `Retry-After` 전에 보낼 수 있다. 문은 벽시계(`Date.now()`) 기준이라 시스템 시계가 바뀌면 일찍 보내거나 다음 5초 주기까지 늦을 수 있다.
 - 결정 1의 backlog 배출 시간과 재전송 비용은 계산이고 측정하지 않았다.
 
 ## 관련 문서
@@ -63,21 +66,22 @@
 - docs/spec/2026-10-26-terminal-demo-retry-after.md
 - src/main/resources/static/terminal/index.html
 - docs/wiki/capacity.md
+- load-test/s3-sync-batch.js
 
 ## 인수 조건
 1. `retryDelay`가 다음 값을 돌려주고 selftest가 이를 확인해 "selftest 통과"다. random은 0과 0.9999 두 값으로 본다.
    - `RATE_LIMITED`와 `Retry-After` "1": 1000과 2000
    - `RATE_LIMITED`와 "3600": 3600000과 3601000
-   - `RATE_LIMITED`와 `Retry-After` 없음, 빈 문자열, "0", "1.5", "-1", HTTP-date: 5000
-   - code 없음(네트워크 오류, timeout)과 다른 code(`UNAUTHENTICATED`)에 `Retry-After` "1": 5000과 6000
-2. 가짜 서버로 잰 같은 배치의 재전송 간격이 `RATE_LIMITED`와 `Retry-After` 1이면 1.0~2.0초, 3이면 3.0~4.0초다. 500, 응답 없이 끊긴 연결, 30초 timeout, `RATE_LIMITED`가 아닌 429, HTTP-date `Retry-After`는 5.0~6.0초다. 기다리는 동안 0.1초마다 `flush`를 불러도 요청이 서버에 닿지 않는다. 재전송의 operation이 첫 전송과 같다. 간격의 최소·최대를 결과 절에 남긴다.
+   - `RATE_LIMITED`와 `Retry-After` 없음, 빈 문자열, "0", "1.5", "-1", HTTP-date: 5000과 6000
+   - code가 없는 오류(네트워크 오류, timeout, `Retry-After` "1"만 있는 오류)와 다른 code(`UNAUTHENTICATED`)에 `Retry-After` "1": 5000과 6000
+2. 가짜 서버로 잰 같은 배치의 재전송 간격(서버가 연달아 받은 시각의 차)이 대기 범위의 하한 이상이고 상한 + 0.15초(timer 지연과 로컬 왕복의 여유) 이하다. 대기 범위는 `RATE_LIMITED`와 `Retry-After` 1이면 1.0~2.0초, 3이면 3.0~4.0초다. 500, 응답 없이 끊긴 연결, `RATE_LIMITED`가 아닌 429, HTTP-date `Retry-After`는 5.0~6.0초, 30초 timeout은 timeout 뒤 5.0~6.0초(도착 간격 35.0~36.0초)다. 재전송은 페이지가 건 `setTimeout`이 보낸다. 요청이 닿은 시각은 `U.retryAt`보다 이르지 않고 0.1초 넘게 늦지 않다. `retryAt` 전에는 0.1초마다 `flush`를 불러도 요청이 서버에 닿지 않는다. 재전송의 operation이 첫 전송과 같다. 간격의 최소·최대와 `retryAt` 대비 늦음을 결과 절에 남긴다.
 3. 실패하면 화면 문구가 기다릴 시간을 보인다("서버 전송 실패(HTTP 429). 1.4초 뒤 다시 시도합니다" 꼴).
 4. [용량 기준](../wiki/capacity.md)의 단말 sync 계약 문장과 `resilientpos.rate-limit.terminal.capacity` 행의 1,800 op 서술이 결정 1·2·6대로 바뀐다.
 5. `./gradlew test` 전체가 통과한다(시연 페이지를 서빙하는 `DemoPageExposureTest` 포함).
 
 ## 검증
 - selftest(#118과 같은 방법, 헤드리스 Chrome으로 `index.html?selftest`): `"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --enable-logging=stderr --v=0 --dump-dom "file://$PWD/src/main/resources/static/terminal/index.html?selftest"`의 제목이 "selftest 통과"이고 stderr 콘솔에 `selftest 실패`가 없다.
-- 재전송 실측: Python 표준 라이브러리 가짜 서버가 `src/main/resources/static`을 서빙하고, `POST /v1/terminals/{terminalId}/sync`에 정해 둔 순서로 응답하며 요청마다 도착 시각과 operation을 남긴다. 서빙하는 `index.html` 끝에 주문 하나를 넣고 0.1초마다 `flush`를 부르는 스크립트를 덧붙여 헤드리스 Chrome으로 연다(`?mock` 없이 http로 열어 `postSync`를 탄다). 순서는 `RATE_LIMITED`·`Retry-After` 1 열 번, 3 한 번, 500 다섯 번, 응답 없이 끊긴 연결, 31초 지연(30초 timeout), code가 다른 429, HTTP-date `Retry-After`, 그리고 200이다. 스크립트는 scratchpad에 두고 커밋하지 않는다. 고치기 전 HEAD에서 먼저 돌려 지금 동작(모두 약 5초, jitter 없음)을 본다.
+- 재전송 실측: Python 표준 라이브러리 가짜 서버가 `src/main/resources/static`을 서빙하고, `POST /v1/terminals/{terminalId}/sync`에 정해 둔 순서로 응답하며 요청마다 도착 시각과 operation을 남긴다. 서빙하는 `index.html` 끝에 스크립트를 덧붙여 헤드리스 Chrome으로 연다(`?mock` 없이 http로 열어 `postSync`를 탄다). 스크립트는 주문 하나를 넣고, `retryAt` 전에만 0.1초마다 `flush`를 불러 문을 확인하며, `U.retryAt`과 `U.syncError`가 바뀔 때마다 콘솔에 남긴다. `retryAt` 뒤에는 부르지 않으므로 재전송은 페이지의 `setTimeout`(늦으면 5초 주기)이 보낸다. 간격은 서버가 같은 배치를 연달아 받은 시각의 차이고, 하한 이상·상한 + 0.15초 이하를 통과로 본다. 늦음은 서버 도착 시각(epoch ms) − 콘솔의 `retryAt`이고 0 이상 100ms 이하를 통과로 본다. 순서는 `RATE_LIMITED`·`Retry-After` 1 열 번, 3 한 번, 500 다섯 번, 응답 없이 끊긴 연결, 31초 지연(30초 timeout), code가 다른 429, HTTP-date `Retry-After`, 그리고 200이다. 스크립트는 scratchpad에 두고 커밋하지 않는다. 고치기 전 HEAD에서 먼저 돌려 지금 동작(모두 약 5초, jitter 없음)을 본다.
 - `./gradlew test`
 - `python3 scripts/check_pr.py --base origin/main --worktree`, 제출 전에는 `--worktree` 없이 한 번 더.
 - compose 스택은 쓰지 않는다. 가짜 서버로 충분하다.
@@ -100,8 +104,26 @@
 
 | 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
 |---|---|---|---|
-| 기다릴 시간 계산(인수 조건 1), selftest의 `retryDelay` 경계값 | 미실행 | 미실행 | 미실행 |
-| 재전송 배선과 간격(인수 조건 2), 가짜 서버 실측 | 미실행 | 미실행 | 미실행 |
+| 기다릴 시간 계산(인수 조건 1), selftest의 `retryDelay` 경계값 | 검증 절의 헤드리스 Chrome selftest. 제목이 기본 제목 그대로이고 콘솔에 `Uncaught ReferenceError: retryDelay is not defined` | 같은 명령. 제목 "selftest 통과" | 리팩터링 없음. 결함 주입 6종(jitter 제거, `Retry-After` 0 허용, code 무시, 소수 허용, 반올림 제거, 기본 5초를 1초로) 모두 제목 "selftest 실패" |
+| 재전송 배선과 간격(인수 조건 2·3), 가짜 서버 실측 | 고치기 전 HEAD(`b0ced22`)에서 짧은 순서(`RATE_LIMITED` 세 번, 500, 끊긴 연결, 다른 code의 429, 날짜 형식, 200). `RATE_LIMITED`·`Retry-After` 1 세 번이 모두 5.002~5.008초 뒤라 1.0~2.0초 기대에 실패. 나머지도 5.003~5.008초로 jitter가 없었다 | 전체 순서 21요청 PASS(간격은 결과 절). 짧은 순서를 다시 돌려 화면 문구를 확인 | 리팩터링 없음 |
 
 ## 결과
-개발 전 작성. 개발 후 실행 결과와 변경 이유를 추가한다.
+- 시연 단말: `postSync`가 실패 응답의 `error.errorCode`와 `Retry-After`를 오류에 싣고, `flush`가 `retryDelay(e, Math.random)` ms 뒤로 `retryAt`과 `setTimeout`을 건다. 화면 문구는 기다릴 시간을 보이고, `setInterval` 5초의 주석을 GAP 재전송과 놓친 전송으로 고쳤다. 범위 조정은 없다.
+- selftest: 헤드리스 Chrome에서 "selftest 통과". 결함 주입 6종 모두 실패(TDD 검증 기록).
+- 검증: origin/main ee8020e 위에서 `./gradlew test` 전체 934개가 통과했다(실패 0, `DemoPageHiddenByDefaultTest`·`DemoPageOpenInDemoProfileTest` 포함). `check_pr.py --base origin/main --worktree` PASS.
+
+### 재전송 실측(2026-10-26)
+검증 절의 가짜 서버와 헤드리스 Chrome(macOS, 로컬 루프백)이다. 간격은 서버가 같은 배치를 연달아 받은 시각의 차이다. 기다리는 동안 덧붙인 스크립트가 0.1초마다 `flush`를 불렀지만 하한보다 일찍 닿은 요청은 없었다. 21요청의 operation은 모두 첫 전송과 같았고, 200 뒤 1초 동안 더 온 요청은 없었다.
+
+| 응답 | 횟수 | 기대 | 측정 최소·최대 |
+|---|---|---|---|
+| 429 `RATE_LIMITED`, `Retry-After: 1` | 10 | 1.0~2.0초 | 1.046·1.976초 |
+| 429 `RATE_LIMITED`, `Retry-After: 3` | 1 | 3.0~4.0초 | 3.106초 |
+| 500 | 5 | 5.0~6.0초 | 5.300·6.005초 |
+| 응답 없이 끊긴 연결 | 1 | 5.0~6.0초 | 5.756초 |
+| 31초 지연(30초 timeout) | 1 | 35.0~36.0초 | 35.292초 |
+| 429, code `OTHER`, `Retry-After: 1` | 1 | 5.0~6.0초 | 5.566초 |
+| 429 `RATE_LIMITED`, `Retry-After`가 HTTP-date | 1 | 5.0~6.0초 | 6.009초 |
+
+- 6.005초와 6.009초는 상한을 9ms까지 넘었다. 1초에 가까운 jitter에 timer 지연과 로컬 왕복이 더해진 것으로 본다(jitter 값 자체는 기록하지 않았다). 하한은 모두 지켰다. 도구는 상한에 0.15초를 더해 판정한다.
+- 화면 문구(짧은 순서): "서버 전송 실패(HTTP 429). 1.4초 뒤 다시 시도합니다"가 1.405초 뒤 재전송과 맞았다. 네트워크 오류는 "서버 전송 실패(Failed to fetch). 5.6초 뒤 다시 시도합니다"이고, 200 뒤에는 문구가 비었다.
