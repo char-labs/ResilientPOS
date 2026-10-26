@@ -156,7 +156,7 @@ Flyway gate 병렬 외에 검사 시간을 줄이는 장치가 셋 있다([ci-bu
 - 범위는 Gradle 의존성과 워크플로 `uses:`다. 컨테이너 이미지(Dockerfile, compose, Testcontainers)는 보지 않는다. action은 major 태그로 고정한다. SHA로 고정한 action에는 Dependabot alert가 생기지 않는다.
 - 기준은 GitHub Advisory Database다. OSV에만 있는 advisory는 보지 못한다.
 - fork에서 온 PR은 제출 권한(`contents: write`)을 받지 못해 두 job이 실패한다. fork PR을 받게 되면 gradle/actions dependency-submission 문서의 두 워크플로 구성으로 바꾼다.
-- Dependabot security updates와 version updates는 켜지 않는다. 전이 의존성 alert에는 security update PR이 만들어지지 않고, 자동 PR은 spec 첫 커밋 계약을 지키지 못한다.
+- Dependabot security updates는 켜져 있다. Dependabot은 manifest에서 찾을 수 있는 의존성(action 태그, `build.gradle.kts`에 버전을 직접 적은 의존성과 플러그인)에만 PR을 만들고 BOM이 정하는 전이 의존성에는 만들지 않는다. Dependabot PR에는 spec 첫 커밋이 없으므로 그대로 머지하지 않는다. 같은 수정을 spec 첫 커밋이 있는 PR로 내면 머지 뒤 Dependabot이 자기 PR을 닫는다. version updates(`dependabot.yml`)는 같은 이유로 켜지 않는다.
 
 ### rebase와 force-push
 - 개발 브랜치를 base 위로 rebase 하는 것은 허용한다. rebase 뒤에도 spec 첫 커밋이 base 이후 첫 커밋이어야 하며,
