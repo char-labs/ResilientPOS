@@ -25,6 +25,7 @@ data class CreateOrderRequest(
         clientOrderId = ClientOrderId(clientOrderId),
         currency = currency,
         lines = lines.map { it.toCommand(currency) },
+        occurredAt = null,
     )
 }
 

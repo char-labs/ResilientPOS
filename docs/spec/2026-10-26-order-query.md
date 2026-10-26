@@ -141,7 +141,7 @@
 ## TDD 검증 기록
 | 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
 |---|---|---|---|
-| 주문 생성이 단말 시각을 규칙대로 발생 시각으로 정한다 (인수 8) | 미실행 | 미실행 | 미실행 |
+| 주문 생성이 단말 시각을 규칙대로 발생 시각으로 정한다 (인수 8, 9 일부). `OrderTest`의 `단말 시각이 없으면 발생 시각은 수신 시각이다`, `단말 시각이 수신 시각보다 늦으면 수신 시각으로 낮춘다`, `단말 시각이 수신 시각과 같거나 이르면 그대로 쓴다`, `단말 시각이 7일 정각 전이면 그대로 쓰고 1마이크로초라도 넘게 이르면 수신 시각이다`, `발생 시각은 마이크로초로 자른다` | `./gradlew test --tests 'com.resilientpos.order.internal.domain.OrderTest'` 38건 중 3건 실패. 최소 선언(`Order.occurredAt`을 항상 now로 둠) 뒤 assertion 실패: 같거나 이르면 그대로, 7일 경계, 마이크로초 절삭이 now와 달라서 실패. 미래·없음 두 건은 스텁이 now라 통과 | 같은 명령, BUILD SUCCESSFUL (OrderTest 전부 통과) | `./gradlew test --tests 'com.resilientpos.order.*' --tests 'com.resilientpos.sync.*' --tests '*ModuleStructureTest' --tests 'com.resilientpos.FixtureFactoriesTest'` BUILD SUCCESSFUL, 235건 실패 0. 마이그레이션 V021은 통합 테스트 Flyway 적용으로 확인 |
 | sync 항목 `createdAt`이 주문 발생 시각이 되고 재전송은 첫 값을 지킨다 (인수 8) | 미실행 | 미실행 | 미실행 |
 | 단건 조회가 매장 기준으로 상태·version·line·checkout을 읽는다 (인수 1~3) | 미실행 | 미실행 | 미실행 |
 | 목록이 발생 시각 keyset으로 기간·상태를 걸러 합계와 함께 읽는다 (인수 4·5) | 미실행 | 미실행 | 미실행 |

@@ -14,6 +14,7 @@ import jakarta.persistence.Enumerated
 import jakarta.persistence.Id
 import jakarta.persistence.Table
 import jakarta.persistence.Version
+import java.time.Instant
 import java.util.Currency
 import java.util.UUID
 import org.hibernate.annotations.JdbcTypeCode
@@ -38,6 +39,7 @@ class OrderEntity private constructor(
     clientOrderId: UUID,
     currency: String,
     status: OrderStatus,
+    occurredAt: Instant,
 ) : BaseEntity() {
 
     @Id
@@ -60,6 +62,10 @@ class OrderEntity private constructor(
 
     @Enumerated(EnumType.STRING)
     var status: OrderStatus = status
+        protected set
+
+    /** 주문 발생 시각. 생성 때 한 번 정해지고 바뀌지 않아 `apply`가 쓰지 않는다. */
+    var occurredAt: Instant = occurredAt
         protected set
 
     /**
@@ -91,6 +97,7 @@ class OrderEntity private constructor(
             status = status,
             lines = lines.map { it.toDomain(resolvedCurrency) },
             checkouts = checkouts.map { it.toDomain(resolvedCurrency) },
+            occurredAt = occurredAt,
         )
     }
 
@@ -102,6 +109,7 @@ class OrderEntity private constructor(
             clientOrderId = order.clientOrderId.value,
             currency = order.currency.currencyCode,
             status = order.status,
+            occurredAt = order.occurredAt,
         )
     }
 }

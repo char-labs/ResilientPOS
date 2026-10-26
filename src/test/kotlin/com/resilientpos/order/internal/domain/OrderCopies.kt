@@ -10,4 +10,4 @@ fun Order.restored(
     status: OrderStatus = this.status,
     lines: List<OrderLine> = this.lines,
     checkouts: List<Checkout> = this.checkouts,
-): Order = Order.restore(id, storeId, terminalId, clientOrderId, currency, status, lines, checkouts)
+): Order = Order.restore(id, storeId, terminalId, clientOrderId, currency, status, lines, checkouts, occurredAt)

@@ -17,7 +17,9 @@ import com.resilientpos.order.OrderStatus
 import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.TerminalId
 import java.math.BigDecimal
+import java.time.Duration
 import java.time.Instant
+import java.time.temporal.ChronoUnit
 import java.util.Currency
 
 /**
@@ -32,6 +34,8 @@ class Order private constructor(
     val status: OrderStatus,
     val lines: List<OrderLine>,
     val checkouts: List<Checkout>,
+    /** 주문이 팔린 시각(업무 발생 시각). 이벤트가 일어난 시각인 `DomainEvent.occurredAt`과 다르다. */
+    val occurredAt: Instant,
 ) {
 
     val total: Money get() = lines.fold(Money.zero(currency)) { acc, line -> acc + line.amount }
@@ -99,6 +103,7 @@ class Order private constructor(
                     status = OrderStatus.CHECKOUT_REQUESTED,
                     lines = lines,
                     checkouts = checkouts + checkout,
+                    occurredAt = occurredAt,
                 )
                 val event = OrderPaymentRequested(
                     eventId = ids.next(),
@@ -143,6 +148,7 @@ class Order private constructor(
             status = OrderStatus.PAID,
             lines = lines,
             checkouts = checkouts,
+            occurredAt = occurredAt,
         )
         return Transition(paid, listOf(OrderPaid(ids.next(), now, id.value, storeId, terminalId, checkoutNo, amount)))
     }
@@ -161,6 +167,15 @@ class Order private constructor(
          * 이 값을 두 배로 올리면 정상 주문이 전송 단계에서 끊긴다.
          */
         const val MAX_LINES = 500
+
+        /** 단말 시각이 수신 시각보다 이 기간을 넘게 이르면 초기화된 시계 같은 고장 값으로 보고 수신 시각을 쓴다. */
+        val MAX_TERMINAL_CLOCK_LAG: Duration = Duration.ofDays(7)
+
+        /** 저장 값(마이크로초)과 메모리 값을 같게 자른다. 단말 시각이 없거나 범위 밖이면 수신 시각, 수신 시각보다 늦으면 수신 시각으로 낮춘다. */
+        private fun occurredAtOf(reported: Instant?, now: Instant): Instant {
+            val accepted = if (reported == null || reported < now.minus(MAX_TERMINAL_CLOCK_LAG)) now else minOf(reported, now)
+            return accepted.truncatedTo(ChronoUnit.MICROS)
+        }
 
         /**
          * line 개수 불변식. `create`만이 아니라 **line을 더하는 명령을 새로 만드는 PR도 이것을 부른다.**
@@ -191,7 +206,8 @@ class Order private constructor(
             status: OrderStatus,
             lines: List<OrderLine>,
             checkouts: List<Checkout>,
-        ): Order = Order(id, storeId, terminalId, clientOrderId, currency, status, lines, checkouts)
+            occurredAt: Instant,
+        ): Order = Order(id, storeId, terminalId, clientOrderId, currency, status, lines, checkouts, occurredAt)
 
         fun create(command: OrderCommand.Create, ids: IdentifierGenerator, now: Instant): Transition<Order, OrderEvent.Created> {
             if (command.lines.isEmpty()) {
@@ -212,6 +228,7 @@ class Order private constructor(
                 status = OrderStatus.OPEN,
                 lines = command.lines.map { OrderLine(OrderLineId(ids.next()), it.productCode, it.productName, it.unitPrice, it.quantity) },
                 checkouts = emptyList(),
+                occurredAt = occurredAtOf(command.occurredAt, now),
             )
             order.requireStorableTotal()
 
