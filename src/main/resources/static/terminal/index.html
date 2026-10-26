@@ -427,7 +427,7 @@ async function postSync(operations) {
 // 0~1초 jitter는 매장 단말이 함께 끊겼다 돌아올 때 같은 초에 몰리지 않게 한다(inbound-rate-limit 결정 6).
 function retryDelay(error, random) {
   const r = error.retryAfter, s = error.errorCode === 'RATE_LIMITED' && /^\d+$/.test(r) && +r >= 1 ? +r : 5;
-  return Math.round((s + random()) * 1000);
+  return Math.min(Math.round((s + random()) * 1000), 2 ** 31 - 1); // setTimeout은 이보다 큰 대기를 32비트로 감아 일찍(Infinity는 바로) 부른다
 }
 async function mockSync(operations) {
   await new Promise(r => setTimeout(r, 400));
@@ -1024,6 +1024,7 @@ function selfTest() {
   const rl = retryAfter => ({ errorCode: 'RATE_LIMITED', retryAfter }), lo = () => 0, hi = () => 0.9999;
   const ok7 = retryDelay(rl('1'), lo) === 1000 && retryDelay(rl('1'), hi) === 2000
     && retryDelay(rl('3600'), lo) === 3600000 && retryDelay(rl('3600'), hi) === 3601000
+    && retryDelay(rl('4294968'), lo) === 2 ** 31 - 1 && retryDelay(rl('9'.repeat(400)), lo) === 2 ** 31 - 1 // setTimeout이 32비트로 감아 일찍 부르지 않게
     && [null, '', '0', '1.5', '-1', 'Wed, 21 Oct 2026 07:28:00 GMT'].every(v => retryDelay(rl(v), lo) === 5000 && retryDelay(rl(v), hi) === 6000)
     && [new TypeError('Failed to fetch'), new DOMException('signal timed out', 'TimeoutError'), { retryAfter: '1' }, { errorCode: 'UNAUTHENTICATED', retryAfter: '1' }]
       .every(e => retryDelay(e, lo) === 5000 && retryDelay(e, hi) === 6000);
