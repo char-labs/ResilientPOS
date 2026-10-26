@@ -112,7 +112,7 @@ class PayloadHashTest {
     @Test
     fun `toCommand는 ISO 4217에 없는 통화와 소문자 통화를 UNSUPPORTED_CURRENCY로 거절한다`() {
         listOf("ZZZ", "krw").forEach { currency ->
-            val failure = assertFailsWith<DomainException> { order.copy(currency = currency).toCommand(terminalId) }
+            val failure = assertFailsWith<DomainException> { order.copy(currency = currency).toCommand(terminalId, null) }
 
             assertEquals(Money.UNSUPPORTED_CURRENCY, failure.code)
             assertEquals(DomainErrorKind.INVALID, failure.kind)
@@ -123,7 +123,7 @@ class PayloadHashTest {
     fun `toCommand는 소수나 Int 범위 밖의 수량을 INVALID_QUANTITY로 거절한다`() {
         // 4294967297은 Int로 자르면 1이 되는 값이다.
         listOf("1.5", "4294967297", "-2147483649", "2147483648").forEach { quantity ->
-            val failure = assertFailsWith<DomainException> { orderWithQuantity(quantity).toCommand(terminalId) }
+            val failure = assertFailsWith<DomainException> { orderWithQuantity(quantity).toCommand(terminalId, null) }
 
             assertEquals(OrderLine.INVALID_QUANTITY, failure.code)
             assertEquals(DomainErrorKind.INVALID, failure.kind)
@@ -132,18 +132,18 @@ class PayloadHashTest {
 
     @Test
     fun `toCommand는 정수인 수량을 변환하고 소수부가 0인 표기도 같은 수량으로 본다`() {
-        assertEquals(2, orderWithQuantity("2.0").toCommand(terminalId).lines.single().quantity)
-        assertEquals(Int.MAX_VALUE, orderWithQuantity("2147483647").toCommand(terminalId).lines.single().quantity)
-        assertEquals(Int.MIN_VALUE, orderWithQuantity("-2147483648").toCommand(terminalId).lines.single().quantity)
+        assertEquals(2, orderWithQuantity("2.0").toCommand(terminalId, null).lines.single().quantity)
+        assertEquals(Int.MAX_VALUE, orderWithQuantity("2147483647").toCommand(terminalId, null).lines.single().quantity)
+        assertEquals(Int.MIN_VALUE, orderWithQuantity("-2147483648").toCommand(terminalId, null).lines.single().quantity)
         // 범위 안의 0과 음수는 order가 판정한다.
-        assertEquals(0, orderWithQuantity("0").toCommand(terminalId).lines.single().quantity)
-        assertEquals(-1, orderWithQuantity("-1").toCommand(terminalId).lines.single().quantity)
+        assertEquals(0, orderWithQuantity("0").toCommand(terminalId, null).lines.single().quantity)
+        assertEquals(-1, orderWithQuantity("-1").toCommand(terminalId, null).lines.single().quantity)
     }
 
     @Test
     fun `toCommand는 극단적인 지수의 수량도 지수를 펴지 않고 거절하고 끝난다`() {
         listOf("1E+999999999", "1E-999999999").forEach { quantity ->
-            val failure = assertFailsWith<DomainException> { orderWithQuantity(quantity).toCommand(terminalId) }
+            val failure = assertFailsWith<DomainException> { orderWithQuantity(quantity).toCommand(terminalId, null) }
 
             assertEquals(OrderLine.INVALID_QUANTITY, failure.code)
         }

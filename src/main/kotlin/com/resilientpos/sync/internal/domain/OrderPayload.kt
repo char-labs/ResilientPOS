@@ -7,6 +7,7 @@ import com.resilientpos.order.OrderCommand
 import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.TerminalId
 import java.math.BigDecimal
+import java.time.Instant
 import java.util.Currency
 
 /**
@@ -35,7 +36,7 @@ data class OrderPayload(
     }
 
     /** `order` 공개 명령으로 바꾼다. 통화·수량·금액 규칙에 어긋나면 `DomainException`이다. */
-    fun toCommand(terminalId: TerminalId): OrderCommand.Create {
+    fun toCommand(terminalId: TerminalId, occurredAt: Instant?): OrderCommand.Create {
         // Currency.getInstance의 거절은 IllegalArgumentException이다. 그것만 거절로 바꾸고 Error나 다른 예외는 그대로 올려 배치 오류가 되게 한다.
         val currency = try {
             Currency.getInstance(currency)
@@ -50,6 +51,7 @@ data class OrderPayload(
             lines = lines.map {
                 OrderCommand.Create.Line(it.productCode, it.productName, Money.of(it.unitPrice, currency), it.quantity.toIntExact())
             },
+            occurredAt = occurredAt,
         )
     }
 
