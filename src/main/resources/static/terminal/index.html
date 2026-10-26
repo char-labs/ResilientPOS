@@ -346,7 +346,7 @@ function restore(json) { // S를 저장된 모양으로 되돌린다(저장 실�
 }
 
 // 화면 상태(새로 고치면 사라져도 되는 것)
-const U = { syncError: '', again: false, kstep: 'home', remote: null, lastResultId: null, faceFail: false, kiosk: Q.has('kiosk'), view: 'order', cat: '즐겨찾는 메뉴', dining: '매장', cart: [], sel: -1, overlay: null, flushing: false, retryAt: 0 };
+const U = { syncError: '', again: false, kstep: 'home', remote: null, lastResultId: null, faceFail: false, kiosk: Q.has('kiosk'), view: 'order', cat: '즐겨찾는 메뉴', dining: '매장', cart: [], sel: -1, overlay: null, flushing: false, retryTimer: 0 };
 
 const won = n => (Number(n) || 0).toLocaleString('ko-KR'); // 숫자가 아닌 값이 화면에 그대로 들어가지 않게 한다
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -417,8 +417,17 @@ async function postSync(operations) {
     });
   } catch (e) { settleLink(link, e); throw e; }
   settleLink(link, null);
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => null); // 본문이 JSON이 아니면(ingress 등) code가 없다
+    throw Object.assign(new Error(`HTTP ${res.status}`), { errorCode: body?.error?.errorCode, retryAfter: res.headers.get('Retry-After') });
+  }
   return (await res.json()).data;
+}
+// 다시 보낼 때까지 기다릴 ms. 재전송 규약은 HTTP 상태가 아니라 code에 묶여 RATE_LIMITED만 Retry-After초를 따르고, 그 밖은 5초다.
+// 0~1초 jitter는 매장 단말이 함께 끊겼다 돌아올 때 같은 초에 몰리지 않게 한다(inbound-rate-limit 결정 6).
+function retryDelay(error, random) {
+  const r = error.retryAfter, s = error.errorCode === 'RATE_LIMITED' && /^\d+$/.test(r) && +r >= 1 ? +r : 5;
+  return Math.min(Math.round((s + random()) * 1000), 2 ** 31 - 1); // setTimeout은 이보다 큰 대기를 32비트로 감아 일찍(Infinity는 바로) 부른다
 }
 async function mockSync(operations) {
   await new Promise(r => setTimeout(r, 400));
@@ -426,7 +435,7 @@ async function mockSync(operations) {
 }
 
 async function flush() {
-  if (ROLE !== 'pos' || !S.outbox.length || !isOnline() || Date.now() < U.retryAt) return;
+  if (ROLE !== 'pos' || !S.outbox.length || !isOnline() || U.retryTimer) return;
   if (U.flushing) { U.again = true; return; }
   U.flushing = true; U.again = false;
   if (U.view === 'status' && !U.overlay) render(); // 기다릴 것이 있을 때만 진행 상태를 보인다
@@ -439,10 +448,11 @@ async function flush() {
     U.syncError = first && S.outbox.length === before
       ? `순번이 맞지 않아 전송이 멈췄습니다(서버 확정 ${S.lastAcked}, 대기 첫 순번 ${first.sequence}). 단말 초기화가 필요할 수 있습니다` : '';
   } catch (e) {
-    // 실패하면 5초 뒤에 다시 보낸다(429의 Retry-After 1초보다 길다). 요청 중에 쌓인 다음 전송 요청도 그때까지 미룬다.
-    U.retryAt = Date.now() + 5000;
-    setTimeout(flush, 5000);
-    U.syncError = `서버 전송 실패(${e.message}). 5초마다 다시 시도합니다`;
+    // 재시도 timer가 걸려 있는 동안은 5초 주기·새 주문·연결 복구·지금 동기화 모두 보내지 않는다. 요청 중에 쌓인 다음 전송 요청도 그때까지 미룬다.
+    // 벽시계와 비교하지 않는다. timer는 단조 시계라 벽시계가 늦어지면 제때 불려도 문에 걸려 5초 주기까지 밀린다.
+    const wait = retryDelay(e, Math.random);
+    U.retryTimer = setTimeout(() => { U.retryTimer = 0; flush(); }, wait);
+    U.syncError = `서버 전송 실패(${e.message}). ${(wait / 1000).toFixed(1)}초 뒤 다시 시도합니다`;
     console.warn('sync 실패, 대기열을 유지합니다:', e.message);
   } finally {
     U.flushing = false;
@@ -1010,7 +1020,16 @@ function selfTest() {
   sent.push(stampLink(l, 't5'));
   const ok6 = sent.join() === 't1,t2,t2,t2,t5';
   console.assert(ok6, 'selftest 실패: 재연결 시각', sent);
-  if (!ok3 || !ok4 || !ok5 || !ok6) return false;
+  // 다시 보낼 때까지: RATE_LIMITED는 Retry-After초, 그 밖(Retry-After가 1 이상의 정수가 아닐 때 포함)은 5초에 0~1초 jitter를 더한다
+  const rl = retryAfter => ({ errorCode: 'RATE_LIMITED', retryAfter }), lo = () => 0, hi = () => 0.9999;
+  const ok7 = retryDelay(rl('1'), lo) === 1000 && retryDelay(rl('1'), hi) === 2000
+    && retryDelay(rl('3600'), lo) === 3600000 && retryDelay(rl('3600'), hi) === 3601000
+    && retryDelay(rl('4294968'), lo) === 2 ** 31 - 1 && retryDelay(rl('9'.repeat(400)), lo) === 2 ** 31 - 1 // setTimeout이 32비트로 감아 일찍 부르지 않게
+    && [null, '', '0', '1.5', '-1', 'Wed, 21 Oct 2026 07:28:00 GMT'].every(v => retryDelay(rl(v), lo) === 5000 && retryDelay(rl(v), hi) === 6000)
+    && [new TypeError('Failed to fetch'), new DOMException('signal timed out', 'TimeoutError'), { retryAfter: '1' }, { errorCode: 'UNAUTHENTICATED', retryAfter: '1' }]
+      .every(e => retryDelay(e, lo) === 5000 && retryDelay(e, hi) === 6000);
+  console.assert(ok7, 'selftest 실패: 재전송 대기');
+  if (!ok3 || !ok4 || !ok5 || !ok6 || !ok7) return false;
   console.assert(ok, 'selftest 실패', st);
   console.log(ok ? 'selftest 통과' : 'selftest 실패');
   return ok;
@@ -1062,7 +1081,7 @@ addEventListener('keydown', e => {
 addEventListener('resize', fit);
 addEventListener('online', () => { render(); flush(); });
 addEventListener('offline', () => { link.down = true; render(); });
-setInterval(flush, 5000);          // 요청이 실패했을 때의 재시도
+setInterval(flush, 5000);          // GAP 재전송과 놓친 전송. 실패 뒤의 재시도는 flush가 건 timer가 보낸다
 setInterval(() => { if (!U.overlay) render(); }, 30000); // 시계와 경과 시간
 fit(); render(); flush();
 if (new URLSearchParams(location.search).has('selftest')) document.title = selfTest() ? 'selftest 통과' : 'selftest 실패';

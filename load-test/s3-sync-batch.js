@@ -11,7 +11,7 @@ const BACKLOG_SALES = Number(__ENV.BACKLOG_SALES || 250);
 const BATCH = Number(__ENV.BATCH || 500);
 const TIMEOUT = __ENV.TIMEOUT || '60s';
 const OFFLINE_MINUTES = 30;
-// 실패한 배치는 시연 단말처럼 5초 뒤 같은 항목으로 다시 보낸다. 이만큼 이어서 실패하면 그 단말은 수렴하지 못한 것으로 센다.
+// 실패한 배치는 종류와 관계없이 jitter 없이 5초 뒤 같은 항목으로 다시 보낸다(시연 단말은 RATE_LIMITED면 Retry-After를 따른다, capacity.md). 이만큼 이어서 실패하면 그 단말은 수렴하지 못한 것으로 센다.
 const MAX_CONSECUTIVE_FAILURES = 5;
 
 const convergence = new Trend('convergence_seconds');
