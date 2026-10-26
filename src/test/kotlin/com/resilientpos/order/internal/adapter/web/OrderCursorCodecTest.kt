@@ -50,6 +50,8 @@ class OrderCursorCodecTest {
             "구조에 구분자가 없음" to raw("1792972200123456"),
             "구조에 구분자가 둘" to raw("1792972200123456.${orderId.value}.x"),
             "UUID가 아님" to raw("1792972200123456.not-a-uuid"),
+            "축약한 UUID" to raw("1792972200123456.18f6b1a-0-7000-8000-c1"),
+            "대문자 UUID" to raw("1792972200123456.018F6B1A-0000-7000-8000-0000000000C1"),
             "숫자가 아님" to raw("abc.${orderId.value}"),
             "시각이 Long 밖" to raw("99999999999999999999.${orderId.value}"),
             "시각이 범위 위" to raw("${Long.MAX_VALUE}.${orderId.value}"),

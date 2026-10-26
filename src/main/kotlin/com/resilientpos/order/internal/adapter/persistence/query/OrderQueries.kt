@@ -30,6 +30,7 @@ class OrderQueries(
      * 주문 하나를 매장 기준으로 읽는다. 쿼리는 둘이고 주문이 없으면 line을 읽지 않는다.
      * READ COMMITTED라 한 문장 = 한 스냅샷이다. 상태와 checkout은 한 쿼리(left join, 행 수는 회차 수)로 읽어 같은 커밋이다.
      * line은 생성 뒤 바뀌지 않아 따로 읽는다. line을 바꾸는 명령이 생기면 다시 본다.
+     * line 쿼리에는 매장 조건이 없다. 매장 조건을 건 첫 쿼리가 주문을 찾은 뒤에만 실행하므로 순서를 바꾸지 않는다.
      */
     @ReadOnlyTransactional
     fun getOrder(orderId: OrderId, storeId: StoreId): OrderDetailView? {
@@ -103,7 +104,8 @@ class OrderQueries(
                 terminalId = TerminalId(order.terminalId),
                 status = order.status,
                 currency = currency,
-                total = (columns[1] as BigDecimal?)?.let { Money.of(it, currency) } ?: Money.zero(currency),
+                // line 없는 주문은 생성 불변식(EMPTY_ORDER)이 막는다. 합계가 null이면 0으로 감추지 않고 드러낸다.
+                total = Money.of(checkNotNull(columns[1] as BigDecimal?) { "line 없는 주문 ${order.id}" }, currency),
                 occurredAt = order.occurredAt,
             )
         }

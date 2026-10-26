@@ -9,7 +9,6 @@ import com.resilientpos.order.OrderId
 import com.resilientpos.order.OrderQuery
 import com.resilientpos.order.OrderQueryFacade
 import com.resilientpos.order.OrderStatus
-import com.resilientpos.order.createAndRequestCheckout
 import com.resilientpos.store.StoreId
 import jakarta.persistence.EntityManagerFactory
 import java.time.Clock
@@ -24,16 +23,20 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import org.hibernate.SessionFactory
 import org.hibernate.stat.Statistics
+import org.springframework.jdbc.core.JdbcTemplate
 
 /**
  * 점주 주문 목록 조회를 실제 PostgreSQL에서 본다. 매장마다 새 id를 써서 다른 테스트의 주문과 섞이지 않는다.
  * 같은 시각 동률의 기대 순서는 id 문자열의 사전순이다. 소문자 hex 문자열 순서는 PostgreSQL `uuid`의 부호 없는 바이트 순서와 같다.
  * `UUID.compareTo`는 상위 64비트를 부호 있는 수로 비교해 다를 수 있고, UUID v7은 같은 밀리초 안에서 생성 순서와 같지 않다.
+ * 다른 상태의 주문은 checkout 대신 상태 컬럼만 바꿔 만든다. checkout은 결제 시도 생성을 비동기로 띄우고, Hibernate 통계는 전역이라
+ * 그 문장이 문장 수 테스트에 섞인다(제대로 고치는 `statement_inspector`는 별도 PR, `PaymentAttemptInsertStatementCountIntegrationTest`).
  */
 class OrderListQueryIntegrationTest(
     private val commands: OrderCommandFacade,
     private val queryFacade: OrderQueryFacade,
     private val clock: Clock,
+    private val jdbc: JdbcTemplate,
     entityManagerFactory: EntityManagerFactory,
 ) : PostgresIntegrationTest() {
 
@@ -79,21 +82,59 @@ class OrderListQueryIntegrationTest(
         val oldest = place(store, base)
         val ties = List(3) { place(store, base.plusSeconds(60)) }.sortedByDescending { it.value.toString() }
         val newest = place(store, base.plusSeconds(120))
-        val expected = listOf(newest) + ties + oldest
+        // 늦게 sync된 주문: id는 가장 크고(가장 늦게 생성) 발생 시각은 가장 이르다. keyset이 id만 비교하면 이 주문이 빠진다.
+        val late = place(store, base.minusSeconds(60))
+        check(late.value.toString() > (ties + oldest + newest).maxOf { it.value.toString() }) { "늦게 만든 주문의 id가 가장 커야 한다" }
+        val expected = listOf(newest) + ties + oldest + late
 
-        val pages = mutableListOf<OrderQuery.FindOrders.Result>()
-        var cursor: OrderQuery.FindOrders.Cursor? = null
-        do {
-            val page = find(store, size = 2, after = cursor)
-            pages += page
-            check(pages.size <= 5) { "cursor가 앞으로 나아가지 않는다" }
-            cursor = page.next
-        } while (cursor != null)
+        val pages = pagesOf { cursor -> find(store, size = 2, after = cursor) }
 
-        assertEquals(listOf(2, 2, 1), pages.map { it.items.size })
+        // 남은 건수가 페이지 크기와 정확히 같아 마지막 페이지가 꽉 차도 다음 cursor가 없어야 한다.
+        assertEquals(listOf(2, 2, 2), pages.map { it.items.size })
         assertEquals(expected, pages.flatMap { page -> page.items.map { it.orderId } })
         assertNull(pages.last().next)
         assertEquals(OrderQuery.FindOrders.Cursor(base.plusSeconds(60), ties[0]), pages[0].next)
+    }
+
+    @Test
+    fun `상태 필터와 cursor를 함께 쓰면 그 상태의 주문만 끝까지 한 번씩 넘긴다`() {
+        val store = StoreId(UUID.randomUUID())
+        val open = (0..2).map { place(store, base.plusSeconds(it * 120L)) }
+        repeat(2) { markStatus(place(store, base.plusSeconds(it * 120L + 60)), OrderStatus.CHECKOUT_REQUESTED) }
+
+        val pages = pagesOf { cursor -> find(store, status = OrderStatus.OPEN, size = 1, after = cursor) }
+
+        assertEquals(open.reversed(), pages.flatMap { page -> page.items.map { it.orderId } })
+        assertNull(pages.last().next)
+    }
+
+    @Test
+    fun `저장할 수 있는 끝 연도의 기간과 cursor로도 조회한다`() {
+        val store = StoreId(UUID.randomUUID())
+        val order = place(store, base)
+        val first = Instant.parse("0001-01-01T00:00:00Z")
+        val last = Instant.parse("9999-12-31T23:59:59.999999Z")
+
+        assertEquals(listOf(order), find(store, from = first, to = last).items.map { it.orderId })
+        assertEquals(listOf(order), find(store, after = OrderQuery.FindOrders.Cursor(last, OrderId(UUID.randomUUID()))).items.map { it.orderId })
+        assertEquals(emptyList(), find(store, after = OrderQuery.FindOrders.Cursor(first, OrderId(UUID.randomUUID()))).items)
+    }
+
+    private fun markStatus(orderId: OrderId, status: OrderStatus) {
+        jdbc.update("update t_order set status = ? where id = ?", status.name, orderId.value)
+    }
+
+    /** cursor를 따라 끝까지 읽는다. cursor가 나아가지 않으면 무한히 돌지 않고 실패한다. */
+    private fun pagesOf(read: (OrderQuery.FindOrders.Cursor?) -> OrderQuery.FindOrders.Result): List<OrderQuery.FindOrders.Result> {
+        val pages = mutableListOf<OrderQuery.FindOrders.Result>()
+        var cursor: OrderQuery.FindOrders.Cursor? = null
+        do {
+            val page = read(cursor)
+            pages += page
+            check(pages.size <= MAX_PAGES) { "cursor가 앞으로 나아가지 않는다" }
+            cursor = page.next
+        } while (cursor != null)
+        return pages
     }
 
     @Test
@@ -114,9 +155,7 @@ class OrderListQueryIntegrationTest(
     fun `status는 그 상태의 주문만 거른다`() {
         val store = StoreId(UUID.randomUUID())
         val open = place(store, base)
-        val requested = commands.createAndRequestCheckout(
-            OrderFixtures.createOrderCommand(storeId = store, occurredAt = base.plusSeconds(60)),
-        )
+        val requested = place(store, base.plusSeconds(60)).also { markStatus(it, OrderStatus.CHECKOUT_REQUESTED) }
 
         assertEquals(listOf(requested), find(store, status = OrderStatus.CHECKOUT_REQUESTED).items.map { it.orderId })
         assertEquals(listOf(open), find(store, status = OrderStatus.OPEN).items.map { it.orderId })
@@ -159,5 +198,9 @@ class OrderListQueryIntegrationTest(
         find(store, size = 2)
 
         assertEquals(1L, statistics.prepareStatementCount - before)
+    }
+
+    private companion object {
+        const val MAX_PAGES = 10
     }
 }

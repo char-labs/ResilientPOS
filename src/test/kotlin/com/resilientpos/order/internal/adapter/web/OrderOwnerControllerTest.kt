@@ -167,7 +167,7 @@ class OrderOwnerControllerTest(
     }
 
     @Test
-    fun `남의 매장이거나 없는 매장이면 404 STORE_NOT_FOUND이고 파라미터를 보기 전에 조회하지 않는다`() {
+    fun `남의 매장이거나 없는 매장이면 404 STORE_NOT_FOUND이고 size와 cursor를 보기 전에 조회하지 않는다`() {
         willThrow(DomainException("STORE_NOT_FOUND", "매장을 찾을 수 없습니다", DomainErrorKind.NOT_FOUND))
             .given(stores).requireOwned(StoreId(UUID.fromString(STORE_ID)), OwnerId(UUID.fromString(OWNER_ID)))
 
@@ -196,6 +196,8 @@ class OrderOwnerControllerTest(
             "Base64가 아님" to "not%20base64!",
             "구조가 틀림" to raw("1792972200123456"),
             "UUID가 아님" to raw("1792972200123456.not-a-uuid"),
+            "축약한 UUID" to raw("1792972200123456.18f6b1a-0-7000-8000-c1"),
+            "대문자 UUID" to raw("1792972200123456.018F6B1A-0000-7000-8000-0000000000C1"),
             "숫자가 아님" to raw("abc.018f6b1a-0000-7000-8000-0000000000c1"),
             "시각 범위 밖" to raw("${Long.MAX_VALUE}.018f6b1a-0000-7000-8000-0000000000c1"),
         )

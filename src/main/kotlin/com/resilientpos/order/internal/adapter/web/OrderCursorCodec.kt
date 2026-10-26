@@ -30,22 +30,28 @@ object OrderCursorCodec {
     fun decode(text: String): OrderQuery.FindOrders.Cursor {
         try {
             val parts = String(decoder.decode(text)).split('.')
-            if (parts.size != 2) throw badRequest()
+            if (parts.size != 2) throw badRequest(CURSOR)
             val occurredAt = Instant.EPOCH.plus(parts[0].toLong(), ChronoUnit.MICROS)
-            return OrderQuery.FindOrders.Cursor(requireStorable(occurredAt), OrderId(UUID.fromString(parts[1])))
+            val orderId = UUID.fromString(parts[1])
+            // UUID.fromString은 축약·대문자 표기도 받는다. 서버가 발급한 소문자 정규형만 cursor다.
+            if (orderId.toString() != parts[1]) throw badRequest(CURSOR)
+            return OrderQuery.FindOrders.Cursor(requireStorable(occurredAt), OrderId(orderId))
         } catch (e: ResponseStatusException) {
             throw e
         } catch (e: RuntimeException) {
             // Base64, 숫자, UUID 형식과 시각 계산 오버플로(DateTimeException, ArithmeticException)가 모두 여기로 온다. 입력만 보는 순수 해석이라 원인은 한 가지다.
-            throw badRequest()
+            throw badRequest(CURSOR)
         }
     }
 
     /** 목록의 시각 입력(cursor, `from`·`to`)이 PostgreSQL `timestamptz`에 바인딩될 수 있는지 본다. 밖이면 DB 오류(500) 대신 400이다. */
     fun requireStorable(instant: Instant): Instant {
-        if (instant < MIN || instant > MAX) throw badRequest()
+        if (instant < MIN || instant > MAX) throw badRequest("time out of range")
         return instant
     }
 
-    private fun badRequest() = ResponseStatusException(HttpStatus.BAD_REQUEST)
+    /** reason은 로그에서 어느 검사가 막았는지 가르려는 것이고 응답 본문은 `BAD_REQUEST` 고정 문구다. 입력값은 넣지 않는다. */
+    fun badRequest(reason: String) = ResponseStatusException(HttpStatus.BAD_REQUEST, reason)
+
+    private const val CURSOR = "cursor"
 }

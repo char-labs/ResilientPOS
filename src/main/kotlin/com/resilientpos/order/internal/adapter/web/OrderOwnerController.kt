@@ -10,13 +10,11 @@ import java.time.Instant
 import java.time.OffsetDateTime
 import java.util.UUID
 import org.springframework.format.annotation.DateTimeFormat
-import org.springframework.http.HttpStatus
 import org.springframework.security.core.annotation.AuthenticationPrincipal
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PathVariable
 import org.springframework.web.bind.annotation.RequestParam
 import org.springframework.web.bind.annotation.RestController
-import org.springframework.web.server.ResponseStatusException
 
 /**
  * 점주용 주문 목록 endpoint. `/owner` 아래는 `OwnerSecurityFilterChain`이 세션 쿠키로 지킨다. principal은 점주 ID(UUID 문자열)다.
@@ -44,7 +42,7 @@ class OrderOwnerController(
     ): OrderPageResponse {
         stores.requireOwned(StoreId(storeId), OwnerId(UUID.fromString(ownerId)))
         val pageSize = size ?: OrderQuery.FindOrders.Criteria.DEFAULT_SIZE
-        if (pageSize !in 1..OrderQuery.FindOrders.Criteria.MAX_SIZE) throw ResponseStatusException(HttpStatus.BAD_REQUEST)
+        if (pageSize !in 1..OrderQuery.FindOrders.Criteria.MAX_SIZE) throw OrderCursorCodec.badRequest("size")
         val criteria = OrderQuery.FindOrders.Criteria(from?.toStorableInstant(), to?.toStorableInstant(), status, pageSize, cursor?.let(OrderCursorCodec::decode))
         return OrderPageResponse.from(queryFacade.findOrders(OrderQuery.FindOrders(StoreId(storeId), criteria)))
     }
