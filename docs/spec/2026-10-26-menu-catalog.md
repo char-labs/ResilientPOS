@@ -93,6 +93,7 @@
 - src/test/kotlin/com/resilientpos/catalog/**
 - src/test/kotlin/com/resilientpos/ModuleStructureTest.kt
 - src/test/kotlin/com/resilientpos/SchemaMigrationTest.kt
+- src/test/kotlin/com/resilientpos/terminal/internal/adapter/web/TerminalInFlightIntegrationTest.kt
 - docs/spec/2026-10-26-menu-catalog.md
 - docs/wiki/**
 - README.md
@@ -126,7 +127,7 @@ create table t_menu (
 ```
 
 - 질문 1(도출): 메뉴는 PostgreSQL 어디에도 없다. `t_order_line`은 판매된 값의 기록이라 메뉴가 아니다(팔리지 않은 상품, 바뀐 가격을 모른다). `store_id`는 `t_store.id`를 가리키는 참조이고 FK는 두지 않는다(도메인 모델 규칙). `version`은 `updated_at`으로 대신할 수 없다. JVM 시각이라 pod 사이에 단조가 아니다.
-- 질문 2(읽는 코드): `store_id`는 두 API의 조회 키, `menu`는 두 API의 응답, `version`은 ETag와 `If-Match` 비교가 읽는다. 감사 시각 셋과 `deleted_at`은 `BaseEntity` 공통 컬럼이다(`@SoftDelete`라 validate가 `deleted_at`을 요구한다).
+- 질문 2(읽는 코드): `store_id`는 두 API의 조회 키, `menu`는 두 API의 응답, `version`은 ETag와 `If-Match` 비교가 읽는다. 감사 시각 둘(`created_at`·`updated_at`)과 `deleted_at`은 `BaseEntity` 공통 컬럼이다(`@SoftDelete`라 validate가 `deleted_at`을 요구한다).
 - 질문 3(나중에 채우기): 버린 값과 다시 볼 조건. 메뉴 변경 이력(이력 조회나 감사 요구가 생길 때), 항목별 색·이미지·품절(단말이 그 값을 읽을 때, 문서 안 필드라 기본값을 두고 컬럼 없이 더한다), 별도 `currency` 컬럼(store 통화 정책이 생길 때).
 - 질문 4(마지막 방어선): PK `t_menu_pkey`가 "매장당 메뉴 하나"와 생성 경합의 방어선이다. 지우는 명령이 없고 삭제 행에도 걸린다. 그래서 이 표의 행은 SQL로도 soft delete하지 않는다. 삭제된 행이 있으면 조회는 없다고 보고 생성은 PK에 걸려 그 매장은 메뉴를 다시 만들지 못한다. `version`(`@Version`)이 수정 경합의 방어선이다. 코드 중복과 항목 상한은 문서 하나를 통째로 검사하는 도메인 규칙이라 DB 제약이 없다(교체가 문서 단위라 부분 갱신으로 규칙을 우회하는 경로가 없다).
 - 질문 5(정본): 메뉴의 정본은 이 행 하나다. 단말 localStorage 사본은 사본이고, 복구 경로는 다음 받기(ETag가 다르면 200)다. ETag에 매장 ID를 넣어 다른 매장의 사본이 맞는 것으로 보이지 않게 한다. 주문 line의 이름·가격은 사본이 아니라 판매 시점 기록이라 메뉴와 어긋나도 맞다.
@@ -150,7 +151,7 @@ create table t_menu (
 - README.md의 모듈 목록에 `catalog`가 있으면 더한다.
 
 ## 분할 계획
-- 이 PR은 메뉴 하나의 컨텍스트다. 주문 조회(Phase 1, `feature/order-query`)와 동시에 진행한다. 겹칠 수 있는 곳은 마이그레이션 번호(V021), `SchemaMigrationTest`, `docs/wiki/domain-model.md`다. push 전에 origin/main과 그 브랜치의 마지막 번호를 확인하고 나중에 머지하는 쪽이 번호를 바꾼다. domain-model.md는 서로 다른 절을 고친다.
+- 이 PR은 메뉴 하나의 컨텍스트다. 주문 조회(Phase 1, `feature/order-query`)와 동시에 진행한다. 겹칠 수 있는 곳은 마이그레이션 번호(V021), `SchemaMigrationTest`, `TerminalInFlightIntegrationTest`의 `/v1` GET 목록(Phase 1이 주문 조회 GET을 더하면 같은 줄), `docs/wiki/domain-model.md`다. push 전에 origin/main과 그 브랜치의 마지막 번호를 확인하고 나중에 머지하는 쪽이 번호를 바꾼다. domain-model.md는 서로 다른 절을 고친다.
 - 2026-10-26 확인: origin/main bb14c86, 열린 PR 없음, `feature/order-query`는 아직 push 전. main과 열린 PR에 ETag·조건부 요청 처리 헬퍼가 없다.
 
 ## 설계 검토 반영
