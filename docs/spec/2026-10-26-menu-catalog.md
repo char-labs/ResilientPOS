@@ -163,10 +163,10 @@ multi-review(Claude 86/100, Codex 79/100, Gemini CLI 없음)와 spring-backend-s
 
 반영한 것:
 - 읽기 경로는 저장된 문서를 `Menu.create`로 다시 검증하지 않고 `MenuView`로 바로 바꾼다(Claude·specialist 2/3). 다시 검증하면 규칙이 강해진 뒤 그 매장의 GET이 400으로 굳고, 점주도 ETag를 못 받아 메뉴를 고칠 수 없다. 저장된 문서를 읽지 못하면(깨진 통화, `Money` 자릿수) 400이 아니라 500이다. 사용자 잘못이 아니고 오류율 SLO에 잡혀야 한다.
-- 저장 문서의 모르는 필드는 무시한다. 필드를 더한 뒤 이전 버전으로 되돌려도 GET이 실패하지 않게 하려는 것이다(specialist).
+- 저장 문서의 모르는 필드는 무시한다. 필드를 더한 뒤 이전 버전으로 되돌려도 GET이 실패하지 않게 하려는 것이다(specialist) Jackson 3 `JsonMapper`는 이미 무시하지만 전역 설정이 바뀌어도 유지되게 문서 타입에 명시한다.
 - `If-Match` version은 선행 0 없는 숫자만 받는다(`.01`은 409, Codex). `If-None-Match`도 앞뒤 공백을 지우고 본다(Claude).
 - `Money` 위반 메시지에 몇 번째 항목인지 붙인다. code는 그대로다(specialist).
-- `items`의 null 원소가 500이 아니라 400인지 확인한다(Claude).
+- `items`의 null 원소는 역직렬화 단계에서 400 `BAD_REQUEST`다(Claude가 500을 의심해 테스트로 확인했고 처음부터 400이었다).
 - `Menu`는 `storeId`로 같음을 판단한다(aggregate 규칙, Claude).
 - 시연 단말(결정 8 보강):
   - 가격은 decimal string 그대로 들고 다니고 주문 합계는 `BigInt`로 센다. 정수 단위 가격만 받는다. `Number`로 바꾸면 큰 금액에서 자릿수를 잃어 서버 합계와 어긋난다(Codex HIGH).
