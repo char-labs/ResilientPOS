@@ -40,6 +40,7 @@
 - 조건 헤더 규칙(사용자 결정, HTTP 상태):
   - 두 헤더가 모두 없거나 둘 다 있으면 400 `MENU_PRECONDITION_REQUIRED`다(`INVALID`). 옛 화면이 마지막 저장을 조용히 덮어쓰지 못하게 하려는 것이다.
   - `If-Match`는 strong ETag 하나만 받는다. 값이 지금 ETag와 다르거나, `*`·weak·여러 값·해석할 수 없는 값이거나, 메뉴가 없으면 409 `MENU_VERSION_MISMATCH`다(`CONFLICT`). `If-None-Match`는 `*`만 받고, 메뉴가 이미 있거나 `*`가 아니면 같은 409다.
+  - 헤더 해석은 Controller가 매장 소유 확인보다 먼저 한다(HTTP 문법이라서). 그래서 남의 매장에 틀린 헤더를 보내면 404가 아니라 400·409다. 어느 쪽이든 매장의 존재를 드러내지 않는다. (개발 중 범위 조정)
   - RFC 9110 §13.1.1은 If-Match 실패에 412를 요구한다. `DomainErrorKind`는 HTTP 숫자가 아니라 업무 의미이고(`DomainException.kt`), 저장소의 다른 버전 충돌도 409로 나간다. 소비자가 점주 화면 하나라 412에 기대는 중간 캐시가 없어 이 이탈을 받아들인다.
 - 저장 절차:
   - 비교와 저장은 한 `Tx.masterTx` 블록 안에서 한다. 그 블록이 찾은 관리 엔티티의 version과 `If-Match`를 비교하고 같은 엔티티를 바꾼다. 비교용 읽기를 따로 하면 `@Version`이 지키는 것이 두 번째 읽기 값이 되어 옛 화면이 새 저장을 덮어쓴다.
@@ -92,7 +93,6 @@
 - src/test/kotlin/com/resilientpos/catalog/**
 - src/test/kotlin/com/resilientpos/ModuleStructureTest.kt
 - src/test/kotlin/com/resilientpos/SchemaMigrationTest.kt
-- src/docs/asciidoc/**
 - docs/spec/2026-10-26-menu-catalog.md
 - docs/wiki/**
 - README.md
@@ -138,7 +138,7 @@ create table t_menu (
 
 ## 검증
 - `./gradlew test` 전체. 범위를 좁히면 `./gradlew test --tests 'com.resilientpos.catalog.*' --tests 'com.resilientpos.ModuleStructureTest' --tests 'com.resilientpos.SchemaMigrationTest'`.
-- Controller는 MockMvc와 REST Docs, fixture는 Fixture Monkey. 경합은 `OrderVersionConflictIntegrationTest`처럼 "읽기 → 다른 트랜잭션 커밋 → 저장" 순서로 결정적으로 만든 PostgreSQL 통합 테스트로 확인한다. 응답 ETag와 DB version의 일치도 통합 테스트로 본다.
+- Controller는 MockMvc와 REST Docs 스니펫, fixture는 Fixture Monkey. 저장소에 asciidoc 문서와 Asciidoctor 빌드가 없어 스니펫(`build/generated-snippets/menu-*`)만 만든다. (개발 중 범위 조정) 경합은 `OrderVersionConflictIntegrationTest`처럼 "읽기 → 다른 트랜잭션 커밋 → 저장" 순서로 결정적으로 만든 PostgreSQL 통합 테스트로 확인한다. 응답 ETag와 DB version의 일치도 통합 테스트로 본다.
 - 시연 단말: `?selftest`에 메뉴 사본 검증, 분류 순서, 메뉴 교체 뒤 `trustedLines`의 새 가격, 키오스크 메뉴 수신, 상품명 escape를 더한다. 받기는 #120과 같은 방식으로 확인한다. Python 표준 라이브러리 가짜 서버가 `src/main/resources/static`을 서빙하고 `GET /v1/menu`에 REST Docs 스니펫과 같은 envelope 모양으로 정해 둔 순서(200 → `If-None-Match` 일치 304 → 가격을 바꾼 200 → 401 → 연결 끊김)로 답하며 요청의 `If-None-Match`를 남긴다. 헤드리스 Chrome으로 `?mock` 없이 열어 화면 타일 가격과 localStorage 사본을 단계마다 읽는다. 스크립트는 scratchpad에 두고 커밋하지 않는다. 고치기 전 HEAD에서도 돌려 지금은 `GET /v1/menu`를 부르지 않는 것을 본다.
 - 개발 중 `python3 scripts/check_pr.py --base origin/main --worktree`, 제출 전 `--worktree` 없이 한 번 더.
 
