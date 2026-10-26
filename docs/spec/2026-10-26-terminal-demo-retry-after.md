@@ -111,12 +111,13 @@
 | 기다릴 시간 계산(인수 조건 1), selftest의 `retryDelay` 경계값 | 검증 절의 헤드리스 Chrome selftest. 제목이 기본 제목 그대로이고 콘솔에 `Uncaught ReferenceError: retryDelay is not defined` | 같은 명령. 제목 "selftest 통과" | 리팩터링 없음. 결함 주입 8종(jitter 제거, `Retry-After` 0 허용, code 무시, 소수 허용, 반올림 제거, 기본 5초를 1초로, code가 없으면 `RATE_LIMITED`로, `RATE_LIMITED`의 5초 경로만 jitter 제거) 모두 제목 "selftest 실패". 뒤의 둘은 리뷰가 짚은 빈틈이라 처음 selftest(`1ed406f`)는 통과시켰고, 사례(code 없이 `Retry-After`만 있는 오류, 이상한 값의 random 0.9999)를 더한 뒤 잡았다 |
 | 재전송 배선과 간격(인수 조건 2·3), 가짜 서버 실측 | 고치기 전 HEAD(`b0ced22`)에서 짧은 순서(`RATE_LIMITED` 세 번, 500, 끊긴 연결, 다른 code의 429, 날짜 형식, 200). `RATE_LIMITED`·`Retry-After` 1 세 번이 모두 5.002~5.008초 뒤라 1.0~2.0초 기대에 실패. 나머지도 5.003~5.008초로 jitter가 없었다 | 전체 순서 21요청 PASS(결과 절). 화면 문구도 같은 실행에서 확인 | 리팩터링 없음 |
 | 벽시계가 늦어질 때의 재전송(결정 4 범위 조정), 가짜 서버 실측 `--skew 50` | 벽시계 문(`6dfa1e3`)에서 `--quick --skew 50`. timer는 1~6ms 늦게 제때 불렸지만 문에 걸려 재전송이 4.908~10.003초 뒤라 간격 7개 모두 실패(예정 대비 3.3~5.0초 늦음) | 재시도 timer 문으로 같은 명령 PASS(예정 대비 3.5~9.7ms). 전체 순서 `--skew 50`도 PASS | 리팩터링 없음 |
+| 대기 상한(결정 4 범위 조정, 인수 조건 1), selftest의 "4294968"·400자리 사례 | 사례를 먼저 더하고 selftest. 제목 "selftest 실패", 콘솔 `selftest 실패: 재전송 대기` | 상한을 넣고 같은 명령. 제목 "selftest 통과". 짧은 순서 실측도 PASS(예정 대비 2.3~10.3ms) | 리팩터링 없음 |
 
 ## 결과
 - 시연 단말: `postSync`가 실패 응답의 `error.errorCode`와 `Retry-After`를 오류에 싣는다. `flush`는 `retryDelay(e, Math.random)` ms짜리 재시도 timer(`U.retryTimer`)를 걸고, timer가 걸려 있는 동안 모든 전송 계기를 막는다. 화면 문구는 기다릴 시간을 보이고, `setInterval` 5초의 주석을 GAP 재전송과 놓친 전송으로 고쳤다.
 - 범위 조정 셋은 구현 전에 이 spec에 먼저 적었다. S3 주석(결정 6), 재시도 timer 문과 대기 상한(결정 4)이다.
 - selftest: 헤드리스 Chrome에서 "selftest 통과". 결함 주입 8종 모두 실패(TDD 검증 기록).
-- 검증: origin/main ee8020e 위에서 `./gradlew test` 전체 934개가 두 번 통과했다(실패 0, `DemoPageHiddenByDefaultTest`·`DemoPageOpenInDemoProfileTest` 포함). 한 번은 `1ed406f`, 한 번은 재시도 timer 문(`b46842c`)이다. `check_pr.py --base origin/main --worktree` PASS.
+- 검증: origin/main ee8020e 위에서 `./gradlew test` 전체 934개가 세 번 통과했다(실패 0, `DemoPageHiddenByDefaultTest`·`DemoPageOpenInDemoProfileTest` 포함). `1ed406f`, 재시도 timer 문(`b46842c`), 대기 상한(`254d9b1`)에서다. `check_pr.py --base origin/main --worktree` PASS.
 - multi-review(Claude 87점, Codex는 CRITICAL·HIGH 없이 MEDIUM 1·LOW 1, Gemini는 CLI가 없어 미실행)에서 반영한 것:
   - selftest 빈틈 둘: 이상한 `Retry-After`를 random 0으로만 봄, code 없이 `Retry-After`만 있는 오류를 보지 않음(Codex·Claude).
   - 인수 조건 2의 측정 허용치와 timeout의 도착 간격 표기(Codex·Claude).
