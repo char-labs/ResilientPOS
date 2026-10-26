@@ -130,6 +130,21 @@ class MenuManagementIntegrationTest(
     }
 
     @Test
+    fun `같은 내용을 다시 저장하는 중에 다른 트랜잭션이 먼저 커밋해도 MENU_VERSION_MISMATCH이고 먼저 커밋한 내용이 남는다`() {
+        val items = MenuFixtures.replace(storeId, ownerId).items
+        create(items)
+        val winner = """{"currency":"KRW","items":[]}"""
+
+        // 내용이 같아 dirty UPDATE 없이 OPTIMISTIC_FORCE_INCREMENT만 version을 올리는 경로다
+        withCommittedAfterBlocked(
+            "update t_menu set menu = '$winner'::jsonb, version = version + 1 where store_id = '${storeId.value}'",
+        ) { replace(0, items) }
+
+        assertEquals(1L, dbVersion())
+        assertEquals(jsonMapper.readTree(winner), jsonMapper.readTree(dbMenu()))
+    }
+
+    @Test
     fun `먼저 커밋된 생성 뒤 두 번째 생성은 PK 위반이 MENU_VERSION_MISMATCH가 된다`() {
         val winner = """{"currency":"KRW","items":[]}"""
 
