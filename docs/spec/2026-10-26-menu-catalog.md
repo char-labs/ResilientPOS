@@ -83,7 +83,8 @@
 - 한계: DB를 백업으로 되돌려 version이 내려가면, 같은 version을 가진 사본이 다른 내용인데도 304를 받을 수 있다. 복원 절차가 생기면 그 절차가 메뉴 version을 올린다.
 
 ## 관련 문서
-없음
+- [order-line-blank-product](2026-09-21-order-line-blank-product.md): `t_product`를 두지 않는 결정
+- [terminal-demo-ui](2026-10-05-terminal-demo-ui.md): 시연 단말과 토큰 연동 제외
 
 ## 변경 경로
 - src/main/java/com/resilientpos/catalog/**
@@ -135,7 +136,7 @@ create table t_menu (
 - 질문 7(락·크기): 새 표 생성이라 기존 표를 잠그지 않는다.
 - 질문 8(이전 버전): 이전 버전은 새 표를 매핑하지 않아 `validate`가 통과하고 쓰지도 않는다.
 - 질문 9(이벤트·캐시): 이벤트를 내지 않는다. 응답은 HTTP 조건부 요청으로만 재사용되고 서버 캐시는 없다. version이 바뀌면 ETag가 바뀌므로 무효화가 따로 없다. jsonb 문서의 필드 이름이 저장 형식이라 리터럴 JSON 테스트로 고정한다.
-- 대조 기록: (리뷰어가 구현 뒤 채운다)
+- 대조 기록: code-reviewer(읽기 전용 에이전트), 2026-10-26, 대상 커밋 822ec89, 질문 1~9와 결정 4·5 일치. 불일치: 질문 2의 "감사 시각 셋"(BaseEntity는 `created_at`·`updated_at` 둘, 문구라 동작 영향 없음)을 고쳤다. 함께 받은 테스트 빈틈(내용이 같은 재저장의 경합)은 테스트를 더해 닫았다
 
 ## 검증
 - `./gradlew test` 전체. 범위를 좁히면 `./gradlew test --tests 'com.resilientpos.catalog.*' --tests 'com.resilientpos.ModuleStructureTest' --tests 'com.resilientpos.SchemaMigrationTest'`.
@@ -157,11 +158,43 @@ create table t_menu (
 ## 설계 검토 반영
 spring-backend-specialist가 커밋 전에 검토했다(P0 없음). 반영한 것: PUT 응답 ETag를 같은 트랜잭션의 관리 엔티티 version에서 얻고 수정마다 version을 올린다(P1), ETag에 매장 ID를 넣는다(P1), 304는 Spring 조건부 처리에 맡기고 envelope가 붙지 않는지 단언한다, 조건 헤더 문법과 둘 다 있을 때, `Long? = null` version·`persist`·PK 이름 명시와 Facade의 경합 번역, 주문 line과 같은 판정(`isBlank`·NUL·code point), 시연 단말의 escape·분류 순서·`PRODUCT` 재생성·`no-store`, price decimal string, 통화 검증의 빈틈(항목 0개, `String` DTO), soft delete 금지, `SchemaMigrationTest` 경로, SLO 분모 영향. HTTP 상태는 검토 추천대로 409·400으로 정했다(사용자 결정). jsonb는 `String` 필드 + adapter의 `JsonMapper`, 수정 경합은 `@Version`으로 정했다.
 
+## 코드 리뷰 반영
+multi-review(Claude 86/100, Codex 79/100, Gemini CLI 없음)와 spring-backend-specialist(P0·P1 없음)가 커밋 62ada07을 봤다. (개발 중 범위 조정)
+
+반영한 것:
+- 읽기 경로는 저장된 문서를 `Menu.create`로 다시 검증하지 않고 `MenuView`로 바로 바꾼다(Claude·specialist 2/3). 다시 검증하면 규칙이 강해진 뒤 그 매장의 GET이 400으로 굳고, 점주도 ETag를 못 받아 메뉴를 고칠 수 없다. 저장된 문서를 읽지 못하면(깨진 통화, `Money` 자릿수) 400이 아니라 500이다. 사용자 잘못이 아니고 오류율 SLO에 잡혀야 한다.
+- 저장 문서의 모르는 필드는 무시한다. 필드를 더한 뒤 이전 버전으로 되돌려도 GET이 실패하지 않게 하려는 것이다(specialist).
+- `If-Match` version은 선행 0 없는 숫자만 받는다(`.01`은 409, Codex). `If-None-Match`도 앞뒤 공백을 지우고 본다(Claude).
+- `Money` 위반 메시지에 몇 번째 항목인지 붙인다. code는 그대로다(specialist).
+- `items`의 null 원소가 500이 아니라 400인지 확인한다(Claude).
+- `Menu`는 `storeId`로 같음을 판단한다(aggregate 규칙, Claude).
+- 시연 단말(결정 8 보강):
+  - 가격은 decimal string 그대로 들고 다니고 주문 합계는 `BigInt`로 센다. 정수 단위 가격만 받는다. `Number`로 바꾸면 큰 금액에서 자릿수를 잃어 서버 합계와 어긋난다(Codex HIGH).
+  - 메뉴 받기는 한 번에 하나만 보내고, sync가 끊겼다 서버에 닿으면 다시 받는다(Codex·Claude 2/3).
+  - 단말 초기화는 메뉴 사본도 지운다(Codex·Claude 2/3).
+  - 키오스크는 화면에 보인 합계를 함께 보내고, 포스는 지금 사본으로 다시 센 합계와 다르면 받지 않는다. 받은 메뉴의 통화가 바뀌면 장바구니를 비운다(Claude). 결정 8의 "장바구니는 담을 때 값"은 포스 장바구니 이야기다. 키오스크 주문은 포스 사본의 값으로 접수하므로 금액이 달라지면 거절이 맞다.
+  - 합성 "전체" 탭은 분류 이름과 겹치지 않는 빈 문자열 키로 둔다(Codex). `esc`는 `'`도 바꾼다(Claude).
+
+받아들인 한계:
+- 점주 PUT이 커밋된 뒤 응답이 사라져 같은 요청을 다시 보내면 409다. 데이터는 맞다. 점주 화면은 409를 받으면 GET으로 지금 메뉴를 받아 비교한다(specialist).
+- 내용이 같은 재저장 분기(`isSame` + `OPTIMISTIC_FORCE_INCREMENT`)는 테스트가 판별하지 못한다. jsonb가 정규화한 텍스트와 Jackson 출력이 바이트로 같을 수 없어서 분기를 지워도 dirty UPDATE가 version을 한 번 올린다. jsonb 서식에 기대지 않게 명시적인 분기로 둔다(specialist).
+- 같은 내용 재저장은 `updated_at`을 바꾸지 않는다. 읽는 코드가 없다.
+- U+FEFF만 있는 이름은 서버(`isBlank`)가 받고 시연 단말(`trim`)은 거절해 그 메뉴 전체를 쓰지 않는다. 주문 line 판정과 함께 바꿀 일이라 두었다(Claude).
+- `postMessage` 상대 origin을 같은 호스트의 임의 포트로 믿는 것은 이 PR 전부터의 시연 단말 구조다(Codex). 기기 두 대 시연이나 토큰 연동 때 함께 고친다.
+- `MenuJpaRepository`는 두지 않는다. 쓰는 곳이 없고 adapter가 `EntityManager`로 넣고 찾는다.
+
 ## TDD 검증 기록
 
 | 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
 |---|---|---|---|
-| 개발 전에 테스트 의도를 적고 실행 후 관측 결과를 기록 | 미실행 | 미실행 | 미실행 |
+| Menu.create 검증(인수 8, 결정 1·3·7): `MenuTest` 12개(길이 경계, 서로게이트, NBSP·U+3000 공백, NUL, 코드 중복, 항목 201개, 음수 가격, 가격 통화 불일치, 자릿수 초과의 Money code, 항목 0개의 XXX 통화)와 `ModuleStructureTest`의 catalog 인식 | `./gradlew test --tests 'com.resilientpos.catalog.*' --tests 'com.resilientpos.ModuleStructureTest'`. 검증 없는 스텁에서 17개 중 9개가 `AssertionFailedError`(INVALID_MENU 미발생, 항목 0개 XXX에서 UNSUPPORTED_CURRENCY 미발생). 유효 메뉴·0원·자릿수 초과 3개는 스텁도 통과(characterization) | 같은 명령, 17개 통과 | `--tests 'com.resilientpos.DependencyDirectionTest'`를 더한 같은 명령 통과. 정리할 리팩터링 없음 |
+| 시연 단말 메뉴 사본(인수 11, 결정 8): `?selftest`의 메뉴 모양 검증·분류 순서(`"2"`·`__proto__`)·교체 뒤 `trustedLines` 새 가격·키오스크 수신·이름 escape | 결함 주입 셋(상품 타일 `esc` 제거, `trustedLines` 고정 가격, 객체 키 분류)을 각각 넣은 복사본에서 `selftest 실패` | 헤드리스 Chrome `?mock&selftest`에서 `selftest 통과` | 가짜 서버 실측(검증 절) |
+| 메뉴 저장·조회 Facade와 영속성(인수 1·2·4·9의 서비스·DB 부분): `MenuManagementIntegrationTest` 12개(생성 version 0, 수정 반환 version = DB, 같은 내용 재저장 +1, 옛 version·없는데 수정·있는데 생성, 수정 경합, 생성 경합의 PK 경로, 남의 매장, 메뉴 없음, `krw`·`ZZZ`·빈 통화, jsonb 원문, USD 자릿수)와 `SchemaMigrationTest` 갱신 | `./gradlew test --tests 'com.resilientpos.catalog.*'`. Facade를 `TODO()` 스텁으로 두어 12개 모두 실패(대부분 `NotImplementedError`, 생성 경합은 표가 없어 `PSQLException`). assertion 실패가 아니라 미구현 예외였다 | 같은 명령. 첫 실행 5개 실패(`find`에 강제 증가를 주면 수정 한 번에 version 0에서 2, 나머지는 테스트의 `count(*)`가 다른 테스트 행을 센 격리 결함). 증가 방식을 바꾸고 count를 `store_id`로 좁혀 통과 | catalog·`SchemaMigrationTest`·`ConstraintTranslationTest`·`TransactionDeclarationTest`·`DependencyDirectionTest`·`ModuleStructureTest`·`EntityVisibilityTest` 통과 |
+| 점주 API(인수 4·5·6): `MenuOwnerControllerTest` 15개(GET 200·ETag `매장ID.version`·price decimal string, 메뉴 없음 404·ETag 없음, 남의 매장 404, 생성 `If-None-Match: *` version 0과 감사 로그, `If-Match` 수정, 옛 ETag 409·감사 로그 없음, 헤더 없음·둘 다 400, `If-Match` 비정상 11종 409, `If-None-Match` 비`*` 4종 409, `krw` 400 `INVALID_MENU`) | `--tests '…catalog.internal.adapter.web.MenuOwnerControllerTest'`. `TODO()` 스텁의 500이 기대 상태와 달라 assertion 실패. 비로그인 401·CSRF 없음 403·필수 필드 누락 400은 처음부터 통과(characterization) | 같은 명령 통과 | catalog 전체·`ModuleStructureTest`·`DependencyDirectionTest`·`FixtureFactoriesTest`·`TransactionDeclarationTest`·`ConstraintTranslationTest`·`EntityVisibilityTest`·`ApiAdviceTest` 통과 |
+| 단말 API(인수 3·7): `MenuTerminalControllerTest` 6개(200·ETag·`no-cache, private`, 지금 ETag 304·빈 본문·헤더 유지, 옛·다른 매장 ETag 200, weak 일치 304, 메뉴 없음 404) | `--tests '…catalog.internal.adapter.web.MenuTerminalControllerTest'`. 스텁 500으로 5개 실패. 토큰 없음 401은 처음부터 통과 | 같은 명령 통과. 304에 envelope가 붙지 않는 것을 관측 | 위와 같음 |
+| 실제 체인·DB(인수 2·3·5·6·7): `MenuApiIntegrationTest` 8개(PUT 응답 ETag = 이어지는 GET ETag, 단말 200/304, 옛 ETag 409 뒤 저장본 유지, 헤더 오류가 500이 아님, CSRF 403·비로그인 401) | RED 없음. 위 슬라이스가 RED→GREEN을 거친 뒤 쓴 characterization이라 결함 주입으로 판별력을 따로 재지 않았다 | 통과 | 위와 같음 |
+| 같은 내용 재저장의 경합(인수 4, 리뷰 반영): `같은 내용을 다시 저장하는 중에 다른 트랜잭션이 먼저 커밋해도 MENU_VERSION_MISMATCH이고 먼저 커밋한 내용이 남는다` | RED 없음(이미 구현된 `OPTIMISTIC_FORCE_INCREMENT` 경로의 characterization) | `--tests '…catalog.internal.application.MenuManagementIntegrationTest'` 통과 | 아래 전체 테스트 |
+| `/v1` GET 고정 목록(결정 6): `TerminalInFlightIntegrationTest`의 GET pattern 목록에 `/v1/menu` | 전체 `./gradlew test`에서 이 테스트만 실패(목록에 없는 새 GET). 의도한 경고다 | 메뉴 조회가 행을 잠그지 않는 PK 읽기임을 확인하고 목록에 더해 통과 | 같은 명령 통과 |
 
 ## 결과
 개발 전 작성.
