@@ -56,7 +56,8 @@ t_reconciliation_case.resolved_by_owner_id ────────────�
 ## 3. 엔티티별 역할
 
 ### `OrderEntity` — 주문의 머리
-- 역할: 주문 하나의 소유 단말·매장·통화·상태(`OPEN`→`CHECKOUT_REQUESTED`→`PAID`)를 든다. 금액 합계는 컬럼으로 두지 않는다(파생 값, line에서 접는다).
+- 역할: 주문 하나의 소유 단말·매장·통화·상태(`OPEN`→`CHECKOUT_REQUESTED`→`PAID`)와 업무 발생 시각 `occurred_at`을 든다. `occurred_at`은 단말이 알려 준 판매 시각(sync 항목 `createdAt`, HTTP 생성은 수신 시각)이고 서버가 받은 시각 `created_at`과 다르다. 수신 시각보다 늦으면 수신 시각으로 낮추고 7일 넘게 이르면 수신 시각을 쓰며(`Order.create`), 생성 뒤 바뀌지 않는다. 금액 합계는 컬럼으로 두지 않는다(파생 값, line에서 접는다).
+- 읽는 곳: `OrderQueries`(port 없음). 단말 단건 `GET /v1/orders/{id}`는 매장 조건으로 주문과 checkout을 한 쿼리로, line을 한 쿼리로 읽는다. 점주 목록 `GET /owner/v1/stores/{storeId}/orders`는 `occurred_at desc, id desc` keyset으로 한 쿼리이고 합계는 select 절의 상관 subquery다. 인덱스 `ix_order_store_occurred (store_id, occurred_at, id)`와 상태 필터용 `ix_order_store_status_occurred (store_id, status, occurred_at, id)`가 받친다.
 - 관계: 자식 `OrderLineEntity`·`OrderCheckoutEntity`가 `order_id`로 가리킨다. 다른 모듈(`payment`·`fulfillment`·`sync`)도 `order_id`로 가리키지만 이 표를 읽지 않는다.
 - 방어선: unique `(terminal_id, client_order_id)`가 "같은 단말의 같은 주문 요청은 하나"의 마지막 방어선이다(멱등 키, 삭제 행에도 걸린다). 주문 생성 API에서 겹쳐 걸린 위반은 커밋을 연 `OrderCommandFacade.create`가 제약 이름으로 가려 `409 CONCURRENT_REQUEST`로 바꾼다. sync 항목이 지면 커밋이 sync 트랜잭션이라 바꾸지 않고 배치가 500이다. `@Version`은 루트인 이 표에만 있다. 상태 전이는 행 잠금(`for no key update`, 대기 3초) 아래에서 한다.
 - 만드는 곳: `OrderCommandFacade.create`(HTTP, `Lock` 블록)와 `createInCallerTransaction`(sync 항목 트랜잭션). 바꾸는 곳: `requestCheckout`·`markPaid`. `requestCheckout`은 `orderId`로 찾는 것(HTTP)과 `(terminalId, clientOrderId)`로 찾는 것(sync 항목 트랜잭션에 합류) 둘이고 둘 다 주문 행을 잠근다.
@@ -141,11 +142,11 @@ t_reconciliation_case.resolved_by_owner_id ────────────�
 | 2. 단말이 `POST /v1/orders/{id}/checkout` | 200, `checkoutNo=1`·`amount`·`status=CHECKOUT_REQUESTED` | `t_order.status` 갱신 + `t_order_checkout` 1행 + `event_publication`(`OrderPaymentRequested`) | **한 커밋**(주문 행 잠금). 응답은 커밋 직후 |
 | 3. Kafka `order.payment-requested` → `payment` | 단말에는 아직 아무것도 없다 | `t_payment_attempt` 1행(`REQUESTED`, 0원이면 바로 `APPROVED`) + `event_publication`(`AttemptCreated`) | **한 커밋**(`Lock` 블록). 같은 사실이 두 번 와도 기존 시도를 돌려준다 |
 | 4. Kafka `payment.attempt-created` → provider 호출 | 없음 | 호출은 **트랜잭션 밖** | provider 응답 뒤 행을 잠그고 결말 적용 |
-| 5. 결말 적용 | 없음(결제 조회 API는 아직 없다) | `t_payment_attempt.status`→`APPROVED`, `provider_reference` + `event_publication`(`PaymentApproved`) | **한 커밋** |
-| 6. Kafka `payment.approved` → `order` | 단말이 주문을 다시 만들거나 checkout을 다시 부르면 `status=PAID` | `t_order.status`→`PAID` + `event_publication`(`OrderPaid`) | **한 커밋**(주문 행 잠금, 최신 회차·금액 대조) |
+| 5. 결말 적용 | 결제 시도 조회 `GET /v1/orders/{id}/payment-attempts`가 `APPROVED`를 보인다 | `t_payment_attempt.status`→`APPROVED`, `provider_reference` + `event_publication`(`PaymentApproved`) | **한 커밋** |
+| 6. Kafka `payment.approved` → `order` | 주문 단건 조회 `GET /v1/orders/{id}`가 `status=PAID`와 오른 `version`을 보인다 | `t_order.status`→`PAID` + `event_publication`(`OrderPaid`) | **한 커밋**(주문 행 잠금, 최신 회차·금액 대조) |
 | 7. Kafka `order.paid` → `fulfillment` | 없음(보드 화면은 아직 없다) | `t_fulfillment` 1행 | **한 커밋**(unique `(order_id)`) |
 
-단말 관점의 요점: 단말이 직접 보는 표는 `t_order`·`t_order_checkout`뿐이고, 결제·이행은 단말 응답 뒤에 이벤트로 이어진다. 2단계 직후 `status`는 아직 `CHECKOUT_REQUESTED`이고 `PAID`는 나중에 반영된다.
+단말 관점의 요점: 결제·이행은 단말 응답 뒤에 이벤트로 이어진다. 2단계 직후 `status`는 아직 `CHECKOUT_REQUESTED`이고 `PAID`는 나중에 반영된다. 단말은 주문 상태를 주문 단건 조회로, 결제 결말을 결제 시도 조회로 따로 읽어 맞춘다. `order`와 `payment`는 서로 의존하지 않아 서버가 둘을 합치지 않는다. 시도가 `APPROVED`인데 주문이 `CHECKOUT_REQUESTED`에 머물면 6단계가 아직이거나 금액 불일치로 DLT에 간 것이다.
 
 ### 4.2 오프라인 주문 동기화
 
@@ -153,7 +154,7 @@ t_reconciliation_case.resolved_by_owner_id ────────────�
 |---|---|---|---|
 | 0. 오프라인에서 주문을 만들고 `operationId`·`sequence`를 붙여 로컬 큐에 저장 | 로컬 화면 | 서버에는 아무것도 없다 | — |
 | 1. 재연결 뒤 `POST /v1/terminals/{terminalId}/sync`에 배치 | — | 새 단말이면 `t_sync_watermark` 1행(0) | 짧은 커밋 하나 |
-| 2. `CREATE_ORDER` 항목: watermark 잠금 → 순번 판정 → `order` 명령 변환 → `createInCallerTransaction` | 항목 `APPLIED`+`orderId` | `t_order`·`t_order_line` + `t_sync_operation`(`APPLIED`) + `t_sync_watermark.last_acked_sequence` +1 | **항목 하나가 한 커밋** |
+| 2. `CREATE_ORDER` 항목: watermark 잠금 → 순번 판정 → `order` 명령 변환 → `createInCallerTransaction` | 항목 `APPLIED`+`orderId` | `t_order`(`occurred_at`은 항목 `createdAt`)·`t_order_line` + `t_sync_operation`(`APPLIED`) + `t_sync_watermark.last_acked_sequence` +1 | **항목 하나가 한 커밋** |
 | 2a. `REQUEST_CHECKOUT` 항목: watermark 잠금 → 순번 판정 → `clientOrderId`로 주문 행 잠금 → 전이 → 단말 합계 대조 → 저장 | 항목 `APPLIED`+`orderId` | `t_order.status`→`CHECKOUT_REQUESTED` + `t_order_checkout` 1행 + `event_publication`(`OrderPaymentRequested`) + `t_sync_operation`(`APPLIED`) + watermark +1. 이후는 4.1의 3단계부터 | **항목 하나가 한 커밋**. 행 잠금은 watermark 다음에 주문 순서다 |
 | 2'. 항목이 도메인 규칙에 걸림(빈 상품명, 상품 코드·상품명의 길이 초과와 NUL 문자, 모르는 통화 코드, 정수가 아니거나 Int 범위 밖인 수량, 금액 자릿수, 같은 `clientOrderId`에 다른 내용, 결제 요청의 주문 없음, 단말 합계와 확정 금액 불일치, 인증된 단말과 다른 매장의 주문 생성 `STORE_MISMATCH`) | 항목 `REJECTED`+`errorCode` | 첫 트랜잭션은 롤백(그 항목이 쓴 행 없음). 두 번째 트랜잭션이 `t_sync_operation`(`REJECTED`)과 watermark +1 | 두 커밋. 단말은 그 항목을 버린다 |
 | 2''. 이미 확정된 순번 | 같은 내용이면 `DUPLICATE`(기록된 `orderId`), 다른 내용·다른 순번·모르는 operation이면 `CONFLICT` | 아무것도 쓰지 않는다 | 읽기만 |
@@ -167,8 +168,8 @@ t_reconciliation_case.resolved_by_owner_id ────────────�
 
 | 단계 | 보이는 것 | 표 |
 |---|---|---|
-| 1. provider가 거절 | 없음(단말에 알릴 API가 아직 없다) | `t_payment_attempt.status`→`DECLINED`. 주문은 `CHECKOUT_REQUESTED`에 머문다 |
-| 2. `PaymentManagement.retryAuthorization(paymentId)`(HTTP endpoint 없음, Facade만) | — | 새 `t_payment_attempt` 1행(`REQUESTED`, `retried_from`=거절된 시도). 거절된 행을 잠그고 최신 시도를 확인해 겹친 요청도 하나로 수렴 |
+| 1. provider가 거절 | 결제 시도 조회가 `DECLINED`와 그 `paymentId`를 보인다 | `t_payment_attempt.status`→`DECLINED`. 주문은 `CHECKOUT_REQUESTED`에 머문다 |
+| 2. 단말이 `POST /v1/payment-attempts/{paymentId}/retry`(`PaymentManagement.retryAuthorization`) | — | 새 `t_payment_attempt` 1행(`REQUESTED`, `retried_from`=거절된 시도). 거절된 행을 잠그고 최신 시도를 확인해 겹친 요청도 하나로 수렴 |
 | 3. 이후 | 4.1의 4단계부터 | 같은 회차·같은 금액으로 provider를 다시 부른다 |
 
 ### 4.4 결제 미확인(`UNKNOWN`)
