@@ -20,7 +20,7 @@
 
 가정이 바뀌면(매장 규모, 단말이 HTTP 경로를 주로 쓰게 됨, 실제 PG 지연) 이 표와 아래 값을 다시 잰다.
 
-단말 sync 계약은 배치 50 op, 응답 대기 30초, 실패하면 5초 뒤 같은 배치를 다시 보내는 것이다. 시연 단말과 S3(`BATCH=50 TIMEOUT=30s`)가 이 계약을 따른다. 근거는 [slo-alert-followups](../spec/2026-10-23-slo-alert-followups.md) 결정 7이다.
+단말 sync 계약은 배치 50 op, 응답 대기 30초이고, 실패하면 같은 배치를 다시 보낸다. `error.errorCode`가 `RATE_LIMITED`이면 `Retry-After`초 뒤, 그 밖의 실패(네트워크 오류, timeout, 5xx, `Retry-After`가 1 이상의 정수가 아닌 경우)는 5초 뒤에 0~1초 jitter를 더해 보내고, 그 전에는 보내지 않는다. 시연 단말이 이 계약을 따른다. S3(`BATCH=50 TIMEOUT=30s`)는 배치와 응답 대기를 따르고, 실패하면 종류와 관계없이 jitter 없이 5초 뒤 다시 보낸다. 서버의 `Retry-After`(지금 값으로 1초)보다 길어 규약 안이다. 근거는 [slo-alert-followups](../spec/2026-10-23-slo-alert-followups.md) 결정 7과 [terminal-demo-retry-after](../spec/2026-10-26-terminal-demo-retry-after.md)다.
 
 ## 인스턴스 하나의 용량
 2026-10-21~22에 로컬 compose 한 대(Apple M3 Pro, OrbStack CPU 11·메모리 16GiB, 앱 `mem_limit: 1g`, trace 샘플링 1.0)에서 쟀다. 22일 측정은 호스트 부하(load average 30~51)와 VM 정지로 흔들려, 판정에는 흔들리지 않은 실행만 썼다. 원시 수치와 흔들린 구간은 spec 결과 절에 있다.
@@ -59,7 +59,7 @@
 
 | 설정 | 값 | 근거 |
 |---|---|---|
-| `resilientpos.rate-limit.terminal.capacity` | 10 | 30분 내내 피크(판매 초당 0.5건 × op 2)로 팔다 끊긴 단말의 backlog 1,800 op는 배치 500으로 요청 4개다. 그동안의 실시간 판매는 같은 outbox의 다음 배치에 실린다. 트래픽 가정의 500 op는 원문 NFR의 배치 크기로 잡은 보통 재연결이고, 이 값은 최악이다. 단말 sync 계약(배치 50)으로는 500 op가 요청 10개라 capacity 안이지만 1,800 op는 36개다. 서버가 한가해 배치를 연달아 보내면 10개 남짓 뒤 429를 받고, 5초 뒤 bucket이 다시 찬 채로 이어 보낸다(계산, 미측정) |
+| `resilientpos.rate-limit.terminal.capacity` | 10 | 30분 내내 피크(판매 초당 0.5건 × op 2)로 팔다 끊긴 단말의 backlog 1,800 op는 배치 500으로 요청 4개다. 그동안의 실시간 판매는 같은 outbox의 다음 배치에 실린다. 트래픽 가정의 500 op는 원문 NFR의 배치 크기로 잡은 보통 재연결이고, 이 값은 최악이다. 단말 sync 계약(배치 50)으로는 500 op가 요청 10개라 capacity 안이지만 1,800 op는 36개다. 서버가 한가해 배치를 연달아 보내면 10개 남짓 뒤 429를 받는다. 시연 단말은 1~2초 뒤 그동안 찬 만큼(2~4개)씩 이어 보내 남은 26개에 약 13초, S3는 5초 뒤 bucket이 다시 찬 채로 이어 보낸다(계산, 미측정) |
 | `resilientpos.rate-limit.terminal.refill-per-second` | 2 | 단말 피크 평균 0.5 RPS(판매 1건 = sync 1요청 또는 HTTP 2요청이라 약 0.55 RPS)의 약 4배 |
 | `resilientpos.rate-limit.store.capacity` | 40 | 매장 단말 4대 × 단말 capacity |
 | `resilientpos.rate-limit.store.refill-per-second` | 8 | 매장 단말 4대 × 단말 refill. 고장 단말 k=1~3이어도 같은 매장 정상 단말 몫이 남는다(필요 3.5·5.0·6.5/s) |
