@@ -101,6 +101,7 @@
 - 개발 컨텍스트는 "시연 단말의 sync 재전송 규약" 하나다.
 - 따로 둔 것: 시연 단말 토큰 인증, S3 재시도(제외).
 - 겹침 확인(2026-10-26, origin/main ee8020e): 열린 PR이 없다. 진행 중인 `feature/dependency-vulnerability-scan`은 `.github/workflows`와 `docs/wiki/development-workflow.md`를 고쳐 이 PR의 경로와 겹치지 않는다. push·PR 생성·머지 직전에 다시 확인하고 먼저 머지된 쪽 위로 rebase한다.
+- 다시 확인(2026-10-26): #119(`feature/dependency-vulnerability-scan`)가 `79c75b9`로 머지됐고 열린 PR은 이 PR뿐이다. #119가 고친 경로(`.github/workflows/pr-checks.yml`, `README.md`, `build.gradle.kts`, `docs/wiki/development-workflow.md`, 그 spec)는 이 PR과 겹치지 않아 충돌 없이 rebase했다. Kotlin을 2.4.21로 올린 빌드 위라 `./gradlew test`를 다시 돌린다.
 - 공용 헬퍼: main과 열린 PR에 시연 페이지에서 쓸 jitter나 `Retry-After` 해석 헬퍼가 없다. `load-test/lib/api.js`(k6)와 `RedisDistributedLock`(Kotlin)의 jitter는 다른 런타임이라 쓸 수 없다.
 
 ## TDD 검증 기록
@@ -108,16 +109,16 @@
 
 | 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
 |---|---|---|---|
-| 기다릴 시간 계산(인수 조건 1), selftest의 `retryDelay` 경계값 | 검증 절의 헤드리스 Chrome selftest. 제목이 기본 제목 그대로이고 콘솔에 `Uncaught ReferenceError: retryDelay is not defined` | 같은 명령. 제목 "selftest 통과" | 리팩터링 없음. 결함 주입 8종(jitter 제거, `Retry-After` 0 허용, code 무시, 소수 허용, 반올림 제거, 기본 5초를 1초로, code가 없으면 `RATE_LIMITED`로, `RATE_LIMITED`의 5초 경로만 jitter 제거) 모두 제목 "selftest 실패". 뒤의 둘은 리뷰가 짚은 빈틈이라 처음 selftest(`1ed406f`)는 통과시켰고, 사례(code 없이 `Retry-After`만 있는 오류, 이상한 값의 random 0.9999)를 더한 뒤 잡았다 |
-| 재전송 배선과 간격(인수 조건 2·3), 가짜 서버 실측 | 고치기 전 HEAD(`b0ced22`)에서 짧은 순서(`RATE_LIMITED` 세 번, 500, 끊긴 연결, 다른 code의 429, 날짜 형식, 200). `RATE_LIMITED`·`Retry-After` 1 세 번이 모두 5.002~5.008초 뒤라 1.0~2.0초 기대에 실패. 나머지도 5.003~5.008초로 jitter가 없었다 | 전체 순서 21요청 PASS(결과 절). 화면 문구도 같은 실행에서 확인 | 리팩터링 없음 |
-| 벽시계가 늦어질 때의 재전송(결정 4 범위 조정), 가짜 서버 실측 `--skew 50` | 벽시계 문(`6dfa1e3`)에서 `--quick --skew 50`. timer는 1~6ms 늦게 제때 불렸지만 문에 걸려 재전송이 4.908~10.003초 뒤라 간격 7개 모두 실패(예정 대비 3.3~5.0초 늦음) | 재시도 timer 문으로 같은 명령 PASS(예정 대비 3.5~9.7ms). 전체 순서 `--skew 50`도 PASS | 리팩터링 없음 |
+| 기다릴 시간 계산(인수 조건 1), selftest의 `retryDelay` 경계값 | 검증 절의 헤드리스 Chrome selftest. 제목이 기본 제목 그대로이고 콘솔에 `Uncaught ReferenceError: retryDelay is not defined` | 같은 명령. 제목 "selftest 통과" | 리팩터링 없음. 결함 주입 8종(jitter 제거, `Retry-After` 0 허용, code 무시, 소수 허용, 반올림 제거, 기본 5초를 1초로, code가 없으면 `RATE_LIMITED`로, `RATE_LIMITED`의 5초 경로만 jitter 제거) 모두 제목 "selftest 실패". 뒤의 둘은 리뷰가 짚은 빈틈이라 처음 selftest(`94d3991`)는 통과시켰고, 사례(code 없이 `Retry-After`만 있는 오류, 이상한 값의 random 0.9999)를 더한 뒤 잡았다 |
+| 재전송 배선과 간격(인수 조건 2·3), 가짜 서버 실측 | 고치기 전 HEAD(`9e0c5f9`)에서 짧은 순서(`RATE_LIMITED` 세 번, 500, 끊긴 연결, 다른 code의 429, 날짜 형식, 200). `RATE_LIMITED`·`Retry-After` 1 세 번이 모두 5.002~5.008초 뒤라 1.0~2.0초 기대에 실패. 나머지도 5.003~5.008초로 jitter가 없었다 | 전체 순서 21요청 PASS(결과 절). 화면 문구도 같은 실행에서 확인 | 리팩터링 없음 |
+| 벽시계가 늦어질 때의 재전송(결정 4 범위 조정), 가짜 서버 실측 `--skew 50` | 벽시계 문(`e8ff0c6`)에서 `--quick --skew 50`. timer는 1~6ms 늦게 제때 불렸지만 문에 걸려 재전송이 4.908~10.003초 뒤라 간격 7개 모두 실패(예정 대비 3.3~5.0초 늦음) | 재시도 timer 문으로 같은 명령 PASS(예정 대비 3.5~9.7ms). 전체 순서 `--skew 50`도 PASS | 리팩터링 없음 |
 | 대기 상한(결정 4 범위 조정, 인수 조건 1), selftest의 "4294968"·400자리 사례 | 사례를 먼저 더하고 selftest. 제목 "selftest 실패", 콘솔 `selftest 실패: 재전송 대기` | 상한을 넣고 같은 명령. 제목 "selftest 통과". 짧은 순서 실측도 PASS(예정 대비 2.3~10.3ms) | 리팩터링 없음 |
 
 ## 결과
 - 시연 단말: `postSync`가 실패 응답의 `error.errorCode`와 `Retry-After`를 오류에 싣는다. `flush`는 `retryDelay(e, Math.random)` ms짜리 재시도 timer(`U.retryTimer`)를 걸고, timer가 걸려 있는 동안 모든 전송 계기를 막는다. 화면 문구는 기다릴 시간을 보이고, `setInterval` 5초의 주석을 GAP 재전송과 놓친 전송으로 고쳤다.
 - 범위 조정 셋은 구현 전에 이 spec에 먼저 적었다. S3 주석(결정 6), 재시도 timer 문과 대기 상한(결정 4)이다.
 - selftest: 헤드리스 Chrome에서 "selftest 통과". 결함 주입 8종 모두 실패(TDD 검증 기록).
-- 검증: origin/main ee8020e 위에서 `./gradlew test` 전체 934개가 세 번 통과했다(실패 0, `DemoPageHiddenByDefaultTest`·`DemoPageOpenInDemoProfileTest` 포함). `1ed406f`, 재시도 timer 문(`b46842c`), 대기 상한(`254d9b1`)에서다. `check_pr.py --base origin/main --worktree` PASS.
+- 검증: rebase 전 origin/main ee8020e 위에서 `./gradlew test` 전체 934개가 세 번 통과했다(실패 0, `DemoPageHiddenByDefaultTest`·`DemoPageOpenInDemoProfileTest` 포함). 첫 구현, 재시도 timer 문, 대기 상한 커밋에서다. #119(`79c75b9`, Kotlin 2.4.21) 위로 rebase한 뒤 다시 돌려 934개가 통과했다(실패 0). `check_pr.py --base origin/main --worktree` PASS.
 - multi-review(Claude 87점, Codex는 CRITICAL·HIGH 없이 MEDIUM 1·LOW 1, Gemini는 CLI가 없어 미실행)에서 반영한 것:
   - selftest 빈틈 둘: 이상한 `Retry-After`를 random 0으로만 봄, code 없이 `Retry-After`만 있는 오류를 보지 않음(Codex·Claude).
   - 인수 조건 2의 측정 허용치와 timeout의 도착 간격 표기(Codex·Claude).
@@ -139,5 +140,5 @@
 | 429 `RATE_LIMITED`, `Retry-After`가 HTTP-date | 1 | 5.0~6.0초 | 5.474초 | 5.916초 |
 
 - 예정 시각 대비 서버 도착은 skew 0에서 2.4~10.6ms(중앙 6.0ms), skew 50에서 2.8~25.8ms(중앙 7.4ms)다. timer가 불린 늦음은 skew 0에서 1~9ms(중앙 3ms), skew 50에서 0~6ms(중앙 3ms)다. timer가 걸려 있는 동안 0.1초마다 `flush`를 불렀지만 예정보다 일찍 닿은 요청은 없었다. 두 실행 모두 operation이 첫 전송과 같았고, 200 뒤 1초 동안 더 온 요청은 없었다.
-- 벽시계 문(`6dfa1e3`)일 때: skew 없는 전체 순서 네 번 가운데 두 번에서 한 요청씩 122ms·232ms 늦었다. 232ms는 `Retry-After: 3` 뒤 4.184초라 상한 + 0.15초를 넘었다. timer 호출 시각을 남긴 진단 두 번(timer 40회)에서는 문에 걸린 timer가 없었지만, 2회는 `Date.now()`가 `retryAt`과 같은 순간에 불렸다. 그래서 두 이상치가 timer 지연이었는지 문에 걸린 것이었는지는 가르지 못했다. `--skew 50`에서는 간격 7개가 모두 실패했다(TDD 검증 기록).
+- 벽시계 문(`e8ff0c6`)일 때: skew 없는 전체 순서 네 번 가운데 두 번에서 한 요청씩 122ms·232ms 늦었다. 232ms는 `Retry-After: 3` 뒤 4.184초라 상한 + 0.15초를 넘었다. timer 호출 시각을 남긴 진단 두 번(timer 40회)에서는 문에 걸린 timer가 없었지만, 2회는 `Date.now()`가 `retryAt`과 같은 순간에 불렸다. 그래서 두 이상치가 timer 지연이었는지 문에 걸린 것이었는지는 가르지 못했다. `--skew 50`에서는 간격 7개가 모두 실패했다(TDD 검증 기록).
 - 화면 문구: "서버 전송 실패(HTTP 429). 1.3초 뒤 다시 시도합니다"가 1.276초 뒤 재전송과 맞았다. 네트워크 오류는 "서버 전송 실패(Failed to fetch). 5.7초 뒤…", timeout은 "서버 전송 실패(signal timed out). 5.2초 뒤…"이고, 200 뒤에는 문구가 비었다.
