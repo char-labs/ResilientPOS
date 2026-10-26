@@ -153,6 +153,8 @@
 | 리뷰 반영: 늦게 sync된 주문과 페이지 끝, 상태 필터 cursor, 끝 연도 바인딩, 비정규 UUID cursor (인수 4·7). `OrderListQueryIntegrationTest`의 넘김 테스트에 id는 가장 크고 시각은 가장 이른 주문을 더해 `[2, 2, 2]`로 바꿈, `상태 필터와 cursor를 함께 쓰면 그 상태의 주문만 끝까지 한 번씩 넘긴다`, `저장할 수 있는 끝 연도의 기간과 cursor로도 조회한다`, `OrderCursorCodecTest`·`OrderOwnerControllerTest`의 축약·대문자 UUID cursor | keyset의 시각 미만 분기를 지우면 기존 6건이 모두 통과함을 먼저 확인(판별력 없음). 새 넘김 테스트는 그 제거에서 `expected [2, 2, 2] but was [2, 2, 1]`, 다음 페이지 판정을 "이상"으로 바꾸면 빈 페이지가 하나 더 나와 실패. 축약 UUID cursor는 코덱이 예외 없이 받고 Controller는 500 | 코덱이 `UUID.toString()`과 입력이 같을 때만 받게 하고 cursor·size·시각 범위의 400에 reason을 붙임(응답 본문은 고정 문구, 로그에만 남는다). `./gradlew test --tests 'com.resilientpos.order.*'` 161건 통과 | 같은 명령 통과. 목록 테스트 3회 연속 통과. 상태가 다른 주문은 checkout 대신 상태 컬럼을 바꿔 만들어 이 클래스가 비동기 처리를 띄우지 않게 했다(전역 통계 문장 수가 한 번 2로 섞였다) |
 
 ## 결과
+`./gradlew test` 전체 973건 통과, 실패 0(origin/main bb14c86 기준). `python3 scripts/check_pr.py --base origin/main --worktree`와 제출 전 `--worktree` 없는 실행 모두 PASS. 열린 PR #121(`feature/menu-catalog`, Phase 3)과 겹치는 경로는 `docs/wiki/domain-model.md`·`docs/wiki/entity-map.md`(서로 다른 절이라 merge-tree에서 자동 병합), `SchemaMigrationTest.kt`·`TerminalInFlightIntegrationTest.kt`(한 줄 목록 충돌), 마이그레이션 번호 V021(같은 번호)이다. 나중에 머지하는 쪽이 번호를 바꾸고 두 목록을 합쳐 rebase한다. 공용 페이지 타입·cursor 인코딩은 만들지 않았다(`order` 안에만 있다). #121은 목록이나 cursor를 쓰지 않는다.
+
 **generic plan 실측(인수 9).** 구현이 렌더한 목록 SQL(Hibernate 로그 원문, select 절 상관 subquery와 범위 절의 keyset 술어)을 같은 일회용 컨테이너(주문 1,000만, 인덱스 A·B)에서 `PREPARE`하고 `plan_cache_mode = force_generic_plan`으로 `EXPLAIN (ANALYZE, BUFFERS) EXECUTE`했다. 두 번째 실행 기준이다.
 
 | 경우 | 계획 | 시간 | buffers |
