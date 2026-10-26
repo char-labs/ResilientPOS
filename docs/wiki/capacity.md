@@ -20,7 +20,7 @@
 
 가정이 바뀌면(매장 규모, 단말이 HTTP 경로를 주로 쓰게 됨, 실제 PG 지연) 이 표와 아래 값을 다시 잰다.
 
-단말 sync 계약은 배치 50 op, 응답 대기 30초이고, 실패하면 같은 배치를 다시 보낸다. `error.errorCode`가 `RATE_LIMITED`이고 `Retry-After`가 1 이상의 정수이면 `Retry-After`초 뒤, 그 밖의 실패(code가 없거나 다른 실패: 네트워크 오류, timeout, 5xx, 401 등)는 5초 뒤에 보내고, 두 경우 모두 0~1초 jitter를 더한다. 그 전에는 보내지 않는다. 시연 단말이 이 계약을 따른다. S3(`BATCH=50 TIMEOUT=30s`)는 배치와 응답 대기를 따르고, 실패하면 종류와 관계없이 jitter 없이 5초 뒤 다시 보낸다. 서버의 `Retry-After`(지금 값으로 1초)보다 늦게 보내 하한은 지키지만 jitter는 없다. 근거는 [slo-alert-followups](../spec/2026-10-23-slo-alert-followups.md) 결정 7과 [terminal-demo-retry-after](../spec/2026-10-26-terminal-demo-retry-after.md)다.
+단말 sync 계약은 배치 50 op, 응답 대기 30초이고, 실패하면 같은 배치를 다시 보낸다. `error.errorCode`가 `RATE_LIMITED`이고 `Retry-After`가 1 이상의 정수이면 `Retry-After`초 뒤, 그 밖의 실패(code가 없거나 다른 실패: 네트워크 오류, timeout, 5xx, 401 등, 그리고 `RATE_LIMITED`이지만 `Retry-After`가 1 이상의 정수가 아닌 경우)는 5초 뒤에 보내고, 두 경우 모두 0~1초 jitter를 더한다. 그 전에는 보내지 않는다. 시연 단말이 이 계약을 따른다. S3(`BATCH=50 TIMEOUT=30s`)는 배치와 응답 대기를 따르고, 실패하면 종류와 관계없이 jitter 없이 5초 뒤 다시 보낸다. 서버의 `Retry-After`(지금 값으로 1초)보다 늦게 보내 하한은 지키지만 jitter는 없다. 근거는 [slo-alert-followups](../spec/2026-10-23-slo-alert-followups.md) 결정 7과 [terminal-demo-retry-after](../spec/2026-10-26-terminal-demo-retry-after.md)다.
 
 ## 인스턴스 하나의 용량
 2026-10-21~22에 로컬 compose 한 대(Apple M3 Pro, OrbStack CPU 11·메모리 16GiB, 앱 `mem_limit: 1g`, trace 샘플링 1.0)에서 쟀다. 22일 측정은 호스트 부하(load average 30~51)와 VM 정지로 흔들려, 판정에는 흔들리지 않은 실행만 썼다. 원시 수치와 흔들린 구간은 spec 결과 절에 있다.
