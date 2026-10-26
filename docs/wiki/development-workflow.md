@@ -130,14 +130,16 @@ python3 scripts/check_pr.py --base origin/main
 머지 직전 재실행 습관은 그대로 유지한다.
 
 ### PR 워크플로
-`.github/workflows/pr-checks.yml`이 main으로 향하는 PR에서 Gradle build 두 job과 Flyway gate를 함께 돌린다. main push에서는 Gradle build 두 job만 돈다.
+`.github/workflows/pr-checks.yml`이 main으로 향하는 PR에서 Gradle build 두 job, Flyway gate, Dependency submission, Dependency review를 돌린다. main push에서는 Gradle build 두 job과 Dependency submission만 돈다.
 
 | job | 하는 일 | 실패하면 |
 |---|---|---|
 | Gradle build (1/2, 2/2) | `./gradlew build -PtestShard=번호/2`. test를 절반씩 나눠 돌린다. 통합 테스트가 Testcontainers로 PostgreSQL·Redis·Kafka를 띄운다 | PR에 실패로 표시된다. 한쪽이 실패해도 다른 쪽은 끝까지 돈다 |
 | Flyway version gate | `check_pr.py --base origin/(기준) --migrations-only` | 버전 중복을 머지 전에 막는다 |
+| Dependency submission | Gradle이 해석한 의존성을 GitHub 의존성 그래프에 올린다. Boot BOM이 정한 전이 의존성과 테스트·buildscript classpath까지 들어간다. `runtimeClasspath`는 runtime, 나머지는 development scope다 | Dependency review가 비교할 그래프가 없어 함께 실패한다 |
+| Dependency review | PR에서만 돈다. 기준과 head의 그래프를 비교해 PR이 새로 들이거나 버전을 바꾼 의존성에서 취약 버전을 찾는다. 심각도 LOW 이상, runtime·development·unknown scope를 모두 본다 | 취약 버전을 머지 전에 막는다 |
 
-워크플로는 버전 중복만 본다. spec 첫 커밋 판정은 머지 결과 위에서 의미가 달라지므로 로컬 검사가 계속 담당한다.
+워크플로의 `check_pr.py`는 버전 중복만 본다. spec 첫 커밋 판정은 머지 결과 위에서 의미가 달라지므로 로컬 검사가 계속 담당한다.
 Flyway gate는 빌드 산출물을 쓰지 않으므로 빌드를 기다리지 않는다. 빌드가 실패해도 버전 중복 결과는 따로 나온다.
 
 Flyway gate 병렬 외에 검사 시간을 줄이는 장치가 셋 있다([ci-build-time](../spec/2026-10-22-ci-build-time.md)).
@@ -145,6 +147,16 @@ Flyway gate 병렬 외에 검사 시간을 줄이는 장치가 셋 있다([ci-bu
 - 각 job 안에서 test는 fork 2개로 나눠 돈다(`build.gradle.kts`의 `maxParallelForks`). fork마다 컨테이너를 따로 띄워 DB와 consumer group을 같이 쓰지 않는다. 고정값이라 로컬과 CI가 같은 fork 수로 돈다. 클래스를 fork에 나누는 순서는 환경마다 다를 수 있다.
 - `gradle.properties`가 Gradle build cache를 켠다. setup-gradle은 main push job에서만 캐시를 저장하고 PR은 main의 마지막 캐시를 읽기만 한다. 그래서 입력이 main과 같은 task만 `FROM-CACHE`로 건너뛴다. 문서만 고친 PR은 compile과 test를 건너뛰고, 소스를 고친 PR은 다시 돈다. runbook이나 알림 규칙(`docker/prometheus`)은 test 입력이라 고치면 test 전체가 다시 돈다. PR을 같은 커밋으로 다시 돌려도 PR 실행은 캐시를 저장하지 않으므로 처음 실행과 같다.
 - test도 캐시하므로 입력에 없는 변화(태그가 움직이는 컨테이너 이미지, 간헐적 실패)는 test를 건너뛴 실행에서 잡지 못한다. 의심되면 `./gradlew test --rerun`으로 다시 돌린다. 테스트가 classpath 밖 파일을 읽으면 `build.gradle.kts`의 Test `inputs`에, `build` 아래에 파일을 남기면 `outputs`에 더한다. output으로 두지 않은 파일은 test가 캐시에서 올 때 생기지 않는다.
+
+의존성 취약점 검사는 GitHub 의존성 그래프와 Dependabot alert를 쓴다([dependency-vulnerability-scan](../spec/2026-10-26-dependency-vulnerability-scan.md)).
+- 두 job은 빌드를 기다리지 않는다. Dependency review만 Dependency submission 뒤에 돈다.
+- PR 검사는 PR이 바꾼 의존성만 본다. 의존성을 바꾸지 않았는데 새로 공개된 CVE는 main 그래프의 Dependabot alert(Security 탭, 이메일)로 온다. GitHub가 새 advisory를 저장된 그래프와 다시 대조하므로 주기 실행은 두지 않는다.
+- 고친 버전이 있으면 노출이 좁아도 미루지 않고 고친다. Boot BOM이 정하는 전이 의존성은 `dependencyManagement`의 관리 항목으로, buildscript classpath는 `buildscript`의 constraint로 고정하고 주석에 CVE와 지울 조건을 단다.
+- 고친 버전이 없어 취약 버전을 들일 수밖에 없으면 Dependency review의 `allow-ghsas`에 GHSA ID를 넣고 주석에 이유와 다시 볼 조건을 단다. main의 alert는 열린 채 남아 고친 버전이 나오면 다시 보인다.
+- 범위는 Gradle 의존성과 워크플로 `uses:`다. 컨테이너 이미지(Dockerfile, compose, Testcontainers)는 보지 않는다. action은 major 태그로 고정한다. SHA로 고정한 action에는 Dependabot alert가 생기지 않는다.
+- 기준은 GitHub Advisory Database다. OSV에만 있는 advisory는 보지 못한다.
+- fork에서 온 PR은 제출 권한(`contents: write`)을 받지 못해 두 job이 실패한다. fork PR을 받게 되면 gradle/actions dependency-submission 문서의 두 워크플로 구성으로 바꾼다.
+- Dependabot security updates와 version updates는 켜지 않는다. 전이 의존성 alert에는 security update PR이 만들어지지 않고, 자동 PR은 spec 첫 커밋 계약을 지키지 못한다.
 
 ### rebase와 force-push
 - 개발 브랜치를 base 위로 rebase 하는 것은 허용한다. rebase 뒤에도 spec 첫 커밋이 base 이후 첫 커밋이어야 하며,
@@ -210,7 +222,7 @@ Flyway가 읽는 마이그레이션을 더하거나 고치거나 지우는 PR이
 검사기는 절과 대조 기록을 빠뜨리는 것만 막는다. 답이 맞는지와 대조가 실제로 있었는지는 PR 리뷰가 본다. `spring.flyway.locations`를 바꾸는 PR과 `db/migration` 패키지 밖의 `JavaMigration` 빈은 경로로 알 수 없어서 검사하지 못한다.
 LLM이 파일을 편집한 실제 시각이나 요구사항 해석의 정확성까지 증명할 수는 없다. 이는 지침과 PR 리뷰로 확인한다.
 spec 이력 검사는 명시 실행 방식이라 실행하지 않은 커밋이나 병합을 자동 차단하지 않는다.
-빌드와 마이그레이션 버전만 PR 워크플로가 검사한다.
+빌드, 마이그레이션 버전, PR이 들이는 의존성 취약점만 PR 워크플로가 검사한다.
 **자동으로 머지를 막는 장치는 없다.** 브랜치 보호는 쓰지 않는 것이 아니라 이 저장소의 플랜에서 켤 수 없다(API가 `403 Upgrade to GitHub Pro`를 돌려준다). 그래서 필수 검사(required status check)를 걸 수 없고, 검사가 실패했거나 아예 돌지 않은 PR도 머지 버튼이 살아 있다. 워크플로의 통과 표시는 게이트가 아니라 신호이며, 머지 전에 사람이 확인한다([pr-harness-gaps](../spec/2026-09-21-pr-harness-gaps.md)).
 하네스 자체 변경은 검사 우회가 없는지 별도로 리뷰한다.
 
