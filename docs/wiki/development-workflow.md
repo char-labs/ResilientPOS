@@ -130,21 +130,34 @@ python3 scripts/check_pr.py --base origin/main
 머지 직전 재실행 습관은 그대로 유지한다.
 
 ### PR 워크플로
-`.github/workflows/pr-checks.yml`이 main으로 향하는 PR에서 Gradle build 두 job과 Flyway gate를 함께 돌린다. main push에서는 Gradle build 두 job만 돈다.
+`.github/workflows/pr-checks.yml`이 main으로 향하는 PR에서 Gradle build, Flyway gate, Dependency submission, Dependency review를 돌린다. main push에서는 Gradle build와 Dependency submission만 돈다.
 
 | job | 하는 일 | 실패하면 |
 |---|---|---|
-| Gradle build (1/2, 2/2) | `./gradlew build -PtestShard=번호/2`. test를 절반씩 나눠 돌린다. 통합 테스트가 Testcontainers로 PostgreSQL·Redis·Kafka를 띄운다 | PR에 실패로 표시된다. 한쪽이 실패해도 다른 쪽은 끝까지 돈다 |
+| Gradle build | `./gradlew build`. 통합 테스트가 Testcontainers로 PostgreSQL·Redis·Kafka를 띄운다 | PR에 실패로 표시된다 |
 | Flyway version gate | `check_pr.py --base origin/(기준) --migrations-only` | 버전 중복을 머지 전에 막는다 |
+| Dependency submission | Gradle이 해석한 의존성을 GitHub 의존성 그래프에 올린다. Boot BOM이 정한 전이 의존성과 테스트·buildscript classpath까지 들어간다. `runtimeClasspath`는 runtime, 나머지는 development scope다. Dependabot이 연 PR에서는 돌지 않는다 | Dependency review가 건너뛰어진다(skipped). skipped는 통과가 아니다 |
+| Dependency review | PR에서만 돈다. 기준과 head의 그래프를 비교해 PR이 새로 들이거나 버전을 바꾼 의존성에서 취약 버전을 찾는다. 심각도 LOW 이상, runtime·development·unknown scope를 모두 본다 | 취약 버전을 머지 전에 막는다 |
 
-워크플로는 버전 중복만 본다. spec 첫 커밋 판정은 머지 결과 위에서 의미가 달라지므로 로컬 검사가 계속 담당한다.
+워크플로의 `check_pr.py`는 버전 중복만 본다. spec 첫 커밋 판정은 머지 결과 위에서 의미가 달라지므로 로컬 검사가 계속 담당한다.
 Flyway gate는 빌드 산출물을 쓰지 않으므로 빌드를 기다리지 않는다. 빌드가 실패해도 버전 중복 결과는 따로 나온다.
 
-Flyway gate 병렬 외에 검사 시간을 줄이는 장치가 셋 있다([ci-build-time](../spec/2026-10-22-ci-build-time.md)).
-- test는 CI에서 job 2개로 나눠 돈다. `build.gradle.kts`가 `testShard` 속성을 받으면 바깥 클래스 이름의 해시로 그 job 몫의 클래스만 돌린다. 모든 클래스가 정확히 한 job에서 돈다. 속성이 없으면(로컬) 전부 돈다. CI에서 깨진 클래스는 로컬에서 `--tests`로 그 클래스만 돌린다. 앞 클래스에 따라 깨지는 것으로 보이면 같은 `-PtestShard=번호/2`로 그 job 몫을 `--rerun`으로 돌린다. 클래스 순서는 실행마다 같다.
-- 각 job 안에서 test는 fork 2개로 나눠 돈다(`build.gradle.kts`의 `maxParallelForks`). fork마다 컨테이너를 따로 띄워 DB와 consumer group을 같이 쓰지 않는다. 고정값이라 로컬과 CI가 같은 fork 수로 돈다. 클래스를 fork에 나누는 순서는 환경마다 다를 수 있다.
+Flyway gate 병렬 외에 검사 시간을 줄이는 장치가 둘 있다([ci-build-time](../spec/2026-10-22-ci-build-time.md)). test를 job 둘로 나누던 것은 효과가 크지 않다고 보고 job 하나로 되돌렸다([dependency-vulnerability-scan](../spec/2026-10-26-dependency-vulnerability-scan.md) 결정 13).
+- test는 fork 2개로 나눠 돈다(`build.gradle.kts`의 `maxParallelForks`). fork마다 컨테이너를 따로 띄워 DB와 consumer group을 같이 쓰지 않는다. 고정값이라 로컬과 CI가 같은 fork 수로 돈다. 클래스를 fork에 나누는 순서는 환경마다 다를 수 있다.
 - `gradle.properties`가 Gradle build cache를 켠다. setup-gradle은 main push job에서만 캐시를 저장하고 PR은 main의 마지막 캐시를 읽기만 한다. 그래서 입력이 main과 같은 task만 `FROM-CACHE`로 건너뛴다. 문서만 고친 PR은 compile과 test를 건너뛰고, 소스를 고친 PR은 다시 돈다. runbook이나 알림 규칙(`docker/prometheus`)은 test 입력이라 고치면 test 전체가 다시 돈다. PR을 같은 커밋으로 다시 돌려도 PR 실행은 캐시를 저장하지 않으므로 처음 실행과 같다.
 - test도 캐시하므로 입력에 없는 변화(태그가 움직이는 컨테이너 이미지, 간헐적 실패)는 test를 건너뛴 실행에서 잡지 못한다. 의심되면 `./gradlew test --rerun`으로 다시 돌린다. 테스트가 classpath 밖 파일을 읽으면 `build.gradle.kts`의 Test `inputs`에, `build` 아래에 파일을 남기면 `outputs`에 더한다. output으로 두지 않은 파일은 test가 캐시에서 올 때 생기지 않는다.
+
+의존성 취약점 검사는 GitHub 의존성 그래프와 Dependabot alert를 쓴다([dependency-vulnerability-scan](../spec/2026-10-26-dependency-vulnerability-scan.md)).
+- 두 job은 빌드를 기다리지 않는다. Dependency review만 Dependency submission 뒤에 돈다.
+- PR 검사는 PR이 바꾼 의존성만 본다. 의존성을 바꾸지 않았는데 새로 공개된 CVE는 main 그래프의 Dependabot alert(Security 탭, 이메일)로 온다. GitHub가 새 advisory를 저장된 그래프와 다시 대조하므로 주기 실행은 두지 않는다.
+- 고친 버전이 있으면 노출이 좁아도 미루지 않고 고친다. Boot BOM이 정하는 전이 의존성은 `dependencyManagement`의 관리 항목으로 버전을 고정하고, buildscript classpath는 `buildscript`의 constraint로 최소 버전을 요구한다. 주석에 CVE와 지울 조건을 단다. 관리 항목은 지우는 것을 잊으면 나중에 더 높은 버전을 낮출 수 있고, constraint는 더 높은 버전을 그대로 따라간다.
+- 고친 버전이 없어 취약 버전을 들일 수밖에 없으면 Dependency review의 `allow-ghsas`에 GHSA ID를 넣고 주석에 이유와 다시 볼 조건을 단다. main의 alert는 열린 채 남아 고친 버전이 나오면 다시 보인다. PR 검사는 PR head의 워크플로로 돌아서, 같은 PR이 `allow-ghsas`를 더하면 스스로 통과한다. `allow-ghsas`를 더하는 PR은 spec에 GHSA·영향 범위·대체 불가 근거·지울 조건을 적고, 사람의 보안 리뷰 전에는 머지하지 않는다.
+- Dependency review가 head 그래프 반영을 기다리다 시간(120초)을 넘기면 경고만 남기고 판정한다. 로그에 head snapshot 경고가 남은 통과는 신호가 아니다.
+- 범위는 Gradle 의존성과 워크플로 `uses:`다. 컨테이너 이미지(Dockerfile, compose, Testcontainers), Gradle 배포판, JDK, action이 실행 중에 내려받는 것은 보지 않는다. action은 major 태그로 고정한다. SHA로 고정한 action에는 Dependabot alert가 생기지 않는다. 그래프는 `v6`을 버전 6으로 기록해서 alert의 버전 범위가 실제로 도는 6.x와 다를 수 있다.
+- 기준은 GitHub Advisory Database다. OSV에만 있는 advisory는 보지 못한다.
+- Dependency submission은 쓰기 토큰을 쥔 채 PR의 빌드 스크립트와 플러그인을 실행한다. 그래서 checkout은 자격 증명을 남기지 않고(`persist-credentials: false`), Dependabot이 연 PR에서는 돌지 않는다.
+- fork에서 온 PR은 제출 권한(`contents: write`)을 받지 못해 Dependency submission이 실패하고 Dependency review는 건너뛰어진다. fork PR을 받게 되면 gradle/actions dependency-submission 문서의 두 워크플로 구성으로 바꾼다.
+- Dependabot security updates는 켜져 있다. Dependabot은 manifest에서 찾을 수 있는 의존성(action 태그, `build.gradle.kts`에 버전을 직접 적은 의존성과 플러그인)에만 PR을 만들고 BOM이 정하는 전이 의존성에는 만들지 않는다. Dependabot PR에는 spec 첫 커밋이 없으므로 그대로 머지하지 않는다. 같은 수정을 spec 첫 커밋이 있는 PR로 내면 머지 뒤 Dependabot이 자기 PR을 닫는다. version updates(`dependabot.yml`)는 같은 이유로 켜지 않는다.
 
 ### rebase와 force-push
 - 개발 브랜치를 base 위로 rebase 하는 것은 허용한다. rebase 뒤에도 spec 첫 커밋이 base 이후 첫 커밋이어야 하며,
@@ -210,7 +223,7 @@ Flyway가 읽는 마이그레이션을 더하거나 고치거나 지우는 PR이
 검사기는 절과 대조 기록을 빠뜨리는 것만 막는다. 답이 맞는지와 대조가 실제로 있었는지는 PR 리뷰가 본다. `spring.flyway.locations`를 바꾸는 PR과 `db/migration` 패키지 밖의 `JavaMigration` 빈은 경로로 알 수 없어서 검사하지 못한다.
 LLM이 파일을 편집한 실제 시각이나 요구사항 해석의 정확성까지 증명할 수는 없다. 이는 지침과 PR 리뷰로 확인한다.
 spec 이력 검사는 명시 실행 방식이라 실행하지 않은 커밋이나 병합을 자동 차단하지 않는다.
-빌드와 마이그레이션 버전만 PR 워크플로가 검사한다.
+빌드, 마이그레이션 버전, PR이 들이는 의존성 취약점만 PR 워크플로가 검사한다.
 **자동으로 머지를 막는 장치는 없다.** 브랜치 보호는 쓰지 않는 것이 아니라 이 저장소의 플랜에서 켤 수 없다(API가 `403 Upgrade to GitHub Pro`를 돌려준다). 그래서 필수 검사(required status check)를 걸 수 없고, 검사가 실패했거나 아예 돌지 않은 PR도 머지 버튼이 살아 있다. 워크플로의 통과 표시는 게이트가 아니라 신호이며, 머지 전에 사람이 확인한다([pr-harness-gaps](../spec/2026-09-21-pr-harness-gaps.md)).
 하네스 자체 변경은 검사 우회가 없는지 별도로 리뷰한다.
 
