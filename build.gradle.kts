@@ -1,9 +1,19 @@
+buildscript {
+    dependencies {
+        constraints {
+            // Boot Gradle 플러그인 4.1.2가 commons-compress 1.27.1로 끌어오는 commons-lang3 3.16.0: CVE-2025-48924(3.18.0에서 수정). Spring Boot 4.1.x 브랜치에는 수정이 없다.
+            // Boot Gradle 플러그인이 commons-lang3 3.18.0 이상을 가져오는 Boot 패치로 올리는 PR에서 지운다.
+            classpath("org.apache.commons:commons-lang3:3.18.0")
+        }
+    }
+}
+
 plugins {
-    kotlin("jvm") version "2.4.10"
-    kotlin("plugin.spring") version "2.4.10"
+    kotlin("jvm") version "2.4.21"
+    kotlin("plugin.spring") version "2.4.21"
     id("org.springframework.boot") version "4.1.2"
     id("io.spring.dependency-management") version "1.1.7"
-    kotlin("plugin.jpa") version "2.4.10"
+    kotlin("plugin.jpa") version "2.4.21"
 }
 
 group = "com.resilientpos"
