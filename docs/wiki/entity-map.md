@@ -131,7 +131,7 @@ t_reconciliation_case.resolved_by_owner_id ────────────�
 - 만드는 곳: `StoreManagement.create`(`POST /owner/v1/stores`). 바꾸는 명령은 없다.
 
 ### `MenuEntity` — 매장 하나의 메뉴 문서
-- 역할: 매장 메뉴의 정본이다. `menu`(jsonb)가 `{currency, items:[{code, name, price, category}]}` 문서 하나를 든다. 표시 순서는 항목 배열 순서이고 `price`는 통화 자릿수의 decimal string이다. 문서의 필드 이름이 저장 형식이라 리터럴 JSON 테스트로 고정한다. 직렬화는 persistence adapter의 `MenuDocumentMapper`가 Spring `JsonMapper`로 하고, 검증을 통과한 도메인 메뉴를 다시 직렬화해 저장한다.
+- 역할: 매장 메뉴의 정본이다. `menu`(jsonb)가 `{currency, items:[{code, name, price, category}]}` 문서 하나를 든다. 표시 순서는 항목 배열 순서이고 `price`는 통화 자릿수의 decimal string이다. 문서의 필드 이름이 저장 형식이라 리터럴 JSON 테스트로 고정한다. 직렬화는 persistence adapter의 `MenuDocumentMapper`가 Spring `JsonMapper`로 하고, 검증을 통과한 도메인 메뉴를 다시 직렬화해 저장한다. 읽을 때는 `Menu` 규칙으로 다시 검증하지 않고 조회 결과(`MenuView`)로 바로 바꾼다. 규칙을 강하게 바꿔도 이미 저장된 메뉴를 읽고 고칠 수 있게 하려는 것이다. 문서를 읽지 못하면(모르는 통화 등) 500이다. 문서의 모르는 필드는 무시한다.
 - 관계: `store_id`(PK)로 `t_store`를 가리킨다. 다른 표가 이 행을 가리키지 않는다. 주문 line은 메뉴와 대조하지 않는다. 단말은 `GET /v1/menu`로 받아 사본으로 두고, ETag(`"매장ID.version"`)가 같으면 304를 받는다.
 - 방어선: PK `t_menu_pkey`가 "매장당 메뉴 하나"와 생성 경합의 방어선이고, `@Version`의 조건부 UPDATE가 수정 경합의 방어선이다. 둘 다 커밋에서 드러나고 `MenuManagement.replace`가 `Tx` 블록 밖에서 `409 MENU_VERSION_MISMATCH`로 바꾼다. 코드 중복·항목 200개 상한은 `Menu`가 문서를 통째로 검사한다(DB 제약 없음). PK가 삭제 행에도 걸리므로 이 표의 행은 SQL로도 soft delete하지 않는다.
 - 만드는 곳: `MenuManagement.replace`(`PUT /owner/v1/stores/{storeId}/menu`에 `If-None-Match: *`, `persist`, version 0). 바꾸는 곳: 같은 메서드(`If-Match`). 한 트랜잭션에서 관리 엔티티를 `find`하고 version을 `If-Match`와 비교한 뒤, 내용이 바뀌면 dirty UPDATE, 같으면 `OPTIMISTIC_FORCE_INCREMENT`로 version을 한 번 올린다. 지우는 명령은 없다.
