@@ -12,6 +12,7 @@ import com.resilientpos.platform.Tx
 import com.resilientpos.platform.isUniqueViolationOf
 import com.resilientpos.store.StoreId
 import com.resilientpos.store.StoreManagement
+import java.math.BigDecimal
 import java.util.Currency
 import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.dao.OptimisticLockingFailureException
@@ -36,8 +37,7 @@ class MenuManagement(
 
     /** 단말이 자기 매장([storeId])의 메뉴를 읽는다. 메뉴가 없으면 `MENU_NOT_FOUND`(NOT_FOUND)다. */
     fun findForTerminal(storeId: StoreId): MenuView {
-        val stored = queries.find(storeId) ?: throw DomainException(MENU_NOT_FOUND, "메뉴를 찾을 수 없습니다", DomainErrorKind.NOT_FOUND)
-        return stored.menu.toView(stored.version)
+        return queries.find(storeId) ?: throw DomainException(MENU_NOT_FOUND, "메뉴를 찾을 수 없습니다", DomainErrorKind.NOT_FOUND)
     }
 
     /**
@@ -52,7 +52,7 @@ class MenuManagement(
         val menu = Menu.create(
             command.storeId,
             currency,
-            command.items.map { MenuItem(it.code, it.name, Money.of(it.price, currency), it.category) },
+            command.items.mapIndexed { index, it -> MenuItem(it.code, it.name, money(it.price, currency, index + 1), it.category) },
         )
         val version = try {
             Tx.masterTx { save(menu, command.precondition) }
@@ -75,6 +75,14 @@ class MenuManagement(
             Currency.getInstance(code)
         } catch (_: IllegalArgumentException) {
             throw DomainException(Menu.INVALID_MENU, "알 수 없는 통화 코드입니다", DomainErrorKind.INVALID)
+        }
+
+    /** `Money` 위반의 code·kind는 그대로 두고 메시지에 몇 번째 항목인지 붙인다. */
+    private fun money(price: BigDecimal, currency: Currency, n: Int): Money =
+        try {
+            Money.of(price, currency)
+        } catch (e: DomainException) {
+            throw DomainException(e.code, "${n}번째 항목의 가격: ${e.message}", e.kind)
         }
 
     private fun Menu.toView(version: Long) =

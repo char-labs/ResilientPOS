@@ -205,6 +205,8 @@ class MenuOwnerControllerTest(
             "\"$OTHER_STORE_ID.3\"",
             "\"$STORE_ID.x\"",
             "\"$STORE_ID.-1\"",
+            "\"$STORE_ID.01\"",
+            "\"$STORE_ID.00\"",
             "\"$STORE_ID.99999999999999999999\"",
             "\"3\"",
             "",
@@ -220,11 +222,27 @@ class MenuOwnerControllerTest(
 
     @Test
     fun `If-None-Match가 별표가 아니면 409 MENU_VERSION_MISMATCH이다`() {
-        listOf("\"$STORE_ID.0\"", "W/\"x\"", "* ", "**").forEach { value ->
+        listOf("\"$STORE_ID.0\"", "W/\"x\"", "**").forEach { value ->
             put(ifNoneMatch = value)
                 .andExpect(status().isConflict)
                 .andExpect(jsonPath("$.error.errorCode").value("MENU_VERSION_MISMATCH"))
         }
+
+        verifyNoInteractions(management)
+    }
+
+    @Test
+    fun `If-None-Match는 앞뒤 공백을 지우고 별표를 본다`() {
+        given(management.replace(replaceCommand(MenuCommand.Precondition.Create))).willReturn(view(0))
+
+        put(ifNoneMatch = "* ").andExpect(status().isOk)
+    }
+
+    @Test
+    fun `items에 null 원소가 있으면 500이 아니라 400 BAD_REQUEST이고 Facade를 부르지 않는다`() {
+        put(body = """{ "currency": "KRW", "items": [null] }""", ifNoneMatch = "*")
+            .andExpect(status().isBadRequest)
+            .andExpect(jsonPath("$.error.errorCode").value("BAD_REQUEST"))
 
         verifyNoInteractions(management)
     }

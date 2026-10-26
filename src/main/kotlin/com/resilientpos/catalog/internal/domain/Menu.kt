@@ -13,6 +13,11 @@ class Menu private constructor(
     val currency: Currency,
     val items: List<MenuItem>,
 ) {
+    /** aggregate의 같음은 식별자(매장)로 판단한다. */
+    override fun equals(other: Any?): Boolean = this === other || (other is Menu && storeId == other.storeId)
+
+    override fun hashCode(): Int = storeId.hashCode()
+
     companion object {
         const val INVALID_MENU = "INVALID_MENU"
 

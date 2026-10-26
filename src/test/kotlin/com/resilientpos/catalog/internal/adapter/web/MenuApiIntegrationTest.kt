@@ -13,6 +13,7 @@ import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import org.springframework.http.MediaType
+import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.ResultActionsDsl
 import org.springframework.test.web.servlet.get
@@ -27,6 +28,7 @@ import org.springframework.test.web.servlet.put
 class MenuApiIntegrationTest(
     private val mockMvc: MockMvc,
     private val terminals: TerminalManagement,
+    private val jdbcTemplate: JdbcTemplate,
 ) : PostgresIntegrationTest() {
 
     private val owner: OwnerSession = mockMvc.logInNewOwner()
@@ -222,5 +224,32 @@ class MenuApiIntegrationTest(
             status { isUnauthorized() }
             jsonPath("$.error.errorCode") { value("UNAUTHENTICATED") }
         }
+    }
+
+    private fun insertRaw(json: String) {
+        jdbcTemplate.update(
+            "insert into t_menu (store_id, menu, version, created_at, updated_at) values (?, ?::jsonb, 0, now(), now())",
+            storeId,
+            json,
+        )
+    }
+
+    @Test
+    fun `저장 문서가 지금 규칙 밖이어도 점주와 단말 GET은 200으로 그대로 돌려준다`() {
+        val item = """{"code":"A1","name":"${"n".repeat(300)}","price":"4000","category":"커피"}"""
+        insertRaw("""{"currency":"KRW","items":[$item,$item]}""")
+
+        ownerGet().andExpect {
+            status { isOk() }
+            jsonPath("$.data.items.length()") { value(2) }
+        }
+        terminalGet(terminals.registerTerminal(StoreId(storeId))).andExpect { status { isOk() } }
+    }
+
+    @Test
+    fun `저장 문서를 읽지 못하면 GET은 400이 아니라 500이다`() {
+        insertRaw("""{"currency":"XX1","items":[]}""")
+
+        ownerGet().andExpect { status { isInternalServerError() } }
     }
 }

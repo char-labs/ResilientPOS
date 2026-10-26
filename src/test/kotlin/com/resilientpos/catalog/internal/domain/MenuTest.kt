@@ -10,6 +10,7 @@ import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNotEquals
 
 class MenuTest {
 
@@ -40,6 +41,17 @@ class MenuTest {
         assertEquals(storeId, menu.storeId)
         assertEquals(krw, menu.currency)
         assertEquals(items, menu.items)
+    }
+
+    @Test
+    fun `같음은 storeId로 판단하고 내용이 달라도 같은 매장이면 같다`() {
+        val a = Menu.create(storeId, krw, listOf(item("A1")))
+        val b = Menu.create(storeId, usd, listOf(item("B1", price = Money.of("1.50", usd))))
+        val other = Menu.create(StoreId(UUID.fromString("00000000-0000-0000-0000-0000000000d2")), krw, listOf(item("A1")))
+
+        assertEquals(a, b)
+        assertEquals(a.hashCode(), b.hashCode())
+        assertNotEquals(a, other)
     }
 
     @Test

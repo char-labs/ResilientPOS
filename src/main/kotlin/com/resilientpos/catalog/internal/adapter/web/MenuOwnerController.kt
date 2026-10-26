@@ -50,7 +50,7 @@ class MenuOwnerController(private val management: MenuManagement) {
     /** 정확히 하나만 보내야 한다. `If-None-Match`는 `*`만, `If-Match`는 이 매장의 strong ETag 하나만 받고 나머지는 모두 409다. */
     private fun precondition(storeId: StoreId, ifMatch: String?, ifNoneMatch: String?): Precondition = when {
         ifMatch != null && ifNoneMatch == null -> Precondition.Version(MenuEtag.versionOf(ifMatch, storeId) ?: throw versionMismatch())
-        ifMatch == null && ifNoneMatch != null -> if (ifNoneMatch == "*") Precondition.Create else throw versionMismatch()
+        ifMatch == null && ifNoneMatch != null -> if (ifNoneMatch.trim() == "*") Precondition.Create else throw versionMismatch()
         else -> throw DomainException(MENU_PRECONDITION_REQUIRED, "If-Match와 If-None-Match 중 하나만 보내야 합니다", DomainErrorKind.INVALID)
     }
 

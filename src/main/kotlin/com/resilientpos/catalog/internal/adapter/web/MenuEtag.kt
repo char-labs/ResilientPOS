@@ -11,7 +11,7 @@ object MenuEtag {
 
     fun of(view: MenuView): String = "\"${view.storeId.value}.${view.version}\""
 
-    private val STRONG = Regex("\"([^\",]*)\\.([0-9]+)\"")
+    private val STRONG = Regex("\"([^\",]*)\\.(0|[1-9][0-9]*)\"")
 
     /** [header]가 이 매장의 strong ETag 하나일 때만 version을 돌려준다. `*`·weak·여러 값·다른 매장·해석 불가는 null이다. */
     fun versionOf(header: String, storeId: StoreId): Long? {

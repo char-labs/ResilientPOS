@@ -1,8 +1,8 @@
 package com.resilientpos.catalog.internal.adapter.persistence.query
 
+import com.resilientpos.catalog.MenuView
 import com.resilientpos.catalog.internal.adapter.persistence.MenuDocumentMapper
 import com.resilientpos.catalog.internal.adapter.persistence.command.MenuEntity
-import com.resilientpos.catalog.internal.domain.StoredMenu
 import com.resilientpos.platform.JdslQueryExecutor
 import com.resilientpos.platform.ReadOnlyTransactional
 import com.resilientpos.platform.selectFrom
@@ -18,8 +18,8 @@ class MenuQueries(
 
     /** 없으면 null이다. 행 하나를 한 쿼리로 읽어 문서와 version이 같은 커밋의 것이다. */
     @ReadOnlyTransactional
-    fun find(storeId: StoreId): StoredMenu? =
+    fun find(storeId: StoreId): MenuView? =
         queries.findFirst {
             selectFrom(MenuEntity::class).where(path(MenuEntity::storeId).eq(storeId.value))
-        }?.let { StoredMenu(documents.toMenu(storeId, it.menu), checkNotNull(it.version) { "저장된 행은 version이 있다" }) }
+        }?.let { documents.toView(storeId, it.menu, checkNotNull(it.version) { "저장된 행은 version이 있다" }) }
 }

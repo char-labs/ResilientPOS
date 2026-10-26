@@ -1,7 +1,8 @@
 package com.resilientpos.catalog.internal.adapter.persistence
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties
+import com.resilientpos.catalog.MenuView
 import com.resilientpos.catalog.internal.domain.Menu
-import com.resilientpos.catalog.internal.domain.MenuItem
 import com.resilientpos.foundation.Money
 import com.resilientpos.store.StoreId
 import java.util.Currency
@@ -23,20 +24,30 @@ class MenuDocumentMapper(private val jsonMapper: JsonMapper) {
         ),
     )
 
-    fun toMenu(storeId: StoreId, json: String): Menu {
-        val document = jsonMapper.readValue(json, Document::class.java)
-        val currency = Currency.getInstance(document.currency)
-        return Menu.create(
-            storeId,
-            currency,
-            document.items.map { MenuItem(it.code, it.name, Money.of(it.price, currency), it.category) },
-        )
-    }
+    /**
+     * 저장 문서를 [Menu.create]로 다시 검증하지 않고 읽기용 [MenuView]로 바꾼다. 규칙이 강해진 뒤에도 이미 저장된 메뉴를 읽을 수 있어야 한다.
+     * 문서를 읽지 못하면(모르는 통화, 자릿수 위반) 사용자 잘못이 아니라 저장 데이터의 문제라 [IllegalStateException]이다.
+     */
+    fun toView(storeId: StoreId, json: String, version: Long): MenuView =
+        try {
+            val document = jsonMapper.readValue(json, Document::class.java)
+            val currency = Currency.getInstance(document.currency)
+            MenuView(
+                storeId,
+                currency,
+                document.items.map { MenuView.Item(it.code, it.name, Money.of(it.price, currency), it.category) },
+                version,
+            )
+        } catch (e: Exception) {
+            throw IllegalStateException("저장된 메뉴 문서를 읽을 수 없다: storeId=${storeId.value}", e)
+        }
 
     /** 두 문서가 JSON 값으로 같은지. 공백과 키 순서는 보지 않는다. */
     fun isSame(json: String, other: String): Boolean = jsonMapper.readTree(json) == jsonMapper.readTree(other)
 
+    @JsonIgnoreProperties(ignoreUnknown = true)
     private data class Document(val currency: String, val items: List<Item>) {
+        @JsonIgnoreProperties(ignoreUnknown = true)
         data class Item(val code: String, val name: String, val price: String, val category: String)
     }
 }

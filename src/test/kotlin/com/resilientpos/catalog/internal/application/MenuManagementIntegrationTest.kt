@@ -23,6 +23,8 @@ import javax.sql.DataSource
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.jdbc.core.queryForObject
 import tools.jackson.databind.json.JsonMapper
@@ -232,5 +234,57 @@ class MenuManagementIntegrationTest(
 
         assertEquals("3.50", jsonMapper.readTree(dbMenu()).get("items").get(0).get("price").stringValue())
         assertEquals(Money.of("3.50", Currency.getInstance("USD")), menus.findForTerminal(storeId).items.single().price)
+    }
+
+    private fun insertRaw(json: String) {
+        jdbcTemplate.update(
+            "insert into t_menu (store_id, menu, version, created_at, updated_at) values (?, ?::jsonb, 0, now(), now())",
+            storeId.value,
+            json,
+        )
+    }
+
+    private fun rawItem(code: String, name: String = "아메리카노") = """{"code":"$code","name":"$name","price":"4000","category":"커피"}"""
+
+    @Test
+    fun `읽기는 저장 문서를 다시 검증하지 않아 규칙 밖 문서도 그대로 돌려준다`() {
+        val longName = "n".repeat(300)
+        val over = (1..201).joinToString(",") { rawItem("C$it") }
+        insertRaw("""{"currency":"KRW","items":[${rawItem("A1", longName)},${rawItem("A1")}]}""")
+
+        val view = menus.findForTerminal(storeId)
+
+        assertEquals(listOf("A1", "A1"), view.items.map { it.code })
+        assertEquals(longName, view.items[0].name)
+        assertEquals(0L, view.version)
+        jdbcTemplate.update("update t_menu set menu = ?::jsonb where store_id = ?", """{"currency":"KRW","items":[$over]}""", storeId.value)
+        assertEquals(201, menus.find(storeId, ownerId).items.size)
+    }
+
+    @Test
+    fun `저장 문서를 읽지 못하면 DomainException이 아니라 원인을 가진 IllegalStateException이다`() {
+        insertRaw("""{"currency":"XX1","items":[${rawItem("A1")}]}""")
+
+        val e = assertFailsWith<IllegalStateException> { menus.findForTerminal(storeId) }
+        assertNotNull(e.cause)
+    }
+
+    @Test
+    fun `저장 문서의 모르는 필드는 무시하고 읽는다`() {
+        insertRaw("""{"currency":"KRW","extra":1,"items":[{"code":"A1","name":"아메리카노","price":"4000","category":"커피","soldOut":true}]}""")
+
+        assertEquals("A1", menus.findForTerminal(storeId).items.single().code)
+    }
+
+    @Test
+    fun `Money 위반 메시지에 몇 번째 항목인지 붙고 code와 kind는 그대로다`() {
+        val e = assertFailsWith<DomainException> {
+            create(listOf(MenuFixtures.item("A1"), MenuFixtures.item("A2", price = "4000.5")))
+        }
+
+        assertEquals("INVALID_MONEY_SCALE", e.code)
+        assertEquals(DomainErrorKind.INVALID, e.kind)
+        assertTrue(e.message!!.startsWith("2번째 항목의 가격: "), e.message)
+        assertEquals(0L, menuCount())
     }
 }
