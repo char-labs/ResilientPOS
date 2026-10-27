@@ -8,7 +8,7 @@
 
 단말(POS)의 쓰기 요청 하나는 아래 순서로 처리된다. 점주 경로(`/owner/**`)는 1번만 다르다. Spring Security 체인(`platform.OwnerSecurityFilterChain`)이 Redis에 둔 세션 쿠키로 인증한다. 플랫폼 운영자 경로(`/admin/**`)는 `platform.AdminSecurityFilterChain`이 사내 IdP가 발급한 Bearer JWT로 인증하고 세션을 쓰지 않는다([platform-operator-dlt-redrive](../spec/2026-10-21-platform-operator-dlt-redrive.md)).
 
-1. **인증.** 단말은 `/v1/**`를 `Authorization: Bearer 토큰`으로 부른다. `terminal` 모듈의 `TerminalAuthenticationInterceptor`가 토큰 형식을 거르고 `TerminalManagement.authenticate`로 토큰 해시를 활성 credential과 대조한다. 성공하면 `AuthenticatedTerminal`(단말 ID, 매장 ID)을 요청 속성에 두고, 실패하면 401 `UNAUTHENTICATED`다. 인증된 요청은 같은 인터셉터에서 동시 요청 상한(`TerminalInFlightLimiter`)과 빈도 상한(`RedisTerminalRateLimiter`)을 차례로 거친다. 동시 요청 상한은 pod 메모리에서 단말마다 sync(`POST /v1/terminals/{terminalId}/sync`) 1개와 그 밖의 쓰기 요청 1개만 처리 중이게 한다. 결제 시도 조회(GET)는 행 잠금을 잡지 않는 읽기라 묶지 않는다. 같은 단말의 같은 묶음이 처리 중이면 Controller에 닿기 전에 429 `RATE_LIMITED`와 `Retry-After: 1`이고, 빈도 token을 쓰지 않는다. 자리는 요청이 끝날 때(예외 포함) 푼다. 이미 통과한 요청에서 인터셉터가 REQUEST가 아닌 dispatch로 다시 불리면(비동기 handler의 ASYNC dispatch) 아무것도 다시 판정하지 않는다. handler가 일한 뒤에 429를 내지 않기 위해서다. 잠금을 기다리며 커넥션을 쥐는 같은 단말의 겹친 요청을 막아, 한 단말의 쓰기 요청이 pod 하나의 커넥션 풀에서 handler 단계에 쥐는 커넥션을 2개 이하로 묶는다. 자리를 잡기 전의 인증 조회는 거절된 요청도 한 번 치른다([terminal-concurrency-limit](../spec/2026-10-23-terminal-concurrency-limit.md)). 빈도 상한은 단말 bucket과 그 매장 bucket(Redis token bucket)을 한 번에 확인해 둘 중 하나라도 비면 Controller에 닿기 전에 429 `RATE_LIMITED`와 `Retry-After`(초)다. `Retry-After`는 같은 요청을 다시 보내도 되는 가장 이른 시각이다. 응답은 동시 거절과 빈도 거절을 가르지 않는다. 거절은 상태를 바꾸지 않으므로 단말은 `error.errorCode`가 `RATE_LIMITED`이면 endpoint와 관계없이 같은 요청을 `Retry-After`에 0~1초 jitter를 더한 뒤 그대로 다시 보낸다. 429·`RATE_LIMITED`는 이 handler 전 거절에만 쓴다. 규약을 HTTP 상태가 아니라 code에 묶는 것은, 나중에 처리 도중의 거절이 429로 나가도 단말이 같은 요청의 재전송으로 다루지 않게 하려는 것이다. Redis 오류면 제한 없이 통과한다(fail-open)([inbound-rate-limit](../spec/2026-10-21-inbound-rate-limit.md)).
+1. **인증.** 단말은 `/v1/**`를 `Authorization: Bearer 토큰`으로 부른다. `terminal` 모듈의 `TerminalAuthenticationInterceptor`가 토큰 형식을 거르고 `TerminalManagement.authenticate`로 토큰 해시를 활성 credential과 대조한다. 성공하면 `AuthenticatedTerminal`(단말 ID, 매장 ID)을 요청 속성에 두고, 실패하면 401 `UNAUTHENTICATED`다. 인증된 요청은 같은 인터셉터에서 동시 요청 상한(`TerminalInFlightLimiter`)과 빈도 상한(`RedisTerminalRateLimiter`)을 차례로 거친다. 동시 요청 상한은 pod 메모리에서 단말마다 sync(`POST /v1/terminals/{terminalId}/sync`) 1개와 그 밖의 쓰기 요청 1개만 처리 중이게 한다. 결제 시도 조회와 메뉴 조회(`GET /v1/menu`) 같은 GET은 행 잠금을 잡지 않는 읽기라 묶지 않고 빈도 token만 하나 쓴다. 같은 단말의 같은 묶음이 처리 중이면 Controller에 닿기 전에 429 `RATE_LIMITED`와 `Retry-After: 1`이고, 빈도 token을 쓰지 않는다. 자리는 요청이 끝날 때(예외 포함) 푼다. 이미 통과한 요청에서 인터셉터가 REQUEST가 아닌 dispatch로 다시 불리면(비동기 handler의 ASYNC dispatch) 아무것도 다시 판정하지 않는다. handler가 일한 뒤에 429를 내지 않기 위해서다. 잠금을 기다리며 커넥션을 쥐는 같은 단말의 겹친 요청을 막아, 한 단말의 쓰기 요청이 pod 하나의 커넥션 풀에서 handler 단계에 쥐는 커넥션을 2개 이하로 묶는다. 자리를 잡기 전의 인증 조회는 거절된 요청도 한 번 치른다([terminal-concurrency-limit](../spec/2026-10-23-terminal-concurrency-limit.md)). 빈도 상한은 단말 bucket과 그 매장 bucket(Redis token bucket)을 한 번에 확인해 둘 중 하나라도 비면 Controller에 닿기 전에 429 `RATE_LIMITED`와 `Retry-After`(초)다. `Retry-After`는 같은 요청을 다시 보내도 되는 가장 이른 시각이다. 응답은 동시 거절과 빈도 거절을 가르지 않는다. 거절은 상태를 바꾸지 않으므로 단말은 `error.errorCode`가 `RATE_LIMITED`이면 endpoint와 관계없이 같은 요청을 `Retry-After`에 0~1초 jitter를 더한 뒤 그대로 다시 보낸다. 429·`RATE_LIMITED`는 이 handler 전 거절에만 쓴다. 규약을 HTTP 상태가 아니라 code에 묶는 것은, 나중에 처리 도중의 거절이 429로 나가도 단말이 같은 요청의 재전송으로 다루지 않게 하려는 것이다. Redis 오류면 제한 없이 통과한다(fail-open)([inbound-rate-limit](../spec/2026-10-21-inbound-rate-limit.md)).
 2. **Controller.** 경로·본문의 단말과 매장을 `AuthenticatedTerminal`과 대조하고(다르면 403 `TERMINAL_MISMATCH`) Request DTO를 Command로 바꿔 Facade를 부른다. 판단은 하지 않는다.
 3. **Command Facade.** use case 하나의 진입점이고 트랜잭션을 연다(`Tx.masterTx`). 행을 잠그고 읽은 뒤 aggregate의 전이 메서드를 부른다.
 4. **Aggregate 전이.** aggregate는 자신을 바꾸지 않고 `Transition`(바뀐 새 aggregate와 그 전이가 낸 도메인 이벤트)을 돌려준다([도메인 모델 §4.1](domain-model.md#41-aggregate-상태-전이는-불변-객체가-새-인스턴스를-반환한다)). 불변식 위반은 `DomainException`이다.
@@ -229,7 +229,7 @@ flowchart TB
 | order 상태 `OFFLINE_CREATED → SYNCED → PAYMENT_PENDING` | 첫 상태는 `OPEN` | 오프라인 생성 여부는 `sync`가 소유하는 사실이다(도메인 모델 §8) |
 | `PaymentDeclined → [MarkOrderPaymentFailed]` | 거절은 `payment`에 남고 주문은 `CHECKOUT_REQUESTED`에 머문다 | 그 회차의 결제가 아직 끝나지 않았고 재결제는 같은 회차의 새 시도다(도메인 모델 §2) |
 | `PaymentUnknown → [OpenReconciliationCase]` | `payment`의 주기 작업이 provider 조회로 확정 | reconciliation case는 아직 없다([payment-unknown-resolution](../spec/2026-10-01-payment-unknown-resolution.md)) |
-| context 7개 | `owner`(점주 계정)를 더해 8개 | 점주가 자기 매장의 단말을 관리하는 API가 생겼다([operator-authentication](../spec/2026-10-06-operator-authentication.md)) |
+| context 7개 | `owner`(점주 계정)와 `catalog`(매장 메뉴)를 더해 9개 | 점주가 자기 매장의 단말을 관리하는 API가 생겼다([operator-authentication](../spec/2026-10-06-operator-authentication.md)). 메뉴 정본이 없어 점주가 가격을 바꿀 수 없고 같은 매장 단말이 같은 메뉴를 본다는 보장이 없었다. 주문 line은 메뉴와 대조하지 않는다([menu-catalog](../spec/2026-10-26-menu-catalog.md)) |
 
 ### 5.4 지금 코드에 있는 것과 없는 것
 
@@ -262,6 +262,7 @@ flowchart TB
 | `sync` | bounded context | 단말 watermark, operation 접수·중복 제거, gap·conflict 판정 | 없음. HTTP endpoint만 있다 |
 | `fulfillment` | bounded context | 결제된 주문의 이행 | 없음. `OrderPaid`를 소비할 뿐이다 |
 | `reconciliation` | bounded context | 불일치 case(예정) | 없음. 아직 비어 있다 |
+| `catalog` | bounded context | 매장 메뉴의 정본(코드·이름·가격·분류, 통화 하나). 주문 line은 메뉴와 대조하지 않는다 | `MenuManagement`, `MenuCommand`, `MenuView` |
 | `contract` | 계약 | 모듈을 건너가는 이벤트. 업무 규칙과 상태가 없다 | `OrderPaymentRequested`, `PaymentApproved`, `OrderPaid`, `PaymentAttemptKind` |
 | `foundation` | 공유 커널 | 프레임워크 없는 값 타입과 모델링 원시 타입 | `Money`, `DomainEvent`, `Transition`, `DomainException`, `IdentifierGenerator` |
 | `platform` | 공용 인프라 | 트랜잭션(`Tx`), 분산 락(`Lock`), 엔티티 기반 클래스, 조회 실행기, 응답 envelope·오류 변환, 점주·운영자 Security 체인, Kafka 구성, 발행 기록 재전송·metric, DLT 재투입·폐기 표시 API와 기록, 미처리 DLT metric | `Tx`, `Lock`, `BaseEntity`, `JdslQueryExecutor` 등 |
@@ -283,24 +284,26 @@ flowchart TB
 |---|---|---|
 | `sync` → `order` | 동기 호출 | `SyncCommandFacade`가 `OrderCommandFacade.createInCallerTransaction`·`requestCheckout`을 항목 트랜잭션 안에서 부른다. `OrderCommand`, `OrderId`, `ClientOrderId` |
 | `terminal` → `store` | 동기 호출(읽기) | 점주 단말 관리 Controller(`TerminalOwnerController`)가 `StoreManagement.requireOwned`로 매장 소유를 먼저 확인한다. `StoreId` |
+| `catalog` → `store` | 동기 호출(읽기) | `MenuManagement`가 점주의 메뉴 조회·교체 전에 `StoreManagement.requireOwned`로 매장 소유를 확인한다. `StoreId` |
 | `order` → `contract` | 이벤트 | 발행 `OrderPaymentRequested`·`OrderPaid`, 소비 `PaymentApproved`·`PaymentAttemptKind` |
 | `payment` → `contract` | 이벤트 | 소비 `OrderPaymentRequested`, 발행 `PaymentApproved` |
 | `fulfillment` → `contract` | 이벤트 | 소비 `OrderPaid` |
 | `contract` → `store`, `terminal` | 값 타입 | 이벤트 필드 `StoreId`, `TerminalId` |
 | `order`·`payment`·`sync` → `store`, `terminal` | 값 타입 | `StoreId`, `TerminalId`, Controller 파라미터 `AuthenticatedTerminal` |
-| `store` → `owner`, `terminal` → `owner` | 값 타입 | `OwnerId` |
+| `catalog` → `terminal` | 값 타입 | 단말 메뉴 조회 Controller 파라미터 `AuthenticatedTerminal` |
+| `store` → `owner`, `terminal` → `owner`, `catalog` → `owner` | 값 타입 | `OwnerId` |
 | 모든 모듈(`foundation`·`reconciliation` 제외) → `foundation` | 값 타입 | `Money`, `DomainEvent`, `Transition`, `DomainException`, `IdentifierGenerator` |
-| 업무 모듈 7개(`reconciliation` 제외) → `platform` | 인프라 | `Tx`, `Lock`, `BaseEntity`, `JdslQueryExecutor`, `logger` |
+| 업무 모듈 8개(`reconciliation` 제외) → `platform` | 인프라 | `Tx`, `Lock`, `BaseEntity`, `JdslQueryExecutor`, `logger` |
 
-- 출력에 없는 간선도 사실이다. `order`와 `payment`는 서로 의존하지 않는다. `payment`·`fulfillment`·`sync`·`reconciliation`에 의존하는 모듈은 없다. `platform`은 `foundation`에만 의존한다. `KafkaConfiguration`이 토픽 이름을 이벤트 클래스 상수가 아니라 설정 목록에서 읽는 것도 `platform → payment` 간선을 만들지 않으려는 것이다.
+- 출력에 없는 간선도 사실이다. `order`와 `payment`는 서로 의존하지 않는다. `payment`·`fulfillment`·`sync`·`reconciliation`·`catalog`에 의존하는 모듈은 없다. `order`는 `catalog`를 모른다. `platform`은 `foundation`에만 의존한다. `KafkaConfiguration`이 토픽 이름을 이벤트 클래스 상수가 아니라 설정 목록에서 읽는 것도 `platform → payment` 간선을 만들지 않으려는 것이다.
 - Modulith 출력의 의존 종류는 `DEFAULT`(타입 참조)와 `USES_COMPONENT`(Spring 빈 주입) 두 가지다. 모듈 사이 consumer가 `@ApplicationModuleListener`가 아니라 `@KafkaListener`라서 Modulith는 이벤트 수신을 `EVENT_LISTENER` 의존으로 보지 못하고, 이벤트 간선은 `contract` 타입 참조(`DEFAULT`)로 나온다.
-- 모듈 사이 동기 호출은 위 두 줄(`USES_COMPONENT`)뿐이다. 그 밖의 모듈 사이 변경은 이벤트다.
+- 모듈 사이 동기 호출은 위 세 줄(`USES_COMPONENT`)뿐이다. 그 밖의 모듈 사이 변경은 이벤트다.
 
 ### 6.4 의존 규칙을 지키는 테스트
 
 | 테스트 | 막는 것 |
 |---|---|
-| `ModuleStructureTest` | `ApplicationModules.verify()`로 다른 모듈의 `internal` 참조와 모듈 순환을 막는다. 모듈 11개의 이름을 고정한다. ArchUnit으로 `contract` → `order`·`payment`·`sync`·`reconciliation`·`fulfillment`·`platform` 의존을 막는다(순환 검사는 소비자가 생긴 뒤에야 걸리므로 그 전에 방향을 지킨다). 모듈을 건너가는 이벤트의 클래스 이름을 리터럴로 고정한다(`event_publication.event_type`에 저장되는 이름이다) |
+| `ModuleStructureTest` | `ApplicationModules.verify()`로 다른 모듈의 `internal` 참조와 모듈 순환을 막는다. 모듈 12개의 이름을 고정한다. ArchUnit으로 `contract` → `order`·`payment`·`sync`·`reconciliation`·`fulfillment`·`platform` 의존을 막는다(순환 검사는 소비자가 생긴 뒤에야 걸리므로 그 전에 방향을 지킨다). 모듈을 건너가는 이벤트의 클래스 이름을 리터럴로 고정한다(`event_publication.event_type`에 저장되는 이름이다) |
 | `DependencyDirectionTest` | `foundation`이 Spring·JPA·Servlet·Jackson·Kafka에 의존하지 않는다. 모든 모듈의 `internal.domain`이 그 프레임워크와 같은 모듈의 `internal.adapter`·`internal.application`에 의존하지 않는다. Modulith는 모듈 사이만 보므로 모듈 안의 레이어 방향은 이 테스트가 지킨다 |
 | `EntityVisibilityTest` | JPA 엔티티가 값을 받는 생성자와 public setter를 열지 않는다. 엔티티는 persistence adapter의 변환기로만 만들고 바꾼다 |
 | `TransactionDeclarationTest` | 클래스에 `@Transactional`을 달지 않고 `@Transactional(readOnly = true)`를 직접 쓰지 않는다. 트랜잭션 경계는 `Tx`로 선언한다 |

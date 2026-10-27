@@ -17,7 +17,7 @@ class SchemaMigrationTest(
             "select version, success from flyway_schema_history order by installed_rank",
         ) { it.getString("version") to it.getBoolean("success") }
 
-        assertEquals(listOf("001" to true, "002" to true, "003" to true, "004" to true, "005" to true, "006" to true, "007" to true, "008" to true, "009" to true, "010" to true, "011" to true, "012" to true, "013" to true, "014" to true, "015" to true, "016" to true, "017" to true, "018" to true, "019" to true, "020" to true), applied)
+        assertEquals(listOf("001" to true, "002" to true, "003" to true, "004" to true, "005" to true, "006" to true, "007" to true, "008" to true, "009" to true, "010" to true, "011" to true, "012" to true, "013" to true, "014" to true, "015" to true, "016" to true, "017" to true, "018" to true, "019" to true, "020" to true, "021" to true), applied)
     }
 
     @Test
@@ -52,6 +52,7 @@ class SchemaMigrationTest(
                 "t_dead_letter_dismissal",
                 "t_dead_letter_redrive",
                 "t_fulfillment",
+                "t_menu",
                 "t_order",
                 "t_order_checkout",
                 "t_order_line",
@@ -96,14 +97,14 @@ class SchemaMigrationTest(
     }
 
     @Test
-    fun `낙관적 잠금 version 컬럼은 그것을 선언한 엔티티의 테이블인 t_order에만 있다`() {
+    fun `낙관적 잠금 version 컬럼은 그것을 선언한 엔티티의 테이블인 t_order와 t_menu에만 있다`() {
         val tables = query(
             "select table_name from information_schema.columns " +
                 "where table_schema = 'public' and column_name = 'version' and table_name <> 'flyway_schema_history' " +
                 "order by table_name",
         ) { it.getString("table_name") }
 
-        assertEquals(listOf("t_order"), tables)
+        assertEquals(listOf("t_menu", "t_order"), tables)
     }
 
     @Test
