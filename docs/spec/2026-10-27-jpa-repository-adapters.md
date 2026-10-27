@@ -136,7 +136,8 @@ persistence 어댑터가 `EntityManager`를 주입받아 `persist`·`find`를 �
 - 열린 PR과 겹치는 곳:
   - #122 `feature/order-query`: `OrderEntity.kt`, `docs/wiki/domain-model.md`, `docs/wiki/entity-map.md`, 마이그레이션 V021~V023.
   - #121 `feature/menu-catalog`: `docs/wiki/domain-model.md`, `docs/wiki/entity-map.md`, V021, 그리고 새 `MenuPersistenceAdapter`가 `EntityManager.persist`를 쓴다.
-  - 둘 중 먼저 머지된 쪽에 맞춰 rebase한다. 마이그레이션 번호는 나중에 머지되는 쪽이 바꾼다. #121이 먼저 머지되면 이 PR에서 `MenuPersistenceAdapter`도 새 규약으로 바꾸고, 이 PR이 먼저 머지되면 #121이 맞춘다.
+  - 확인 결과(2026-10-27, push 직전, origin/main bb14c863): 열린 PR은 #121·#122뿐이고 둘 다 머지 전이다. 겹치는 경로는 `docs/wiki/domain-model.md`, `docs/wiki/entity-map.md`, `src/test/kotlin/com/resilientpos/SchemaMigrationTest.kt`다. 마이그레이션 V021은 이 PR(`V021__sync_watermark_version.sql`), #121(`V021__catalog_menu.sql`), #122(`V021__order_occurred_at.sql`) 셋이 같은 번호를 쓴다. 나중에 머지되는 쪽이 번호와 `SchemaMigrationTest`의 기대값을 바꾼다.
+  - 먼저 머지된 쪽에 맞춰 rebase한다. 마이그레이션 번호는 나중에 머지되는 쪽이 바꾼다. #121이 먼저 머지되면 이 PR에서 `MenuPersistenceAdapter`도 새 규약으로 바꾸고, 이 PR이 먼저 머지되면 #121이 맞춘다.
 
 ## TDD 검증 기록
 업무 동작 변경이 아니라 Repository 저장 방식의 리팩터링이다(Repository 전용 작업이라 TDD 스킬 대상에서 빠진다). 동작이 바뀌는 것(SELECT 수)은 테스트 기대값을 먼저 바꿔 RED를 본 뒤 구현한다.
