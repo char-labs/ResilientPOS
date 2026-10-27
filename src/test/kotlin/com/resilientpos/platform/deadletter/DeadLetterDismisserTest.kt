@@ -7,7 +7,6 @@ import com.resilientpos.platform.BaseEntity
 import com.resilientpos.platform.DependencyUnavailableException
 import com.resilientpos.platform.Tx
 import com.resilientpos.platform.TxRunner
-import jakarta.persistence.EntityManager
 import java.sql.SQLException
 import java.time.Instant
 import java.util.Optional
@@ -45,11 +44,10 @@ class DeadLetterDismisserTest {
 
     private val reader = mock(DeadLetterReader::class.java)
     private val dismissals = mock(DeadLetterDismissalJpaRepository::class.java)
-    private val entityManager = mock(EntityManager::class.java)
     private val ids = object : IdentifierGenerator {
         override fun next() = ID
     }
-    private val dismisser = DeadLetterDismisser(reader, dismissals, entityManager, ids)
+    private val dismisser = DeadLetterDismisser(reader, dismissals, ids)
 
     private val record = dltRecord()
 
@@ -63,14 +61,14 @@ class DeadLetterDismisserTest {
     @Test
     fun `앞뒤 공백을 지운 사유가 500자면 받고 지운 값을 기록해 처음 기록으로 응답하고 감사 INFO 한 줄에 사유가 없다`(output: CapturedOutput) {
         given(reader.readRecord(DLT, 0, DLT_OFFSET)).willReturn(record)
-        willAnswer { stamp(it.arguments[0] as DeadLetterDismissalEntity, DISMISSED_AT); null }.given(entityManager).persist(any())
+        willAnswer { managedCopy(it.arguments[0] as DeadLetterDismissalEntity, DISMISSED_AT) }.given(dismissals).save(any())
         val reason = "가".repeat(500)
 
         val response = dismiss("  $reason\n")
 
         assertEquals(DeadLetterDismissResponse(DLT, 0, DLT_OFFSET, OPERATOR, DISMISSED_AT), response)
         val saved = ArgumentCaptor.forClass(DeadLetterDismissalEntity::class.java)
-        verify(entityManager).persist(saved.capture())
+        verify(dismissals).save(saved.capture())
         assertEquals(reason, saved.value.reason)
         assertEquals(DLT_TIMESTAMP, saved.value.dltTimestamp)
         assertEquals(ID, saved.value.id)
@@ -88,7 +86,7 @@ class DeadLetterDismisserTest {
             assertEquals(DomainErrorKind.INVALID, e.kind, reason)
         }
 
-        verifyNoInteractions(reader, dismissals, entityManager)
+        verifyNoInteractions(reader, dismissals)
     }
 
     @Test
@@ -97,7 +95,7 @@ class DeadLetterDismisserTest {
         given(reader.readRecord(DLT, 0, DLT_OFFSET)).willThrow(invalid)
 
         assertSame(invalid, assertFailsWith<DomainException> { dismiss() })
-        verifyNoInteractions(dismissals, entityManager)
+        verifyNoInteractions(dismissals)
     }
 
     @Test
@@ -106,7 +104,7 @@ class DeadLetterDismisserTest {
         given(reader.readRecord(DLT, 0, DLT_OFFSET)).willThrow(unavailable)
 
         assertSame(unavailable, assertFailsWith<DependencyUnavailableException> { dismiss() })
-        verifyNoInteractions(dismissals, entityManager)
+        verifyNoInteractions(dismissals)
     }
 
     @Test
@@ -115,7 +113,7 @@ class DeadLetterDismisserTest {
 
         assertEquals(DeadLetterRedriver.DEAD_LETTER_NOT_FOUND, e.code)
         assertEquals(DomainErrorKind.NOT_FOUND, e.kind)
-        verifyNoInteractions(dismissals, entityManager)
+        verifyNoInteractions(dismissals)
     }
 
     @Test
@@ -127,7 +125,7 @@ class DeadLetterDismisserTest {
         val response = dismiss("다른 사유")
 
         assertEquals(DeadLetterDismissResponse(DLT, 0, DLT_OFFSET, "operator-subject-2", DISMISSED_AT), response)
-        verify(entityManager, never()).persist(any())
+        verify(dismissals, never()).save(any())
         assertEquals(emptyList(), auditLines(output))
     }
 
@@ -141,7 +139,7 @@ class DeadLetterDismisserTest {
                 "could not execute statement",
                 SQLException("ERROR: duplicate key value violates unique constraint \"ux_dead_letter_dismissal_source\"", "23505"),
             ),
-        ).given(entityManager).persist(any())
+        ).given(dismissals).save(any())
 
         val response = dismiss()
 
@@ -153,7 +151,7 @@ class DeadLetterDismisserTest {
     fun `다른 제약의 위반은 번역하지 않고 그대로 던지며 감사 줄을 남기지 않는다`(output: CapturedOutput) {
         given(reader.readRecord(DLT, 0, DLT_OFFSET)).willReturn(record)
         val other = DataIntegrityViolationException("could not execute statement", SQLException("ERROR: duplicate key value violates unique constraint \"pk_other\"", "23505"))
-        willThrow(other).given(entityManager).persist(any())
+        willThrow(other).given(dismissals).save(any())
 
         assertSame(other, assertFailsWith<DataIntegrityViolationException> { dismiss() })
         assertEquals(emptyList(), auditLines(output))
@@ -175,6 +173,9 @@ class DeadLetterDismisserTest {
         )
 
         /** Hibernate가 넣거나 읽어 올 때 채우는 생성 시각을 채운다. 컨텍스트 없는 단위 테스트라 Hibernate가 없다. */
+        /** `merge`처럼 넘긴 객체가 아니라 생성 시각이 채워진 다른 인스턴스를 돌려준다. 응답이 `save`의 반환값으로 만들어지는지 가린다. */
+        fun managedCopy(entity: DeadLetterDismissalEntity, at: Instant): DeadLetterDismissalEntity = stamp(with(entity) { DeadLetterDismissalEntity.of(id, dltTopic, dltPartition, dltOffset, dltTimestamp, operatorSubject, reason) }, at)
+
         fun stamp(entity: DeadLetterDismissalEntity, at: Instant): DeadLetterDismissalEntity = entity.also {
             BaseEntity::class.java.getDeclaredField("createdAt").apply { isAccessible = true }.set(it, at)
         }

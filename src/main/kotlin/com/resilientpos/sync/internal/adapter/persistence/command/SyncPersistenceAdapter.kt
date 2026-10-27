@@ -7,21 +7,23 @@ import com.resilientpos.sync.internal.domain.SyncOperation
 import com.resilientpos.sync.internal.domain.SyncRepository
 import com.resilientpos.sync.internal.domain.Watermark
 import com.resilientpos.terminal.TerminalId
-import jakarta.persistence.EntityManager
 import java.util.UUID
+import org.springframework.data.repository.findByIdOrNull
 import org.springframework.stereotype.Component
 import org.springframework.transaction.annotation.Transactional
 
 /**
  * `SyncRepository`의 JPA 구현. 조회는 [JdslQueryExecutor]로 한다.
  *
- * 새 행은 `EntityManager.persist`로 넣는다. 두 엔티티 모두 할당식 `@Id`에 `@Version`이 없어서 Spring Data의 `save`가
- * 새 행인지 알 수 없고 `merge`로 가 SELECT가 한 번 더 나간다. watermark의 기존 행은 `EntityManager.find`로 찾는다 —
+ * 새 행은 Spring Data의 `save`로 넣는다. 접수 기록은 `@Version`이 없어 `merge`로 가 SELECT가 하나 더 나간다.
+ * watermark는 단말 ID가 PK라 `@Version`을 두어 새 행이 `persist`로 간다. `merge`면 같은 단말의 첫 배치가 겹칠 때 진 쪽이
+ * PK 위반 대신 이긴 쪽 행을 0으로 덮어쓴다. watermark의 기존 행은 `findById`로 찾는다 —
  * 같은 트랜잭션에서 잠금 조회로 이미 읽었으면 영속성 컨텍스트의 인스턴스가 돌아와 SELECT가 더 나가지 않는다.
  */
 @Component
 class SyncPersistenceAdapter(
-    private val entityManager: EntityManager,
+    private val watermarks: WatermarkJpaRepository,
+    private val operations: SyncOperationJpaRepository,
     private val queries: JdslQueryExecutor,
 ) : SyncRepository {
 
@@ -39,12 +41,8 @@ class SyncPersistenceAdapter(
     /** 트랜잭션은 Facade가 소유하고 여기서는 합류한다. 선언은 트랜잭션 없이 직접 부른 경우의 안전망이다. */
     @Transactional
     override fun saveWatermark(watermark: Watermark): Watermark {
-        val existing: WatermarkEntity? = entityManager.find(WatermarkEntity::class.java, watermark.terminalId.value)
-        if (existing != null) {
-            existing.apply(watermark)
-        } else {
-            entityManager.persist(WatermarkEntity.from(watermark))
-        }
+        val existing = watermarks.findByIdOrNull(watermark.terminalId.value)
+        if (existing != null) existing.apply(watermark) else watermarks.save(WatermarkEntity.from(watermark))
         return watermark
     }
 
@@ -66,7 +64,7 @@ class SyncPersistenceAdapter(
 
     @Transactional
     override fun saveOperation(operation: SyncOperation): SyncOperation {
-        entityManager.persist(SyncOperationEntity.from(operation))
+        operations.save(SyncOperationEntity.from(operation))
         return operation
     }
 }

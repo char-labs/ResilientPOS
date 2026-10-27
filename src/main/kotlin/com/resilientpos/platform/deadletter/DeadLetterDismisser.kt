@@ -6,7 +6,6 @@ import com.resilientpos.foundation.IdentifierGenerator
 import com.resilientpos.platform.Tx
 import com.resilientpos.platform.isUniqueViolationOf
 import com.resilientpos.platform.logger
-import jakarta.persistence.EntityManager
 import java.time.Instant
 import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.stereotype.Component
@@ -26,7 +25,6 @@ import org.springframework.stereotype.Component
 class DeadLetterDismisser(
     private val reader: DeadLetterReader,
     private val dismissals: DeadLetterDismissalJpaRepository,
-    private val entityManager: EntityManager,
     private val identifierGenerator: IdentifierGenerator,
 ) {
 
@@ -38,14 +36,14 @@ class DeadLetterDismisser(
         val dltTimestamp = Instant.ofEpochMilli(record.timestamp())
         recorded(topic, partition, offset, dltTimestamp)?.let { return DeadLetterDismissResponse.from(it) }
         val dismissal = DeadLetterDismissalEntity.of(identifierGenerator.next(), topic, partition, offset, dltTimestamp, operator, trimmedReason)
-        try {
-            Tx.masterTx { entityManager.persist(dismissal) }
+        val saved = try {
+            Tx.masterTx { dismissals.save(dismissal) }
         } catch (e: DataIntegrityViolationException) {
             if (!e.isUniqueViolationOf(SOURCE_CONSTRAINT)) throw e
             return DeadLetterDismissResponse.from(checkNotNull(recorded(topic, partition, offset, dltTimestamp)) { "unique에 걸렸는데 이긴 기록이 없다 dltTopic=$topic dltPartition=$partition dltOffset=$offset" })
         }
         log.info { "audit action=DEAD_LETTER_DISMISSED operator=$operator dltTopic=$topic dltPartition=$partition dltOffset=$offset" }
-        return DeadLetterDismissResponse.from(dismissal)
+        return DeadLetterDismissResponse.from(saved)
     }
 
     private fun recorded(topic: String, partition: Int, offset: Long, timestamp: Instant) =

@@ -75,7 +75,7 @@ class SyncStatementCountIntegrationTest(
         SyncCommand.ReceiveBatch.Operation(UUID.randomUUID(), sequence, CheckoutPayload(clientOrderId, BigDecimal("3502")))
 
     @Test
-    fun `이미 요청된 주문의 멱등 checkout 요청은 9문장이고 재전송은 4문장이다`() {
+    fun `이미 요청된 주문의 멱등 checkout 요청은 10문장이고 재전송은 4문장이다`() {
         val command = OrderFixtures.createOrderCommand(terminalId = terminalId)
         orders.create(command)
         // 첫 요청(OPEN에서 적용)은 커밋 직후 비동기 문장이 측정에 섞여 세지 않는다. 뒤 둘이 그것이 가라앉은 뒤에 센다.
@@ -90,8 +90,8 @@ class SyncStatementCountIntegrationTest(
         // `set local lock_timeout`은 통계에 잡히지 않는다(아래 합이 그것 없이 실측과 맞는다).
         // 배치마다: watermark 확인 SELECT, 응답용 watermark SELECT
         val perBatch = 2L
-        // 항목 트랜잭션 판정: watermark 잠금 SELECT, 접수 기록 조회, watermark UPDATE, 접수 기록 INSERT
-        val judged = 4L
+        // 항목 트랜잭션 판정: watermark 잠금 SELECT, 접수 기록 조회, watermark UPDATE, 접수 기록 merge의 SELECT와 INSERT
+        val judged = 5L
         // 주문을 키로 잠그고 읽기: 주문 SELECT FOR UPDATE, line SELECT, checkout SELECT
         val orderLock = 3L
         // 주문 저장의 자식 SELECT 둘(line, checkout)은 바뀐 것이 없으면 나가지 않아야 한다

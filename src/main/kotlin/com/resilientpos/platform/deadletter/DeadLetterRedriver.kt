@@ -8,7 +8,6 @@ import com.resilientpos.platform.Tx
 import com.resilientpos.platform.isUniqueViolationOf
 import com.resilientpos.platform.logger
 import io.micrometer.core.instrument.MeterRegistry
-import jakarta.persistence.EntityManager
 import java.time.Duration
 import java.time.Instant
 import java.util.concurrent.TimeUnit
@@ -49,7 +48,6 @@ class DeadLetterRedriver(
     private val jsonMapper: JsonMapper,
     private val kafka: KafkaOperations<Any, Any>,
     private val redrives: DeadLetterRedriveJpaRepository,
-    private val entityManager: EntityManager,
     private val identifierGenerator: IdentifierGenerator,
     private val meterRegistry: MeterRegistry,
     @Value("\${resilientpos.kafka.topics}") topics: List<String>,
@@ -82,8 +80,8 @@ class DeadLetterRedriver(
         val redrive = DeadLetterRedriveEntity.of(
             identifierGenerator.next(), topic, partition, offset, dltTimestamp, sent.partition(), sent.offset(), operator, trimmedReason,
         )
-        try {
-            Tx.masterTx { entityManager.persist(redrive) }
+        val saved = try {
+            Tx.masterTx { redrives.save(redrive) }
         } catch (e: Exception) {
             // 이긴 기록을 읽기 전에 남긴다. 그 조회가 실패해도 이 요청이 보낸 사실과 행위자는 남는다.
             if (e !is DataIntegrityViolationException || !e.isUniqueViolationOf(SOURCE_CONSTRAINT)) {
@@ -98,7 +96,7 @@ class DeadLetterRedriver(
             "audit action=DEAD_LETTER_REDRIVEN operator=$operator dltTopic=$topic dltPartition=$partition dltOffset=$offset " +
                 "topic=$originalTopic partition=${sent.partition()} offset=${sent.offset()}"
         }
-        return DeadLetterRedriveResponse.from(redrive)
+        return DeadLetterRedriveResponse.from(saved)
     }
 
     /**

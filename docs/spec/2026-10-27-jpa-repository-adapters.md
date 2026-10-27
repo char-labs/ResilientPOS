@@ -44,10 +44,11 @@ persistence 어댑터가 `EntityManager`를 주입받아 `persist`·`find`를 �
 - 고친 내용: 새 행도 `save`이고 `merge`의 SELECT를 받아들인다. `Persistable`·`persist` fragment는 쓰지 않는다. 도메인 값이 PK인 엔티티는 `@Version`을 선언한다. 저장한 엔티티를 다시 읽으려면 `save`의 반환값을 쓴다.
 - 규칙 정본은 볼트라 저장소에는 커밋하지 않는다. 고친 뒤 `make bootstrap`을 다시 실행했다.
 
-**5. 이름과 인터페이스 모양은 그대로 둔다(사용자 결정, 2026-10-27).**
+**5. 이름은 그대로 두고, 모든 Spring Data repository는 `JpaRepository`를 상속한다(사용자 결정, 2026-10-27).**
 - `XxxPersistenceAdapter`, `XxxJpaRepository` 이름은 그대로다.
-- `JpaRepository`가 아닌 좁힌 인터페이스(`FulfillmentJpaRepository`, `PaymentAttemptJpaRepository`, `ReconciliationCaseJpaRepository`, `SyncOperationJpaRepository`, `WatermarkJpaRepository`, `DeadLetter*JpaRepository`)에는 쓰는 메서드(`save`, `findById`)만 선언하고, 좁힌 채로 둔다. 이유(대량 삭제가 soft delete와 만나 행이 조회에서 통째로 사라진다)는 각 KDoc에 그대로 있다.
-- repository가 없던 `owner`·`store`·`terminal`에는 같은 이유로 좁힌 `OwnerJpaRepository`·`StoreJpaRepository`·`TerminalJpaRepository`·`TerminalCredentialJpaRepository`를 만든다.
+- 범위 조정(2026-10-27, 사용자 지시): 처음 브리프는 "`Repository`를 상속한 좁힌 인터페이스는 필요한 메서드만 더해 좁힌 채로 둔다"였다. 개발 중 사용자가 새로 만든 repository와 기존 좁힌 인터페이스(`FulfillmentJpaRepository`, `PaymentAttemptJpaRepository`, `ReconciliationCaseJpaRepository`, `SyncOperationJpaRepository`, `WatermarkJpaRepository`, `DeadLetterDismissalJpaRepository`, `DeadLetterRedriveJpaRepository`)를 모두 `JpaRepository`로 바꾸라고 했다. 어댑터의 PK 조회는 `findByIdOrNull`이다(참고 구현의 모양).
+- repository가 없던 `owner`·`store`·`terminal`에는 `OwnerJpaRepository`·`StoreJpaRepository`·`TerminalJpaRepository`·`TerminalCredentialJpaRepository`를 만든다.
+- 대가: 좁혀 둔 이유는 "`deleteAllInBatch` 같은 대량 삭제가 공개 빈에 딸려 오고, `BaseEntity`의 soft delete와 만나 한 번에 모든 행을 조회에서 지운다"였다. 결제 원장, 멱등 키(sync 접수 기록, DLT 기록), watermark(지워지면 단말 전부가 순번 1부터 다시 시작)가 여기에 든다. 이제 그 메서드가 열려 있고, 막는 것은 리뷰뿐이다. 이를 막는 구조 테스트는 지금 없다.
 
 **6. 트랜잭션·반환값·제약 위반 시점을 확인한다.**
 - 트랜잭션: Spring Data의 `save`는 `@Transactional`(`REQUIRED`)이라 호출자 트랜잭션에 합류하고, 호출자가 없으면 자기 트랜잭션을 연다. 어댑터 KDoc의 계약(호출자 트랜잭션에 합류)은 그대로 성립한다. 다만 `@Transactional`이 없던 어댑터는 지금까지 트랜잭션 없이 부르면 `persist`가 `TransactionRequiredException`으로 실패했는데, 이제는 조용히 따로 커밋된다. 그래서 그 저장 메서드의 호출자가 모두 트랜잭션 안인지 확인한다(검증 절).
@@ -71,6 +72,7 @@ persistence 어댑터가 `EntityManager`를 주입받아 `persist`·`find`를 �
 - 새 행마다 SELECT가 하나 더 나간다. line 500개 주문이면 500번이다(결정 2). 지금 측정한 용량 기준([용량 기준](../wiki/capacity.md))은 이 SELECT를 포함하지 않는다.
 - `@Transactional`이 없던 저장 메서드를 트랜잭션 없이 부르면, 이제는 실패하지 않고 따로 커밋된다(결정 6). 지금 호출자는 모두 트랜잭션 안이지만, 이를 막는 구조 테스트는 없다.
 - `t_sync_watermark.version`은 새 행 판정용이고 낙관적 잠금이 지키는 경로는 없다(결정 3).
+- 모든 repository가 `JpaRepository`라 `deleteAll`·`deleteAllInBatch` 같은 대량 삭제를 부를 수 있다. soft delete와 만나면 결제 시도·멱등 키·watermark가 통째로 조회에서 사라진다(결정 5). 막는 구조 테스트가 없다.
 
 ## 관련 문서
 없음
@@ -85,7 +87,8 @@ persistence 어댑터가 `EntityManager`를 주입받아 `persist`·`find`를 �
 - src/main/kotlin/com/resilientpos/sync/internal/adapter/persistence/command/**
 - src/main/kotlin/com/resilientpos/terminal/internal/adapter/persistence/command/**
 - src/main/kotlin/com/resilientpos/platform/deadletter/**
-- src/main/resources/db/migration/V021__sync_watermark_version.sql
+- src/main/resources/db/migration/V025__sync_watermark_version.sql
+- src/test/kotlin/com/resilientpos/SchemaMigrationTest.kt
 - src/test/kotlin/com/resilientpos/order/internal/application/**
 - src/test/kotlin/com/resilientpos/payment/internal/adapter/persistence/command/**
 - src/test/kotlin/com/resilientpos/sync/internal/application/**
@@ -98,13 +101,13 @@ persistence 어댑터가 `EntityManager`를 주입받아 `persist`·`find`를 �
    - `OrderInsertStatementCountIntegrationTest`: 새 주문은 `1 + 1 + 2N`, 기존 주문에 line을 더하면 5, checkout을 더하면 5.
    - `PaymentAttemptInsertStatementCountIntegrationTest`: 2.
    - `SyncStatementCountIntegrationTest`: 멱등 checkout 10, 재전송 4.
-3. 같은 단말의 첫 watermark 저장이 겹치면 진 쪽이 지금처럼 PK 위반(`DataIntegrityViolationException`)을 받고 `ensureWatermark`가 삼킨다. 이미 있는 watermark를 `Watermark.initial`로 덮어쓰지 않는다.
+3. 이미 전진한 watermark 행이 있을 때 새 `WatermarkEntity`를 `save`하면 덮어쓰지 않고 `DataIntegrityViolationException`(PK 위반)이다. `WatermarkFirstInsertRaceIntegrationTest`가 고정하고, `@Version`을 빼면 실패한다(실측). 동시 요청 두 개로 창을 여는 테스트는 없다. 위 테스트는 진 쪽이 `findById`에서 null을 본 뒤의 `save` 호출을 만든다.
 4. `DeadLetterRedriver`·`DeadLetterDismisser`의 응답 시각이 `save`가 돌려준 엔티티의 `createdAt`이다.
-5. `OrderCommandFacadeIntegrationTest`의 "트랜잭션 밖에서 부른 save가 line INSERT에서 실패하면 주문 행도 남지 않는다"는 다른 주문의 line ID를 재사용하지 않고, `varchar(64)`를 넘는 상품 코드로 line INSERT를 실패시킨다. `merge`라면 재사용한 ID의 line을 UPDATE로 가져가 버려서, 원래 방식으로는 실패가 나지 않는다. 운영 경로의 line ID는 모두 `ids.next()`라 이 일이 생기지 않는다.
+5. `OrderCommandFacadeIntegrationTest`의 "트랜잭션 밖에서 부른 save가 line INSERT에서 실패하면 주문 행도 남지 않는다"는 살아 있는 다른 주문의 line ID를 재사용하지 않고, 지운(soft delete) line의 ID를 재사용해 PK 위반을 낸다. 살아 있는 line의 ID면 `merge`가 그 line을 UPDATE로 가져가 실패하지 않는다. 운영 경로의 line ID는 모두 `ids.next()`라 이 일이 생기지 않는다.
 6. 바꾸기 전과 뒤에 `./gradlew test` 전체가 통과한다.
 
 ## 스키마 변경 검토
-`V021__sync_watermark_version.sql`: `t_sync_watermark`에 `version bigint not null default 0`을 더한다.
+`V025__sync_watermark_version.sql`: `t_sync_watermark`에 `version bigint not null default 0`을 더한다.
 1. 도출: 다른 컬럼에서 도출할 수 없다. 값 자체는 쓰이지 않고 "새 행인가"를 Spring Data가 판정하는 표지다(결정 3).
 2. 읽는 코드: Spring Data `isNew`(version null이면 새 행)와 Hibernate의 UPDATE `where version = ?`가 읽는다.
 3. 나중에 채우기: 상수 기본값 0으로 기존 행이 채워진다. 기존 행은 0이라 기존 행으로 판정된다.
@@ -140,7 +143,12 @@ persistence 어댑터가 `EntityManager`를 주입받아 `persist`·`find`를 �
 
 | 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
 |---|---|---|---|
-| 새 행 문장 수(주문·결제 시도·sync) | 미실행 | 미실행 | 미실행 |
+| 새 행 문장 수(주문·결제 시도·sync) | `./gradlew test --tests '*StatementCount*'`: 기대값을 `merge` 기준으로 바꾸자 5개 실패 | 어댑터를 `save`로 바꾼 뒤 통과 | `./gradlew test --rerun-tasks` 935개 통과 |
+| watermark 첫 행 덮어쓰기 방지 | `@Version`을 뺀 상태에서 `WatermarkFirstInsertRaceIntegrationTest` 실패(덮어씀) | `@Version`을 둔 상태에서 통과 | 위와 같음 |
 
 ## 결과
-개발 전 작성.
+- `EntityManager`를 주입받는 클래스는 `JdslQueryExecutor` 하나다. 어댑터 8개와 `DeadLetterDismisser`·`DeadLetterRedriver`가 Spring Data repository의 `save`·`findByIdOrNull`을 쓴다. 모든 repository가 `JpaRepository`다.
+- 문장 수 변화(실측): 새 주문 `2 + 2N`, 기존 주문에 line 하나 더하면 +1, checkout 하나 더하면 +1, 새 결제 시도 1 → 2, sync 멱등 checkout 9 → 10.
+- `DeadLetterRedriver`·`DeadLetterDismisser`는 `save`가 돌려준 인스턴스로 응답한다. 단위 테스트의 repository mock이 복사본을 돌려줘서 넘긴 객체를 쓰면 실패한다.
+- 호출자 트랜잭션: `@Transactional`이 없던 저장 메서드의 호출자는 모두 `Tx`·`Lock` 블록 안이다(spring-backend-specialist가 코드로 확인).
+- 확인하지 못한 것: 동시 요청 두 개로 watermark의 `merge` 경합을 재현하지 못했다(결정 3의 시나리오는 코드 읽기와 `@Version` 유무 비교 테스트로 확인). `merge`의 UPDATE에 `created_at`이 실리는지는 보지 않았다.

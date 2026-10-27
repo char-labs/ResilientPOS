@@ -10,7 +10,6 @@ import com.resilientpos.platform.DependencyUnavailableException
 import com.resilientpos.platform.Tx
 import com.resilientpos.platform.TxRunner
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry
-import jakarta.persistence.EntityManager
 import java.sql.SQLException
 import java.time.Instant
 import java.util.Optional
@@ -69,13 +68,12 @@ class DeadLetterRedriverTest {
     @Suppress("UNCHECKED_CAST") // Mockito는 제네릭 인터페이스의 타입 인자를 모른다.
     private val kafka = mock(KafkaOperations::class.java) as KafkaOperations<Any, Any>
     private val redrives = mock(DeadLetterRedriveJpaRepository::class.java)
-    private val entityManager = mock(EntityManager::class.java)
     private val meterRegistry = SimpleMeterRegistry()
     private val ids = object : IdentifierGenerator {
         override fun next() = ID
     }
     private val redriver = DeadLetterRedriver(
-        reader, DeadLetterEventTypes(listOf(TOPIC, "payment.approved")), JSON_MAPPER, kafka, redrives, entityManager, ids, meterRegistry, listOf(TOPIC, "payment.approved"),
+        reader, DeadLetterEventTypes(listOf(TOPIC, "payment.approved")), JSON_MAPPER, kafka, redrives, ids, meterRegistry, listOf(TOPIC, "payment.approved"),
     )
 
     private val record = dltRecord(VALUE)
@@ -110,7 +108,7 @@ class DeadLetterRedriverTest {
     fun `앞뒤 공백을 지운 사유가 500자면 받고 지운 값을 같은 key와 값을 보낸 자리와 함께 기록한다`() {
         given(reader.readRecord(DLT, 0, DLT_OFFSET)).willReturn(record)
         given(kafka.send(any<ProducerRecord<Any, Any>>())).willReturn(acked(0, 41))
-        willAnswer { stamp(it.arguments[0] as DeadLetterRedriveEntity, REDRIVEN_AT); null }.given(entityManager).persist(any())
+        willAnswer { managedCopy(it.arguments[0] as DeadLetterRedriveEntity, REDRIVEN_AT) }.given(redrives).save(any())
 
         val response = redrive("  " + "가".repeat(500) + "\n")
 
@@ -124,7 +122,7 @@ class DeadLetterRedriverTest {
         assertContentEquals(VALUE, sent.value.value() as ByteArray)
         assertEquals(0, sent.value.headers().toArray().size)
         val saved = ArgumentCaptor.forClass(DeadLetterRedriveEntity::class.java)
-        verify(entityManager).persist(saved.capture())
+        verify(redrives).save(saved.capture())
         assertEquals("가".repeat(500), saved.value.reason)
         assertEquals(1.0, redriven())
     }
@@ -137,7 +135,7 @@ class DeadLetterRedriverTest {
             assertEquals(DomainErrorKind.INVALID, e.kind, reason)
         }
 
-        verifyNoInteractions(reader, kafka, redrives, entityManager)
+        verifyNoInteractions(reader, kafka, redrives)
     }
 
     @Test
@@ -146,7 +144,7 @@ class DeadLetterRedriverTest {
         given(reader.readRecord(DLT, 0, DLT_OFFSET)).willThrow(invalid)
 
         assertSame(invalid, assertFailsWith<DomainException> { redrive() })
-        verifyNoInteractions(redrives, kafka, entityManager)
+        verifyNoInteractions(redrives, kafka)
     }
 
     @Test
@@ -166,7 +164,8 @@ class DeadLetterRedriverTest {
         assertEquals("지금 코드가 읽지 못하는 메시지입니다: UNSUPPORTED_EVENT_SCHEMA_VERSION", messages[0])
         assertTrue(messages[1].startsWith("지금 코드가 읽지 못하는 메시지입니다: ") && "garbage" !in messages[1], messages[1])
         assertEquals("지금 코드가 읽지 못하는 메시지입니다: 값이 없습니다", messages[2])
-        verifyNoInteractions(kafka, entityManager)
+        verifyNoInteractions(kafka)
+        verify(redrives, never()).save(any())
         assertEquals(0.0, redriven())
     }
 
@@ -176,7 +175,8 @@ class DeadLetterRedriverTest {
 
         assertEquals(DeadLetterRedriver.DEAD_LETTER_NOT_FOUND, e.code)
         assertEquals(DomainErrorKind.NOT_FOUND, e.kind)
-        verifyNoInteractions(kafka, entityManager)
+        verifyNoInteractions(kafka)
+        verify(redrives, never()).save(any())
     }
 
     @Test
@@ -190,7 +190,7 @@ class DeadLetterRedriverTest {
                 "could not execute statement",
                 SQLException("ERROR: duplicate key value violates unique constraint \"ux_dead_letter_redrive_source\"", "23505"),
             ),
-        ).given(entityManager).persist(any())
+        ).given(redrives).save(any())
 
         val response = redrive()
 
@@ -205,7 +205,7 @@ class DeadLetterRedriverTest {
         given(reader.readRecord(DLT, 0, DLT_OFFSET)).willReturn(record)
         given(kafka.send(any<ProducerRecord<Any, Any>>())).willReturn(acked(0, 41))
         val other = DataIntegrityViolationException("could not execute statement", SQLException("ERROR: duplicate key value violates unique constraint \"pk_other\"", "23505"))
-        willThrow(other).given(entityManager).persist(any())
+        willThrow(other).given(redrives).save(any())
 
         assertSame(other, assertFailsWith<DataIntegrityViolationException> { redrive() })
         assertEquals(0.0, redriven())
@@ -217,7 +217,7 @@ class DeadLetterRedriverTest {
         given(reader.readRecord(DLT, 0, DLT_OFFSET)).willReturn(record)
         given(kafka.send(any<ProducerRecord<Any, Any>>())).willReturn(acked(0, 41))
         val down = CannotCreateTransactionException("Could not open JPA EntityManager for transaction")
-        willThrow(down).given(entityManager).persist(any())
+        willThrow(down).given(redrives).save(any())
 
         assertSame(down, assertFailsWith<CannotCreateTransactionException> { redrive() })
         assertEquals(0.0, redriven())
@@ -241,7 +241,7 @@ class DeadLetterRedriverTest {
 
         assertIs<TimeoutException>(e.cause)
         assertEquals(10_000L, waitedMillis)
-        verify(entityManager, never()).persist(any())
+        verify(redrives, never()).save(any())
         assertEquals(0.0, redriven())
         assertUnrecordedLine(output, "audit action=DEAD_LETTER_REDRIVE_UNRECORDED operator=$OPERATOR dltTopic=$DLT dltPartition=0 dltOffset=$DLT_OFFSET cause=SEND_UNCONFIRMED")
     }
@@ -261,7 +261,7 @@ class DeadLetterRedriverTest {
 
         assertSame(interrupted, thrown)
         assertTrue(flagRestored, "인터럽트 표시가 지워진 채 던졌다")
-        verify(entityManager, never()).persist(any())
+        verify(redrives, never()).save(any())
     }
 
     @Test
@@ -278,7 +278,7 @@ class DeadLetterRedriverTest {
         val other = assertFailsWith<Exception> { redrive() }
 
         assertFalse(other is DependencyUnavailableException, "권한 실패가 503으로 바뀌었다: $other")
-        verify(entityManager, never()).persist(any())
+        verify(redrives, never()).save(any())
         assertEquals(listOf("SEND_UNCONFIRMED", "SEND_UNCONFIRMED"), unrecorded(output).map { it.substringAfter("cause=") })
     }
 
@@ -303,6 +303,9 @@ class DeadLetterRedriverTest {
         )
 
         /** Hibernate가 넣거나 읽어 올 때 채우는 생성 시각을 채운다. 컨텍스트 없는 단위 테스트라 Hibernate가 없다. */
+        /** `merge`처럼 넘긴 객체가 아니라 생성 시각이 채워진 다른 인스턴스를 돌려준다. 응답이 `save`의 반환값으로 만들어지는지 가린다. */
+        fun managedCopy(entity: DeadLetterRedriveEntity, at: Instant): DeadLetterRedriveEntity = stamp(with(entity) { DeadLetterRedriveEntity.of(id, dltTopic, dltPartition, dltOffset, dltTimestamp, targetPartition, targetOffset, operatorSubject, reason) }, at)
+
         fun stamp(entity: DeadLetterRedriveEntity, at: Instant): DeadLetterRedriveEntity = entity.also {
             BaseEntity::class.java.getDeclaredField("createdAt").apply { isAccessible = true }.set(it, at)
         }

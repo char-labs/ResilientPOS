@@ -10,23 +10,23 @@ import com.resilientpos.platform.JdslQueryExecutor
 import com.resilientpos.platform.selectFrom
 import com.resilientpos.platform.ReadOnlyTransactional
 import com.resilientpos.store.StoreId
-import jakarta.persistence.EntityManager
 import java.time.Instant
 import java.util.UUID
+import org.springframework.data.repository.findByIdOrNull
 import org.springframework.stereotype.Component
 
 /**
  * `PaymentAttemptRepository`의 JPA 구현. 조회는 [JdslQueryExecutor]로 한다.
  *
- * 새 행을 `EntityManager.persist`로 넣는다. `PaymentAttemptEntity`는 할당식 `@Id`에 `@Version`이 없어서
- * Spring Data의 `save`가 새 행인지 알 수 없고 `merge`로 가 SELECT가 한 번 더 나간다.
+ * 새 행은 [PaymentAttemptJpaRepository.save]로 넣는다. 할당식 `@Id`에 `@Version`이 없어 `merge`로 가 SELECT가 하나 더 나간다.
+ * 트랜잭션은 `PaymentManagement`가 소유하고 `save`·`update`는 거기에 합류한다.
  *
  * 한 주문의 시도는 여럿이다(승인 뒤 취소, 거절 뒤 재시도). `id`가 UUID v7이라 `id` 정렬이 곧 생성 순서다.
  * `deleted_at is null`은 조회마다 적지 않아도 `BaseEntity`의 `@SoftDelete`가 붙여 준다.
  */
 @Component
 class PaymentAttemptPersistenceAdapter(
-    private val entityManager: EntityManager,
+    private val jpaRepository: PaymentAttemptJpaRepository,
     private val queries: JdslQueryExecutor,
 ) : PaymentAttemptRepository {
 
@@ -131,7 +131,7 @@ class PaymentAttemptPersistenceAdapter(
      * 행이 없으면 방금 잠근 행이 사라진 것이라 불변식이 깨진 것이다. 클라이언트에 줄 답이 아니어서 도메인 예외로 바꾸지 않는다.
      */
     override fun update(attempt: PaymentAttempt): PaymentAttempt {
-        val entity: PaymentAttemptEntity = entityManager.find(PaymentAttemptEntity::class.java, attempt.id.value)
+        val entity = jpaRepository.findByIdOrNull(attempt.id.value)
             ?: error("갱신하려는 결제 시도가 없다: ${attempt.id.value}")
         entity.applyResult(
             attempt.status, attempt.providerReference, attempt.unknownReason, attempt.queryCount, attempt.reconciliationRequestedAt,
@@ -140,7 +140,7 @@ class PaymentAttemptPersistenceAdapter(
     }
 
     override fun save(attempt: PaymentAttempt): PaymentAttempt {
-        entityManager.persist(PaymentAttemptEntity.from(attempt))
+        jpaRepository.save(PaymentAttemptEntity.from(attempt))
         return attempt
     }
 }

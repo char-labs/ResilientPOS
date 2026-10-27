@@ -191,9 +191,11 @@ class OrderCommandFacadeIntegrationTest(
     @Test
     fun `트랜잭션 밖에서 부른 save가 line INSERT에서 실패하면 주문 행도 남지 않는다`() {
         val order = newOrder()
-        // 이미 커밋된 다른 주문의 line ID를 다시 쓰면 도메인 규칙은 지나가고 t_order_line PK 위반으로 INSERT가 실패한다.
+        // 다른 주문에서 지운 line의 ID를 다시 쓰면 도메인 규칙은 지나가고, merge의 SELECT는 soft delete된 행을 보지 못해
+        // INSERT를 내며 t_order_line PK 위반으로 실패한다. 살아 있는 line의 ID면 merge가 그 line을 UPDATE로 가져가 실패하지 않는다.
         val committed = newOrder().also { repository.save(it) }
-        val unstorable = OrderLine(committed.lines.first().id, "SKU-X", "중복 ID", Money.of("100", OrderFixtures.krw), 1)
+        repository.save(committed.restored(lines = committed.lines.drop(1)))
+        val unstorable = OrderLine(committed.lines.first().id, "SKU-X", "지운 line의 ID", Money.of("100", OrderFixtures.krw), 1)
 
         assertFailsWith<DataIntegrityViolationException> { repository.save(order.restored(lines = order.lines + unstorable)) }
 
