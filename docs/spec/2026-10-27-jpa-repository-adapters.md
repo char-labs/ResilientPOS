@@ -50,7 +50,12 @@ persistence 어댑터가 `EntityManager`를 주입받아 `persist`·`find`를 �
 - repository가 없던 `owner`·`store`·`terminal`에는 `OwnerJpaRepository`·`StoreJpaRepository`·`TerminalJpaRepository`·`TerminalCredentialJpaRepository`를 만든다.
 - 대가: 좁혀 둔 이유는 "`deleteAllInBatch` 같은 대량 삭제가 공개 빈에 딸려 오고, `BaseEntity`의 soft delete와 만나 한 번에 모든 행을 조회에서 지운다"였다. 결제 원장, 멱등 키(sync 접수 기록, DLT 기록), watermark(지워지면 단말 전부가 순번 1부터 다시 시작)가 여기에 든다. 이제 그 메서드가 열려 있고, 막는 것은 리뷰뿐이다. 이를 막는 구조 테스트는 지금 없다.
 
-**6. 트랜잭션·반환값·제약 위반 시점을 확인한다.**
+**6. 머지된 `MenuPersistenceAdapter`(#121)도 같은 규약으로 옮긴다(사용자 브리프).**
+- `MenuEntity`는 `Long?` `@Version`이고 `storeId`(도메인 값)가 PK다. 그래서 `MenuJpaRepository.save`가 `persist`로 가서 생성 경합의 PK 위반이 그대로 방어선이다(결정 3과 같은 이유). `MenuEntity`에는 변경이 없다.
+- `replace`의 `entityManager.lock(entity, OPTIMISTIC_FORCE_INCREMENT)`는 Spring Data에 대응이 없다. 이미 읽은 엔티티에 `@Lock` 파생 쿼리로 걸면 version이 오르지 않는다(실측, 메뉴 테스트 3개 실패). 그래서 문서와 version을 엔티티를 올리지 않는 투영(`MenuSnapshot`)으로 먼저 읽어 내용이 같은지 가리고, 같으면 `@Lock(OPTIMISTIC_FORCE_INCREMENT)` 파생 쿼리로, 다르면 `findByIdOrNull`로 엔티티를 한 번만 읽는다.
+- 대가: 수정 한 번이 SELECT를 하나 더 낸다(투영 + 엔티티). 두 읽기 사이에 다른 트랜잭션이 커밋하면 읽은 엔티티의 version이 달라 `replace`가 null이다.
+
+**7. 트랜잭션·반환값·제약 위반 시점을 확인한다.**
 - 트랜잭션: Spring Data의 `save`는 `@Transactional`(`REQUIRED`)이라 호출자 트랜잭션에 합류하고, 호출자가 없으면 자기 트랜잭션을 연다. 어댑터 KDoc의 계약(호출자 트랜잭션에 합류)은 그대로 성립한다. 다만 `@Transactional`이 없던 어댑터는 지금까지 트랜잭션 없이 부르면 `persist`가 `TransactionRequiredException`으로 실패했는데, 이제는 조용히 따로 커밋된다. 그래서 그 저장 메서드의 호출자가 모두 트랜잭션 안인지 확인한다(검증 절).
 - 실제 호출자는 모두 트랜잭션 안이다(spring-backend-specialist 확인). `PaymentAttemptPersistenceAdapter.save`는 `PaymentManagement`의 `Lock.executeWithLock` 안과 `retryAuthorization`의 `Tx.masterTx` 안에서, `update`는 `updateAndPublish`를 거쳐 `Tx.masterTx` 안에서 불린다. `FulfillmentPersistenceAdapter.save`는 `FulfillmentCommandFacade`의 `Tx.masterTx` 안에서 불린다.
 - 읽기 전용 트랜잭션: `findById`는 `SimpleJpaRepository`의 클래스 수준 `@Transactional(readOnly = true)`다. 쓰기 메서드 안(바깥 읽기쓰기 트랜잭션)에서 부르면 그 트랜잭션에 참여하기만 하고 flush 모드를 바꾸지 않는다. `FlushMode.MANUAL`과 `setDefaultReadOnly(true)`는 `HibernateJpaDialect.beginTransaction`이 새 트랜잭션을 열 때만 건다(spring-orm 7.0.9 sources 150~177줄).
@@ -70,7 +75,7 @@ persistence 어댑터가 `EntityManager`를 주입받아 `persist`·`find`를 �
 
 ## 한계
 - 새 행마다 SELECT가 하나 더 나간다. line 500개 주문이면 500번이다(결정 2). 지금 측정한 용량 기준([용량 기준](../wiki/capacity.md))은 이 SELECT를 포함하지 않는다.
-- `@Transactional`이 없던 저장 메서드를 트랜잭션 없이 부르면, 이제는 실패하지 않고 따로 커밋된다(결정 6). 지금 호출자는 모두 트랜잭션 안이지만, 이를 막는 구조 테스트는 없다.
+- `@Transactional`이 없던 저장 메서드를 트랜잭션 없이 부르면, 이제는 실패하지 않고 따로 커밋된다(결정 7). 지금 호출자는 모두 트랜잭션 안이지만, 이를 막는 구조 테스트는 없다.
 - `t_sync_watermark.version`은 새 행 판정용이고 낙관적 잠금이 지키는 경로는 없다(결정 3).
 - 모든 repository가 `JpaRepository`라 `deleteAll`·`deleteAllInBatch` 같은 대량 삭제를 부를 수 있다. soft delete와 만나면 결제 시도·멱등 키·watermark가 통째로 조회에서 사라진다(결정 5). 막는 구조 테스트가 없다.
 
@@ -86,6 +91,7 @@ persistence 어댑터가 `EntityManager`를 주입받아 `persist`·`find`를 �
 - src/main/kotlin/com/resilientpos/store/internal/adapter/persistence/command/**
 - src/main/kotlin/com/resilientpos/sync/internal/adapter/persistence/command/**
 - src/main/kotlin/com/resilientpos/terminal/internal/adapter/persistence/command/**
+- src/main/kotlin/com/resilientpos/catalog/internal/adapter/persistence/command/**
 - src/main/kotlin/com/resilientpos/platform/deadletter/**
 - src/main/resources/db/migration/V025__sync_watermark_version.sql
 - src/test/kotlin/com/resilientpos/SchemaMigrationTest.kt
@@ -134,9 +140,9 @@ persistence 어댑터가 `EntityManager`를 주입받아 `persist`·`find`를 �
 ## 분할 계획
 - 이 PR은 "저장 경로를 Spring Data로 옮긴다"는 개발 컨텍스트 하나다.
 - 열린 PR과 겹치는 곳:
-  - #122 `feature/order-query`: `OrderEntity.kt`, `docs/wiki/domain-model.md`, `docs/wiki/entity-map.md`, 마이그레이션 V021~V023.
-  - #121 `feature/menu-catalog`: `docs/wiki/domain-model.md`, `docs/wiki/entity-map.md`, V021, 그리고 새 `MenuPersistenceAdapter`가 `EntityManager.persist`를 쓴다.
-  - 확인 결과(2026-10-27, push 직전, origin/main bb14c863): 열린 PR은 #121·#122뿐이고 둘 다 머지 전이다. 겹치는 경로는 `docs/wiki/domain-model.md`, `docs/wiki/entity-map.md`, `src/test/kotlin/com/resilientpos/SchemaMigrationTest.kt`다. 마이그레이션 V021은 이 PR(`V021__sync_watermark_version.sql`), #121(`V021__catalog_menu.sql`), #122(`V021__order_occurred_at.sql`) 셋이 같은 번호를 쓴다. 나중에 머지되는 쪽이 번호와 `SchemaMigrationTest`의 기대값을 바꾼다.
+  - #122 `feature/order-query`: `OrderEntity.kt`, `docs/wiki/domain-model.md`, `docs/wiki/entity-map.md`, 마이그레이션 V022~V024.
+  - #121 `feature/menu-catalog`: 머지됐다(ed46803b). 새 `MenuPersistenceAdapter`가 `EntityManager`를 쓰던 것을 이 PR이 `MenuJpaRepository`로 바꿨다(결정 6).
+  - 확인 결과(2026-10-27, rebase 시점, origin/main ed46803b): #121이 머지됐고 열린 PR은 #122뿐이다(CI 진행 중). 마이그레이션은 #121이 V021, #122가 V022~V024를 쓰므로 이 PR은 V025로 옮겼다. #122와 겹치는 경로는 `docs/wiki/domain-model.md`, `docs/wiki/entity-map.md`, `src/test/kotlin/com/resilientpos/SchemaMigrationTest.kt`다. #122가 먼저 머지되면 이 PR이, 이 PR이 먼저면 #122가 `SchemaMigrationTest`의 적용 목록과 wiki를 맞춘다.
   - 먼저 머지된 쪽에 맞춰 rebase한다. 마이그레이션 번호는 나중에 머지되는 쪽이 바꾼다. #121이 먼저 머지되면 이 PR에서 `MenuPersistenceAdapter`도 새 규약으로 바꾸고, 이 PR이 먼저 머지되면 #121이 맞춘다.
 
 ## TDD 검증 기록
