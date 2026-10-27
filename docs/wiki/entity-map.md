@@ -18,7 +18,7 @@ Kotlin으로 엔티티를 어떤 형태로 쓰는지(생성자 `private`, `var �
 | `OrderCheckoutEntity` | `t_order_checkout` | order | `Order`의 자식(회차별 확정 금액) | `order_id` | 넣기만 한다 |
 | `PaymentAttemptEntity` | `t_payment_attempt` | payment | 루트 `PaymentAttempt` | `order_id`, `checkout_no`(회차 번호), `retried_from`(같은 표의 `id`) | 결말(`status`·`provider_reference`)과 결과 불명의 기록(`unknown_reason`·`query_count`·`reconciliation_requested_at`)만 바뀐다. 행을 잠그고 바꾼다 |
 | `FulfillmentEntity` | `t_fulfillment` | fulfillment | 루트 `Fulfillment` | `order_id` | 넣기만 한다 |
-| `WatermarkEntity` | `t_sync_watermark` | sync | 루트 `Watermark`(단말당 하나) | `terminal_id`가 PK | `last_acked_sequence`만 `apply`. 행을 잠그고 바꾼다 |
+| `WatermarkEntity` | `t_sync_watermark` | sync | 루트 `Watermark`(단말당 하나) | `terminal_id`가 PK | `last_acked_sequence`만 `apply`. 행을 잠그고 바꾼다. 새 행 판정용 `@Version` |
 | `SyncOperationEntity` | `t_sync_operation` | sync | `Watermark`와 같은 트랜잭션의 접수 기록 | `terminal_id`, `operation_id`(단말이 만든 값), `order_id` | 넣기만 한다 |
 | `TerminalEntity` | `t_terminal` | terminal | 루트 `Terminal` | `store_id`(`t_store`. 매장 행이 없는 옛 단말도 있다) | `status`만 `applyStatus`(`ACTIVE`→`INACTIVE`). 행을 잠그고 바꾼다. `terminal_code`는 바뀌지 않는다 |
 | `TerminalCredentialEntity` | `t_terminal_credential` | terminal | `Terminal`과 같은 트랜잭션의 credential 이력 | `terminal_id` | `revoked_at`만 `applyRevokedAt`(회전 때 한 번) |
@@ -98,7 +98,7 @@ t_reconciliation_case.resolved_by_owner_id ────────────�
 ### `WatermarkEntity` — 단말이 어디까지 확정됐는지
 - 역할: 단말별로 서버가 확정한 마지막 순번(`last_acked_sequence`). 단말은 응답의 이 값 다음부터 다시 보낸다.
 - 관계: `terminal_id`가 PK다. `t_sync_operation`과 같은 `terminal_id`로 묶인다.
-- 방어선: 항목 처리마다 이 행을 잠근다(`for no key update`, 대기 3초). 같은 단말의 배치가 동시에 와도 항목 단위로 직렬화된다. 잠금 없이 쓰는 경로가 없어 `@Version`이 없다.
+- 방어선: 항목 처리마다 이 행을 잠근다(`for no key update`, 대기 3초). 같은 단말의 배치가 동시에 와도 항목 단위로 직렬화된다. 첫 배치 두 개가 겹치면 PK가 하나만 넣게 하고 진 쪽은 PK 위반을 삼킨다. `@Version`은 낙관적 잠금이 아니라 새 행을 `save`가 `merge`가 아닌 `persist`로 보내게 하려고 둔다. `merge`면 진 쪽이 이긴 쪽 행을 0으로 덮어쓴다.
 - 만드는 곳: 배치 시작 때 없으면 `SyncCommandFacade`가 0으로 넣는다. 바꾸는 곳: 항목이 `APPLIED`·`REJECTED`로 확정될 때 +1.
 
 ### `SyncOperationEntity` — operation 하나의 판정 기록
@@ -249,4 +249,4 @@ provider 응답이 끊기면 `t_payment_attempt.status`가 `UNKNOWN`으로 남�
 - [도메인 모델](domain-model.md) — aggregate 경계(§2), 용어집(§3), 스키마 변경 검토(§4.7)
 - 현재 상태(`docs/wiki/current-state.md`, 볼트) — 모듈별 구현 상태와 알려진 빈틈
 - 볼트 규칙 `domain-modeling-kotlin.md` §5 — 엔티티 작성 규칙(`.claude/rules`로 복사된다)
-- 마이그레이션 `src/main/resources/db/migration/V002`·`V003`·`V005`~`V008`·`V010`~`V024` — 각 표의 DDL과 주석
+- 마이그레이션 `src/main/resources/db/migration/V002`·`V003`·`V005`~`V008`·`V010`~`V025` — 각 표의 DDL과 주석

@@ -1,12 +1,9 @@
 package com.resilientpos.fulfillment.internal.adapter.persistence.command
 
 import java.util.UUID
-import org.springframework.data.repository.Repository
+import org.springframework.data.jpa.repository.JpaRepository
 
 /**
- * `t_fulfillment`용 Spring Data repository. 지금 조회는 `FulfillmentPersistenceAdapter`가 `JdslQueryExecutor`로 한다.
- *
- * `JpaRepository`를 상속하지 않는다. 그러면 `deleteAllInBatch` 같은 메서드가 공개 빈에 딸려 오는데,
- * `BaseEntity`의 soft delete 때문에 그 한 번이 모든 fulfillment를 조용히 조회에서 지운다.
+ * `t_fulfillment`용 Spring Data repository. `FulfillmentPersistenceAdapter`가 저장에 쓰고, 조회는 `JdslQueryExecutor`로 한다.
  */
-interface FulfillmentJpaRepository : Repository<FulfillmentEntity, UUID>
+interface FulfillmentJpaRepository : JpaRepository<FulfillmentEntity, UUID>

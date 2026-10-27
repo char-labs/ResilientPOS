@@ -9,17 +9,17 @@ import com.resilientpos.platform.selectFrom
 import com.resilientpos.platform.ReadOnlyTransactional
 import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.TerminalId
-import jakarta.persistence.EntityManager
 import java.util.UUID
+import org.springframework.data.repository.findByIdOrNull
 import org.springframework.stereotype.Repository
 import org.springframework.transaction.annotation.Transactional
 
 /**
  * `OrderRepository`의 JPA 구현. 엔티티 사이에 연관관계 매핑이 없으므로 주문과 line의 조립과 변경 반영을 여기서 한다.
  * 새 행이면 `from`, 기존 행이면 `apply`로 저장하고 line과 checkout은 ID로 맞춘다.
- * line과 checkout은 `@Version`이 없다. 도메인 ID를 저장 전에 만들기 때문에 Spring Data의 `save`는 이런 새 엔티티를 기존 행으로 보고
- * `merge`해서 SELECT가 한 번 더 나간다. 그래서 새 자식 행은 `EntityManager.persist`로 넣는다. 기존 행은 같은 트랜잭션에서 읽은 관리 엔티티라
- * `apply`만 하면 flush가 UPDATE한다. 조회는 [JdslQueryExecutor]로 한다. 저장할 때 기존 주문 행은 `EntityManager.find`로 찾는다.
+ * line과 checkout은 `@Version`이 없다. 도메인 ID를 저장 전에 만들기 때문에 Spring Data의 `saveAll`은 새 자식 행을 기존 행으로 보고
+ * `merge`해서 새 행마다 SELECT가 하나 더 나간다(line 500개 주문이면 500번). 이 비용을 받아들였다. 기존 행은 같은 트랜잭션에서 읽은 관리 엔티티라
+ * `apply`만 하면 flush가 UPDATE한다. 조회는 [JdslQueryExecutor]로 한다. 저장할 때 기존 주문 행은 `findByIdOrNull`로 찾는다.
  * 같은 트랜잭션에서 잠금 조회로 이미 읽었으면 영속성 컨텍스트의 인스턴스가 돌아와 SELECT가 더 나가지 않는다.
  * 호출 순서와 무관하게 새 자식 행의 INSERT가 soft delete UPDATE보다 먼저 flush된다(SQL 로그로 확인).
  * `t_order_line`에 지금은 PK 말고 unique가 없어서 지워진 행의 `line_no`를 새 행이 물려받아도 충돌하지 않는다.
@@ -29,7 +29,7 @@ import org.springframework.transaction.annotation.Transactional
 class OrderPersistenceAdapter(
     private val jpaRepository: OrderJpaRepository,
     private val lineJpaRepository: OrderLineJpaRepository,
-    private val entityManager: EntityManager,
+    private val checkoutJpaRepository: OrderCheckoutJpaRepository,
     private val queries: JdslQueryExecutor,
 ) : OrderRepository {
 
@@ -77,12 +77,12 @@ class OrderPersistenceAdapter(
 
     /**
      * 트랜잭션은 Facade가 소유하고 여기서는 합류한다. 선언은 트랜잭션 없이 직접 부른 경우의 안전망이다.
-     * 없으면 주문 행만 자기 트랜잭션으로 커밋되고 `persist`가 실패해 line 없는 주문이 남는다.
+     * 없으면 `save`·`saveAll`이 저마다 자기 트랜잭션으로 커밋돼 line 저장이 실패하면 line 없는 주문이 남는다.
      */
     @Transactional
     override fun save(order: Order): Order {
         val orderId = order.id.value
-        val existing: OrderEntity? = entityManager.find(OrderEntity::class.java, orderId)
+        val existing: OrderEntity? = jpaRepository.findByIdOrNull(orderId)
         jpaRepository.save(existing?.also { it.apply(order) } ?: OrderEntity.from(order))
 
         val existingLines = if (existing == null) emptyMap()
@@ -91,14 +91,14 @@ class OrderPersistenceAdapter(
             existingLines[line.id.value]?.also { it.apply(lineNo, line) } ?: OrderLineEntity.from(orderId, lineNo, line)
         }
         lineJpaRepository.deleteAll(existingLines.values - lines.toSet())
-        (lines - existingLines.values.toSet()).forEach(entityManager::persist)
+        lineJpaRepository.saveAll(lines - existingLines.values.toSet())
 
         // checkout은 확정 뒤에 바뀌지 않는다. 없는 ID만 넣고 갱신·삭제하지 않는다.
         val storedCheckoutIds = if (existing == null) emptySet()
         else findCheckouts(orderId).map { it.id }.toSet()
-        order.checkouts.filter { it.id.value !in storedCheckoutIds }
-            .map { OrderCheckoutEntity.from(orderId, it) }
-            .forEach(entityManager::persist)
+        checkoutJpaRepository.saveAll(
+            order.checkouts.filter { it.id.value !in storedCheckoutIds }.map { OrderCheckoutEntity.from(orderId, it) },
+        )
         return order
     }
 

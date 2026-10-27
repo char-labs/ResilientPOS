@@ -23,9 +23,9 @@ import org.hibernate.stat.Statistics
 import org.springframework.transaction.support.TransactionTemplate
 
 /**
- * 새 행이 추가 SELECT 없이 INSERT 한 번으로 들어가는지 Hibernate 통계의 JDBC 문장 수로 검사한다. Docker가 필요하다.
- * 도메인 ID를 저장 전에 만들기 때문에 Spring Data의 `save`는 `@Version`이 없는 새 엔티티를 기존 행으로 보고 `merge`한다.
- * 그러면 새 행마다 SELECT가 하나 더 나가고 이 테스트의 문장 수가 그만큼 늘어난다.
+ * 주문 저장의 JDBC 문장 수를 Hibernate 통계로 고정한다. Docker가 필요하다.
+ * 도메인 ID를 저장 전에 만들기 때문에 Spring Data의 `save`는 `@Version`이 없는 새 line·checkout을 기존 행으로 보고 `merge`한다.
+ * 그래서 새 자식 행마다 PK SELECT가 하나 더 나가고 이 비용을 받아들였다([jpa-repository-adapters] 결정 2). 루트는 `@Version`이 있어 INSERT 한 번이다.
  * 통계는 `SessionFactory` 전체의 누적값이다. 지금은 테스트를 병렬로 돌리지 않아서 이 구간의 문장만 잡히고,
  * 병렬 실행을 켜면 다른 클래스의 SQL이 섞이므로 그때 클래스 격리나 세션별 측정으로 바꾼다.
  */
@@ -68,19 +68,20 @@ class OrderInsertStatementCountIntegrationTest(
     }
 
     @Test
-    fun `새 주문 저장은 주문 조회 한 번과 주문과 line의 INSERT뿐이다`() {
+    fun `새 주문 저장은 주문 조회 한 번과 주문 INSERT, line마다 SELECT와 INSERT다`() {
         val order = Order.create(OrderFixtures.createOrderCommand(), identifierGenerator, clock.instant()).aggregate
 
         val statements = statementsOfSave { order }
 
         val orderSelect = 1L
         val orderInsert = 1L
+        val lineSelects = order.lines.size.toLong()
         val lineInserts = order.lines.size.toLong()
-        assertEquals(orderSelect + orderInsert + lineInserts, statements, "새 line마다 SELECT가 따라붙으면 merge로 빠진 것이다")
+        assertEquals(orderSelect + orderInsert + lineSelects + lineInserts, statements, "line은 merge라 SELECT가, 루트는 @Version이 있어 INSERT 한 번이다")
     }
 
     @Test
-    fun `기존 주문에 line을 바꾸고 더해 저장하면 새 line은 SELECT 없이 INSERT 한 번이다`() {
+    fun `기존 주문에 line을 바꾸고 더해 저장하면 새 line은 SELECT와 INSERT다`() {
         val orderId = facade.create(OrderFixtures.createOrderCommand()).orderId
         val added = OrderLine(OrderLineId(UUID.randomUUID()), "SKU-3", "바닐라라떼", Money.of("700", OrderFixtures.krw), 1)
 
@@ -94,14 +95,15 @@ class OrderInsertStatementCountIntegrationTest(
         // 이 0이 "자식 행만 바뀌면 루트 version이 오르지 않는다"([도메인 모델] 4.7절 질문 6)의 증거다.
         val lineSelect = 1L
         val checkoutSelect = 1L
+        val newLineSelect = 1L
         val lineInsert = 1L
         val lineUpdate = 1L
-        assertEquals(lineSelect + checkoutSelect + lineInsert + lineUpdate, statements, "새 line에 SELECT가 따라붙으면 merge로 빠진 것이다")
+        assertEquals(lineSelect + checkoutSelect + newLineSelect + lineInsert + lineUpdate, statements, "새 line은 merge라 SELECT가 하나 붙는다")
         assertEquals(3, assertNotNull(repository.findById(orderId)).lines.size)
     }
 
     @Test
-    fun `checkout을 더한 주문을 저장하면 새 checkout은 SELECT 없이 INSERT 한 번이다`() {
+    fun `checkout을 더한 주문을 저장하면 새 checkout은 SELECT와 INSERT다`() {
         val orderId = facade.create(OrderFixtures.createOrderCommand()).orderId
 
         val statements = statementsOfSave {
@@ -110,9 +112,10 @@ class OrderInsertStatementCountIntegrationTest(
 
         val lineSelect = 1L
         val checkoutSelect = 1L
+        val newCheckoutSelect = 1L
         val checkoutInsert = 1L
         val orderUpdate = 1L
-        assertEquals(lineSelect + checkoutSelect + checkoutInsert + orderUpdate, statements, "새 checkout에 SELECT가 따라붙으면 merge로 빠진 것이다")
+        assertEquals(lineSelect + checkoutSelect + newCheckoutSelect + checkoutInsert + orderUpdate, statements, "새 checkout은 merge라 SELECT가 하나 붙는다")
         assertEquals(1, assertNotNull(repository.findById(orderId)).checkouts.size)
     }
 }

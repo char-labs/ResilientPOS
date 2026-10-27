@@ -6,6 +6,7 @@ import com.resilientpos.terminal.TerminalId
 import jakarta.persistence.Entity
 import jakarta.persistence.Id
 import jakarta.persistence.Table
+import jakarta.persistence.Version
 import java.util.UUID
 
 /**
@@ -14,7 +15,9 @@ import java.util.UUID
  * 흐름: 단말의 첫 sync 배치에서 0으로 생기고, 항목이 `APPLIED`·`REJECTED`로 확정될 때마다 그 항목의 트랜잭션 안에서 행을 잠근 채 +1이 된다. 전체 지도는 `docs/wiki/entity-map.md`.
  *
  * `Watermark`의 JPA 매핑. 단말 ID가 곧 PK다 — 단말당 행 하나이고 서버 식별자를 따로 만들 이유가 없다.
- * `@Version`은 두지 않는다. 항목 처리는 이 행을 잠그고 진행하며 잠금 없이 쓰는 경로가 없다.
+ * `@Version`은 낙관적 잠금이 아니라 새 행 판정용이다. 항목 처리는 이 행을 잠그고 진행해 version이 충돌하지 않는다.
+ * version이 `null`인 새 엔티티는 Spring Data의 `save`가 `persist`로 보낸다. `merge`로 가면 같은 단말의 첫 배치가 겹칠 때
+ * 진 쪽이 PK 위반을 받지 않고 이긴 쪽이 이미 전진시킨 행을 0으로 덮어쓴다(`SyncCommandFacade.ensureWatermark`).
  * 생성은 `from`, 변경은 `apply`만 한다(도메인 규칙 §5). `val`을 쓰지 않는 이유는 `OrderEntity`의 KDoc에 있다.
  */
 @Entity
@@ -29,6 +32,10 @@ class WatermarkEntity private constructor(
         protected set
 
     var lastAckedSequence: Long = lastAckedSequence
+        protected set
+
+    @Version
+    var version: Long? = null
         protected set
 
     fun apply(watermark: Watermark) {

@@ -8,18 +8,18 @@ import com.resilientpos.reconciliation.ReconciliationCaseId
 import com.resilientpos.reconciliation.internal.domain.ReconciliationCase
 import com.resilientpos.reconciliation.internal.domain.ReconciliationCaseRepository
 import com.resilientpos.store.StoreId
-import jakarta.persistence.EntityManager
+import org.springframework.data.repository.findByIdOrNull
 import org.springframework.stereotype.Repository
 import org.springframework.transaction.annotation.Transactional
 
 /**
- * `ReconciliationCaseRepository`의 JPA 구현. case는 한 행이라 새 case면 `EntityManager.persist`로 넣고, 기존 case면 관리 엔티티에 `apply`한다.
- * 엔티티에 `@Version`이 없어 Spring Data의 `save`를 쓰면 `merge`로 가 SELECT가 한 번 더 나간다.
+ * `ReconciliationCaseRepository`의 JPA 구현. case는 한 행이라 새 case면 [ReconciliationCaseJpaRepository.save]로 넣고, 기존 case면 관리 엔티티에 `apply`한다.
+ * 엔티티에 `@Version`이 없어 새 case의 `save`는 `merge`로 가 SELECT가 하나 더 나간다.
  * `deleted_at is null`은 조회마다 적지 않아도 `BaseEntity`의 `@SoftDelete`가 붙여 준다.
  */
 @Repository
 class ReconciliationCasePersistenceAdapter(
-    private val entityManager: EntityManager,
+    private val jpaRepository: ReconciliationCaseJpaRepository,
     private val queries: JdslQueryExecutor,
 ) : ReconciliationCaseRepository {
 
@@ -43,14 +43,8 @@ class ReconciliationCasePersistenceAdapter(
     /** 트랜잭션은 Facade가 소유하고 여기서는 합류한다. 선언은 트랜잭션 없이 직접 부른 경우의 안전망이다. */
     @Transactional
     override fun save(reconciliationCase: ReconciliationCase): ReconciliationCase {
-        val caseId = reconciliationCase.id.value
-        val existing: ReconciliationCaseEntity? = entityManager.find(ReconciliationCaseEntity::class.java, caseId)
-        if (existing == null) {
-            entityManager.persist(ReconciliationCaseEntity.from(reconciliationCase))
-        } else {
-            existing.apply(reconciliationCase)
-        }
-
+        val existing = jpaRepository.findByIdOrNull(reconciliationCase.id.value)
+        if (existing != null) existing.apply(reconciliationCase) else jpaRepository.save(ReconciliationCaseEntity.from(reconciliationCase))
         return reconciliationCase
     }
 }

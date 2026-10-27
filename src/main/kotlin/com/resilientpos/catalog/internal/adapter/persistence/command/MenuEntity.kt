@@ -33,7 +33,7 @@ class MenuEntity private constructor(
 
     /**
      * 수정 경합의 방어선이다. 수정은 내용이 같아도 한 번 올린다(바뀌면 dirty UPDATE, 같으면 `MenuPersistenceAdapter.replace`의 `OPTIMISTIC_FORCE_INCREMENT` 잠금).
-     * nullable인 이유는 `OrderEntity`와 같다(primitive면 Spring Data가 새 엔티티를 `merge`로 보낸다). 생성은 `EntityManager.persist`다.
+     * nullable인 이유는 `OrderEntity`와 같다(primitive면 Spring Data가 새 엔티티를 `merge`로 보낸다). 생성은 `save`가 `persist`로 보낸다.
      */
     @Version
     var version: Long? = null

@@ -21,11 +21,10 @@ import org.hibernate.stat.Statistics
 import org.springframework.transaction.support.TransactionTemplate
 
 /**
- * 새 시도가 추가 SELECT 없이 INSERT 한 번으로 들어가는지 Hibernate 통계로 검사한다. Docker가 필요하다.
+ * 새 시도 저장의 JDBC 문장 수를 Hibernate 통계로 고정한다. Docker가 필요하다.
  *
  * 도메인 ID를 저장 전에 만들기 때문에 Spring Data의 `save`는 `@Version`이 없는 새 엔티티를 기존 행으로 보고
- * `merge`한다. 그러면 SELECT가 하나 더 나간다. 어댑터가 `EntityManager.persist`를 쓴다는 것을
- * 코드로 읽지 않고 문장 수로 확인한다.
+ * `merge`한다. 그래서 PK SELECT가 하나 더 나가고 이 비용을 받아들였다([jpa-repository-adapters] 결정 2).
  *
  * **통계는 `SessionFactory` 전체의 누적값이다.** 이제 비동기 리스너가 같은 `SessionFactory`로 SQL을 내므로
  * 앞 테스트의 리스너 작업이 아직 큐에 남아 있으면 그 문장이 이 델타에 섞여 간헐 실패가 날 수 있다.
@@ -55,7 +54,7 @@ class PaymentAttemptInsertStatementCountIntegrationTest(
     }
 
     @Test
-    fun `새 시도 저장은 INSERT 한 번으로 끝난다`() {
+    fun `새 시도 저장은 merge의 SELECT 한 번과 INSERT 한 번이다`() {
         val attempt = PaymentAttempt.create(
             PaymentFixtures.createAttemptCommand(
                 orderId = UUID.randomUUID(),
@@ -72,6 +71,6 @@ class PaymentAttemptInsertStatementCountIntegrationTest(
         transaction.execute { repository.save(attempt) }
         val statements = statistics.prepareStatementCount - before
 
-        assertEquals(1, statements, "저장에 나간 JDBC 문장 수")
+        assertEquals(2, statements, "저장에 나간 JDBC 문장 수(SELECT, INSERT)")
     }
 }
