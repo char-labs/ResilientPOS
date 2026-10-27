@@ -1,6 +1,6 @@
 # 도메인 모델과 유비쿼터스 언어
 
-이 프로젝트가 쓰는 DDD 용어의 정의, bounded context 8개의 요약, 코드·스키마·문서가 함께 쓰는 단어 목록이다.
+이 프로젝트가 쓰는 DDD 용어의 정의, bounded context 9개의 요약, 코드·스키마·문서가 함께 쓰는 단어 목록이다.
 업무 기능 spec을 쓰거나 새 도메인 타입·테이블·이벤트 이름을 만들 때 먼저 읽는다. Facade/Service/Aggregate의
 책임 분리 표는 [README의 Engineering Principles](../../README.md#engineering-principles)가 정본이며 여기서 반복하지 않는다.
 Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰는지는 볼트 규칙 `rules/domain-modeling-kotlin.md`가
@@ -19,7 +19,7 @@ Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰�
 |---|---|---|---|
 | 도메인 (Domain) | 소프트웨어가 해결하려는 문제 영역 | — | 네트워크 단절과 부분 실패 속에서도 주문·결제 상태가 중복 없이 수렴하는 매장 판매 운영 |
 | 유비쿼터스 언어 (Ubiquitous Language) | 기획·개발·문서·코드·스키마가 같은 뜻으로 쓰는 단어 집합 | 한 단어가 두 뜻이면 둘 중 하나를 바꾼다 | §3 용어집. `terminal`(단말)을 코드·테이블·spec이 모두 쓰고 `pos`는 쓰지 않는다 |
-| 바운디드 컨텍스트 (Bounded Context) | 한 모델과 그 용어가 유효한 명시적 경계. 경계 밖과는 공개 계약(Facade·이벤트)으로만 통한다 | 같은 단어가 다른 뜻이거나 데이터 소유자가 다르면 경계가 다르다 | Spring Modulith application module 8개 `com.resilientpos.{owner,store,terminal,order,payment,sync,reconciliation,fulfillment}`. `ModuleStructureTest`가 경계를 검사한다. Gradle 모듈이 아니다 |
+| 바운디드 컨텍스트 (Bounded Context) | 한 모델과 그 용어가 유효한 명시적 경계. 경계 밖과는 공개 계약(Facade·이벤트)으로만 통한다 | 같은 단어가 다른 뜻이거나 데이터 소유자가 다르면 경계가 다르다 | Spring Modulith application module 9개 `com.resilientpos.{owner,store,catalog,terminal,order,payment,sync,reconciliation,fulfillment}`. `ModuleStructureTest`가 경계를 검사한다. Gradle 모듈이 아니다 |
 | 애그리거트 (Aggregate) / 루트 | 한 트랜잭션에서 함께 일관성을 지켜야 하는 객체 묶음. 루트 하나만 외부에 노출되고 루트가 불변식을 소유한다 | "이 둘이 한 트랜잭션에서 반드시 함께 맞아야 하는가?" 예면 같은 aggregate, 아니면 별도 aggregate이고 ID로만 참조한다 | `Order`(루트) + `OrderLine` + checkout 금액. `OrderLine`을 밖에서 바꾸지 않고 `order.changeLine(...)`으로 바꾼다. `Order`와 `PaymentAttempt`는 별개 aggregate라 `orderId`로 참조하고 이벤트로 연결한다 |
 | 엔티티 (Entity) | 식별자로 구별되고 생명주기가 있는 객체 | 속성이 모두 같아도 식별자가 다르면 다른 것 | `Order`, `PaymentAttempt`, `Watermark`, `ReconciliationCase`, `Fulfillment`. 식별자는 UUID v7을 애플리케이션이 저장 전에 만든다 |
 | 값 객체 (Value Object) | 식별자가 없고 속성이 같으면 같은 것. 불변 | "두 인스턴스의 모든 속성이 같으면 같은 것인가?" 예면 값 객체 | `Money`, `OrderId`, `TerminalCode`, checkout 확정 금액. Kotlin `data class` + `of`/`from` 팩토리 |
@@ -45,6 +45,7 @@ Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰�
 | `sync` | `Watermark` | 단말 watermark, operation 접수·중복 제거, gap·conflict | `lastAckedSequence`는 단조 증가. gap을 건너뛰어 전진하지 않는다 | 공개 Facade 없음(`internal`의 `SyncCommandFacade`, HTTP만 부른다) |
 | `reconciliation` | `ReconciliationCase` | 불일치 case의 근거, 규칙 버전, 승인·조치 감사 기록 | 근거·규칙·감사 없이 해결하지 않는다. 결제 상태를 직접 고치지 않는다. 결제 시도 하나에 case 하나(unique `t_reconciliation_case.payment_id`). 점주는 자기 매장의 case만 해소한다 | `ReconciliationManagement`(쓰기), `ReconciliationQueryFacade`(조회) |
 | `fulfillment` | `Fulfillment`, `ReceiptDelivery` | 주문 이후의 이행과 영수증 전달 | 원본 주문당 natural key로 한 번만 생성. 재시도 side effect는 멱등 | 소비 이벤트만 |
+| `catalog` | `Menu` | 매장 메뉴(항목의 코드·이름·가격·분류, 통화 하나) | 매장당 메뉴 하나(PK `t_menu_pkey`). 메뉴 안에서 코드 유일, 항목 200개 이하, 코드·이름·분류는 주문 line과 같은 글자 규칙. 전체 교체만 하고 version으로 동시 수정을 거절한다. 주문 line은 메뉴와 대조하지 않는다 | `MenuManagement` |
 
 컨텍스트 사이의 소유 규칙:
 - `payment`만 결제 정본 상태를 바꾼다. `reconciliation`은 case와 근거를 소유하고 결론을 좁은 공개 command `PaymentManagement.resolveFromReconciliation`으로 요청한다. 해소 트랜잭션은 `reconciliation`이 소유하고 `payment`가 합류한다(§4.6). 결제 확정과 case 해소가 한 커밋이다.
@@ -54,6 +55,7 @@ Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰�
 - **결제 결말 셋 중 `PaymentApproved`만 `contract`에 있다.** 그것만 경계를 넘기 때문이다. `PaymentEvent.Declined`·`PaymentEvent.Unknown`은 `payment`의 sealed 계층에 남는다(§4.4). 거절·불명이어도 주문은 `CHECKOUT_REQUESTED`에 머물고(그 회차의 결제가 아직 끝나지 않았다), 재결제는 같은 회차의 새 시도이며, `UNKNOWN`은 `payment`가 provider 조회로 확정하므로 `order`가 받을 일이 없다([payment-unknown-resolution](../spec/2026-10-01-payment-unknown-resolution.md)). 주문 취소처럼 주문이 거절을 알아야 하는 명령이 생기는 PR이 옮기고, 그 이동은 `event_publication`의 `event_type`을 바꾸므로 배포된 행이 있는지부터 본다.
 - **모듈을 건너가는 이벤트는 `contract` 모듈이 소유한다.** 두 모듈이 서로의 사실을 주고받으면 타입 의존이 양방향이 되어 Modulith의 순환 검사에 걸린다. 양쪽이 함께 의존하는 곳에 그 사실을 둔다. `contract`는 bounded context가 아니다 — 업무 규칙도 상태도 없고 계약만 있다. **`contract`를 의존하는 모듈의 타입을 들지 않는다**(`orderId`·`paymentId`는 raw `UUID`로 든다). 들면 그 방향으로 간선이 생겨 순환이 되돌아온다. `contract`를 의존하지 않는 `store`·`terminal`의 `StoreId`·`TerminalId`는 순환이 없어 그대로 든다(`OrderPaid` KDoc). `ModuleStructureTest`가 `contract`에서 `order`·`payment`·`sync`·`reconciliation`·`fulfillment`·`platform`으로 가는 의존을 막는다. 소비자가 없는 이벤트는 소유 모듈에 남는다 — 경계를 넘는 것만 공유한다.
 - `order`는 합계가 0원인 주문도 똑같이 checkout을 확정하고 `OrderPaymentRequested`를 낸다. 전액 할인·프로모션 주문이 거절되지 않고 주문·결제·영수증 조회가 같은 경로로 보이게 하려는 것이다. `payment`는 0원 attempt를 provider 호출 없이 승인으로 기록하고 `PaymentApproved`를 내야 한다.
+- `order`는 `catalog`를 모른다. 주문 line의 상품 코드·이름·단가는 단말이 보낸 판매 시점 원본이고 서버는 메뉴와 대조하지 않는다. 메뉴가 바뀌어도 과거 line은 그대로다([menu-catalog](../spec/2026-10-26-menu-catalog.md)).
 - `sync`는 접수·중복·순서만 판정하고, 받아들인 명령은 소유 컨텍스트의 Command Facade로 넘긴다. `SyncOperationApplied`는 기술 감사 이벤트이며 `OrderCreated`를 대체하지 않는다.
 - `foundation`은 프레임워크 없는 값 타입(`Money`, 식별자 생성기)과 모델링 원시 타입(`Transition`, `DomainEvent`, §4.5)만 공유한다. 주문·결제 같은 업무 개념을 두는 곳이 아니다. 모듈을 건너가는 이벤트는 업무 사실이므로 `foundation`이 아니라 `contract`에 둔다.
 
@@ -93,6 +95,8 @@ Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰�
 | `attempt` (payment) | 한 주문에 대한 provider 요청 1회. 식별은 `PaymentId`이고 회차 번호는 두지 않는다. 승인과 취소는 각각 별도 attempt다 | `payment`, `transaction` | 한 요청의 결과(승인·거절·`UNKNOWN`)를 한 회차에 담아야 한다. transaction은 DB 용어와 충돌한다 |
 | `UNKNOWN` | provider 결과를 아직 확인하지 못한 결제 상태. 실패가 아니다 | `FAILED`, `TIMEOUT` | timeout은 전송 관찰의 실패이고 결제 결과의 실패가 아니다. `UNKNOWN`에서 새 승인 요청을 재시도하지 않고 provider 조회 → reconciliation으로 수렴한다. 조회 확정은 `payment`의 주기 작업이 하고(§4.3), 조회로도 확정되지 않으면 reconciliation case로 넘긴다. 불명이 된 사유(`unknown reason`)를 시도에 남긴다 |
 | `gap` / `duplicate` / `conflict` / `rejected` | sync 판정 결과. 순번 누락 / 이미 접수한 operation의 같은 내용 재전송 / 확정한 순번에 다른 내용이나 모르는 operation / 소유 컨텍스트가 도메인 규칙으로 거절한 operation(순번은 확정되고 단말은 버린다) | 일반 `error`, HTTP 500 | 네 가지는 각각 다른 복구 경로를 가진 업무 결과다. 항목 단위 결과로 돌려주고 부분 성공을 200 하나로 숨기지 않는다. 적용된 항목은 `applied`다([sync-intake](../spec/2026-09-30-sync-intake.md)) |
+| `menu` | 매장 메뉴. 판매할 상품 항목과 통화를 담은 문서 하나다. 서버가 정본이고 단말은 받아 둔 사본으로 판다 | `product`, `catalog` | `t_product`(상품 마스터)를 두지 않는다는 결정([order-line-blank-product](../spec/2026-09-21-order-line-blank-product.md))과 섞이지 않게 `product`를 쓰지 않는다. `catalog`는 모듈 이름으로만 쓴다. 테이블은 `t_menu`([menu-catalog](../spec/2026-10-26-menu-catalog.md)) |
+| `menu item` | 메뉴 항목. 코드·이름·가격·분류 넷이다. 표시 순서는 항목 배열 순서다 | `product`, `catalog item` | 위 `menu`와 같다. 항목은 메뉴 문서 안의 값이고 따로 행을 두지 않는다. 주문 line은 항목을 가리키지 않고 판매 시점 값을 기록한다 |
 | `case` (reconciliation) | 불일치 한 건의 근거·규칙 버전·조치·감사 기록 | `issue`, `ticket` | ticket은 KDS·프린터의 표시 매체(화면 카드, 종이 주문표)를 가리키는 업계 용어다 |
 | `evidence` | POS·서버·provider 각각이 말하는 사실의 기록 | `proof`, `log` | 세 출처를 나란히 비교하는 것이 reconciliation의 본질이다 |
 | `reconciliation requested` (넘김) | `payment`가 스스로 확정하지 못한 시도를 case로 넘긴 사실. 넘긴 시각은 `t_payment_attempt.reconciliation_requested_at`이 정본이다 | `escalated`, `handed off` | 이벤트 이름 `PaymentReconciliationRequested`와 같은 말을 쓴다. 넘긴 뒤 `payment`는 그 시도를 조회하지 않는다 |
@@ -284,6 +288,7 @@ Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰�
 - `t_dead_letter_redrive`는 DLT 재투입 기록이다. Kafka는 DLT 레코드를 다시 보낸 사실을 남기지 않고 로그는 정본이 아니라서 표로 둔다(질문 1). 원 토픽(`dlt_topic`에서 `.DLT`를 뺀 값)과 재투입 시각(`created_at`)은 도출할 수 있어 컬럼을 두지 않았다. 넣은 자리(`target_partition`·`target_offset`)는 다시 DLT로 간 메시지를 이 재투입에 잇는 유일한 값이다(질문 2). unique `ux_dead_letter_redrive_source(dlt_topic, dlt_partition, dlt_offset, dlt_timestamp)`가 "한 DLT 레코드의 기록은 하나"와 멱등 응답의 유일한 방어선이고, 지우는 명령이 없어 삭제 행에도 걸린다(질문 4). 레코드 시각(`dlt_timestamp`)을 넣은 것은 DLT 토픽을 다시 만들면 offset이 0부터 재사용되기 때문이다. 조회는 삭제 행을 보지 못하므로 이 표의 행은 SQL로도 soft delete하지 않는다. `reason`은 읽는 코드가 없는 감사 정본이고 나중에 채울 수 없어 둔다(질문 2·3). 전송은 트랜잭션 밖이라 같은 좌표가 동시에 오면 둘 다 보낼 수 있고 consumer 멱등이 견딘다(질문 6)([platform-operator-dlt-redrive](../spec/2026-10-21-platform-operator-dlt-redrive.md)).
 - `t_dead_letter_dismissal`은 DLT 폐기 표시 기록이다. Kafka 레코드에는 표시를 남길 수 없어 표로 둔다(질문 1). 재투입 표에 넣지 않은 것은 그 표의 넣은 자리 컬럼이 not null이고 "기록이 있으면 브로커에 ack된 것이다"라는 불변식이 깨지기 때문이다. unique `ux_dead_letter_dismissal_source(dlt_topic, dlt_partition, dlt_offset, dlt_timestamp)`가 "한 DLT 레코드의 폐기 기록은 하나"와 멱등 응답의 유일한 방어선이고 삭제 행에도 걸린다(질문 4). 두 표에 걸친 배타는 두지 않는다. DB가 지킬 수 없고 미처리 수 gauge가 두 표의 합집합으로 세어 둘 다 있어도 틀리지 않는다. 합집합의 두 조회는 같은 시점을 읽지 않아, 폐기한 레코드의 재투입이 그 사이에 커밋되면 한 갱신 동안 많게 센다(질문 6). `reason`은 재투입 기록과 같은 판단으로 둔다(질문 2·3)([alert-state-gauges](../spec/2026-10-22-alert-state-gauges.md)).
 - `t_fulfillment`의 unique는 청사진의 `(orderId, ticketType)`이 아니라 `(order_id)`다. 이행 방식이 하나뿐이고 `type`을 읽는 코드가 없어 질문 2에서 걸렸다. 방식이 늘면 지금의 유일한 종류를 뜻하는 상수 기본값 컬럼을 더하고 unique를 바꾼다(질문 3). "주문당 한 번"의 마지막 방어선이라 soft delete된 행에도 걸리는 전체 unique로 둔다(질문 4). 상태·매장·품목 snapshot도 읽는 명령·조회가 생길 때 더한다([fulfillment-kitchen-ticket](../spec/2026-09-24-fulfillment.md)).
+- `t_menu`(매장당 한 행, `store_id`가 PK)는 메뉴의 정본이다. 메뉴는 PostgreSQL 어디에도 없고 `t_order_line`은 판매된 값의 기록이라 팔리지 않은 상품과 바뀐 가격을 모른다(질문 1). `version`은 `updated_at`으로 대신할 수 없다. `updated_at`은 JVM 시각이라 pod 사이에 단조가 아니다. `store_id`·`menu`·`version`은 두 조회 API와 ETag·`If-Match` 비교가 읽는다(질문 2). PK `t_menu_pkey`가 "매장당 메뉴 하나"와 생성 경합의 방어선이고 `@Version`이 수정 경합의 방어선이다. 지우는 명령이 없고 PK가 삭제 행에도 걸려, 삭제 행이 있으면 그 매장은 메뉴를 다시 만들지 못하므로 이 표의 행은 SQL로도 soft delete하지 않는다. 코드 중복과 항목 상한은 문서 하나를 통째로 검사하는 도메인 규칙이라 DB 제약이 없다(질문 4). 단말 localStorage는 사본이고 다음 받기(ETag가 다르면 200)가 복구 경로다. ETag에 매장 ID를 넣어 다른 매장 사본이 맞는 것으로 보이지 않게 한다(질문 5). PUT은 한 트랜잭션의 같은 관리 엔티티에서 version을 비교하고 쓰므로 조건부 UPDATE가 비교한 값을 지키고, 내용이 같아도 version을 올린다(질문 6). jsonb 문서의 필드 이름(`currency`, `items`, `code`, `name`, `price`, `category`)이 저장 형식이라 리터럴 JSON 테스트로 고정한다. 나중에 더하는 필드는 기본값을 둔다. 서버 캐시가 없고 version이 바뀌면 ETag가 바뀌어 무효화가 따로 없다(질문 9)([menu-catalog](../spec/2026-10-26-menu-catalog.md)).
 
 기술 근거(2026-09-20 확인, PostgreSQL 18·Flyway 12.4.0·Hibernate 7.4.5): [ALTER TABLE](https://www.postgresql.org/docs/18/sql-altertable.html), [CREATE INDEX](https://www.postgresql.org/docs/18/sql-createindex.html), [Explicit Locking](https://www.postgresql.org/docs/18/explicit-locking.html), [Transaction Isolation](https://www.postgresql.org/docs/18/transaction-iso.html), [Flyway 트랜잭션 처리](https://documentation.red-gate.com/fd/migration-transaction-handling-273973399.html), [Flyway PostgreSQL 락](https://documentation.red-gate.com/fd/postgresql-database-277579325.html). Hibernate `validate`가 매핑된 컬럼만 검사한다는 점은 사용자 가이드에 없어서 `AbstractSchemaValidator` 소스로 확인했다.
 
@@ -333,7 +338,7 @@ grill 심문과 업무 기능 spec의 "소유 모듈 / Command·Query·Event / �
 
 | 사례 | 이 저장소 | 이유 |
 |---|---|---|
-| bounded context = Gradle 모듈 | Spring Modulith 패키지 모듈. Gradle 분할은 현재 상태(`docs/wiki/current-state.md`, 볼트)의 조건이 충족될 때만 | 모듈 8개가 비어 있는 지금 나누면 담길 코드보다 빌드 코드가 많다. 경계는 Modulith 검증이 이미 막는다 |
+| bounded context = Gradle 모듈 | Spring Modulith 패키지 모듈. Gradle 분할은 현재 상태(`docs/wiki/current-state.md`, 볼트)의 조건이 충족될 때만 | 모듈 9개가 비어 있는 지금 나누면 담길 코드보다 빌드 코드가 많다. 경계는 Modulith 검증이 이미 막는다 |
 | Kotlin `internal` 가시성으로 JPA 엔티티를 숨김 | 목적은 같고 수단이 둘로 갈린다. 모듈 경계는 `internal` **패키지** + Modulith 검증, 엔티티를 밖에서 만들거나 바꾸지 못하게 하는 것은 `private` 생성자와 전 필드 `var … protected set`이고, `EntityVisibilityTest`가 그 형태를 고정한다([entity-property-visibility](../spec/2026-09-22-entity-property-visibility.md)) | 단일 Gradle 프로젝트에서 Kotlin `internal`은 전체에 보여 경계가 되지 않는다. 사례 스스로 배치용 JPA 엔티티를 중복 생성한 부작용을 기록했다. 생성·변경을 `from`·`apply`로 묶는 일은 키워드 없이 생성자와 setter 가시성만으로 된다. `private set`이 아닌 이유는 `allOpen`이 `@Entity`에 걸려 있어 멤버가 open이고 Kotlin이 open 프로퍼티의 `private set`을 금지하기 때문이다. 바뀌지 않는 필드를 `val`로 좁히지 않는 이유는 그것이 JVM final 영속 필드가 되어 Jakarta Persistence 3.2 §2.2 금지와 bytecode enhancement 비호환에 걸리기 때문이다 |
 | Command를 aggregate 안의 중첩 클래스로, 상태는 `var … internal set` | Command는 Facade의 공개 입력, aggregate는 불변(§4.1) | CQRS 규약상 Command는 모듈 공개 계약이다. 불변 전이는 기존 Kotlin 규칙과 일치한다 |
 | API·배치 공통 로직을 Biz-component 패키지로 | Controller·이벤트 리스너·스케줄러가 같은 Command Facade를 호출 | Facade가 이미 use case 단위의 공통 진입점이다. 별도 레이어를 두지 않는다 |

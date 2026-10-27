@@ -1,6 +1,6 @@
 # 엔티티 지도
 
-JPA 엔티티 14개가 각각 무엇을 맡고, 서로를 어떻게 가리키며, 단말·점주·운영자가 쓰는 흐름에서 어느 순서로 생기고 바뀌는지를 한곳에 모은 문서다.
+JPA 엔티티 15개가 각각 무엇을 맡고, 서로를 어떻게 가리키며, 단말·점주·운영자가 쓰는 흐름에서 어느 순서로 생기고 바뀌는지를 한곳에 모은 문서다.
 엔티티 클래스의 KDoc 첫 문단이 같은 내용을 짧게 갖고, 여기가 전체 그림이다. 용어·aggregate 경계는 [도메인 모델](domain-model.md)이 정본이고,
 Kotlin으로 엔티티를 어떤 형태로 쓰는지(생성자 `private`, `var … protected set`, `from`/`apply`/`toDomain`)는 볼트 규칙 `domain-modeling-kotlin.md` §5가 정본이다.
 
@@ -24,6 +24,7 @@ Kotlin으로 엔티티를 어떤 형태로 쓰는지(생성자 `private`, `var �
 | `TerminalCredentialEntity` | `t_terminal_credential` | terminal | `Terminal`과 같은 트랜잭션의 credential 이력 | `terminal_id` | `revoked_at`만 `applyRevokedAt`(회전 때 한 번) |
 | `OwnerEntity` | `t_owner` | owner | 루트 `Owner`(점주 계정) | — | 넣기만 한다 |
 | `StoreEntity` | `t_store` | store | 루트 `Store` | `owner_id` | 넣기만 한다 |
+| `MenuEntity` | `t_menu` | catalog | 루트 `Menu`(매장당 하나, 자식 없음) | `store_id`가 PK(`t_store`) | 점주의 전체 교체마다 문서를 바꾸고 `version` +1(내용이 같아도 오른다). 지우지 않는다 |
 | `ReconciliationCaseEntity` | `t_reconciliation_case` | reconciliation | 루트 `ReconciliationCase`(자식 없음) | `payment_id`(unique), `order_id`, `store_id`, `terminal_id`, `resolved_by_owner_id` | `status`(`MANUAL_REVIEW`→`RESOLVED`)와 해소 컬럼만 한 번 바뀐다. 행을 잠그고 바꾼다 |
 | `DeadLetterRedriveEntity` | `t_dead_letter_redrive` | platform | aggregate가 아닌 운영 기록(DLT 재투입 한 건). 업무 상태를 담지 않는다 | DLT 레코드 `(dlt_topic, dlt_partition, dlt_offset, dlt_timestamp)`(unique, Kafka 쪽 좌표와 레코드 시각이라 DB 행을 가리키지 않는다) | 넣기만 한다. 운영자(`operator_subject`, IdP의 `sub`)와 사유를 남긴다([platform-operator-dlt-redrive](../spec/2026-10-21-platform-operator-dlt-redrive.md)) |
 | `DeadLetterDismissalEntity` | `t_dead_letter_dismissal` | platform | aggregate가 아닌 운영 기록(DLT 폐기 표시 한 건, 재투입하지 않기로 한 결정). 업무 상태를 담지 않는다 | 재투입 기록과 같은 DLT 레코드 키(unique). 같은 레코드에 재투입 기록이 함께 있을 수 있다 | 넣기만 한다. 운영자와 사유를 남긴다. 미처리 DLT 수는 두 기록의 합집합을 뺀 값이다([alert-state-gauges](../spec/2026-10-22-alert-state-gauges.md)) |
@@ -45,13 +46,14 @@ t_fulfillment.order_id ───────────────────
 t_terminal_credential.terminal_id ─────────────────────────────────────────────────────────► t_terminal.id
 t_terminal.store_id ───────────────────────────────────────────────────────────────────────► t_store.id
 t_store.owner_id ──────────────────────────────────────────────────────────────────────────► t_owner.id
+t_menu.store_id ───────────────────────────────────────────────────────────────────────────► t_store.id
 t_reconciliation_case.payment_id ──────────────────────────────────────────────────────────► t_payment_attempt.id
 t_reconciliation_case.resolved_by_owner_id ────────────────────────────────────────────────► t_owner.id
 ```
 
 - 화살표는 "값이 저 행의 ID다"라는 뜻이고 DB가 검사하지 않는다. `t_order.id`를 가리키는 표가 여섯(line·checkout·payment·fulfillment·sync·reconciliation case)이지만 서로 조인하는 코드는 없다. 모듈 경계 밖의 값은 이벤트로 건너간다(`OrderPaymentRequested`·`PaymentApproved`·`PaymentReconciliationRequested`·`OrderPaid`). case의 `order_id`·`store_id`·`terminal_id`는 넘겨받은 근거의 사본이다.
 - `t_payment_attempt`는 checkout 회차를 `checkout_no`(1, 2, …)로 가리킨다. `t_order_checkout.id`가 아니다. 결제 승인을 주문에 대조할 때 `order.markPaid`가 최신 회차 번호·금액과 비교한다.
-- `t_terminal`이 생겼지만 `t_order`·`t_sync_*`·`t_payment_attempt`의 `terminal_id`는 그 표와 FK·조인이 없다. 대신 요청을 받을 때 인증된 단말과 대조한다. 주문 생성은 본문의 `terminalId`·`storeId`를, sync는 경로의 `terminalId`와 `CREATE_ORDER` 항목의 `storeId`를 본다. `t_store`는 점주가 만든 매장의 표다. 단말 관리 API만 `t_terminal.store_id`를 `t_store`의 소유와 대조한다. 주문·결제의 `store_id`와 V015 전에 등록된 단말의 `store_id`는 매장 행과 대조하지 않는다.
+- `t_terminal`이 생겼지만 `t_order`·`t_sync_*`·`t_payment_attempt`의 `terminal_id`는 그 표와 FK·조인이 없다. 대신 요청을 받을 때 인증된 단말과 대조한다. 주문 생성은 본문의 `terminalId`·`storeId`를, sync는 경로의 `terminalId`와 `CREATE_ORDER` 항목의 `storeId`를 본다. `t_store`는 점주가 만든 매장의 표다. 단말 관리 API와 점주 메뉴 API만 `t_terminal.store_id`·`t_menu.store_id`를 `t_store`의 소유와 대조한다. 단말의 메뉴 조회는 인증된 단말의 매장으로 `t_menu`를 찾는다. 주문·결제의 `store_id`와 V015 전에 등록된 단말의 `store_id`는 매장 행과 대조하지 않는다.
 
 ## 3. 엔티티별 역할
 
@@ -63,7 +65,7 @@ t_reconciliation_case.resolved_by_owner_id ────────────�
 - 만드는 곳: `OrderCommandFacade.create`(HTTP, `Lock` 블록)와 `createInCallerTransaction`(sync 항목 트랜잭션). 바꾸는 곳: `requestCheckout`·`markPaid`. `requestCheckout`은 `orderId`로 찾는 것(HTTP)과 `(terminalId, clientOrderId)`로 찾는 것(sync 항목 트랜잭션에 합류) 둘이고 둘 다 주문 행을 잠근다.
 
 ### `OrderLineEntity` — 판매 시점의 품목 한 줄
-- 역할: 주문에 담긴 상품 코드·이름·단가·수량을 **그때 값 그대로** 남긴다. 상품 마스터 표가 없으므로 이 행이 "무엇을 얼마에 팔았는가"의 원본이다.
+- 역할: 주문에 담긴 상품 코드·이름·단가·수량을 **그때 값 그대로** 남긴다. 매장 메뉴(`t_menu`)는 있지만 line은 메뉴를 가리키지 않고 서버가 메뉴와 대조하지도 않는다. 이 행이 "무엇을 얼마에 팔았는가"의 판매 시점 원본이고, 메뉴가 바뀌어도 그대로다.
 - 관계: `order_id`로 주문을 가리키고 `line_no`는 정렬용이다. 통화는 `t_order.currency`에서 받아 복원한다.
 - 방어선: 없다(PK뿐). line 개수 상한(500)은 `Order`가, 상품 코드 64자·상품명 255자 상한과 NUL 문자는 `OrderLine`이 검사한다(상한은 컬럼 길이를 따라가고, NUL 문자는 코드 0번 글자 U+0000이고 값이 없다는 뜻의 `null`과 다르며, PostgreSQL text에 들어가지 못한다). 그런 값이 DB 오류가 되면 sync에서 그 단말의 배치가 계속 실패하므로 도메인 규칙으로 거절한다. 같은 line을 동시에 고치는 충돌은 루트 `t_order`의 잠금·`@Version`이 막는다.
 - 만드는 곳: 주문 생성 때 루트와 함께. line을 고치는 명령은 아직 없다.
@@ -128,6 +130,12 @@ t_reconciliation_case.resolved_by_owner_id ────────────�
 - 관계: `t_terminal.store_id`가 이 행을 가리킨다. `owner_id`에 인덱스 `ix_store_owner_id`가 있다(내 매장 목록, 소유 확인).
 - 방어선: 없다(PK뿐). 이름 중복을 허용하고, 소유자를 바꾸는 명령이 없어 소유 확인과 단말 변경 사이에 경합이 없다.
 - 만드는 곳: `StoreManagement.create`(`POST /owner/v1/stores`). 바꾸는 명령은 없다.
+
+### `MenuEntity` — 매장 하나의 메뉴 문서
+- 역할: 매장 메뉴의 정본이다. `menu`(jsonb)가 `{currency, items:[{code, name, price, category}]}` 문서 하나를 든다. 표시 순서는 항목 배열 순서이고 `price`는 통화 자릿수의 decimal string이다. 문서의 필드 이름이 저장 형식이라 리터럴 JSON 테스트로 고정한다. 직렬화는 persistence adapter의 `MenuDocumentMapper`가 Spring `JsonMapper`로 하고, 검증을 통과한 도메인 메뉴를 다시 직렬화해 저장한다. 읽을 때는 `Menu` 규칙으로 다시 검증하지 않고 조회 결과(`MenuView`)로 바로 바꾼다. 규칙을 강하게 바꿔도 이미 저장된 메뉴를 읽고 고칠 수 있게 하려는 것이다. 문서를 읽지 못하면(모르는 통화 등) 500이다. 문서의 모르는 필드는 무시한다.
+- 관계: `store_id`(PK)로 `t_store`를 가리킨다. 다른 표가 이 행을 가리키지 않는다. 주문 line은 메뉴와 대조하지 않는다. 단말은 `GET /v1/menu`로 받아 사본으로 두고, ETag(`"매장ID.version"`)가 같으면 304를 받는다.
+- 방어선: PK `t_menu_pkey`가 "매장당 메뉴 하나"와 생성 경합의 방어선이고, `@Version`의 조건부 UPDATE가 수정 경합의 방어선이다. 둘 다 커밋에서 드러나고 `MenuManagement.replace`가 `Tx` 블록 밖에서 `409 MENU_VERSION_MISMATCH`로 바꾼다. 코드 중복·항목 200개 상한은 `Menu`가 문서를 통째로 검사한다(DB 제약 없음). PK가 삭제 행에도 걸리므로 이 표의 행은 SQL로도 soft delete하지 않는다.
+- 만드는 곳: `MenuManagement.replace`(`PUT /owner/v1/stores/{storeId}/menu`에 `If-None-Match: *`, `persist`, version 0). 바꾸는 곳: 같은 메서드(`If-Match`). 한 트랜잭션에서 관리 엔티티를 `find`하고 version을 `If-Match`와 비교한 뒤, 내용이 바뀌면 dirty UPDATE, 같으면 `OPTIMISTIC_FORCE_INCREMENT`로 version을 한 번 올린다. 지우는 명령은 없다.
 
 ## 4. UX 흐름별 엔티티 동작
 
@@ -222,6 +230,17 @@ provider 응답이 끊기면 `t_payment_attempt.status`가 `UNKNOWN`으로 남�
 | 4. `POST /owner/v1/stores/{storeId}/terminals` | 201, `terminalId`와 평문 토큰(이때 한 번만) | `t_store` 읽기(소유 확인) 뒤 `t_terminal` 1행 + `t_terminal_credential` 1행 | **한 커밋**(unique `ux_terminal_store_code`) |
 | 5. 회전·비활성화 | 200, 새 토큰 또는 `INACTIVE` | `t_terminal` 행 잠금 뒤 `t_terminal_credential`·`t_terminal.status` 갱신 | **한 커밋**. 단말의 매장이 경로와 다르면 `404 TERMINAL_NOT_FOUND` |
 
+### 4.8 점주가 메뉴를 바꿀 때
+
+점주 경로의 인증·CSRF·남의 매장 규칙은 4.7과 같다. 단말은 다음 연결 때 메뉴를 받으러 온다(서버가 밀어 주지 않는다).
+
+| 단계 | 보이는 것 | 표 | 트랜잭션·전달 |
+|---|---|---|---|
+| 1. 점주가 `GET /owner/v1/stores/{storeId}/menu` | 200, 메뉴와 `ETag`. 메뉴가 없으면 `404 MENU_NOT_FOUND` | `t_store` 읽기(소유 확인) 뒤 `t_menu` 1행 읽기 | 읽기만 |
+| 2. 점주가 `PUT …/menu`에 `If-Match`(처음이면 `If-None-Match: *`) | 200, 저장된 메뉴와 새 `ETag`. 옛 ETag면 `409 MENU_VERSION_MISMATCH`, 조건 헤더가 없거나 둘 다면 `400 MENU_PRECONDITION_REQUIRED` | `t_menu.menu` 교체와 `version` +1(처음이면 1행, version 0) | **한 커밋**(`@Version` 조건부 UPDATE, 생성은 PK `t_menu_pkey`) |
+| 3. 단말이 `GET /v1/menu`에 받아 둔 ETag를 `If-None-Match`로 | 바뀌지 않았으면 304(본문 없음, `ETag`·`Cache-Control` 있음), 바뀌었으면 200과 새 메뉴·`ETag`. 메뉴가 없으면 `404 MENU_NOT_FOUND` | `t_menu` 1행 읽기(304여도 읽는다) | 읽기만. 서버 캐시 없음 |
+| 4. 이후 | 단말은 200이면 사본을 바꾸고, 304나 실패면 남은 사본으로 판다. 장바구니에 담긴 상품과 이미 만든 line은 그대로다 | — | — |
+
 ## 5. 아직 엔티티가 없는 것
 
 `Store`의 판매 정책·통화, `ReceiptDelivery`(영수증 전달)는 [도메인 모델 §2](domain-model.md)에 자리만 있고 표와 엔티티는 없다. 주문의 `store_id`는 인증된 단말의 매장과 대조할 뿐 매장 표로 검증하지 않는다(볼트의 현재 상태 `docs/wiki/current-state.md`).
@@ -230,4 +249,4 @@ provider 응답이 끊기면 `t_payment_attempt.status`가 `UNKNOWN`으로 남�
 - [도메인 모델](domain-model.md) — aggregate 경계(§2), 용어집(§3), 스키마 변경 검토(§4.7)
 - 현재 상태(`docs/wiki/current-state.md`, 볼트) — 모듈별 구현 상태와 알려진 빈틈
 - 볼트 규칙 `domain-modeling-kotlin.md` §5 — 엔티티 작성 규칙(`.claude/rules`로 복사된다)
-- 마이그레이션 `src/main/resources/db/migration/V002`·`V003`·`V005`~`V008`·`V010`~`V020` — 각 표의 DDL과 주석
+- 마이그레이션 `src/main/resources/db/migration/V002`·`V003`·`V005`~`V008`·`V010`~`V021` — 각 표의 DDL과 주석

@@ -79,6 +79,7 @@ flowchart TB
     end
     owner["owner<br/>점주 계정"]
     reconciliation["reconciliation<br/>(아직 비어 있음)"]
+    catalog["catalog<br/>매장 메뉴"]
 
     sync ==>|"OrderCommandFacade 호출"| order
     order -->|"발행·소비"| contract
@@ -91,17 +92,20 @@ flowchart TB
     terminal ==>|"StoreManagement 호출"| store
     terminal -.-> owner
     store -.-> owner
+    catalog ==>|"StoreManagement 호출"| store
+    catalog -.-> terminal
+    catalog -.-> owner
 ```
 
-- 굵은 선은 다른 모듈의 Facade를 직접 부르는 동기 호출, 실선은 `contract` 이벤트 타입, 점선은 식별자(`StoreId` 등)와 인증 값(`AuthenticatedTerminal`)만 쓰는 의존입니다. `단말·매장` 상자로 가는 점선은 `terminal`과 `store` 둘 다에 의존한다는 뜻입니다. 그림에서 뺀 간선이 둘 있습니다. `foundation`(값 타입)에는 `reconciliation`을 뺀 모든 모듈이, `platform`(트랜잭션·락·Kafka 구성 등 공용 인프라)에는 업무 모듈 7개가 의존합니다.
-- 간선은 `ApplicationModules.of(ResilientPosApplication::class.java)`가 출력한 모듈 의존을 그대로 옮겼습니다. `order`와 `payment`는 서로 의존하지 않고, `payment`·`fulfillment`에 의존하는 모듈은 없습니다.
+- 굵은 선은 다른 모듈의 Facade를 직접 부르는 동기 호출, 실선은 `contract` 이벤트 타입, 점선은 식별자(`StoreId` 등)와 인증 값(`AuthenticatedTerminal`)만 쓰는 의존입니다. `단말·매장` 상자로 가는 점선은 `terminal`과 `store` 둘 다에 의존한다는 뜻입니다. 그림에서 뺀 간선이 둘 있습니다. `foundation`(값 타입)에는 `reconciliation`을 뺀 모든 모듈이, `platform`(트랜잭션·락·Kafka 구성 등 공용 인프라)에는 업무 모듈 8개가 의존합니다.
+- 간선은 `ApplicationModules.of(ResilientPosApplication::class.java)`가 출력한 모듈 의존을 그대로 옮겼습니다. `order`와 `payment`는 서로 의존하지 않고, `payment`·`fulfillment`·`catalog`에 의존하는 모듈은 없습니다.
 - 다른 모듈은 그 모듈의 기본 패키지에 있는 타입(Facade, Command, View, ID, 이벤트)만 쓸 수 있고 `internal` 아래는 쓸 수 없습니다. `ModuleStructureTest`(Modulith 경계·순환 검증)와 `DependencyDirectionTest`(도메인 레이어의 프레임워크 무의존)가 위반을 테스트 실패로 만듭니다.
 - `order`와 `payment`는 서로의 사실을 주고받습니다. 이벤트를 각자 두면 서로 의존하는 순환이 되므로 둘이 함께 의존하는 `contract` 모듈에 둡니다.
 
 ### 이벤트 스토밍
 
 - 원문 [도메인 청사진](docs/references/05_Domain_Development_Blueprint.md)(2026-09-03)은 주문·결제와 동기화·정산 두 관점의 이벤트 스토밍을 교차 검토한 결과입니다. bounded context 7개와 aggregate, 커맨드 → 이벤트 → 정책 흐름 4개, 커맨드·조회 목록, ADR로 미룬 제품 질문 6개를 남겼습니다. 진행 방식(참가자, 보드)의 기록은 없습니다.
-- 저장소는 이 결과를 [도메인 모델](docs/wiki/domain-model.md)로 옮기며 단어를 다시 정했습니다. 예를 들어 `KitchenTicket`은 `Fulfillment`, `TerminalSyncState`는 `Watermark`가 됐고, 응답이 끊긴 결제는 `PaymentFailed`가 아니라 `PaymentUnknown`입니다. 이후 점주 계정 `owner`를 더해 bounded context는 8개입니다.
+- 저장소는 이 결과를 [도메인 모델](docs/wiki/domain-model.md)로 옮기며 단어를 다시 정했습니다. 예를 들어 `KitchenTicket`은 `Fulfillment`, `TerminalSyncState`는 `Watermark`가 됐고, 응답이 끊긴 결제는 `PaymentFailed`가 아니라 `PaymentUnknown`입니다. 이후 점주 계정 `owner`와 매장 메뉴 `catalog`를 더해 bounded context는 9개입니다.
 - 지금 코드에는 주문 → 결제 → fulfillment, 오프라인 sync, `UNKNOWN` 확정 흐름이 있습니다. reconciliation case와 store 판매 정책은 아직 없습니다. 원문과 다르게 정한 것과 구현 여부의 전체 표는 [아키텍처 상세 §5](docs/wiki/architecture.md#5-이벤트-스토밍)에 있습니다.
 
 ## 시작하기
@@ -189,7 +193,7 @@ Controller는 MockMvc와 Spring REST Docs로 HTTP 계약을 검증하며, fixtur
 ## Engineering Principles
 
 - **정합성/복구 가능성/관측 가능성 우선**: 기능보다 데이터 정합성과 장애 복구, 운영 가시성을 우선합니다.
-- **모듈 경계 준수 (Spring Modulith)**: `owner`, `store`, `terminal`, `order`, `payment`, `sync`, `reconciliation`, `fulfillment` 경계를 지키며 다른 모듈의 internal 코드/DB를 직접 접근하지 않습니다.
+- **모듈 경계 준수 (Spring Modulith)**: `owner`, `store`, `terminal`, `catalog`, `order`, `payment`, `sync`, `reconciliation`, `fulfillment` 경계를 지키며 다른 모듈의 internal 코드/DB를 직접 접근하지 않습니다.
 - **역할 분리**:
   - Facade: use case + transaction 조합
   - Aggregate / Value Object / Policy: 상태 전이·불변식·금액 계산·검증 소유
