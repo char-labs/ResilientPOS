@@ -14,6 +14,7 @@ import com.resilientpos.order.OrderStatus
 import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.TerminalId
 import java.math.BigDecimal
+import java.time.Duration
 import java.time.Instant
 import java.util.Currency
 import java.util.UUID
@@ -55,7 +56,44 @@ class OrderTest {
     private fun createOrderCommand(
         currency: Currency = krw,
         lines: List<OrderCommand.Create.Line> = listOf(orderLine()),
-    ) = OrderFixtures.createOrderCommand(storeId, terminalId, clientOrderId, currency, lines)
+        occurredAt: Instant? = null,
+    ) = OrderFixtures.createOrderCommand(storeId, terminalId, clientOrderId, currency, lines, occurredAt)
+
+    private fun occurredAtOf(reported: Instant?): Instant =
+        Order.create(createOrderCommand(occurredAt = reported), FixedIdentifierGenerator(emptyList()), now).aggregate.occurredAt
+
+    @Test
+    fun `단말 시각이 없으면 발생 시각은 수신 시각이다`() {
+        assertEquals(now, occurredAtOf(null))
+    }
+
+    @Test
+    fun `단말 시각이 수신 시각보다 늦으면 수신 시각으로 낮춘다`() {
+        assertEquals(now, occurredAtOf(now.plusNanos(1_000)))
+    }
+
+    @Test
+    fun `단말 시각이 수신 시각과 같거나 이르면 그대로 쓴다`() {
+        val reported = now.minusSeconds(3600)
+
+        assertEquals(now, occurredAtOf(now))
+        assertEquals(reported, occurredAtOf(reported))
+    }
+
+    @Test
+    fun `단말 시각이 7일 정각 전이면 그대로 쓰고 1마이크로초라도 넘게 이르면 수신 시각이다`() {
+        val limit = now.minus(Duration.ofDays(7))
+
+        assertEquals(limit, occurredAtOf(limit))
+        assertEquals(now, occurredAtOf(limit.minusNanos(1_000)))
+    }
+
+    @Test
+    fun `발생 시각은 마이크로초로 자른다`() {
+        val reported = Instant.parse("2026-09-15T12:00:00.123456789Z")
+
+        assertEquals(Instant.parse("2026-09-15T12:00:00.123456Z"), occurredAtOf(reported))
+    }
 
     @Test
     fun `유효한 명령으로 OPEN 주문과 OrderCreated를 만든다`() {

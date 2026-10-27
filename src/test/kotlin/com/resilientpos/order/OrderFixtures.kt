@@ -6,6 +6,7 @@ import com.resilientpos.foundation.Money
 import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.TerminalId
 import java.math.BigDecimal
+import java.time.Instant
 import java.util.Currency
 import java.util.UUID
 
@@ -35,6 +36,7 @@ object OrderFixtures {
             line("1001", quantity = 2),
             line("500", quantity = 3, productCode = "SKU-2", productName = "카페라떼"),
         ),
+        occurredAt: Instant? = null,
     ): OrderCommand.Create =
         TestFixtureMonkey.instance.giveMeKotlinBuilder<OrderCommand.Create>()
             .setExp(OrderCommand.Create::storeId, storeId)
@@ -42,6 +44,7 @@ object OrderFixtures {
             .setExp(OrderCommand.Create::clientOrderId, clientOrderId)
             .setExp(OrderCommand.Create::currency, currency)
             .setExp(OrderCommand.Create::lines, lines)
+            .setExp(OrderCommand.Create::occurredAt, occurredAt)
             .sample()
 
     /** 단가와 수량만 정한 line. 결제 결말은 FakePaymentGateway가 합계의 끝자리로 정한다. */

@@ -43,7 +43,7 @@ class TerminalInFlightIntegrationTest(
     private fun inFlightRejects() = meterRegistry.counter("inbound.rate.limited", "scope", "in_flight").count()
 
     @Test
-    fun `v1의 GET pattern은 결제 시도 조회와 메뉴 조회로 고정되어 있다`() {
+    fun `v1의 GET pattern은 결제 시도 조회와 메뉴 조회와 주문 단건 조회로 고정되어 있다`() {
         val patterns = handlerMapping.handlerMethods.keys
             .filter { HttpMethod.GET.name() in it.methodsCondition.methods.map { m -> m.name } }
             .flatMap { it.patternValues }
@@ -51,7 +51,7 @@ class TerminalInFlightIntegrationTest(
             .toSet()
 
         assertEquals(
-            setOf("/v1/orders/{orderId}/payment-attempts", "/v1/menu"), // 메뉴 조회는 t_menu PK 한 행을 잠그지 않고 읽는다
+            setOf("/v1/orders/{orderId}/payment-attempts", "/v1/menu", "/v1/orders/{orderId}"), // 메뉴 조회는 t_menu PK 한 행을 잠그지 않고 읽는다
             patterns,
             "새 /v1 GET은 행 잠금·Lock을 잡지 않는지 확인한 뒤 여기에 더한다(spec 결정 3)",
         )

@@ -45,7 +45,7 @@ class FixtureFactoriesTest {
 
         assertEquals(line, OrderFixtures.line("4500", quantity = 2, productCode = "SKU-9", productName = "콜드브루"))
         assertEquals(
-            OrderCommand.Create(storeId, terminalId, clientOrderId, OrderFixtures.krw, listOf(line)),
+            OrderCommand.Create(storeId, terminalId, clientOrderId, OrderFixtures.krw, listOf(line), occurredAt = null),
             OrderFixtures.createOrderCommand(storeId, terminalId, clientOrderId, OrderFixtures.krw, listOf(line)),
         )
         assertEquals(OrderCommand.RequestCheckout(orderId, storeId, terminalId), OrderFixtures.requestCheckoutCommand(orderId, storeId, terminalId))

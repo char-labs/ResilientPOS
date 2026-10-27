@@ -74,10 +74,11 @@ class SyncCommandFacade(
             if (gapped) {
                 SyncCommand.ReceiveBatch.Item(operation.operationId, SyncItemStatus.GAP, null, null).also(::countItem)
             } else {
-                applyOperation(command.terminalId, command.storeId, operation).also {
+                val createdAt = parseCreatedAt(operation.createdAt)
+                applyOperation(command.terminalId, command.storeId, operation, createdAt.instant).also {
                     gapped = it.status == SyncItemStatus.GAP
                     countItem(it)
-                    recordConvergence(operation, reconnectedAt, it)
+                    recordConvergence(createdAt, reconnectedAt, it)
                 }
             }
         }
@@ -105,20 +106,28 @@ class SyncCommandFacade(
         }
     }
 
+    /** 항목의 `createdAt` 파싱 결과. [instant]는 없거나 형식이 틀리면 null이고 [isInvalid]로 둘을 가른다. */
+    private data class CreatedAt(val instant: Instant?, val isInvalid: Boolean)
+
+    /** 항목마다 트랜잭션 밖에서 한 번만 파싱한다. 주문의 발생 시각과 수렴 시간 기록이 같은 값을 쓰며, 세는 일은 [recordConvergence]가 확정된 항목에서만 한다. */
+    private fun parseCreatedAt(raw: String?): CreatedAt {
+        if (raw == null) return CreatedAt(null, false)
+        return try {
+            CreatedAt(OffsetDateTime.parse(raw).toInstant(), false)
+        } catch (invalid: DateTimeParseException) {
+            CreatedAt(null, true)
+        }
+    }
+
     /**
      * 이번 배치에서 처음 확정된 항목(APPLIED·REJECTED)만 단말이 만든 시각과 재연결 시각(`reconnectedAt`) 가운데 늦은 쪽부터 지금까지를 잰다. 재연결 뒤에 만든 항목은 만든 시각부터 잰다.
      * 앞선 항목이 커밋된 뒤 배치가 실패해도 남는다(재전송은 DUPLICATE라 중복 기록은 없다). `createdAt`이 없으면 기록하지 않고, 형식이 틀리면 기록하지 않고 [CREATED_AT_INVALID_METRIC]을 센다.
      */
-    private fun recordConvergence(operation: SyncCommand.ReceiveBatch.Operation, reconnectedAt: Instant?, item: SyncCommand.ReceiveBatch.Item) {
-        val raw = operation.createdAt ?: return
+    private fun recordConvergence(createdAt: CreatedAt, reconnectedAt: Instant?, item: SyncCommand.ReceiveBatch.Item) {
         if (item.status != SyncItemStatus.APPLIED && item.status != SyncItemStatus.REJECTED) return
-        val createdAt = try {
-            OffsetDateTime.parse(raw).toInstant()
-        } catch (invalid: DateTimeParseException) {
-            meterRegistry.counter(CREATED_AT_INVALID_METRIC).increment()
-            return
-        }
-        val elapsed = Duration.between(maxOf(createdAt, reconnectedAt ?: createdAt), clock.instant())
+        if (createdAt.isInvalid) meterRegistry.counter(CREATED_AT_INVALID_METRIC).increment()
+        val created = createdAt.instant ?: return
+        val elapsed = Duration.between(maxOf(created, reconnectedAt ?: created), clock.instant())
         if (!elapsed.isNegative) convergence.record(elapsed)
     }
 
@@ -142,7 +151,12 @@ class SyncCommandFacade(
      * `REJECTED`를 기록하고 순번을 확정한다. 거절 판정은 대개 결정적이라 두 트랜잭션 사이에 죽어도 재전송이 같은 결과를 낸다. 단 주문 없음(`ORDER_NOT_FOUND`)은 시점에 따라 달라질 수 있어(그 사이 같은 clientOrderId의 주문이 HTTP로 커밋될 수 있다) 그때도 거절이 기록되고, 단말은 새 operationId로 다시 요청한다.
      * 두 번째 판정에서 순번을 다시 확인하므로 그 사이에 다른 배치가 같은 operation을 확정했으면 `DUPLICATE`·`CONFLICT`로 갈린다.
      */
-    private fun applyOperation(terminalId: TerminalId, storeId: StoreId, operation: SyncCommand.ReceiveBatch.Operation): SyncCommand.ReceiveBatch.Item {
+    private fun applyOperation(
+        terminalId: TerminalId,
+        storeId: StoreId,
+        operation: SyncCommand.ReceiveBatch.Operation,
+        occurredAt: Instant?,
+    ): SyncCommand.ReceiveBatch.Item {
         val payloadHash = operation.payload.hash()
         return try {
             Tx.masterTx {
@@ -151,7 +165,7 @@ class SyncCommandFacade(
                     val orderId = when (payload) {
                         is OrderPayload -> {
                             if (payload.storeId != storeId) throw DomainException(STORE_MISMATCH, "주문의 매장이 인증된 단말의 매장과 다릅니다")
-                            orders.createInCallerTransaction(payload.toCommand(terminalId)).orderId
+                            orders.createInCallerTransaction(payload.toCommand(terminalId, occurredAt)).orderId
                         }
                         is CheckoutPayload -> orders.requestCheckout(OrderCommand.RequestCheckoutByClientOrderId(terminalId, payload.clientOrderId, payload.amount)).orderId
                     }

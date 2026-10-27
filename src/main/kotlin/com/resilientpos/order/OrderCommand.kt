@@ -4,6 +4,7 @@ import com.resilientpos.foundation.Money
 import com.resilientpos.store.StoreId
 import com.resilientpos.terminal.TerminalId
 import java.math.BigDecimal
+import java.time.Instant
 import java.util.Currency
 
 /**
@@ -21,6 +22,8 @@ object OrderCommand {
         val clientOrderId: ClientOrderId,
         val currency: Currency,
         val lines: List<Line>,
+        /** 단말이 알려 준 판매 시각. HTTP 생성은 null이다. 규칙은 `Order.create`가 적용한다. */
+        val occurredAt: Instant?,
     ) {
         /**
          * 주문 생성 요청에 담긴 line 입력.

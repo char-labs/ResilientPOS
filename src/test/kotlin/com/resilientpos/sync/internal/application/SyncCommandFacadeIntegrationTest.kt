@@ -758,6 +758,51 @@ class SyncCommandFacadeIntegrationTest(
         assertEquals(0.0, invalidCount() - beforeInvalid)
     }
 
+    private fun orderOccurredAt(clientOrderId: ClientOrderId): Instant =
+        checkNotNull(
+            jdbcTemplate.queryForObject(
+                "select occurred_at from t_order where terminal_id = ? and client_order_id = ?",
+                { rs, _ -> rs.getObject(1, java.time.OffsetDateTime::class.java).toInstant() },
+                terminalId.value,
+                clientOrderId.value,
+            ),
+        )
+
+    @Test
+    fun `CREATE_ORDER 항목의 createdAt이 주문의 발생 시각이 된다`() {
+        val sold = Instant.now().minusSeconds(3 * 3600).truncatedTo(java.time.temporal.ChronoUnit.MICROS)
+        val order = payload()
+
+        val result = receive(operation(1, order, createdAt = sold.atOffset(java.time.ZoneOffset.ofHours(9)).toString()))
+
+        assertEquals(SyncItemStatus.APPLIED, result.items.single().status)
+        assertEquals(sold, orderOccurredAt(order.clientOrderId))
+    }
+
+    @Test
+    fun `createdAt만 바꿔 재전송하면 DUPLICATE이고 발생 시각은 첫 값이다`() {
+        val sold = Instant.now().minusSeconds(3 * 3600).truncatedTo(java.time.temporal.ChronoUnit.MICROS)
+        val first = operation(1, createdAt = sold.toString())
+        receive(first)
+
+        val result = receive(first.copy(createdAt = Instant.now().minusSeconds(600).toString()))
+
+        assertEquals(SyncItemStatus.DUPLICATE, result.items.single().status)
+        assertEquals(sold, orderOccurredAt((first.payload as OrderPayload).clientOrderId))
+    }
+
+    @Test
+    fun `형식이 틀린 createdAt의 주문은 APPLIED이고 발생 시각은 수신 시각이다`() {
+        val order = payload()
+        val before = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MICROS)
+
+        val result = receive(operation(1, order, createdAt = "어제"))
+
+        val after = Instant.now()
+        assertEquals(SyncItemStatus.APPLIED, result.items.single().status)
+        assertTrue(orderOccurredAt(order.clientOrderId) in before..after)
+    }
+
     @Test
     fun `Z와 offset이 있는 createdAt은 둘 다 수렴 시간으로 기록하고 invalid를 세지 않는다`() {
         val beforeInvalid = invalidCount()
