@@ -140,9 +140,9 @@ persistence 어댑터가 `EntityManager`를 주입받아 `persist`·`find`를 �
 ## 분할 계획
 - 이 PR은 "저장 경로를 Spring Data로 옮긴다"는 개발 컨텍스트 하나다.
 - 열린 PR과 겹치는 곳:
-  - #122 `feature/order-query`: `OrderEntity.kt`, `docs/wiki/domain-model.md`, `docs/wiki/entity-map.md`, 마이그레이션 V022~V024.
+  - #122 `feature/order-query`: 머지됐다(9336c293). 마이그레이션 V022~V024를 썼다.
   - #121 `feature/menu-catalog`: 머지됐다(ed46803b). 새 `MenuPersistenceAdapter`가 `EntityManager`를 쓰던 것을 이 PR이 `MenuJpaRepository`로 바꿨다(결정 6).
-  - 확인 결과(2026-10-27, rebase 시점, origin/main ed46803b): #121이 머지됐고 열린 PR은 #122뿐이다(CI 진행 중). 마이그레이션은 #121이 V021, #122가 V022~V024를 쓰므로 이 PR은 V025로 옮겼다. #122와 겹치는 경로는 `docs/wiki/domain-model.md`, `docs/wiki/entity-map.md`, `src/test/kotlin/com/resilientpos/SchemaMigrationTest.kt`다. #122가 먼저 머지되면 이 PR이, 이 PR이 먼저면 #122가 `SchemaMigrationTest`의 적용 목록과 wiki를 맞춘다.
+  - 확인 결과(2026-10-27, 마지막 rebase, origin/main 9336c293): #121과 #122가 모두 머지됐고 열린 PR은 이 PR뿐이다. 마이그레이션은 #121이 V021, #122가 V022~V024를 썼으므로 이 PR은 V025다. rebase에서 `SchemaMigrationTest`의 적용 목록과 `docs/wiki/entity-map.md`의 마이그레이션 범위가 충돌해 main의 V024 뒤에 "025"를 더하는 것으로 합쳤다.
   - 먼저 머지된 쪽에 맞춰 rebase한다. 마이그레이션 번호는 나중에 머지되는 쪽이 바꾼다. #121이 먼저 머지되면 이 PR에서 `MenuPersistenceAdapter`도 새 규약으로 바꾸고, 이 PR이 먼저 머지되면 #121이 맞춘다.
 
 ## TDD 검증 기록
