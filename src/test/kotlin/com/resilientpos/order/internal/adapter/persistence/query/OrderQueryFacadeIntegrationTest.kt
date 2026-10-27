@@ -1,6 +1,7 @@
 package com.resilientpos.order.internal.adapter.persistence.query
 
 import com.resilientpos.PostgresIntegrationTest
+import com.resilientpos.ThreadStatementCounter
 import com.resilientpos.foundation.DomainErrorKind
 import com.resilientpos.foundation.DomainException
 import com.resilientpos.foundation.Money
@@ -14,46 +15,26 @@ import com.resilientpos.order.OrderStatus
 import com.resilientpos.order.createAndRequestCheckout
 import com.resilientpos.order.internal.domain.Order
 import com.resilientpos.store.StoreId
-import jakarta.persistence.EntityManagerFactory
 import java.time.Clock
 import java.time.temporal.ChronoUnit
 import java.util.UUID
-import kotlin.test.AfterTest
-import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
-import org.hibernate.SessionFactory
-import org.hibernate.stat.Statistics
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.jdbc.core.queryForObject
 
 /**
  * 주문 단건 조회를 실제 PostgreSQL에서 본다. 주문은 Facade로 만들어 저장된 행을 읽는다. Docker가 필요하다.
- * 통계는 `SessionFactory` 전체의 누적값이라 테스트를 병렬로 돌리지 않는 동안만 문장 수가 이 구간의 것이다(OrderInsertStatementCountIntegrationTest와 같다).
+ * 문장 수는 `ThreadStatementCounter`로 테스트 스레드가 직접 낸 문장만 센다. Hibernate 통계는 비동기 consumer의 문장까지 섞는다.
  */
 class OrderQueryFacadeIntegrationTest(
     private val commands: OrderCommandFacade,
     private val queryFacade: OrderQueryFacade,
     private val jdbc: JdbcTemplate,
     private val clock: Clock,
-    entityManagerFactory: EntityManagerFactory,
 ) : PostgresIntegrationTest() {
 
-    private val statistics: Statistics = entityManagerFactory.unwrap(SessionFactory::class.java).statistics
-
-    private var statisticsWereEnabled = false
-
-    @BeforeTest
-    fun enableStatistics() {
-        statisticsWereEnabled = statistics.isStatisticsEnabled
-        statistics.isStatisticsEnabled = true
-    }
-
-    @AfterTest
-    fun restoreStatistics() {
-        statistics.isStatisticsEnabled = statisticsWereEnabled
-    }
 
     private fun get(orderId: OrderId, storeId: StoreId = OrderFixtures.storeId): OrderDetailView =
         queryFacade.getOrder(OrderQuery.GetOrder(orderId, storeId))
@@ -118,12 +99,11 @@ class OrderQueryFacadeIntegrationTest(
 
     @Test
     fun `단건 조회는 주문과 checkout 한 쿼리와 line 한 쿼리로 두 문장이다`() {
-        // checkout 없는 주문이라 비동기 처리(결제 시도 생성)가 없어 전역 통계에 다른 문장이 섞이지 않는다.
-        // checkout을 따로 읽는 구현이면 행이 없어도 문장이 3개가 된다.
+        // checkout 없는 주문이라 checkout을 따로 읽는 구현이면 행이 없어도 문장이 3개가 된다.
         val orderId = commands.create(OrderFixtures.createOrderCommand()).orderId
-        val before = statistics.prepareStatementCount
+        val before = ThreadStatementCounter.current()
         get(orderId)
 
-        assertEquals(2L, statistics.prepareStatementCount - before, "주문 행과 checkout 한 쿼리, line 한 쿼리")
+        assertEquals(2, ThreadStatementCounter.current() - before, "주문 행과 checkout 한 쿼리, line 한 쿼리")
     }
 }

@@ -1,6 +1,7 @@
 package com.resilientpos.order.internal.adapter.persistence.query
 
 import com.resilientpos.PostgresIntegrationTest
+import com.resilientpos.ThreadStatementCounter
 import com.resilientpos.foundation.Money
 import com.resilientpos.order.OrderCommand
 import com.resilientpos.order.OrderCommandFacade
@@ -10,52 +11,31 @@ import com.resilientpos.order.OrderQuery
 import com.resilientpos.order.OrderQueryFacade
 import com.resilientpos.order.OrderStatus
 import com.resilientpos.store.StoreId
-import jakarta.persistence.EntityManagerFactory
 import java.time.Clock
 import java.time.Duration
 import java.time.Instant
 import java.time.temporal.ChronoUnit
 import java.util.UUID
-import kotlin.test.AfterTest
-import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
-import org.hibernate.SessionFactory
-import org.hibernate.stat.Statistics
 import org.springframework.jdbc.core.JdbcTemplate
 
 /**
  * 점주 주문 목록 조회를 실제 PostgreSQL에서 본다. 매장마다 새 id를 써서 다른 테스트의 주문과 섞이지 않는다.
  * 같은 시각 동률의 기대 순서는 id 문자열의 사전순이다. 소문자 hex 문자열 순서는 PostgreSQL `uuid`의 부호 없는 바이트 순서와 같다.
  * `UUID.compareTo`는 상위 64비트를 부호 있는 수로 비교해 다를 수 있고, UUID v7은 같은 밀리초 안에서 생성 순서와 같지 않다.
- * 다른 상태의 주문은 checkout 대신 상태 컬럼만 바꿔 만든다. checkout은 결제 시도 생성을 비동기로 띄우고, Hibernate 통계는 전역이라
- * 그 문장이 문장 수 테스트에 섞인다(제대로 고치는 `statement_inspector`는 별도 PR, `PaymentAttemptInsertStatementCountIntegrationTest`).
+ * 문장 수는 `ThreadStatementCounter`로 테스트 스레드가 직접 낸 문장만 센다. Hibernate 통계는 비동기 consumer의 문장까지 섞는다.
  */
 class OrderListQueryIntegrationTest(
     private val commands: OrderCommandFacade,
     private val queryFacade: OrderQueryFacade,
     private val clock: Clock,
     private val jdbc: JdbcTemplate,
-    entityManagerFactory: EntityManagerFactory,
 ) : PostgresIntegrationTest() {
 
-    private val statistics: Statistics = entityManagerFactory.unwrap(SessionFactory::class.java).statistics
-
-    private var statisticsWereEnabled = false
 
     private val base: Instant = clock.instant().minus(Duration.ofDays(1)).truncatedTo(ChronoUnit.MICROS)
-
-    @BeforeTest
-    fun enableStatistics() {
-        statisticsWereEnabled = statistics.isStatisticsEnabled
-        statistics.isStatisticsEnabled = true
-    }
-
-    @AfterTest
-    fun restoreStatistics() {
-        statistics.isStatisticsEnabled = statisticsWereEnabled
-    }
 
     private fun place(storeId: StoreId, occurredAt: Instant, lines: List<OrderCommand.Create.Line>? = null): OrderId {
         val command = if (lines == null) {
@@ -190,14 +170,13 @@ class OrderListQueryIntegrationTest(
 
     @Test
     fun `목록은 합계를 포함해 한 문장으로 읽는다`() {
-        // 비동기 처리가 없는 OPEN 주문만 만들어 전역 통계에 다른 문장이 섞이지 않는다.
         val store = StoreId(UUID.randomUUID())
         repeat(3) { place(store, base.plusSeconds(it * 60L)) }
-        val before = statistics.prepareStatementCount
+        val before = ThreadStatementCounter.current()
 
         find(store, size = 2)
 
-        assertEquals(1L, statistics.prepareStatementCount - before)
+        assertEquals(1, ThreadStatementCounter.current() - before)
     }
 
     private companion object {
