@@ -117,7 +117,7 @@ persistence 어댑터가 `EntityManager`를 주입받아 `persist`·`find`를 �
 7. 락: non-volatile 상수 기본값의 `ADD COLUMN`이라 메타데이터 변경이다. `ACCESS EXCLUSIVE`를 짧게 잡는다. 긴 트랜잭션 뒤에서 sync를 세우지 않게 `set local lock_timeout = '5s'`를 둔다. 행 수는 단말 수다.
 8. 이전 버전: 이전 버전은 이 컬럼을 매핑하지 않아 `validate`가 통과하고, INSERT는 기본값 0을 받는다. 이전 버전의 UPDATE는 version을 올리지 않지만, 새 버전의 UPDATE는 행 잠금 아래에서 읽은 version으로 쓰므로 충돌이 없다.
 9. 이벤트·캐시: 실리지 않는다.
-- 대조 기록: 미작성
+- 대조 기록: 읽기 전용 리뷰 에이전트(code-reviewer, 구현자와 다른 에이전트), 2026-10-27, 질문 1~9와 SQL·`WatermarkEntity`·`SyncPersistenceAdapter`·`SyncCommandFacade` 대조에서 불일치 없음. 리뷰어가 확인 불가로 남긴 것 셋은 구현자가 닫았다. version이 null인 새 엔티티의 INSERT가 not null 위반 없이 들어가는 것은 실제 Postgres 통합 테스트 통과로, V014의 `lock_timeout` 동일성은 V014 열람으로, `saveWatermark`의 호출자가 `ensureWatermark`와 `judge`뿐인 것은 grep으로 확인했다. 질문 5(정본 여부)는 리뷰어가 읽은 파일에 근거가 없어 판정하지 않았고, 구현자의 답(사본이 아니다)만 남는다.
 
 ## 검증
 - `python3 scripts/check_pr.py --base origin/main --worktree`(개발 중), `--worktree` 없이 한 번 더(제출 전).
