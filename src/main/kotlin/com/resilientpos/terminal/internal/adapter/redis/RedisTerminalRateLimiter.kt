@@ -28,7 +28,8 @@ import org.springframework.stereotype.Component
  * 쉬는 동안 bucket이 capacity까지 차므로 오프라인에서 돌아온 단말은 capacity만큼 바로 보낼 수 있다.
  * 시각은 Redis `TIME`이라 pod 시계와 무관하다. 알고리즘은 Spring Cloud Gateway의 `request_rate_limiter.lua`를 따랐고 코드는 새로 썼다.
  *
- * 키는 `rate-limit:{매장 ID}:terminal:단말 ID`와 `rate-limit:{매장 ID}:store`다. 중괄호는 Redis Cluster hash tag다.
+ * 키는 `rate-limit:{매장 ID}:terminal:단말 ID`와 `rate-limit:{매장 ID}:store`다. 조회(GET·HEAD)용 [acquireRead]는 같은 스크립트를 부르되
+ * `rate-limit:{매장 ID}:read:terminal:단말 ID`와 `rate-limit:{매장 ID}:read:store`를 따로 쓴다. 중괄호는 Redis Cluster hash tag다.
  * 두 키가 다른 slot이면 Redis Cluster에서 스크립트가 실패하고 아래 fail-open으로 보호가 꺼진다. 키는 [keys] 하나로 만들어 기동 검사도 같은 형식을 쓴다.
  *
  * Redis 오류로 보는 예외는 `DataAccessException`과 `IllegalStateException`(종료 중이라 닫힌 커넥션 팩토리)뿐이고,
@@ -44,20 +45,29 @@ class RedisTerminalRateLimiter(
     @Value("\${resilientpos.rate-limit.terminal.refill-per-second}") terminalRefillPerSecond: Double,
     @Value("\${resilientpos.rate-limit.store.capacity}") storeCapacity: Long,
     @Value("\${resilientpos.rate-limit.store.refill-per-second}") storeRefillPerSecond: Double,
+    @Value("\${resilientpos.rate-limit.read.terminal.capacity}") readTerminalCapacity: Long,
+    @Value("\${resilientpos.rate-limit.read.terminal.refill-per-second}") readTerminalRefillPerSecond: Double,
+    @Value("\${resilientpos.rate-limit.read.store.capacity}") readStoreCapacity: Long,
+    @Value("\${resilientpos.rate-limit.read.store.refill-per-second}") readStoreRefillPerSecond: Double,
 ) {
 
     init {
         requireValid("terminal", terminalCapacity, terminalRefillPerSecond)
         requireValid("store", storeCapacity, storeRefillPerSecond)
+        requireValid("read.terminal", readTerminalCapacity, readTerminalRefillPerSecond)
+        requireValid("read.store", readStoreCapacity, readStoreRefillPerSecond)
     }
 
     /** 스크립트의 ARGV. 키 순서(단말, 매장)와 같은 순서로 capacity와 초당 refill이 번갈아 온다. */
     private val bucketArgs = listOf(terminalCapacity, terminalRefillPerSecond, storeCapacity, storeRefillPerSecond).map { it.toString() }.toTypedArray()
 
-    /** 첫 거절 전에도 시계열이 있어야 increase()가 첫 증가를 잡는다. */
-    private val rejectCounters = SCOPES.associateWith { meterRegistry.counter(METRIC, SCOPE_TAG, it) }
+    /** 조회 bucket의 ARGV. 쓰기와 같은 순서다. */
+    private val readBucketArgs = listOf(readTerminalCapacity, readTerminalRefillPerSecond, readStoreCapacity, readStoreRefillPerSecond).map { it.toString() }.toTypedArray()
 
-    private val rejectLogs = SCOPES.associateWith { LogThrottle() }
+    /** 첫 거절 전에도 시계열이 있어야 increase()가 첫 증가를 잡는다. */
+    private val rejectCounters = (WRITE_SCOPES + READ_SCOPES).associateWith { meterRegistry.counter(METRIC, SCOPE_TAG, it) }
+
+    private val rejectLogs = (WRITE_SCOPES + READ_SCOPES).associateWith { LogThrottle() }
     private val warnLog = LogThrottle()
     private val errorLog = LogThrottle()
 
@@ -80,7 +90,7 @@ class RedisTerminalRateLimiter(
     @PostConstruct
     fun checkScriptAtStartup() {
         val failure = try {
-            val (rejected, _) = verdict(redis.execute(ACQUIRE, keys("preflight:${UUID.randomUUID()}", "preflight"), *bucketArgs))
+            val (rejected, _) = verdict(redis.execute(ACQUIRE, keys(WRITE_KEY_PREFIX, "preflight:${UUID.randomUUID()}", "preflight"), *bucketArgs))
             check(rejected == 0) { "rate limit 스크립트가 새 bucket을 거절했다. 스크립트를 확인한다: rejected=$rejected" }
             return
         } catch (e: DataAccessException) {
@@ -95,8 +105,14 @@ class RedisTerminalRateLimiter(
         log.warn { "기동 검사를 건너뛴다(Redis에 닿지 못하거나 Redis 쪽 상태 오류) cause=${root.javaClass.simpleName}: ${root.message}" }
     }
 
-    /** 거절하면 [RateLimitedException]을 던진다. */
-    fun acquire(terminal: AuthenticatedTerminal) {
+    /** 쓰기 bucket을 한 번 차감한다. 거절하면 [RateLimitedException]을 던진다. */
+    fun acquire(terminal: AuthenticatedTerminal) = takeToken(terminal, WRITE_KEY_PREFIX, bucketArgs, WRITE_SCOPES)
+
+    /** 조회(GET·HEAD) bucket을 한 번 차감한다. 쓰기 bucket은 건드리지 않는다. 거절하면 [RateLimitedException]을 던진다. */
+    fun acquireRead(terminal: AuthenticatedTerminal) = takeToken(terminal, READ_KEY_PREFIX, readBucketArgs, READ_SCOPES)
+
+    /** [scopes]는 키 순서와 같다. fail-open 창·탐침·로그 상태는 쓰기와 조회가 나눠 쓴다. Redis는 하나라 창도 하나다. */
+    private fun takeToken(terminal: AuthenticatedTerminal, keyPrefix: String, args: Array<String>, scopes: List<String>) {
         val now = clock.millis()
         val failedAt = connectionFailedAt.get()
         val window = SKIP_AFTER_CONNECTION_FAILURE.toMillis()
@@ -108,7 +124,7 @@ class RedisTerminalRateLimiter(
         }
         // 창이 열려 있었는데 여기까지 왔으면 이 요청이 탐침이다. 실패면 실패 시각을 기록한 뒤에 탐침을 끝낸다.
         val result = try {
-            redis.execute(ACQUIRE, keys(terminal.storeId.value.toString(), terminal.terminalId.value.toString()), *bucketArgs)
+            redis.execute(ACQUIRE, keys(keyPrefix, terminal.storeId.value.toString(), terminal.terminalId.value.toString()), *args)
         } catch (e: DataAccessException) {
             return proceedUnlimited(terminal, e, failedAt)
         } catch (e: IllegalStateException) {
@@ -120,7 +136,7 @@ class RedisTerminalRateLimiter(
         if (failedAt != NEVER) connectionFailedAt.compareAndSet(failedAt, NEVER)
         val (rejected, waitMicros) = verdict(result)
         if (rejected == 0) return
-        val scope = SCOPES[rejected - 1]
+        val scope = scopes[rejected - 1]
         rejectCounters.getValue(scope).increment()
         // 거절이면 기다릴 시간이 1마이크로초 이상이라 올림한 초는 1 이상이다.
         val retryAfterSeconds = ceil(waitMicros / MICROS_PER_SECOND).toLong()
@@ -195,10 +211,16 @@ class RedisTerminalRateLimiter(
         const val SCOPE_TAG = "scope"
 
         /** 키 순서와 같다. 스크립트가 돌려주는 거절 bucket 번호(1부터)로 찾는다. */
-        val SCOPES = listOf("terminal", "store")
+        val WRITE_SCOPES = listOf("terminal", "store")
+        val READ_SCOPES = listOf("read_terminal", "read_store")
+
+        /** 쓰기 키는 배포 중 bucket이 초기화되지 않게 접두어가 없던 때의 형식 그대로다. */
+        const val WRITE_KEY_PREFIX = ""
+        const val READ_KEY_PREFIX = "read:"
 
         /** 단말 키와 매장 키. 매장 ID가 hash tag라 Redis Cluster에서 두 키가 같은 slot에 있다. 기동 검사도 이 함수를 쓴다. */
-        fun keys(storeId: String, terminalId: String) = listOf("rate-limit:{$storeId}:terminal:$terminalId", "rate-limit:{$storeId}:store")
+        fun keys(prefix: String, storeId: String, terminalId: String) =
+            listOf("rate-limit:{$storeId}:${prefix}terminal:$terminalId", "rate-limit:{$storeId}:${prefix}store")
 
         /** 스크립트 결과(거절 bucket 번호, 기다릴 마이크로초). 기동 검사도 같은 함수로 읽어 반환 형식이 바뀌면 기동에서 드러난다. */
         fun verdict(result: List<*>): Pair<Int, Long> = (result[0] as Long).toInt() to (result[1] as Long)

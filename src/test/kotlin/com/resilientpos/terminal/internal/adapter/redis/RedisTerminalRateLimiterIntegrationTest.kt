@@ -40,13 +40,22 @@ class RedisTerminalRateLimiterIntegrationTest(
         terminalRefillPerSecond: Double = 0.02,
         storeCapacity: Long = 1_000,
         storeRefillPerSecond: Double = 0.02,
+        readTerminalCapacity: Long = 1_000,
+        readTerminalRefillPerSecond: Double = 0.02,
+        readStoreCapacity: Long = 1_000,
+        readStoreRefillPerSecond: Double = 0.02,
     ) = RedisTerminalRateLimiter(
         redis, SimpleMeterRegistry(), Clock.systemUTC(), terminalCapacity, terminalRefillPerSecond, storeCapacity, storeRefillPerSecond,
+        readTerminalCapacity, readTerminalRefillPerSecond, readStoreCapacity, readStoreRefillPerSecond,
     )
 
     private fun terminalKey(terminal: AuthenticatedTerminal) = "rate-limit:{${terminal.storeId.value}}:terminal:${terminal.terminalId.value}"
 
     private fun storeKey(terminal: AuthenticatedTerminal) = "rate-limit:{${terminal.storeId.value}}:store"
+
+    private fun readTerminalKey(terminal: AuthenticatedTerminal) = "rate-limit:{${terminal.storeId.value}}:read:terminal:${terminal.terminalId.value}"
+
+    private fun readStoreKey(terminal: AuthenticatedTerminal) = "rate-limit:{${terminal.storeId.value}}:read:store"
 
     /** 스크립트와 같은 시계(Redis `TIME`)의 지금, 마이크로초. */
     private fun redisNowMicros(): Long =
@@ -180,6 +189,53 @@ class RedisTerminalRateLimiterIntegrationTest(
     }
 
     @Test
+    fun `쓰기 bucket을 다 쓴 단말의 조회는 통과하고 조회 bucket을 다 쓴 단말의 쓰기는 통과한다`() {
+        val limiter = limiter(terminalCapacity = 2, readTerminalCapacity = 2)
+        val terminal = terminal()
+
+        repeat(2) { limiter.acquire(terminal) }
+        assertFailsWith<RateLimitedException> { limiter.acquire(terminal) }
+        repeat(2) { limiter.acquireRead(terminal) }
+        assertFailsWith<RateLimitedException> { limiter.acquireRead(terminal) }
+
+        val other = terminal()
+        repeat(2) { limiter.acquireRead(other) }
+        assertFailsWith<RateLimitedException> { limiter.acquireRead(other) }
+        limiter.acquire(other)
+    }
+
+    @Test
+    fun `조회 bucket도 단말과 매장 둘이고 한쪽이 거절하면 어느 쪽도 차감하지 않는다`() {
+        val limiter = limiter(readTerminalCapacity = 2, readStoreCapacity = 1)
+        val terminal = terminal()
+        putBucket(readStoreKey(terminal), tokens = 0.0, atMicros = redisNowMicros())
+
+        assertContains(assertFailsWith<RateLimitedException> { limiter.acquireRead(terminal) }.message.orEmpty(), "scope=read_store")
+        assertFalse(redis.hasKey(readTerminalKey(terminal)), "조회 매장이 거절했는데 조회 단말 bucket을 썼다")
+
+        val other = terminal(StoreId(UUID.randomUUID()))
+        putBucket(readTerminalKey(other), tokens = 0.0, atMicros = redisNowMicros())
+        assertContains(assertFailsWith<RateLimitedException> { limiter.acquireRead(other) }.message.orEmpty(), "scope=read_terminal")
+        assertFalse(redis.hasKey(readStoreKey(other)), "조회 단말이 거절했는데 조회 매장 bucket을 썼다")
+    }
+
+    @Test
+    fun `조회 키 둘은 같은 Cluster slot에 있고 쓰기 키를 건드리지 않으며 TTL이 걸린다`() {
+        val limiter = limiter(readTerminalCapacity = 3, readTerminalRefillPerSecond = 0.5, readStoreCapacity = 10, readStoreRefillPerSecond = 2.0)
+        val terminal = terminal()
+
+        limiter.acquireRead(terminal)
+
+        assertEquals(SlotHash.getSlot(readTerminalKey(terminal)), SlotHash.getSlot(readStoreKey(terminal)))
+        listOf(readTerminalKey(terminal) to 6_000L, readStoreKey(terminal) to 5_000L).forEach { (key, fillMillis) ->
+            val ttl = checkNotNull(redis.getExpire(key, TimeUnit.MILLISECONDS))
+            assertTrue(ttl in (fillMillis - 1_000)..fillMillis, "$key TTL이 범위 밖이다: $ttl")
+        }
+        assertFalse(redis.hasKey(terminalKey(terminal)))
+        assertFalse(redis.hasKey(storeKey(terminal)))
+    }
+
+    @Test
     fun `ACL이 스크립트 안의 쓰기 명령을 막으면 기동 검사가 기동을 멈춘다`() {
         // 스크립트 안의 ACL 거부 문구는 Redis 버전마다 다르다. 단위 테스트의 문구 목록이 이 이미지의 실제 응답과 맞는지 본다.
         val container = PostgresIntegrationTest.redis
@@ -198,7 +254,7 @@ class RedisTerminalRateLimiterIntegrationTest(
             val restricted = StringRedisTemplate(factory)
             // 인증은 된다. 아래 실패가 WRONGPASS가 아니라 스크립트 안의 HSET 거부라는 뜻이다.
             assertFalse(restricted.hasKey("rate-limit:{acl}:probe"))
-            val limiter = RedisTerminalRateLimiter(restricted, SimpleMeterRegistry(), Clock.systemUTC(), 1_000, 0.02, 1_000, 0.02)
+            val limiter = RedisTerminalRateLimiter(restricted, SimpleMeterRegistry(), Clock.systemUTC(), 1_000, 0.02, 1_000, 0.02, 1_000, 0.02, 1_000, 0.02)
 
             assertFailsWith<IllegalStateException> { limiter.checkScriptAtStartup() }
         } finally {

@@ -24,6 +24,7 @@ import org.springframework.web.servlet.HandlerMapping
  * `afterCompletion`은 불리지 않으므로(`HandlerInterceptor`는 `preHandle`이 true를 돌려준 뒤에만 부른다) 던지기 전에 그 자리에서 푼다.
  *
  * GET·HEAD는 자리를 잡지 않고 인증과 빈도 상한만 한다. 행 잠금을 잡지 않는 읽기라 잠금 앞에서 커넥션을 쥐고 기다리지 않는다.
+ * 빈도 상한도 GET·HEAD는 조회 bucket(`acquireRead`), 그 밖은 쓰기 bucket(`acquire`)만 차감한다. 폴링이 쓰기 bucket을 비워 결제 요청을 막지 않게 하려는 것이다.
  *
  * 비동기 handler(`Callable`·`DeferredResult`·suspend)는 ASYNC dispatch에서 이 메서드를 다시 부른다. 그때는 앞 dispatch가 끝까지 통과해 [ATTRIBUTE]가 있으므로
  * 인증도 두 상한도 다시 하지 않고 통과하고, 자리는 마지막 `afterCompletion`이 한 번 푼다. handler가 이미 일한 뒤 401·429를 내면 "429면 처리되지 않았다"는 계약이 깨진다.
@@ -53,7 +54,7 @@ class TerminalAuthenticationInterceptor(
             HeldSlot(terminal, kind)
         }
         try {
-            rateLimiter.acquire(terminal)
+            if (request.method in READ_METHODS) rateLimiter.acquireRead(terminal) else rateLimiter.acquire(terminal)
         } catch (e: Throwable) {
             held?.let { inFlight.release(it.terminal, it.kind) }
             throw e

@@ -55,7 +55,14 @@ class RedisTerminalRateLimiterTest {
         terminalRefillPerSecond: Double = 1.0,
         storeCapacity: Long = 10,
         storeRefillPerSecond: Double = 1.0,
-    ) = RedisTerminalRateLimiter(redis, meterRegistry, clock, terminalCapacity, terminalRefillPerSecond, storeCapacity, storeRefillPerSecond)
+        readTerminalCapacity: Long = 10,
+        readTerminalRefillPerSecond: Double = 1.0,
+        readStoreCapacity: Long = 10,
+        readStoreRefillPerSecond: Double = 1.0,
+    ) = RedisTerminalRateLimiter(
+        redis, meterRegistry, clock, terminalCapacity, terminalRefillPerSecond, storeCapacity, storeRefillPerSecond,
+        readTerminalCapacity, readTerminalRefillPerSecond, readStoreCapacity, readStoreRefillPerSecond,
+    )
 
     /** 스크립트가 [scriptResult]를 돌려주는 Redis. */
     private fun redisReturning(scriptResult: List<Long>) = mock(StringRedisTemplate::class.java) { scriptResult }
@@ -565,6 +572,8 @@ class RedisTerminalRateLimiterTest {
             .withPropertyValues(
                 "resilientpos.rate-limit.terminal.capacity=10", "resilientpos.rate-limit.terminal.refill-per-second=1",
                 "resilientpos.rate-limit.store.capacity=10", "resilientpos.rate-limit.store.refill-per-second=1",
+                "resilientpos.rate-limit.read.terminal.capacity=10", "resilientpos.rate-limit.read.terminal.refill-per-second=1",
+                "resilientpos.rate-limit.read.store.capacity=10", "resilientpos.rate-limit.read.store.refill-per-second=1",
             )
             .withUserConfiguration(RedisTerminalRateLimiter::class.java)
             .run { context ->
@@ -609,9 +618,9 @@ class RedisTerminalRateLimiterTest {
     }
 
     @Test
-    fun `거절은 거절한 bucket의 scope로 counter를 올리고 두 scope는 처음부터 0으로 있다`() {
+    fun `거절은 거절한 bucket의 scope로 counter를 올리고 쓰기·조회 네 scope는 처음부터 0으로 있다`() {
         val limiter = limiter(redisReturning(listOf(2L, 1_500_000L)))
-        assertEquals(setOf("terminal", "store"), meterRegistry.find(METRIC).counters().map { it.id.getTag("scope") }.toSet())
+        assertEquals(setOf("terminal", "store", "read_terminal", "read_store"), meterRegistry.find(METRIC).counters().map { it.id.getTag("scope") }.toSet())
 
         val rejected = assertFailsWith<RateLimitedException> { limiter.acquire(terminal) }
 
@@ -620,22 +629,65 @@ class RedisTerminalRateLimiterTest {
         assertEquals(0.0, meterRegistry.counter(METRIC, "scope", "terminal").count())
     }
 
+    @Test
+    fun `조회 거절은 read scope로 counter를 올리고 쓰기 scope는 건드리지 않는다`() {
+        listOf(1L to "read_terminal", 2L to "read_store").forEach { (bucket, scope) ->
+            val registry = SimpleMeterRegistry()
+            val limiter = RedisTerminalRateLimiter(redisReturning(listOf(bucket, 1_500_000L)), registry, clock, 10, 1.0, 10, 1.0, 10, 1.0, 10, 1.0)
+
+            val rejected = assertFailsWith<RateLimitedException> { limiter.acquireRead(terminal) }
+
+            assertEquals(2, rejected.retryAfterSeconds)
+            assertContains(rejected.message.orEmpty(), "scope=$scope")
+            assertEquals(1.0, registry.counter(METRIC, "scope", scope).count())
+            assertEquals(listOf(0.0, 0.0, 0.0), listOf("terminal", "store", if (scope == "read_store") "read_terminal" else "read_store").map { registry.counter(METRIC, "scope", it).count() })
+        }
+    }
+
+    @Test
+    fun `조회 설정이 규칙을 어기면 만들지 못하고 메시지에 어느 설정인지 나온다`() {
+        val redis = redisReturning(listOf(0L, 0L))
+        listOf<Pair<() -> Any, String>>(
+            { limiter(redis, readTerminalCapacity = 0) } to "rate-limit.read.terminal: capacity=0",
+            { limiter(redis, readTerminalRefillPerSecond = 0.0) } to "rate-limit.read.terminal",
+            { limiter(redis, readStoreCapacity = 0) } to "rate-limit.read.store: capacity=0",
+            { limiter(redis, readStoreRefillPerSecond = Double.NaN) } to "rate-limit.read.store",
+            { limiter(redis, readStoreCapacity = 86_401, readStoreRefillPerSecond = 1.0) } to "rate-limit.read.store",
+        ).forEach { (create, setting) ->
+            assertContains(assertFailsWith<IllegalArgumentException>(block = create).message.orEmpty(), setting)
+        }
+    }
+
+    @Test
+    fun `조회도 Redis 오류면 통과시키고 쓰기와 같은 창을 나눠 쓴다`() {
+        var calls = 0
+        val limiter = limiter(mock(StringRedisTemplate::class.java) { calls++; throw RedisConnectionFailureException("Unable to connect to Redis") })
+
+        limiter.acquireRead(terminal)
+        limiter.acquire(terminal) // 같은 1초 창 안이라 Redis를 부르지 않는다
+        limiter.acquireRead(terminal)
+
+        assertEquals(1, calls)
+    }
+
     /**
      * 429·`RATE_LIMITED`는 상태를 바꾸기 전(handler 전)의 거절이어야 단말이 같은 요청을 그대로 다시 보낼 수 있다.
-     * 그래서 limiter는 인증 인터셉터만 부른다. 양성 대조가 있어 `acquire`의 시그니처가 바뀌면 규칙이 비지 않고 실패한다.
+     * 그래서 limiter는 인증 인터셉터만 부른다. 양성 대조가 있어 메서드 이름이 바뀌면 규칙이 비지 않고 실패한다.
      */
     @Test
-    fun `acquire는 인증 인터셉터만 부른다`() {
+    fun `acquire와 acquireRead는 인증 인터셉터만 부른다`() {
         val production = ClassFileImporter().withImportOption(ImportOption.Predefined.DO_NOT_INCLUDE_TESTS).importPackages("com.resilientpos")
-        // 시그니처가 아니라 이름과 소유 타입으로 맞춘다. 오버로드나 기본값 인자(합성 메서드)가 생겨도 규칙이 비지 않는다.
-        val acquire = target(name("acquire")).and(target(owner(type(RedisTerminalRateLimiter::class.java))))
+        listOf("acquire", "acquireRead").forEach { method ->
+            // 시그니처가 아니라 이름과 소유 타입으로 맞춘다. 오버로드나 기본값 인자(합성 메서드)가 생겨도 규칙이 비지 않는다.
+            val call = target(name(method)).and(target(owner(type(RedisTerminalRateLimiter::class.java))))
 
-        noClasses().that().doNotBelongToAnyOf(TerminalAuthenticationInterceptor::class.java)
-            .should().callMethodWhere(acquire)
-            .check(production)
-        classes().that().haveFullyQualifiedName(TerminalAuthenticationInterceptor::class.java.name)
-            .should().callMethodWhere(acquire)
-            .check(production)
+            noClasses().that().doNotBelongToAnyOf(TerminalAuthenticationInterceptor::class.java)
+                .should().callMethodWhere(call)
+                .check(production)
+            classes().that().haveFullyQualifiedName(TerminalAuthenticationInterceptor::class.java.name)
+                .should().callMethodWhere(call)
+                .check(production)
+        }
     }
 
     private companion object {

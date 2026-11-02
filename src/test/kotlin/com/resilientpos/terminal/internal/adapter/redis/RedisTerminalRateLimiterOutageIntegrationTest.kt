@@ -42,7 +42,7 @@ class RedisTerminalRateLimiterOutageIntegrationTest(
         val factory = LettuceConnectionFactory(RedisStandaloneConfiguration(redis.host, redis.getMappedPort(6379)), clientConfiguration)
             .apply { afterPropertiesSet(); start() }
         try {
-            val limiter = RedisTerminalRateLimiter(StringRedisTemplate(factory), SimpleMeterRegistry(), clock, 10, 1.0, 10, 1.0)
+            val limiter = RedisTerminalRateLimiter(StringRedisTemplate(factory), SimpleMeterRegistry(), clock, 10, 1.0, 10, 1.0, 10, 1.0, 10, 1.0)
             limiter.acquire(terminal) // 공유 연결을 맺는다
             test(redis, limiter)
         } finally {
@@ -58,6 +58,17 @@ class RedisTerminalRateLimiterOutageIntegrationTest(
 
             // 끊긴 연결에 명령을 받아 두면(Lettuce 기본값) 첫 호출부터 timeout 1초를 다 기다린다.
             val elapsed = measureTime { repeat(3) { limiter.acquire(terminal) } }
+
+            assertTrue(elapsed < 500.milliseconds, "세 번 통과에 $elapsed 걸렸다")
+        }
+    }
+
+    @Test
+    fun `Redis가 내려가면 조회도 command timeout을 기다리지 않고 통과한다`() {
+        withRedis(appRedis.clientConfiguration) { redis, limiter ->
+            redis.stop()
+
+            val elapsed = measureTime { repeat(3) { limiter.acquireRead(terminal) } }
 
             assertTrue(elapsed < 500.milliseconds, "세 번 통과에 $elapsed 걸렸다")
         }
