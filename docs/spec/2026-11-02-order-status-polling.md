@@ -153,9 +153,7 @@
 ## TDD 검증 기록
 | 동작 / 테스트 이름 | RED 명령·실패 이유 | GREEN 명령·결과 | 리팩터링 후 회귀 명령·결과 |
 |---|---|---|---|
-| GET·HEAD는 조회 bucket, 그 밖은 쓰기 bucket을 쓴다 (인수 1) | 미실행 | 미실행 | 미실행 |
-| 조회 bucket은 단말·매장 둘을 원자적으로 차감하고 거절을 scope로 센다 (인수 2·3·5) | 미실행 | 미실행 | 미실행 |
-| 조회 bucket 설정 검증 (인수 4) | 미실행 | 미실행 | 미실행 |
+| 조회 bucket 분리 (인수 1~5). 통합 `RedisTerminalRateLimiterIntegrationTest`의 `쓰기 bucket을 다 쓴 단말의 조회는 통과하고 조회 bucket을 다 쓴 단말의 쓰기는 통과한다`, `조회 bucket도 단말과 매장 둘이고 한쪽이 거절하면 어느 쪽도 차감하지 않는다`, `조회 키 둘은 같은 Cluster slot에 있고 쓰기 키를 건드리지 않으며 TTL이 걸린다`. 장애 `RedisTerminalRateLimiterOutageIntegrationTest`의 `Redis가 내려가면 조회도 command timeout을 기다리지 않고 통과한다`. 단위 `RedisTerminalRateLimiterTest`의 네 scope 0 등록, `조회 거절은 read scope로 counter를 올리고 쓰기 scope는 건드리지 않는다`, `조회 설정이 규칙을 어기면 만들지 못하고 메시지에 어느 설정인지 나온다`, `조회도 Redis 오류면 통과시키고 쓰기와 같은 창을 나눠 쓴다`, 구조 테스트 `acquire와 acquireRead는 인증 인터셉터만 부른다`. 인터셉터 `TerminalAuthenticationInterceptorTest`의 `GET과 HEAD는 자리를 잡지 않고 인증과 조회 빈도 상한만 한다`, `POST는 쓰기 빈도 상한만 부르고 조회 상한은 부르지 않는다` | `./gradlew test --tests 'com.resilientpos.terminal.*'` 136건 중 9건 실패. 최소 선언(생성자에 조회 값 4개, `acquireRead`가 `acquire`를 그대로 부름)이라 assertion 실패: 쓰기 소진 뒤 조회가 `scope=terminal`로 거절, 조회 키 TTL -2(키 없음), counter scope 목록이 쓰기 둘뿐, 조회 설정 오류로도 생성됨, 인터셉터 GET에서 `acquireRead` Wanted but not invoked, 429 기대에 200. 장애 통과와 창 공유 두 건은 스텁이 같은 경로라 처음부터 통과(characterization) | 같은 명령 통과. 본문(창·탐침·결과 해석·scope·로그·counter)을 private `takeToken`(키 접두어, ARGV, scope 목록) 하나로 옮기고 `acquire`·`acquireRead`가 함께 부른다. 키는 `keys(prefix, …)` 하나이고 쓰기 접두어는 빈 문자열(기존 키 그대로), 조회는 `read:`. scope 다섯 중 `in_flight`는 `TerminalInFlightLimiter`가 등록하므로 limiter 단위 테스트는 넷을 본다. 동작 제거 확인: 인터셉터 GET 분기를 지우면 3건(GET·HEAD, 429, 구조 테스트의 양성 대조) 실패, `:store` 키의 hash tag를 지우면 4건(조회·쓰기 slot, 조회·쓰기의 한쪽 거절 무차감) 실패, 원복 | `./gradlew test --tests 'com.resilientpos.terminal.*' --tests '*ModuleStructureTest' --tests '*Architecture*'` BUILD SUCCESSFUL, 141건 실패 0 |
 | 대조 case 목록의 잘림 표시와 REST Docs (인수 6) | 미실행 | 미실행 | 미실행 |
 | 시연 포스의 폴링 판단과 표시 (인수 7) | 미실행 | 미실행 | 미실행 |
 
