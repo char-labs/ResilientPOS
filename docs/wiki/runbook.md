@@ -145,14 +145,15 @@
 
 ## HttpLatencyAboveTarget
 
-- **뜻.** 단말 경로 하나(`uri` label)의 5분 p95가 원문 목표를 10분 넘게 넘는다. 목표는 주문 생성(`POST /v1/orders`) 200ms, checkout(`POST /v1/orders/{orderId}/checkout`) 150ms, sync(`POST /v1/terminals/{terminalId}/sync`) 2초다([시스템 설계 §7](../references/02_System_Design.md#7-nfr-and-observability)). checkout은 승인을 Kafka 뒤로 넘겨 PG를 부르지 않는다. sync의 2초는 가장 큰 배치(500 op)의 목표라, sync가 울면 bucket 보간 오차 안에서 배치 크기와 상관없이 요청의 5% 넘게 최악 목표보다 느리다(분위수는 bucket 안을 고르게 보간한 추정값이다). 429는 빼고 보고, 5분에 그 uri 요청이 20건 미만이면 판정하지 않는다. 5분보다 짧은 튐(단말 동시 재연결)에는 울지 않는다. 앞 단계가 실패하면 뒤 단계 uri는 요청이 없어 판정하지 않는다(주문 생성이 실패하는 동안 checkout). 근거는 [slo-alert-baseline](../spec/2026-10-23-slo-alert-baseline.md) 결정 2다.
+- **뜻.** 경로 하나(`uri` label)의 5분 p95가 목표를 10분 넘게 넘는다. 목표는 주문 생성(`POST /v1/orders`) 200ms, checkout(`POST /v1/orders/{orderId}/checkout`) 150ms, sync(`POST /v1/terminals/{terminalId}/sync`) 2초다([시스템 설계 §7](../references/02_System_Design.md#7-nfr-and-observability)). 조회 넷(`GET /v1/orders/{orderId}`, `GET /v1/orders/{orderId}/payment-attempts`, `GET /v1/menu`, `GET /owner/v1/stores/{storeId}/orders`)은 원문에 GET 목표가 없어 주문 목표 200ms를 쓴다([query-measurement](../spec/2026-11-02-query-measurement.md) 결정 5). checkout은 승인을 Kafka 뒤로 넘겨 PG를 부르지 않는다. sync의 2초는 가장 큰 배치(500 op)의 목표라, sync가 울면 bucket 보간 오차 안에서 배치 크기와 상관없이 요청의 5% 넘게 최악 목표보다 느리다(분위수는 bucket 안을 고르게 보간한 추정값이다). 429는 빼고 보고, 5분에 그 uri 요청이 20건 미만이면 판정하지 않는다. 5분보다 짧은 튐(단말 동시 재연결)에는 울지 않는다. 앞 단계가 실패하면 뒤 단계 uri는 요청이 없어 판정하지 않는다(주문 생성이 실패하는 동안 checkout). 근거는 [slo-alert-baseline](../spec/2026-10-23-slo-alert-baseline.md) 결정 2다. 조회의 한계 셋: 메뉴는 304가 대부분이라 전체 메뉴(200)만 느려지면 울지 않는다. 401·404 같은 빠른 4xx가 많으면 p95가 낮게 나온다. 점주 목록은 요청이 적어 5분 20건에 못 미치는 동안 판정하지 않는다.
 - **먼저 볼 것.**
-  1. 어느 pod인지 본다. `histogram_quantile(0.95, sum by (le, instance) (rate(http_server_requests_seconds_bucket{application="ResilientPOS", uri="울린 uri", method="POST", status!="429"}[5m])))`. 한 pod만 느리면 그 pod의 CPU·힙·GC를 본다.
+  1. 어느 pod인지 본다. `histogram_quantile(0.95, sum by (le, instance) (rate(http_server_requests_seconds_bucket{application="ResilientPOS", uri="울린 uri", method=~"GET|POST", status!="429"}[5m])))`. 한 pod만 느리면 그 pod의 CPU·힙·GC를 본다.
   2. 커넥션 대기. `max(hikaricp_connections_pending{application="ResilientPOS"})`와 `max(hikaricp_connections_acquire_seconds_max{application="ResilientPOS"})`. #77에서 무너진 단계(400 RPS)는 커넥션 대기가 먼저 쌓였다([용량 기준](capacity.md#인스턴스-하나의-용량)).
   3. 부하. 인스턴스 하나의 용량은 단말 요청 전체의 혼합 RPS라 `sum(rate(http_server_requests_seconds_count{application="ResilientPOS", uri=~"/v1/.*", status!="429"}[5m]))`를 [용량 기준](capacity.md#인스턴스-하나의-용량)의 인스턴스 하나 용량 × pod 수와 견준다.
   4. 느린 실패인지 본다. `sum by (status) (rate(http_server_requests_seconds_count{application="ResilientPOS", uri="울린 uri"}[5m]))`에 500이 있으면 커넥션 획득 대기(3초 뒤 실패)가 p95를 올리는 것일 수 있고 [HttpErrorBudgetBurn](#httperrorbudgetburn)도 함께 운다.
   5. sync만 울면 큰 배치가 몰렸는지 본다. INFO `sync 배치 처리 terminalId=…`의 항목 수와 같은 시각의 단말 수.
   6. Tempo에서 그 uri의 느린 trace를 열어 긴 span(DB 문장, 커넥션 획득, 락 대기)을 찾는다. 락 대기는 `distributed_lock_wait_seconds`로도 본다.
+  7. 조회가 울면 쓰기 지연과 함께 움직이는지 본다. 쓰기는 그대로인데 한 조회만 느리면 그 쿼리(DB의 `pg_stat_statements`에서 그 테이블 문장의 평균 시간)와 실행 계획을 본다. 앱에는 쿼리 시간 metric이 없다. 조회 상한과 병목은 [용량 기준](capacity.md#인스턴스-하나의-용량)에 있다.
 - **조치.** 부하가 용량을 넘으면 pod를 늘린다. 이벤트 외부화 상한은 DB 커밋에 묶여 pod를 늘려도 풀리지 않는다([용량 기준](capacity.md#인스턴스-하나의-용량)). DB 지연이면 DB를 본다. 배포 직후 시작됐으면 그 배포를 의심한다.
 - **하지 말 것.** Hikari 풀을 환경 변수로 바로 키우지 않는다. #77에서 20으로 늘려도 외부화 처리량은 늘지 않았고(병목은 DB 커밋), 지연에 주는 효과는 실행기 스레드 수와 섞여 가르지 못했다. 바꾸려면 그 근거를 재는 PR로 다룬다.
 

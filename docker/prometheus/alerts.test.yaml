@@ -832,6 +832,135 @@ tests:
               summary: "/v1/terminals/{terminalId}/sync 요청의 p95가 10분 넘게 원문 목표를 넘는다"
               runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#httplatencyabovetarget
 
+  - name: 조회 p95가 200ms를 10분 넘게 넘으면 그 uri로 운다
+    interval: 1m
+    input_series:
+      # 주문 단건은 모두 (0.1, 0.25]초(p95 0.2425초)다.
+      - series: http_server_requests_seconds_bucket{application="ResilientPOS", method="GET", status="200", uri="/v1/orders/{orderId}", le="0.1", instance="a"}
+        values: 0x20
+      - series: http_server_requests_seconds_bucket{application="ResilientPOS", method="GET", status="200", uri="/v1/orders/{orderId}", le="0.25", instance="a"}
+        values: 0+60x20
+      - series: http_server_requests_seconds_bucket{application="ResilientPOS", method="GET", status="200", uri="/v1/orders/{orderId}", le="+Inf", instance="a"}
+        values: 0+60x20
+      - series: http_server_requests_seconds_count{application="ResilientPOS", method="GET", status="200", uri="/v1/orders/{orderId}", instance="a"}
+        values: 0+60x20
+      # 점주 목록은 분에 5건(5분에 25건)이고 모두 느리다.
+      - series: http_server_requests_seconds_bucket{application="ResilientPOS", method="GET", status="200", uri="/owner/v1/stores/{storeId}/orders", le="0.1", instance="a"}
+        values: 0x20
+      - series: http_server_requests_seconds_bucket{application="ResilientPOS", method="GET", status="200", uri="/owner/v1/stores/{storeId}/orders", le="0.25", instance="a"}
+        values: 0+5x20
+      - series: http_server_requests_seconds_bucket{application="ResilientPOS", method="GET", status="200", uri="/owner/v1/stores/{storeId}/orders", le="+Inf", instance="a"}
+        values: 0+5x20
+      - series: http_server_requests_seconds_count{application="ResilientPOS", method="GET", status="200", uri="/owner/v1/stores/{storeId}/orders", instance="a"}
+        values: 0+5x20
+      # 결제 상태는 0.1초 안이다.
+      - series: http_server_requests_seconds_bucket{application="ResilientPOS", method="GET", status="200", uri="/v1/orders/{orderId}/payment-attempts", le="0.1", instance="a"}
+        values: 0+60x20
+      - series: http_server_requests_seconds_bucket{application="ResilientPOS", method="GET", status="200", uri="/v1/orders/{orderId}/payment-attempts", le="0.25", instance="a"}
+        values: 0+60x20
+      - series: http_server_requests_seconds_bucket{application="ResilientPOS", method="GET", status="200", uri="/v1/orders/{orderId}/payment-attempts", le="+Inf", instance="a"}
+        values: 0+60x20
+      - series: http_server_requests_seconds_count{application="ResilientPOS", method="GET", status="200", uri="/v1/orders/{orderId}/payment-attempts", instance="a"}
+        values: 0+60x20
+      # 메뉴 GET은 빠르다.
+      - series: http_server_requests_seconds_bucket{application="ResilientPOS", method="GET", status="304", uri="/v1/menu", le="0.1", instance="a"}
+        values: 0+60x20
+      - series: http_server_requests_seconds_bucket{application="ResilientPOS", method="GET", status="304", uri="/v1/menu", le="0.25", instance="a"}
+        values: 0+60x20
+      - series: http_server_requests_seconds_bucket{application="ResilientPOS", method="GET", status="304", uri="/v1/menu", le="+Inf", instance="a"}
+        values: 0+60x20
+      - series: http_server_requests_seconds_count{application="ResilientPOS", method="GET", status="304", uri="/v1/menu", instance="a"}
+        values: 0+60x20
+      # 같은 uri의 느린 HEAD는 보지 않는다.
+      - series: http_server_requests_seconds_bucket{application="ResilientPOS", method="HEAD", status="200", uri="/v1/menu", le="0.1", instance="a"}
+        values: 0x20
+      - series: http_server_requests_seconds_bucket{application="ResilientPOS", method="HEAD", status="200", uri="/v1/menu", le="0.25", instance="a"}
+        values: 0+60x20
+      - series: http_server_requests_seconds_bucket{application="ResilientPOS", method="HEAD", status="200", uri="/v1/menu", le="+Inf", instance="a"}
+        values: 0+60x20
+      - series: http_server_requests_seconds_count{application="ResilientPOS", method="HEAD", status="200", uri="/v1/menu", instance="a"}
+        values: 0+60x20
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: HttpLatencyAboveTarget
+        exp_alerts: []
+      # 점주 목록은 표본이 적어 창 초반의 increase가 20건에 늦게 닿는다. 그만큼 늦게 운다.
+      - eval_time: 12m
+        alertname: HttpLatencyAboveTarget
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              uri: /v1/orders/{orderId}
+            exp_annotations:
+              summary: "/v1/orders/{orderId} 요청의 p95가 10분 넘게 원문 목표를 넘는다"
+              runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#httplatencyabovetarget
+      - eval_time: 16m
+        alertname: HttpLatencyAboveTarget
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              uri: /v1/orders/{orderId}
+            exp_annotations:
+              summary: "/v1/orders/{orderId} 요청의 p95가 10분 넘게 원문 목표를 넘는다"
+              runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#httplatencyabovetarget
+          - exp_labels:
+              severity: warning
+              uri: /owner/v1/stores/{storeId}/orders
+            exp_annotations:
+              summary: "/owner/v1/stores/{storeId}/orders 요청의 p95가 10분 넘게 원문 목표를 넘는다"
+              runbook_url: https://github.com/char-labs/ResilientPOS/blob/main/docs/wiki/runbook.md#httplatencyabovetarget
+
+  - name: 조회가 5분에 20건보다 적으면 다른 uri의 POST가 많아도 판정하지 않는다
+    interval: 1m
+    input_series:
+      # 주문 단건은 분에 3.8건(5분에 19건)이 모두 느리다.
+      - series: http_server_requests_seconds_bucket{application="ResilientPOS", method="GET", status="200", uri="/v1/orders/{orderId}", le="0.1", instance="a"}
+        values: 0x20
+      - series: http_server_requests_seconds_bucket{application="ResilientPOS", method="GET", status="200", uri="/v1/orders/{orderId}", le="0.25", instance="a"}
+        values: 0+3.8x20
+      - series: http_server_requests_seconds_bucket{application="ResilientPOS", method="GET", status="200", uri="/v1/orders/{orderId}", le="+Inf", instance="a"}
+        values: 0+3.8x20
+      - series: http_server_requests_seconds_count{application="ResilientPOS", method="GET", status="200", uri="/v1/orders/{orderId}", instance="a"}
+        values: 0+3.8x20
+      # 생성은 많고 빠르다.
+      - series: http_server_requests_seconds_bucket{application="ResilientPOS", method="POST", status="201", uri="/v1/orders", le="0.1", instance="a"}
+        values: 0+60x20
+      - series: http_server_requests_seconds_bucket{application="ResilientPOS", method="POST", status="201", uri="/v1/orders", le="0.25", instance="a"}
+        values: 0+60x20
+      - series: http_server_requests_seconds_bucket{application="ResilientPOS", method="POST", status="201", uri="/v1/orders", le="+Inf", instance="a"}
+        values: 0+60x20
+      - series: http_server_requests_seconds_count{application="ResilientPOS", method="POST", status="201", uri="/v1/orders", instance="a"}
+        values: 0+60x20
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: HttpLatencyAboveTarget
+        exp_alerts: []
+
+  - name: 메뉴 304가 대부분이면 느린 200은 울지 않는다
+    interval: 1m
+    input_series:
+      # 한계를 고정한다. 304가 95%(분에 57건)이고 빠르면 전체 메뉴(200)만 느려도 p95는 0.1초다.
+      - series: http_server_requests_seconds_bucket{application="ResilientPOS", method="GET", status="304", uri="/v1/menu", le="0.1", instance="a"}
+        values: 0+57x20
+      - series: http_server_requests_seconds_bucket{application="ResilientPOS", method="GET", status="304", uri="/v1/menu", le="0.25", instance="a"}
+        values: 0+57x20
+      - series: http_server_requests_seconds_bucket{application="ResilientPOS", method="GET", status="304", uri="/v1/menu", le="+Inf", instance="a"}
+        values: 0+57x20
+      - series: http_server_requests_seconds_count{application="ResilientPOS", method="GET", status="304", uri="/v1/menu", instance="a"}
+        values: 0+57x20
+      - series: http_server_requests_seconds_bucket{application="ResilientPOS", method="GET", status="200", uri="/v1/menu", le="0.1", instance="a"}
+        values: 0x20
+      - series: http_server_requests_seconds_bucket{application="ResilientPOS", method="GET", status="200", uri="/v1/menu", le="0.25", instance="a"}
+        values: 0+3x20
+      - series: http_server_requests_seconds_bucket{application="ResilientPOS", method="GET", status="200", uri="/v1/menu", le="+Inf", instance="a"}
+        values: 0+3x20
+      - series: http_server_requests_seconds_count{application="ResilientPOS", method="GET", status="200", uri="/v1/menu", instance="a"}
+        values: 0+3x20
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: HttpLatencyAboveTarget
+        exp_alerts: []
+
   - name: 단말 API 5xx가 1시간 쌍의 배수를 넘으면 바로 울리고 30분 창이 깨끗해지면 풀린다
     interval: 1m
     input_series:
