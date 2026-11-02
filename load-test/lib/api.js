@@ -41,15 +41,27 @@ function ownerPost(session, path, body) {
   return res;
 }
 
-// 점주 하나가 매장 stores곳을 열고 매장마다 단말 4대를 등록한다. 실행마다 새 이메일이라 이전 실행의 데이터와 겹치지 않는다.
-export function provisionTerminals(stores) {
-  const csrf = http.get(`${BASE_URL}/owner/v1/csrf`, { tags: { name: 'setup' } });
-  const session = { xsrf: cookieValue(csrf, '__Host-XSRF-TOKEN') };
-  const credentials = { email: `load-${uuidv7()}@example.com`, password: 'load-test-password-0001' };
-  ownerPost(session, '/owner/v1/signup', credentials);
+function csrfSession() {
+  // 새 쿠키 저장소로 받아야 서버가 토큰 쿠키를 새로 내준다(같은 VU의 두 번째 호출).
+  const csrf = http.get(`${BASE_URL}/owner/v1/csrf`, { jar: new http.CookieJar(), tags: { name: 'setup' } });
+  return { xsrf: cookieValue(csrf, '__Host-XSRF-TOKEN') };
+}
+
+// 이미 가입한 점주로 로그인한 세션.
+export function ownerLogin(credentials) {
+  const session = csrfSession();
   const login = ownerPost(session, '/owner/v1/login', credentials);
   session.id = cookieValue(login, '__Host-SESSION');
   session.xsrf = cookieValue(login, '__Host-XSRF-TOKEN');
+  return session;
+}
+
+// 점주 하나가 매장 stores곳을 열고 매장마다 단말 4대를 등록한다. 실행마다 새 이메일이라 이전 실행의 데이터와 겹치지 않는다.
+// withOwner면 점주 자격과 세션도 돌려준다(S6 준비).
+export function provisionTerminals(stores, withOwner = false) {
+  const credentials = { email: `load-${uuidv7()}@example.com`, password: 'load-test-password-0001' };
+  ownerPost(csrfSession(), '/owner/v1/signup', credentials);
+  const session = ownerLogin(credentials);
 
   const terminals = [];
   for (let s = 0; s < stores; s++) {
@@ -59,7 +71,39 @@ export function provisionTerminals(stores) {
       terminals.push({ storeId, terminalId: data.terminalId, token: data.token });
     }
   }
-  return terminals;
+  return withOwner ? { terminals, credentials, session } : terminals;
+}
+
+// 매장 메뉴를 처음 만들고 응답 ETag를 돌려준다.
+export function createMenu(session, storeId) {
+  const body = { currency: 'KRW', items: [{ code: 'SKU-1', name: '아메리카노', price: UNIT_PRICE, category: '커피' }] };
+  const res = http.put(`${BASE_URL}/owner/v1/stores/${storeId}/menu`, JSON.stringify(body), {
+    headers: { ...ownerHeaders(session), 'If-None-Match': '*' }, jar: new http.CookieJar(), tags: { name: 'setup' },
+  });
+  if (res.status !== 200) fail(`메뉴 생성 실패: ${res.status} ${res.body}`);
+  return res.headers.Etag || res.headers.ETag;
+}
+
+// 조회 넷(S6). name 태그가 판정 단위다.
+export function readOrder(terminal, orderId) {
+  const res = http.get(`${BASE_URL}/v1/orders/${orderId}`, { headers: terminalHeaders(terminal), tags: { name: 'order_get' } });
+  check(res, { 'order_get 200': (r) => r.status === 200 });
+}
+
+export function readPaymentAttempts(terminal, orderId) {
+  const res = http.get(`${BASE_URL}/v1/orders/${orderId}/payment-attempts`, { headers: terminalHeaders(terminal), tags: { name: 'payment_attempts_get' } });
+  // 없는 주문에도 200과 빈 목록이라, 시도가 있는 주문을 골랐는지 목록으로 본다.
+  check(res, { 'payment_attempts_get 200이고 비지 않는다': (r) => r.status === 200 && r.json('data.#') > 0 });
+}
+
+export function readMenu(terminal, etag) {
+  const res = http.get(`${BASE_URL}/v1/menu`, { headers: { ...terminalHeaders(terminal), 'If-None-Match': etag }, tags: { name: 'menu_get' } });
+  check(res, { 'menu_get 304': (r) => r.status === 304 });
+}
+
+export function readOwnerOrders(session, storeId) {
+  const res = http.get(`${BASE_URL}/owner/v1/stores/${storeId}/orders?size=50`, { headers: ownerHeaders(session), tags: { name: 'owner_orders_get' } });
+  check(res, { 'owner_orders_get 200': (r) => r.status === 200 });
 }
 
 export function terminalHeaders(terminal) {

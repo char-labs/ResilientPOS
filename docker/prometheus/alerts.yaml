@@ -220,6 +220,8 @@ groups:
 
       - alert: HttpLatencyAboveTarget
         # 목표는 원문 NFR(시스템 설계 §7)이다. 생성 200ms, PG 제외 결제 처리 150ms(승인은 Kafka 뒤), sync는 가장 큰 배치(500 op)의 2초다.
+        # 조회 넷(주문 단건, 결제 상태, 단말 메뉴, 점주 주문 목록)은 원문에 GET 목표가 없어 "주문 p95 200ms"를 쓴다. 메뉴 304는 처리한 요청이라 넣는다.
+        # 갈래마다 method를 적는다. GET 매핑은 HEAD도 받아 같은 uri에 HEAD series가 생긴다. 이 일곱 uri는 GET과 POST가 겹치지 않아 하한은 uri로 묶는다.
         # 429는 처리 없이 빨리 끝나 p95를 낮추므로 뺀다. 5분에 20건(1 ÷ (1 − 0.95)) 미만이면 요청 하나가 p95를 정하므로 판정하지 않는다.
         # for 10분은 창 5분에 가장 긴 정상 튐(단말 100대가 backlog 1,800 op로 동시 재연결해 71초, 2분으로 올림)을 더한 7분보다 길다. 그 측정에서 이 알림은 6분 pending 뒤 풀렸다.
         expr: |
@@ -229,9 +231,11 @@ groups:
             histogram_quantile(0.95, sum by (le, uri) (rate(http_server_requests_seconds_bucket{application="ResilientPOS", method="POST", uri="/v1/orders/{orderId}/checkout", status!="429"}[5m]))) > 0.15
             or
             histogram_quantile(0.95, sum by (le, uri) (rate(http_server_requests_seconds_bucket{application="ResilientPOS", method="POST", uri="/v1/terminals/{terminalId}/sync", status!="429"}[5m]))) > 2
+            or
+            histogram_quantile(0.95, sum by (le, uri) (rate(http_server_requests_seconds_bucket{application="ResilientPOS", method="GET", uri=~"/v1/orders/[{]orderId[}]|/v1/orders/[{]orderId[}]/payment-attempts|/v1/menu|/owner/v1/stores/[{]storeId[}]/orders", status!="429"}[5m]))) > 0.2
           )
           and on (uri)
-          sum by (uri) (increase(http_server_requests_seconds_count{application="ResilientPOS", method="POST", status!="429"}[5m])) >= 20
+          sum by (uri) (increase(http_server_requests_seconds_count{application="ResilientPOS", method=~"GET|POST", status!="429"}[5m])) >= 20
         for: 10m
         labels:
           severity: warning
