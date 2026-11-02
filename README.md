@@ -25,7 +25,7 @@ metric·로그·trace(OpenTelemetry, 요청에서 Kafka consumer까지 하나로
 
 ## 아키텍처
 
-한 번 배포하는 Spring Boot 애플리케이션 하나를 Spring Modulith 모듈로 나눈 모듈형 모놀리스입니다. 상태 변경과 이벤트 발행 기록은 PostgreSQL 커밋 하나에 묶고, 모듈 사이는 커밋 뒤 Kafka 이벤트로 잇습니다. 시퀀스 도식, 실패 경로, 이벤트 스토밍 과정, 모듈별 공개 API는 [아키텍처 상세](docs/wiki/architecture.md)에 있습니다. 아래 그림은 main 808aed9의 코드에서 옮겼습니다.
+한 번 배포하는 Spring Boot 애플리케이션 하나를 Spring Modulith 모듈로 나눈 모듈형 모놀리스입니다. 상태 변경과 이벤트 발행 기록은 PostgreSQL 커밋 하나에 묶고, 모듈 사이는 커밋 뒤 Kafka 이벤트로 잇습니다. 시퀀스 도식, 실패 경로, 이벤트 스토밍 과정, 모듈별 공개 API는 [아키텍처 상세](docs/wiki/architecture.md)에 있습니다. 아래 그림은 main fc36227의 코드에서 옮겼습니다.
 
 ### 요청에서 Kafka 이벤트까지
 
@@ -51,7 +51,7 @@ flowchart LR
 3. 업무 행과 이벤트 발행 기록(Spring Modulith Event Publication Registry)이 한 커밋에 들어갑니다. 그래서 "상태는 바뀌었는데 이벤트가 사라짐"이 생기지 않습니다.
 4. 커밋 뒤 Modulith가 이벤트를 Kafka로 보냅니다. 보내지 못한 기록은 주기 작업이 1분마다 다시 보냅니다.
 5. 받는 모듈의 consumer는 자기 모듈의 Command Facade를 부릅니다. 같은 메시지가 두 번 와도 결과는 하나입니다(unique 제약). 일시적 실패는 같은 자리에서 다시 시도하고, 다시 해도 같은 결과인 실패는 DLT로 보냅니다.
-6. 결제 provider 호출은 트랜잭션 밖에서 합니다. 응답이 끊기면 결제를 실패로 확정하지 않고 `UNKNOWN`으로 두었다가 주기 작업이 provider 조회로 확정합니다.
+6. 결제 provider 호출은 트랜잭션 밖에서 합니다. 응답이 끊기면 결제를 실패로 확정하지 않고 `UNKNOWN`으로 두었다가 주기 작업이 provider 조회로 확정합니다. 조회로도 확정하지 못하면 reconciliation case로 넘기고, 점주가 PG 화면에서 확인한 결론으로 해소합니다.
 
 ### 모듈 사이 이벤트
 
@@ -59,8 +59,9 @@ flowchart LR
 |---|---|---|---|---|
 | `OrderPaymentRequested` | order (checkout 확정) | `order.payment-requested` | payment | 결제 시도 기록 |
 | `PaymentEvent.AttemptCreated` | payment | `payment.attempt-created` | payment | provider 승인 요청 |
-| `PaymentApproved` | payment (승인, 조회로 승인 확정, 0원) | `payment.approved` | order | 주문 `PAID` 전이 |
+| `PaymentApproved` | payment (승인, 조회로 승인 확정, 0원, 대조 해소로 승인) | `payment.approved` | order | 주문 `PAID` 전이 |
 | `OrderPaid` | order | `order.paid` | fulfillment | 주문 이행 기록 |
+| `PaymentReconciliationRequested` | payment (조회로 확정하지 못한 시도 넘김) | `payment.reconciliation-requested` | reconciliation | 대조 case 열기 |
 
 대표 흐름은 `주문 생성 → checkout → OrderPaymentRequested → 결제 시도 → provider 승인 → PaymentApproved → 주문 PAID → OrderPaid → fulfillment`입니다. 단말이 오프라인에서 쌓은 주문·결제 요청은 sync 배치로 들어와 같은 Facade를 거치고, 커밋 뒤에는 같은 이벤트 흐름을 탑니다.
 
@@ -78,16 +79,19 @@ flowchart TB
         store["store<br/>매장"]
     end
     owner["owner<br/>점주 계정"]
-    reconciliation["reconciliation<br/>(아직 비어 있음)"]
+    reconciliation["reconciliation<br/>결제 대조 case"]
     catalog["catalog<br/>매장 메뉴"]
 
     sync ==>|"OrderCommandFacade 호출"| order
     order -->|"발행·소비"| contract
     payment -->|"발행·소비"| contract
     fulfillment -->|"소비"| contract
+    reconciliation -->|"소비"| contract
+    reconciliation ==>|"PaymentManagement 호출"| payment
     sync -.-> ref
     order -.-> ref
     payment -.-> ref
+    reconciliation -.-> ref
     contract -.-> ref
     terminal ==>|"StoreManagement 호출"| store
     terminal -.-> owner
@@ -95,10 +99,14 @@ flowchart TB
     catalog ==>|"StoreManagement 호출"| store
     catalog -.-> terminal
     catalog -.-> owner
+    order ==>|"StoreManagement 호출"| store
+    reconciliation ==>|"StoreManagement 호출"| store
+    order -.-> owner
+    reconciliation -.-> owner
 ```
 
-- 굵은 선은 다른 모듈의 Facade를 직접 부르는 동기 호출, 실선은 `contract` 이벤트 타입, 점선은 식별자(`StoreId` 등)와 인증 값(`AuthenticatedTerminal`)만 쓰는 의존입니다. `단말·매장` 상자로 가는 점선은 `terminal`과 `store` 둘 다에 의존한다는 뜻입니다. 그림에서 뺀 간선이 둘 있습니다. `foundation`(값 타입)에는 `reconciliation`을 뺀 모든 모듈이, `platform`(트랜잭션·락·Kafka 구성 등 공용 인프라)에는 업무 모듈 8개가 의존합니다.
-- 간선은 `ApplicationModules.of(ResilientPosApplication::class.java)`가 출력한 모듈 의존을 그대로 옮겼습니다. `order`와 `payment`는 서로 의존하지 않고, `payment`·`fulfillment`·`catalog`에 의존하는 모듈은 없습니다.
+- 굵은 선은 다른 모듈의 Facade를 직접 부르는 동기 호출, 실선은 `contract` 이벤트 타입, 점선은 식별자(`StoreId` 등)와 인증 값(`AuthenticatedTerminal`)만 쓰는 의존입니다. `단말·매장` 상자로 가는 점선은 `terminal`과 `store` 둘 다에 의존한다는 뜻입니다. 그림에서 뺀 간선이 둘 있습니다. `foundation`(값 타입)에는 다른 모든 모듈이, `platform`(트랜잭션·락·Kafka 구성 등 공용 인프라)에는 업무 모듈 9개가 의존합니다.
+- 간선은 `ApplicationModules.of(ResilientPosApplication::class.java)`가 출력한 모듈 의존을 그대로 옮겼습니다. `order`와 `payment`는 서로 의존하지 않습니다. `payment`에 의존하는 모듈은 `reconciliation` 하나이고, `fulfillment`·`sync`·`catalog`·`reconciliation`에 의존하는 모듈은 없습니다.
 - 다른 모듈은 그 모듈의 기본 패키지에 있는 타입(Facade, Command, View, ID, 이벤트)만 쓸 수 있고 `internal` 아래는 쓸 수 없습니다. `ModuleStructureTest`(Modulith 경계·순환 검증)와 `DependencyDirectionTest`(도메인 레이어의 프레임워크 무의존)가 위반을 테스트 실패로 만듭니다.
 - `order`와 `payment`는 서로의 사실을 주고받습니다. 이벤트를 각자 두면 서로 의존하는 순환이 되므로 둘이 함께 의존하는 `contract` 모듈에 둡니다.
 
@@ -106,7 +114,7 @@ flowchart TB
 
 - 원문 [도메인 청사진](docs/references/05_Domain_Development_Blueprint.md)(2026-09-03)은 주문·결제와 동기화·정산 두 관점의 이벤트 스토밍을 교차 검토한 결과입니다. bounded context 7개와 aggregate, 커맨드 → 이벤트 → 정책 흐름 4개, 커맨드·조회 목록, ADR로 미룬 제품 질문 6개를 남겼습니다. 진행 방식(참가자, 보드)의 기록은 없습니다.
 - 저장소는 이 결과를 [도메인 모델](docs/wiki/domain-model.md)로 옮기며 단어를 다시 정했습니다. 예를 들어 `KitchenTicket`은 `Fulfillment`, `TerminalSyncState`는 `Watermark`가 됐고, 응답이 끊긴 결제는 `PaymentFailed`가 아니라 `PaymentUnknown`입니다. 이후 점주 계정 `owner`와 매장 메뉴 `catalog`를 더해 bounded context는 9개입니다.
-- 지금 코드에는 주문 → 결제 → fulfillment, 오프라인 sync, `UNKNOWN` 확정 흐름이 있습니다. reconciliation case와 store 판매 정책은 아직 없습니다. 원문과 다르게 정한 것과 구현 여부의 전체 표는 [아키텍처 상세 §5](docs/wiki/architecture.md#5-이벤트-스토밍)에 있습니다.
+- 지금 코드에는 주문 → 결제 → fulfillment, 오프라인 sync, `UNKNOWN` 확정 흐름, 확정하지 못한 결제를 점주가 해소하는 reconciliation case가 있습니다. reconciliation의 자동 조치와 store 판매 정책은 아직 없습니다. 원문과 다르게 정한 것과 구현 여부의 전체 표는 [아키텍처 상세 §5](docs/wiki/architecture.md#5-이벤트-스토밍)에 있습니다.
 
 ## 시작하기
 
