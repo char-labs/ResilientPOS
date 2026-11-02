@@ -21,7 +21,7 @@
 
 ## 2. Kafka 메시지가 생기는 곳
 
-모듈 사이 이벤트는 다섯이고 모두 Kafka를 거친다. 같은 모듈 안에서 받는 `AttemptCreated`도 재시도·DLT를 같은 경로로 받으려고 Kafka를 거친다([도메인 모델 §4.3](domain-model.md#43-이벤트-전달과-저장-형식)).
+모듈 사이 이벤트는 넷이고 모두 Kafka를 거친다. 같은 모듈 안에서 받는 `AttemptCreated`도 재시도·DLT를 같은 경로로 받으려고 Kafka를 거친다([도메인 모델 §4.3](domain-model.md#43-이벤트-전달과-저장-형식)).
 
 | 이벤트 | 발행 지점(Facade 메서드) | 토픽 | consumer(모듈) | consumer가 부르는 Facade |
 |---|---|---|---|---|
@@ -136,7 +136,6 @@ sequenceDiagram
     participant PG as 결제 provider
     participant K as Kafka
 
-    S->>DB: UNKNOWN 승인 시도 수 세기 → gauge payment.attempt.unknown
     S->>L: executeWithLockNoTx("payment:unknown-resolve")
     S->>DB: 넘기지 않은 UNKNOWN 승인 시도 id 최대 100건(지난 주기 커서 다음부터)
     loop 한 건씩
@@ -151,13 +150,14 @@ sequenceDiagram
             P->>DB: 행 잠금 → 넘김 기록 + PaymentReconciliationRequested 발행 기록
             P-)K: payment.reconciliation-requested
         else 조회로도 모름
-            P->>DB: 행 잠금 → 조회 횟수 +1(WARN 로그)
+            P->>DB: 행 잠금 → 조회 횟수 +1<br/>상한에 닿았으면 같은 커밋에 넘김 기록 + PaymentReconciliationRequested 발행 기록
+            Note over P: 커밋 뒤 WARN 로그
             opt 횟수가 상한에 닿았다
-                P->>DB: 넘김 기록 + PaymentReconciliationRequested 발행 기록
                 P-)K: payment.reconciliation-requested
             end
         end
     end
+    S->>DB: 락 밖에서 결과 불명·넘긴 시도 수와 경과 시간 세기<br/>gauge payment.attempt.unknown 등 4개
 ```
 
 - 모든 pod에서 돌고 Redis 락이 pod 사이를 줄 세운다. 락은 중복 조회를 줄이는 완화 수단이다. 락이 풀려 겹쳐도 조회는 읽기이고, 같은 확정이 두 번 적용되는 일은 행을 잠근 뒤 `UNKNOWN`을 다시 확인하는 데서 막힌다.
@@ -295,7 +295,7 @@ flowchart TB
 | `terminal`·`order`·`reconciliation` → `store` | 동기 호출(읽기) | 점주용 Controller(`TerminalOwnerController`, `OrderOwnerController`, `ReconciliationCaseOwnerController`)가 `StoreManagement.requireOwned`로 매장 소유를 먼저 확인한다. `StoreId` |
 | `catalog` → `store` | 동기 호출(읽기) | `MenuManagement`가 점주의 메뉴 조회·교체 전에 `StoreManagement.requireOwned`로 매장 소유를 확인한다. `StoreId` |
 | `order` → `contract` | 이벤트 | 발행 `OrderPaymentRequested`·`OrderPaid`, 소비 `PaymentApproved`·`PaymentAttemptKind` |
-| `payment` → `contract` | 이벤트 | 소비 `OrderPaymentRequested`, 발행 `PaymentApproved`·`PaymentReconciliationRequested` |
+| `payment` → `contract` | 이벤트 | 소비 `OrderPaymentRequested`, 발행 `PaymentApproved`·`PaymentReconciliationRequested`, 그 필드 `PaymentAttemptKind`·`PaymentUnknownReason`·`PaymentReconciliationReason` |
 | `fulfillment` → `contract` | 이벤트 | 소비 `OrderPaid` |
 | `reconciliation` → `contract` | 이벤트 | 소비 `PaymentReconciliationRequested`, 그 필드 `PaymentReconciliationReason`·`PaymentUnknownReason` |
 | `contract` → `store`, `terminal` | 값 타입 | 이벤트 필드 `StoreId`, `TerminalId` |
@@ -307,7 +307,7 @@ flowchart TB
 
 - 출력에 없는 간선도 사실이다. `order`와 `payment`는 서로 의존하지 않는다. `payment`에 의존하는 모듈은 `reconciliation` 하나이고, `fulfillment`·`sync`·`reconciliation`·`catalog`에 의존하는 모듈은 없다. `order`는 `catalog`를 모른다. `platform`은 `foundation`에만 의존한다. `KafkaConfiguration`이 토픽 이름을 이벤트 클래스 상수가 아니라 설정 목록에서 읽는 것도 `platform → payment` 간선을 만들지 않으려는 것이다.
 - Modulith 출력의 의존 종류는 `DEFAULT`(타입 참조)와 `USES_COMPONENT`(Spring 빈 주입) 두 가지다. 모듈 사이 consumer가 `@ApplicationModuleListener`가 아니라 `@KafkaListener`라서 Modulith는 이벤트 수신을 `EVENT_LISTENER` 의존으로 보지 못하고, 이벤트 간선은 `contract` 타입 참조(`DEFAULT`)로 나온다.
-- 모듈 사이 동기 호출은 위 표의 `동기 호출` 줄(`USES_COMPONENT`)뿐이다. 상태를 바꾸는 것은 `sync → order`와 `reconciliation → payment` 둘이고, `→ store`는 매장 소유를 확인하는 읽기다. 그 밖의 모듈 사이 변경은 이벤트다.
+- 업무 모듈 사이 동기 호출은 위 표의 `동기 호출` 줄(`USES_COMPONENT`)뿐이다. `foundation`·`platform`으로 가는 `USES_COMPONENT`는 식별자 생성기와 조회 실행기 같은 빈 주입이다. 상태를 바꾸는 것은 `sync → order`와 `reconciliation → payment` 둘이고, `→ store`는 매장 소유를 확인하는 읽기다. 그 밖의 모듈 사이 변경은 이벤트다.
 
 ### 6.4 의존 규칙을 지키는 테스트
 

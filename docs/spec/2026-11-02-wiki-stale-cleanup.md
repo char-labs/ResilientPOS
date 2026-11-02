@@ -8,15 +8,16 @@ README와 `docs/wiki`에 지금 main(fc36227)의 코드와 다른 문장이 남�
 
 **고칠 곳**
 - [아키텍처](../wiki/architecture.md)
-  - §2 모듈 사이 이벤트: 넷이 아니라 다섯이다. `contract.PaymentReconciliationRequested`(`PaymentManagement.resolveUnknown`이 발행, 토픽 `payment.reconciliation-requested`, `PaymentReconciliationRequestedListener` → `ReconciliationManagement.open`)를 더한다. `PaymentApproved` 발행 지점에 `resolveFromReconciliation`(대조 해소로 승인)을 더한다.
+  - §2 모듈 사이 이벤트: `contract.PaymentReconciliationRequested`(`PaymentManagement.resolveUnknown`이 발행, 토픽 `payment.reconciliation-requested`, `PaymentReconciliationRequestedListener` → `ReconciliationManagement.open`)를 더한다. `PaymentApproved` 발행 지점에 `resolveFromReconciliation`(대조 해소로 승인)을 더한다.
   - §3.3 결과 불명 결제: 조회로도 모르면 조회 횟수를 올리고 상한(`resilientpos.payment.unknown-query-limit`)에 닿으면 case로 넘긴다. 조회가 다른 금액의 승인을 알려 주면 바로 넘긴다. "reconciliation case는 아직 없다" 문장을 이 사실로 바꾼다.
   - §5.3·§5.4: `PaymentUnknown → [OpenReconciliationCase]` 줄과 "reconciliation의 `OpenCase` 등 | 없다. 모듈은 비어 있다" 줄을 지금 구현(case 열기, 점주 해소, 자동 조치 없음)으로 바꾼다.
   - §6.1 모듈 표: `reconciliation` 책임과 공개 API, `order`의 조회 공개 타입(#122), `contract`의 넘김 이벤트 타입.
   - §6.2·§6.3: `contract`를 쓰는 모듈에 `reconciliation`을 더한다. 간선 `reconciliation → payment`(동기 호출), `order`·`reconciliation → store`(매장 소유 확인), `reconciliation → contract`·`store`·`terminal`·`owner`, `order → owner`를 더한다. `foundation`·`platform` 줄의 "`reconciliation` 제외"를 지운다. "`payment`에 의존하는 모듈은 없다", "동기 호출은 세 줄뿐"을 고친다. 그래프 기준 커밋을 fc36227로 바꾼다.
 - [README](../../README.md) 아키텍처 절: 이벤트 표, 모듈 의존 그래프와 설명, `UNKNOWN` 흐름 설명, "reconciliation case는 아직 없습니다", 그림 기준 커밋.
+- [도메인 모델](../wiki/domain-model.md) §4.3: "모듈 사이 이벤트 다섯"은 모듈 사이 넷과 같은 모듈 안의 `AttemptCreated`다. §2의 "JPA 엔티티 14개"는 15개다(#121의 `MenuEntity`).
 - [도메인 모델](../wiki/domain-model.md) §4.6: 매장 소유 확인(`StoreManagement.requireOwned`)을 부르는 곳에 `catalog`의 `MenuManagement`를 더한다(#121).
 - [차용한 스킬과 사용법](../wiki/borrowed-workflows.md): GitHub Actions 줄. PR 게이트가 빌드·Flyway 검사만이 아니라 Dependency submission·Dependency review도 돈다(#119).
-- [테스트 전략](../wiki/testing-strategy.md) 도입 상태: "REST Docs와 Fixture Monkey 의존성, 테스트 fixture factory, 첫 Controller 문서 테스트는 아직 없다"를 지금 위치로 바꾼다.
+- [테스트 전략](../wiki/testing-strategy.md): 모듈별 Fixture 목록에 `MenuFixtures`(#121)를 더한다. 도입 상태: "REST Docs와 Fixture Monkey 의존성, 테스트 fixture factory, 첫 Controller 문서 테스트는 아직 없다"를 지금 위치로 바꾼다.
 - [wiki 인덱스](../wiki/README.md): JPA 엔티티는 14개가 아니라 15개다(#121의 `MenuEntity`).
 
 **확인했지만 고칠 것이 없던 것**
@@ -75,5 +76,11 @@ README와 `docs/wiki`에 지금 main(fc36227)의 코드와 다른 문장이 남�
 - **고치지 않고 남긴 것.** 사실로 확인할 수 없거나 판단이 섞인 문장이다.
   - [도메인 모델](../wiki/domain-model.md) §8 표의 "모듈 9개가 비어 있는 지금 나누면 담길 코드보다 빌드 코드가 많다". 모듈이 비어 있지 않은 것은 사실이지만, 이 문장은 Gradle 분할을 미루는 판단 근거다. 새 근거를 정하는 일은 이 PR 범위가 아니다.
   - [아키텍처](../wiki/architecture.md) 머리말의 기준 커밋. §1·§3.1·§3.2·§4는 fc36227에서 줄마다 다시 대조하지 않았으므로 기준을 808aed9로 두고, 다시 대조한 절만 fc36227로 적었다.
+- **multi-review 반영.** Claude·Codex 두 리뷰어가 실행됐다(Gemini는 CLI가 없어 미실행). 간선 표·README 그래프가 fc36227 출력과 같다는 데 둘 다 동의했다. 지적을 코드와 대조해 아래를 고쳤다.
+  - §2 "모듈 사이 이벤트는 다섯"을 넷으로 되돌렸다. 다섯째 줄 `AttemptCreated`는 payment 안에서만 돈다. 도메인 모델 §4.3의 "모듈 사이 이벤트 다섯"도 같은 오류라 "Kafka를 거치는 이벤트 다섯(모듈 사이 넷과 `AttemptCreated`)"으로 고쳤다(2/2 합의).
+  - 도메인 모델 §2의 "JPA 엔티티 14개"(2/2 합의).
+  - §3.3 시퀀스: gauge는 락 블록이 끝난 뒤 넷을 센다(`UnknownPaymentResolver.resolveUnknown`). 조회 횟수 증가와 상한 도달 때의 넘김은 한 커밋이고 WARN은 커밋 뒤다(`PaymentManagement.recordAndLog`).
+  - §6.3: `payment → contract`의 값 타입, `USES_COMPONENT`가 `foundation`·`platform`에도 있다는 설명. README의 "의존하는 모듈 없음" 목록에 `sync`를 더해 §6.3과 맞췄다. 테스트 전략 Fixture 목록에 `MenuFixtures`.
+  - 반영하지 않은 것: Codex는 도메인 모델 §8의 "모듈 9개가 비어 있는 지금"을 지우자고 했다. 판단 근거 문장이라 위 "고치지 않고 남긴 것"에 그대로 둔다. README "모듈 사이 이벤트" 표의 `AttemptCreated` 줄은 이 PR 전부터 있었고 받는 모듈을 payment로 적어 사실과 다르지 않아 두었다.
 - 링크 확인: 바꾼 파일 7개의 상대 링크 대상과 `#앵커`를 스크립트로 확인했고 깨진 것이 없었다.
 - `python3 scripts/check_pr.py --base origin/main --worktree`: PASS.

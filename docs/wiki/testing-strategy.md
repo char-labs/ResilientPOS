@@ -48,7 +48,7 @@ Repository 제외는 비즈니스 통합 테스트의 실제 persistence 사용�
 
 ## Fixture Monkey
 - fixture 객체 생성은 Fixture Monkey를 기본으로 하고 공통 factory는 `src/test` 아래에 둔다. Kotlin 생성에는 Kotlin 지원을 사용한다.
-- Fixture Monkey 인스턴스는 `TestFixtureMonkey` 하나를 쓴다. 커맨드 factory는 모듈별 Fixture(`OrderFixtures`, `PaymentFixtures`, `ReconciliationFixtures`, `OwnerFixtures`, `StoreFixtures`, `TerminalFixtures`, `SyncFixtures`)에 두고, 매장·단말·통화·비밀번호 같은 기본값은 다른 Fixture의 값을 참조한다. 파라미터 이름과 순서는 커맨드 생성자와 같게 해서 호출부가 생성자 호출과 같은 모양이 되게 한다. 판단에 쓰는 값만 받고 나머지를 Fixture Monkey가 채우는 `ReconciliationFixtures`의 `open`·`resolve`는 이름 인자로 부른다.
+- Fixture Monkey 인스턴스는 `TestFixtureMonkey` 하나를 쓴다. 커맨드 factory는 모듈별 Fixture(`OrderFixtures`, `PaymentFixtures`, `ReconciliationFixtures`, `OwnerFixtures`, `StoreFixtures`, `TerminalFixtures`, `SyncFixtures`, `MenuFixtures`)에 두고, 매장·단말·통화·비밀번호 같은 기본값은 다른 Fixture의 값을 참조한다. 파라미터 이름과 순서는 커맨드 생성자와 같게 해서 호출부가 생성자 호출과 같은 모양이 되게 한다. 판단에 쓰는 값만 받고 나머지를 Fixture Monkey가 채우는 `ReconciliationFixtures`의 `open`·`resolve`는 이름 인자로 부른다.
 - 필드가 둘 이상인 커맨드는 테스트에서 생성자로 직접 만들지 않고 Fixture factory로 만든다. 식별자 하나만 감싸는 커맨드와, 커맨드 자체를 검증하는 테스트는 생성자를 그대로 쓴다. factory가 넘긴 값(중첩 값과 null 포함)을 그대로 쓰는지는 `FixtureFactoriesTest`가 생성자 결과와 비교해 고정한다. factory를 더하면 그 테스트에도 더한다.
 - 동시성 테스트는 커맨드를 경쟁하는 스레드 밖에서 미리 만든다. 장벽과 호출 사이에 Fixture 생성을 끼우지 않는다.
 - 테스트 의도를 결정하는 가격·수량·상태·시간·ID·컬렉션 크기는 builder에서 고정한다. 경계값과 실패값을 무작위 추첨에 맡기지 않는다.

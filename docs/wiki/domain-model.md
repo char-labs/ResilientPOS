@@ -72,7 +72,7 @@ Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰�
 | `Store` | policy 버전 | 정책을 바꿀 때 새 버전 행이 함께 커밋되지 않으면 이미 발행된 checkout이 가리키는 버전이 없어진다 |
 | `Fulfillment`, `ReceiptDelivery` | 없음(단독 루트) | natural key 한 건이면 충분하다 |
 
-지금 있는 JPA 엔티티 14개의 역할·참조 관계·UX 흐름별 동작은 [엔티티 지도](entity-map.md)에 있다. 자식 엔티티는 루트를 통해서만 만들고 바꾼다. 다른 aggregate의 사실(예: 결제 승인)이 필요하면 자식으로 끌어오지 않고 이벤트로 받는다. 한 컨텍스트에 루트가 여럿일 수 있다(`fulfillment`). 루트 하나가 곧 컨텍스트는 아니다.
+지금 있는 JPA 엔티티 15개의 역할·참조 관계·UX 흐름별 동작은 [엔티티 지도](entity-map.md)에 있다. 자식 엔티티는 루트를 통해서만 만들고 바꾼다. 다른 aggregate의 사실(예: 결제 승인)이 필요하면 자식으로 끌어오지 않고 이벤트로 받는다. 한 컨텍스트에 루트가 여럿일 수 있다(`fulfillment`). 루트 하나가 곧 컨텍스트는 아니다.
 
 ## 3. 유비쿼터스 언어 용어집
 
@@ -138,7 +138,7 @@ Kotlin으로 Aggregate·Value Object·Event·Repository를 어떤 형태로 쓰�
 
 ### 4.3 이벤트 전달과 저장 형식
 - 모듈 안 이벤트 전달은 Spring Modulith Event Publication Registry(`EVENT_PUBLICATION` 테이블)를 쓴다. 별도 outbox 테이블과 processed-event 보조 테이블은 만들지 않는다. 멱등성은 자연 키의 unique 제약이 담당한다. `payment`가 같은 `OrderPaymentRequested`를 다시 받을 때는 그 checkout의 승인 시도를 결말과 무관하게 찾아 돌려준다 — 거절된 시도는 partial unique의 술어 밖이기 때문이다. `payment`에서 사실의 멱등 키는 사실로 만든 첫 승인 시도의 unique다(`retried_from`이 없는 승인 시도를 `(order_id, checkout_no)`당 하나로 묶고 soft delete된 행에도 걸린다). 같은 사실이 동시에 와서 앞 시도가 거절된 뒤에도 두 번째가 들어가지 않는다. 여러 인스턴스에 같은 사실이 동시에 오면 분산 락 블록(`Lock.executeWithLock`, 아래 "분산 락은 `Lock` 블록으로 건다")이 늦게 온 요청을 앞 요청의 커밋까지 기다리게 해서 앞 시도를 돌려받게 한다. 이 잠금은 완화 수단이라 Redis 장애나 대기 초과면 잠그지 않고 진행하고(fail-open) 그때는 unique가 막는다. 재결제로 만든 시도는 `retried_from`에 원래 시도를 가져 그 술어 밖이다([payment-advisory-lock](../spec/2026-09-26-payment-advisory-lock.md)). 진행 중인 승인을 하나로 묶는 partial unique(`(order_id, checkout_no)`에 상태 술어를 건다)는 재결제를 포함한 이중 승인의 방어선이다. 무조건적인 복합 키는 한 주문의 시도 수를 제한하므로 쓰지 않는다. 근거는 [ADR-004](../references/01_ResilientPOS_PRD_Backend_Requirements.md)이고, 보조 테이블을 두지 않는 것은 이 PR에서 정했다. "스키마 변경 검토" 절의 질문 1·4와 같은 판단이다. [README](../../README.md#engineering-principles)의 "Event Publication Registry 또는 outbox/inbox"에서 outbox는 외부 전달(Kafka)을 붙일 때의 이야기다.
-- **모듈 사이 이벤트 다섯은 Kafka를 거친다.** 이벤트 타입에 `@Externalized`를 달아 Modulith가 커밋 뒤 토픽으로 보내고, 받는 쪽은 `@KafkaListener` consumer다. `event_publication`에는 이벤트마다 externalizer(`org.springframework.modulith.events.support.EventExternalizerModuleListener.externalize(java.lang.Object)`)의 행 하나만 남고 "브로커로 보냈는가"만 추적한다. 소비 실패는 Kafka 쪽 재시도와 DLT가 맡는다([kafka-event-redelivery](../spec/2026-09-26-kafka-event-redelivery.md)).
+- **Kafka를 거치는 이벤트는 다섯이다(모듈 사이 넷과 같은 모듈 안의 `AttemptCreated`).** 이벤트 타입에 `@Externalized`를 달아 Modulith가 커밋 뒤 토픽으로 보내고, 받는 쪽은 `@KafkaListener` consumer다. `event_publication`에는 이벤트마다 externalizer(`org.springframework.modulith.events.support.EventExternalizerModuleListener.externalize(java.lang.Object)`)의 행 하나만 남고 "브로커로 보냈는가"만 추적한다. 소비 실패는 Kafka 쪽 재시도와 DLT가 맡는다([kafka-event-redelivery](../spec/2026-09-26-kafka-event-redelivery.md)).
 
   | 이벤트 | 토픽 | consumer(모듈) | consumer group |
   |---|---|---|---|

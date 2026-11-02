@@ -106,7 +106,7 @@ flowchart TB
 ```
 
 - 굵은 선은 다른 모듈의 Facade를 직접 부르는 동기 호출, 실선은 `contract` 이벤트 타입, 점선은 식별자(`StoreId` 등)와 인증 값(`AuthenticatedTerminal`)만 쓰는 의존입니다. `단말·매장` 상자로 가는 점선은 `terminal`과 `store` 둘 다에 의존한다는 뜻입니다. 그림에서 뺀 간선이 둘 있습니다. `foundation`(값 타입)에는 다른 모든 모듈이, `platform`(트랜잭션·락·Kafka 구성 등 공용 인프라)에는 업무 모듈 9개가 의존합니다.
-- 간선은 `ApplicationModules.of(ResilientPosApplication::class.java)`가 출력한 모듈 의존을 그대로 옮겼습니다. `order`와 `payment`는 서로 의존하지 않습니다. `payment`에 의존하는 모듈은 `reconciliation` 하나이고, `fulfillment`·`catalog`·`reconciliation`에 의존하는 모듈은 없습니다.
+- 간선은 `ApplicationModules.of(ResilientPosApplication::class.java)`가 출력한 모듈 의존을 그대로 옮겼습니다. `order`와 `payment`는 서로 의존하지 않습니다. `payment`에 의존하는 모듈은 `reconciliation` 하나이고, `fulfillment`·`sync`·`catalog`·`reconciliation`에 의존하는 모듈은 없습니다.
 - 다른 모듈은 그 모듈의 기본 패키지에 있는 타입(Facade, Command, View, ID, 이벤트)만 쓸 수 있고 `internal` 아래는 쓸 수 없습니다. `ModuleStructureTest`(Modulith 경계·순환 검증)와 `DependencyDirectionTest`(도메인 레이어의 프레임워크 무의존)가 위반을 테스트 실패로 만듭니다.
 - `order`와 `payment`는 서로의 사실을 주고받습니다. 이벤트를 각자 두면 서로 의존하는 순환이 되므로 둘이 함께 의존하는 `contract` 모듈에 둡니다.
 
