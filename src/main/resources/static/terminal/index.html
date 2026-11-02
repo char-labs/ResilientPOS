@@ -551,15 +551,13 @@ function pollStep(p, r, now, random) {
   const wait = r.error ? retryDelay(r.error, random) : (pollLane(q, now) === 'fast' ? POLL.fast : POLL.slow) + jitter(random);
   return { p: q, call, wait, show: q.seen, final: false };
 }
-// 이번에 물어도 되는 폴링. 구간마다 자리가 정해져 있고 최근 주문이 먼저 자리를 얻는다. 자리를 얻지 못한 폴링은 대기열에서 기다린다
-function pollPick(entries, now) {
-  const used = { fast: 0, slow: 0 };
-  return [...entries].sort((a, b) => b.orderAt - a.orderAt).filter(e => {
-    const lane = e.p.at == null ? 'fast' : pollLane(e.p, now);
-    if (used[lane] >= POLL.slots[lane]) return false;
-    used[lane]++;
-    return true;
-  });
+// 대기열에서 이번에 자리를 얻는 폴링. 자리를 얻은 폴링은 끝날 때까지 쥔다(한도 시계가 도는 동안 밀려나지 않게).
+// 새 폴링은 빠른 구간에서 시작하므로 빠른 구간이 3건보다 적고 전체가 9건(빠른 3 + 느린 6)보다 적을 때만 들이고, 최근 주문이 먼저다
+function pollAdmit(entries, now) {
+  const held = entries.filter(e => e.admitted);
+  const fast = held.filter(e => e.p.at == null || pollLane(e.p, now) === 'fast').length;
+  const free = Math.min(POLL.slots.fast - fast, POLL.slots.fast + POLL.slots.slow - held.length);
+  return entries.filter(e => !e.admitted).sort((a, b) => b.orderAt - a.orderAt).slice(0, Math.max(0, free));
 }
 const polls = new Map(); // clientOrderId → 폴링. 화면 상태라 저장하지 않는다
 async function pollOnce(e) {
@@ -582,9 +580,12 @@ function pumpPolls() {
   const now = performance.now();
   for (const o of S.orders) if (o.orderId && !o.pay && !polls.has(o.clientOrderId)) // 모의 서버의 ack는 orderId가 없다
     polls.set(o.clientOrderId, { clientOrderId: o.clientOrderId, orderId: o.orderId, orderAt: o.at, p: { at: null, seen: 'WAIT', fails: 0 }, call: 'attempts', show: 'WAIT', busy: false, done: false, nextAt: now + POLL.first + jitter(Math.random) });
-  for (const e of pollPick([...polls.values()].filter(e => !e.done), now)) if (!e.busy && now >= e.nextAt) pollOnce(e);
+  const live = [...polls.values()].filter(e => !e.done);
+  // 자리를 넘겨받은 첫 요청도 1초 + jitter 뒤다. 바로 보내면 자리 하나가 2초 간격보다 자주 묻는다
+  for (const e of pollAdmit(live, now)) Object.assign(e, { admitted: true, nextAt: Math.max(e.nextAt, now + POLL.first + jitter(Math.random)) });
+  for (const e of live) if (e.admitted && !e.busy && now >= e.nextAt) pollOnce(e);
 }
-const payLabel = o => PAY_LABEL[o.pay || (polls.get(o.clientOrderId) || {}).show] || '-';
+const payLabel = o => { const k = o.pay || (polls.get(o.clientOrderId) || {}).show; return Object.hasOwn(PAY_LABEL, k) ? PAY_LABEL[k] : '-'; };
 
 // ---- 화면 ----
 const ICON = {
@@ -1222,14 +1223,20 @@ function selfTest() {
     step(w0, att('UNKNOWN'), 0).wait === 30000 && step(w0, att('UNKNOWN'), m65 - 1).call === 'attempts' && step(w0, att('UNKNOWN'), m65).show === 'RECON',
     // 실패는 sync와 같은 재전송 대기다. RATE_LIMITED는 Retry-After초
     step(w0, { error: { errorCode: 'RATE_LIMITED', retryAfter: '3' } }, 0).wait === 3000 && step(w0, { error: { errorCode: 'UNAUTHENTICATED', retryAfter: null } }, 0).wait === 5000,
-    // 자리: 빠른 구간 3건, 느린 구간 6건이고 최근 주문이 먼저다
+    // 자리: 빠른 구간 3건, 전체 9건이고 최근 주문이 먼저다. 자리를 얻은 폴링은 새 주문에 밀려나지 않는다
     (() => {
-      const e = (n, p) => ({ orderAt: n, p });
+      const e = (n, p, admitted = false) => ({ orderAt: n, p, admitted });
       const fresh = [1, 5, 3, 4, 2].map(n => e(n, { at: null, seen: 'WAIT' }));
-      const slow = Array.from({ length: 8 }, (_, i) => e(10 + i, { at: 0, seen: 'UNKNOWN' }));
-      return pollPick(fresh, 0).map(x => x.orderAt).join() === '5,4,3' && pollPick([...slow, ...fresh], 0).length === 9
-        && pollPick([...slow, ...fresh], 0).filter(x => x.p.seen === 'UNKNOWN').map(x => x.orderAt).join() === '17,16,15,14,13,12';
+      const fast3 = [1, 2, 3].map(n => e(n, { at: 0, seen: 'WAIT' }, true));
+      const slow = n => Array.from({ length: n }, (_, i) => e(10 + i, { at: 0, seen: 'UNKNOWN' }, true));
+      return pollAdmit(fresh, 0).map(x => x.orderAt).join() === '5,4,3'
+        && pollAdmit([...fast3, e(9, { at: null, seen: 'WAIT' })], 1000).length === 0 // 시작한 셋 뒤에 온 새 주문은 기다린다
+        && pollAdmit([...fast3, e(9, { at: null, seen: 'WAIT' })], s).map(x => x.orderAt).join() === '9' // 셋이 느린 구간으로 가면 자리가 난다
+        && pollAdmit([...slow(6), ...fresh], 0).length === 3 && pollAdmit([...slow(8), ...fresh], 0).map(x => x.orderAt).join() === '5'
+        && pollAdmit([...slow(9), ...fresh], 0).length === 0;
     })(),
+    // 저장된 값이 표에 없으면 '-'다
+    payLabel({ pay: 'constructor' }) === '-' && payLabel({ pay: 'PAID' }) === '결제 완료',
   ];
   const ok8 = okPoll.every(Boolean);
   console.assert(ok8, 'selftest 실패: 결제 상태 폴링', okPoll.map((v, i) => v ? '' : i).filter(String));
