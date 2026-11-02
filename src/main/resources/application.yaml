@@ -182,6 +182,14 @@ resilientpos:
     store:
       capacity: 40
       refill-per-second: 8
+    # GET·HEAD 조회는 쓰기와 따로 센다. 처음 값은 쓰기와 같고 Phase 4가 실측으로 고친다. 근거는 order-status-polling spec 결정 3.
+    read:
+      terminal:
+        capacity: 10
+        refill-per-second: 2
+      store:
+        capacity: 40
+        refill-per-second: 8
   kafka:
     # 이름은 저장 형식이다. 이벤트 클래스의 TOPIC 상수와 같아야 한다(KafkaConfiguration).
     topics: order.payment-requested,payment.attempt-created,payment.approved,order.paid,payment.reconciliation-requested

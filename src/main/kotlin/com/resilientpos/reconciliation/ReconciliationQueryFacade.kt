@@ -14,7 +14,11 @@ class ReconciliationQueryFacade(
 
     /**
      * 그 매장의 `MANUAL_REVIEW` case를 최신순(`id` 내림차순)으로 최대 [ReconciliationCaseQueries.REVIEWABLE_LIMIT]건 돌려준다.
-     * 미해소 건은 점주가 처리하면 줄어드는 목록이라 페이지를 두지 않는다. 그 수를 넘는 매장이 생기면 페이지를 더한다.
+     * 상한보다 한 건 더 읽어 넘었으면 `truncated`를 true로 하고 가장 오래된 한 건을 뺀다. 빠진 case를 읽을 방법은 없다.
+     * 미해소 건은 점주가 처리하면 줄어드는 목록이라 페이지를 두지 않는다. 잘림이 실제로 보이면 커서를 더한다.
      */
-    fun findReviewable(query: ReconciliationQuery.FindReviewable): List<ReconciliationCaseView> = cases.findReviewable(query.storeId)
+    fun findReviewable(query: ReconciliationQuery.FindReviewable): ReconciliationQuery.FindReviewable.Result {
+        val read = cases.findReviewable(query.storeId)
+        return ReconciliationQuery.FindReviewable.Result(read.take(ReconciliationCaseQueries.REVIEWABLE_LIMIT), truncated = read.size > ReconciliationCaseQueries.REVIEWABLE_LIMIT)
+    }
 }

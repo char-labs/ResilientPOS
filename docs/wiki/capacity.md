@@ -67,6 +67,16 @@
 - 상한 조건은 빈도 상한만으로는 성립하지 않는다. 고장 단말이 capacity만큼 한꺼번에 보내면 요청마다 커넥션을 쥔다(최악 행 잠금 대기 3초). 단말별 동시 요청 상한(#101)이 이 빈틈을 막는다. 한 단말의 쓰기 요청이 pod 하나의 풀에서 handler 단계에 쥐는 커넥션은 최대 2개(sync 1개와 그 밖 1개, 풀 10의 20%)이고, 거절된 요청도 인증 조회는 한 번 치른다. 측정(2026-10-23, 앱 한 대, 바탕 70 RPS, [terminal-concurrency-limit](../spec/2026-10-23-terminal-concurrency-limit.md) 결과 절): 고장 단말 하나가 같은 500 op 배치를 5초마다 10개 동시에 보내면 바꾸기 전에는 다른 단말 sync p95가 29ms에서 166ms, pending 최대가 0에서 23이 됐다. 바꾼 뒤에는 묶음마다 1개만 통과해 p95 39~47ms, pending 최대 7~10이었다. 호스트 부하와 222만 행의 발행 기록 위에서 잰 값이라 10% 해상도의 판정은 아니다.
 - 시나리오별 계산: Retry-After를 무시하고 초당 20번 보내는 단말은 89.6%가 429이고, 초마다 10개 동시면 79.2%다. 한 매장 4대 동시 재연결은 단말 bucket 1/10, 매장 bucket 4/40만 써서 429가 없다.
 - 매장 refill 합계(250 × 8 = 2,000/s)는 인스턴스 용량보다 훨씬 크다. 이 상한은 매장 사이 공정성 장치이고 전역 용량 보호가 아니다.
+- GET·HEAD는 따로 둔 조회 bucket을 쓴다([order-status-polling](../spec/2026-11-02-order-status-polling.md) 결정 3). 값은 실측 전 처음 값이고 Phase 4(조회 측정)가 고친다.
+
+| 설정 | 값 | 근거 |
+|---|---|---|
+| `resilientpos.rate-limit.read.terminal.capacity` | 10 | 쓰기와 같은 처음 값. 폴링 동시 자리(빠른 3·느린 6)의 첫 요청이 한꺼번에 나가도 든다 |
+| `resilientpos.rate-limit.read.terminal.refill-per-second` | 2 | 폴링 계약의 단말 상한 초당 1.7(3 × 0.5 + 6 ÷ 30)과 5분마다의 메뉴 조회. 피크 정상 흐름(판매 초당 0.5건 × 약 3요청 = 초당 1.5)은 refill의 75% |
+| `resilientpos.rate-limit.read.store.capacity` | 40 | 매장 단말 4대 × 단말 capacity |
+| `resilientpos.rate-limit.read.store.refill-per-second` | 8 | 매장 단말 4대 × 단말 refill |
+
+- 폴링 부하 모델(계산, 미측정): 정상 결제 1건은 결제 시도 조회 1~2번과 주문 조회 1번, 약 3요청이다. 오래 걸리는 주문 1건은 빠른 구간 35초에 약 14요청, 그 뒤 30.5초마다 1요청이라 7분이면 약 26요청, `UNKNOWN` 65분이면 약 140요청이다. backlog N건의 결제 상태가 다 보이는 데는 약 N × 3 ÷ 1.5초가 걸린다(900건이면 약 30분). 정상 결제 20건 backlog를 가짜 서버로 재면 평균 초당 1.28, 10초 창 최대 15건이다. 매장 단말 N대가 모두 계약대로 폴링하면 N × 1.7이 조회 매장 refill 이하여야 해서, 단말 5대부터는 매장 값을 다시 정한다. 단말 하나가 내는 총 요청은 쓰기와 조회 bucket의 합이라 이전보다 최대 2배이고, 조회는 행 잠금을 잡지 않아 커넥션을 쥔 대기가 없다.
 
 ## HTTP 지연 기준선
 지연 알림(`HttpLatencyAboveTarget`)의 임계는 원문 NFR(생성 200ms, checkout 150ms, sync 500 op 배치 2초)이고 아래 측정값은 그 임계가 견딘 단계와 무너진 단계를 가르는지 보는 판별 근거다([slo-alert-baseline](../spec/2026-10-23-slo-alert-baseline.md)). 무너진 400 RPS에서는 세 경로 모두 p95가 3~5초로 임계를 넘었다. 로컬 한 대는 외부화 상한(약 100 RPS) 아래에서 sync p95 134ms·생성 96ms·checkout 50ms(100 RPS), HTTP 상한 근처 300 RPS에서 sync 180ms·생성 127ms·checkout 77ms였다. 운영 기준선은 운영 환경의 첫 주 분포로 다시 잡는다.

@@ -26,9 +26,9 @@ class ReconciliationCaseOwnerController(
 ) {
 
     @GetMapping("/owner/v1/stores/{storeId}/reconciliation-cases")
-    fun findReviewable(@PathVariable storeId: UUID, @AuthenticationPrincipal ownerId: String): List<ReconciliationCaseResponse> {
+    fun findReviewable(@PathVariable storeId: UUID, @AuthenticationPrincipal ownerId: String): ReconciliationCasePageResponse {
         stores.requireOwned(StoreId(storeId), OwnerId(UUID.fromString(ownerId)))
-        return queryFacade.findReviewable(ReconciliationQuery.FindReviewable(StoreId(storeId))).map(ReconciliationCaseResponse::from)
+        return queryFacade.findReviewable(ReconciliationQuery.FindReviewable(StoreId(storeId))).let(ReconciliationCasePageResponse::from)
     }
 
     @PostMapping("/owner/v1/stores/{storeId}/reconciliation-cases/{caseId}/resolve")

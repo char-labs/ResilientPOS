@@ -117,7 +117,7 @@ class TerminalAuthenticationInterceptorTest(
     fun `limiter가 거절하면 429 RATE_LIMITED와 Retry-After이고 Controller에 닿지 않으며 advice는 로그를 남기지 않는다`(output: CapturedOutput) {
         val mark = output.all.length // 이 테스트가 낸 출력만 본다. 클래스 단위 캡처에는 앞 테스트의 출력도 남는다
         val reason = "scope=terminal terminalId=${terminal.terminalId.value} storeId=${terminal.storeId.value}"
-        willThrow(RateLimitedException(2, reason)).given(rateLimiter).acquire(terminal)
+        willThrow(RateLimitedException(2, reason)).given(rateLimiter).acquireRead(terminal)
         InterceptorTestController.calls = 0
 
         get("Bearer $TOKEN").andExpect {
@@ -220,14 +220,23 @@ class TerminalAuthenticationInterceptorTest(
     }
 
     @Test
-    fun `GET과 HEAD는 자리를 잡지 않고 인증과 빈도 상한만 한다`() {
+    fun `GET과 HEAD는 자리를 잡지 않고 인증과 조회 빈도 상한만 한다`() {
         for (method in listOf(HttpMethod.GET, HttpMethod.HEAD)) {
             mockMvc.request(method, "/v1/test-interceptor") { header("Authorization", "Bearer $TOKEN") }
                 .andExpect { status { isOk() } }
         }
 
         verifyNoInteractions(inFlight)
-        verify(rateLimiter, times(2)).acquire(terminal)
+        verify(rateLimiter, times(2)).acquireRead(terminal)
+        verify(rateLimiter, never()).acquire(terminal)
+    }
+
+    @Test
+    fun `POST는 쓰기 빈도 상한만 부르고 조회 상한은 부르지 않는다`() {
+        post("Bearer $TOKEN").andExpect { status { isOk() } }
+
+        verify(rateLimiter).acquire(terminal)
+        verify(rateLimiter, never()).acquireRead(terminal)
     }
 
     @Test
