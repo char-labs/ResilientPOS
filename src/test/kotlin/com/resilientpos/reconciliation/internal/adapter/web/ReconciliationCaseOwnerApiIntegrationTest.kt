@@ -10,6 +10,9 @@ import com.resilientpos.platform.logInNewOwner
 import com.resilientpos.reconciliation.ReconciliationCaseId
 import com.resilientpos.reconciliation.ReconciliationFixtures
 import com.resilientpos.reconciliation.ReconciliationManagement
+import com.resilientpos.reconciliation.ReconciliationQuery
+import com.resilientpos.reconciliation.ReconciliationQueryFacade
+import com.resilientpos.reconciliation.internal.adapter.persistence.query.ReconciliationCaseQueries
 import com.resilientpos.reconciliation.caseRow
 import com.resilientpos.reconciliation.isUnresolved
 import com.resilientpos.reconciliation.attemptRow
@@ -40,6 +43,7 @@ import org.springframework.test.web.servlet.post
 class ReconciliationCaseOwnerApiIntegrationTest(
     private val mockMvc: MockMvc,
     private val management: ReconciliationManagement,
+    private val queryFacade: ReconciliationQueryFacade,
     private val jdbcTemplate: JdbcTemplate,
 ) : PostgresIntegrationTest() {
 
@@ -90,19 +94,39 @@ class ReconciliationCaseOwnerApiIntegrationTest(
 
         mockMvc.get("/owner/v1/stores/$storeId/reconciliation-cases") { asOwner(owner) }.andExpect {
             status { isOk() }
-            jsonPath("$.data.length()") { value(2) }
-            jsonPath("$.data[0].caseId") { value(newer.value.toString()) }
-            jsonPath("$.data[1].caseId") { value(older.value.toString()) }
-            jsonPath("$.data[0].paymentId") { value(newerPayment.value.toString()) }
-            jsonPath("$.data[0].status") { value("MANUAL_REVIEW") }
-            jsonPath("$.data[0].reason") { value("QUERY_LIMIT_EXCEEDED") }
-            jsonPath("$.data[0].unknownReason") { value("RESULT_UNCONFIRMED") }
-            jsonPath("$.data[0].ruleVersion") { value(1) }
-            jsonPath("$.data[0].amount") { value("4500") }
-            jsonPath("$.data[0].currency") { value("KRW") }
-            jsonPath("$.data[0].reportedAmount") { value(null) }
-            jsonPath("$.data[0].openedAt") { value(ReconciliationFixtures.handedAt.toString()) }
+            jsonPath("$.data.items.length()") { value(2) }
+            jsonPath("$.data.truncated") { value(false) }
+            jsonPath("$.data.items[0].caseId") { value(newer.value.toString()) }
+            jsonPath("$.data.items[1].caseId") { value(older.value.toString()) }
+            jsonPath("$.data.items[0].paymentId") { value(newerPayment.value.toString()) }
+            jsonPath("$.data.items[0].status") { value("MANUAL_REVIEW") }
+            jsonPath("$.data.items[0].reason") { value("QUERY_LIMIT_EXCEEDED") }
+            jsonPath("$.data.items[0].unknownReason") { value("RESULT_UNCONFIRMED") }
+            jsonPath("$.data.items[0].ruleVersion") { value(1) }
+            jsonPath("$.data.items[0].amount") { value("4500") }
+            jsonPath("$.data.items[0].currency") { value("KRW") }
+            jsonPath("$.data.items[0].reportedAmount") { value(null) }
+            jsonPath("$.data.items[0].openedAt") { value(ReconciliationFixtures.handedAt.toString()) }
         }
+    }
+
+    @Test
+    fun `미해소 case가 상한과 같으면 전부와 truncated false이고 상한을 넘으면 최신 상한 건과 truncated true이며 가장 오래된 case가 빠진다`() {
+        val store = createStore(owner)
+        val limit = ReconciliationCaseQueries.REVIEWABLE_LIMIT
+        val ids = (1..limit).map { openCase(store).first }
+        val query = ReconciliationQuery.FindReviewable(StoreId(store))
+
+        val atLimit = queryFacade.findReviewable(query)
+        assertEquals(limit, atLimit.items.size)
+        assertFalse(atLimit.truncated)
+
+        val oldest = ids.first()
+        val overLimit = openCase(store).first.let { queryFacade.findReviewable(query) }
+        assertEquals(limit, overLimit.items.size)
+        assertTrue(overLimit.truncated)
+        assertFalse(overLimit.items.any { it.caseId == oldest })
+        assertEquals(overLimit.items.map { it.caseId.value }.sortedDescending(), overLimit.items.map { it.caseId.value })
     }
 
     @Test

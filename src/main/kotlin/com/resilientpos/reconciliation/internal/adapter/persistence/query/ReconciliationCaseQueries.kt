@@ -23,10 +23,13 @@ class ReconciliationCaseQueries(
     private val queries: JdslQueryExecutor,
 ) {
 
-    /** 열린 시각은 `opened_at`(넘긴 시각)이라 한 쿼리, 조인 없이 읽는다. 목록은 `ix_reconciliation_case_store (store_id, status, id)`를 탄다. */
+    /**
+     * 열린 시각은 `opened_at`(넘긴 시각)이라 한 쿼리, 조인 없이 읽는다. 목록은 `ix_reconciliation_case_store (store_id, status, id)`를 탄다.
+     * 상한을 넘었는지 알 수 있게 [REVIEWABLE_LIMIT]보다 한 건 더 읽는다. 자르는 쪽은 호출자다.
+     */
     @ReadOnlyTransactional
     fun findReviewable(storeId: StoreId): List<ReconciliationCaseView> =
-        queries.findAll(REVIEWABLE_LIMIT) {
+        queries.findAll(REVIEWABLE_LIMIT + 1) {
             selectFrom(ReconciliationCaseEntity::class)
                 .where(
                     and(

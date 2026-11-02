@@ -96,58 +96,63 @@ class ReconciliationCaseOwnerControllerTest(
     @Test
     fun `목록은 200과 미해소 case를 최신순 그대로 돌려주고 금액은 통화 기준 문자열이다`() {
         given(queryFacade.findReviewable(ReconciliationQuery.FindReviewable(StoreId(UUID.fromString(STORE_ID))))).willReturn(
-            listOf(
-                view(CASE_ID, PaymentReconciliationReason.AMOUNT_MISMATCH, reported = Money.of("4600", KRW), reportedRef = "PG-REF-9"),
-                view(OTHER_CASE_ID, PaymentReconciliationReason.QUERY_LIMIT_EXCEEDED),
+            ReconciliationQuery.FindReviewable.Result(
+                items = listOf(
+                    view(CASE_ID, PaymentReconciliationReason.AMOUNT_MISMATCH, reported = Money.of("4600", KRW), reportedRef = "PG-REF-9"),
+                    view(OTHER_CASE_ID, PaymentReconciliationReason.QUERY_LIMIT_EXCEEDED),
+                ),
+                truncated = true,
             ),
         )
 
         list()
             .andExpect(status().isOk)
-            .andExpect(jsonPath("$.data.length()").value(2))
-            .andExpect(jsonPath("$.data[0].caseId").value(CASE_ID))
-            .andExpect(jsonPath("$.data[0].paymentId").value(PAYMENT_ID))
-            .andExpect(jsonPath("$.data[0].orderId").value(ORDER_ID))
-            .andExpect(jsonPath("$.data[0].terminalId").value(TERMINAL_ID))
-            .andExpect(jsonPath("$.data[0].checkoutNo").value(1))
-            .andExpect(jsonPath("$.data[0].reason").value("AMOUNT_MISMATCH"))
-            .andExpect(jsonPath("$.data[0].unknownReason").value("RESULT_UNCONFIRMED"))
-            .andExpect(jsonPath("$.data[0].status").value("MANUAL_REVIEW"))
-            .andExpect(jsonPath("$.data[0].ruleVersion").value(1))
-            .andExpect(jsonPath("$.data[0].amount").value("4500"))
-            .andExpect(jsonPath("$.data[0].currency").value("KRW"))
-            .andExpect(jsonPath("$.data[0].queryCount").value(3))
-            .andExpect(jsonPath("$.data[0].reportedAmount").value("4600"))
-            .andExpect(jsonPath("$.data[0].reportedCurrency").value("KRW"))
-            .andExpect(jsonPath("$.data[0].reportedProviderReference").value("PG-REF-9"))
-            .andExpect(jsonPath("$.data[0].openedAt").value("2026-10-20T00:30:00Z"))
-            .andExpect(jsonPath("$.data[1].caseId").value(OTHER_CASE_ID))
-            .andExpect(jsonPath("$.data[1].reportedAmount").value(null))
-            .andExpect(jsonPath("$.data[1].reportedCurrency").value(null))
-            .andExpect(jsonPath("$.data[1].reportedProviderReference").value(null))
+            .andExpect(jsonPath("$.data.items.length()").value(2))
+            .andExpect(jsonPath("$.data.truncated").value(true))
+            .andExpect(jsonPath("$.data.items[0].caseId").value(CASE_ID))
+            .andExpect(jsonPath("$.data.items[0].paymentId").value(PAYMENT_ID))
+            .andExpect(jsonPath("$.data.items[0].orderId").value(ORDER_ID))
+            .andExpect(jsonPath("$.data.items[0].terminalId").value(TERMINAL_ID))
+            .andExpect(jsonPath("$.data.items[0].checkoutNo").value(1))
+            .andExpect(jsonPath("$.data.items[0].reason").value("AMOUNT_MISMATCH"))
+            .andExpect(jsonPath("$.data.items[0].unknownReason").value("RESULT_UNCONFIRMED"))
+            .andExpect(jsonPath("$.data.items[0].status").value("MANUAL_REVIEW"))
+            .andExpect(jsonPath("$.data.items[0].ruleVersion").value(1))
+            .andExpect(jsonPath("$.data.items[0].amount").value("4500"))
+            .andExpect(jsonPath("$.data.items[0].currency").value("KRW"))
+            .andExpect(jsonPath("$.data.items[0].queryCount").value(3))
+            .andExpect(jsonPath("$.data.items[0].reportedAmount").value("4600"))
+            .andExpect(jsonPath("$.data.items[0].reportedCurrency").value("KRW"))
+            .andExpect(jsonPath("$.data.items[0].reportedProviderReference").value("PG-REF-9"))
+            .andExpect(jsonPath("$.data.items[0].openedAt").value("2026-10-20T00:30:00Z"))
+            .andExpect(jsonPath("$.data.items[1].caseId").value(OTHER_CASE_ID))
+            .andExpect(jsonPath("$.data.items[1].reportedAmount").value(null))
+            .andExpect(jsonPath("$.data.items[1].reportedCurrency").value(null))
+            .andExpect(jsonPath("$.data.items[1].reportedProviderReference").value(null))
             .andDo(
                 document(
                     "reconciliation-cases-list",
                     STORE_PATH,
                     responseFields(
                         fieldWithPath("result").type(JsonFieldType.STRING).description("SUCCESS 또는 FAIL"),
-                        fieldWithPath("data[]").type(JsonFieldType.ARRAY).description("그 매장에서 점주가 아직 해소하지 않은(MANUAL_REVIEW) case. 최신순(caseId 내림차순)이고 최대 100건이며 페이지가 없다. 없으면 빈 배열"),
-                        fieldWithPath("data[].caseId").type(JsonFieldType.STRING).description("case ID(UUID). 해소 요청의 경로에 쓴다"),
-                        fieldWithPath("data[].paymentId").type(JsonFieldType.STRING).description("넘어온 결제 시도 ID(UUID)"),
-                        fieldWithPath("data[].orderId").type(JsonFieldType.STRING).description("주문 ID(UUID)"),
-                        fieldWithPath("data[].terminalId").type(JsonFieldType.STRING).description("결제를 요청한 단말 ID(UUID)"),
-                        fieldWithPath("data[].checkoutNo").type(JsonFieldType.NUMBER).description("주문의 결제 요청 회차"),
-                        fieldWithPath("data[].reason").type(JsonFieldType.STRING).description("case로 넘어온 사유. QUERY_LIMIT_EXCEEDED(조회 상한까지 결과 불명) 또는 AMOUNT_MISMATCH(provider가 다른 금액으로 승인했다고 답함)"),
-                        fieldWithPath("data[].unknownReason").type(JsonFieldType.STRING).description("시도가 UNKNOWN이 된 사유. RESULT_UNCONFIRMED 또는 AMOUNT_MISMATCH"),
-                        fieldWithPath("data[].status").type(JsonFieldType.STRING).description("case 상태. 이 목록에서는 항상 MANUAL_REVIEW"),
-                        fieldWithPath("data[].ruleVersion").type(JsonFieldType.NUMBER).description("case를 분류한 규칙 버전"),
-                        fieldWithPath("data[].amount").type(JsonFieldType.STRING).description("결제 시도 금액. 통화 기준 decimal string. 승인으로 해소할 때 approvedAmount가 이 값과 같아야 한다"),
-                        fieldWithPath("data[].currency").type(JsonFieldType.STRING).description("시도 금액의 통화 코드(ISO 4217)"),
-                        fieldWithPath("data[].queryCount").type(JsonFieldType.NUMBER).description("payment가 provider에 조회한 횟수"),
-                        fieldWithPath("data[].reportedAmount").type(JsonFieldType.STRING).optional().description("조회가 알려 준 승인 금액. 통화 기준 decimal string. 알려 준 것이 없으면 null"),
-                        fieldWithPath("data[].reportedCurrency").type(JsonFieldType.STRING).optional().description("조회가 알려 준 승인 금액의 통화 코드. reportedAmount가 null이면 null"),
-                        fieldWithPath("data[].reportedProviderReference").type(JsonFieldType.STRING).optional().description("조회가 알려 준 PG 승인 참조. 없으면 null"),
-                        fieldWithPath("data[].openedAt").type(JsonFieldType.STRING).description("payment가 넘긴 시각(ISO-8601 UTC)"),
+                        fieldWithPath("data.items[]").type(JsonFieldType.ARRAY).description("그 매장에서 점주가 아직 해소하지 않은(MANUAL_REVIEW) case. 최신순(caseId 내림차순)이고 최대 100건이며 페이지가 없다. 없으면 빈 배열"),
+                        fieldWithPath("data.truncated").type(JsonFieldType.BOOLEAN).description("미해소 case가 100건을 넘어 가장 오래된 것이 items에서 빠졌으면 true. 100건 이하면 false. true여도 빠진 case를 읽는 방법은 아직 없다"),
+                        fieldWithPath("data.items[].caseId").type(JsonFieldType.STRING).description("case ID(UUID). 해소 요청의 경로에 쓴다"),
+                        fieldWithPath("data.items[].paymentId").type(JsonFieldType.STRING).description("넘어온 결제 시도 ID(UUID)"),
+                        fieldWithPath("data.items[].orderId").type(JsonFieldType.STRING).description("주문 ID(UUID)"),
+                        fieldWithPath("data.items[].terminalId").type(JsonFieldType.STRING).description("결제를 요청한 단말 ID(UUID)"),
+                        fieldWithPath("data.items[].checkoutNo").type(JsonFieldType.NUMBER).description("주문의 결제 요청 회차"),
+                        fieldWithPath("data.items[].reason").type(JsonFieldType.STRING).description("case로 넘어온 사유. QUERY_LIMIT_EXCEEDED(조회 상한까지 결과 불명) 또는 AMOUNT_MISMATCH(provider가 다른 금액으로 승인했다고 답함)"),
+                        fieldWithPath("data.items[].unknownReason").type(JsonFieldType.STRING).description("시도가 UNKNOWN이 된 사유. RESULT_UNCONFIRMED 또는 AMOUNT_MISMATCH"),
+                        fieldWithPath("data.items[].status").type(JsonFieldType.STRING).description("case 상태. 이 목록에서는 항상 MANUAL_REVIEW"),
+                        fieldWithPath("data.items[].ruleVersion").type(JsonFieldType.NUMBER).description("case를 분류한 규칙 버전"),
+                        fieldWithPath("data.items[].amount").type(JsonFieldType.STRING).description("결제 시도 금액. 통화 기준 decimal string. 승인으로 해소할 때 approvedAmount가 이 값과 같아야 한다"),
+                        fieldWithPath("data.items[].currency").type(JsonFieldType.STRING).description("시도 금액의 통화 코드(ISO 4217)"),
+                        fieldWithPath("data.items[].queryCount").type(JsonFieldType.NUMBER).description("payment가 provider에 조회한 횟수"),
+                        fieldWithPath("data.items[].reportedAmount").type(JsonFieldType.STRING).optional().description("조회가 알려 준 승인 금액. 통화 기준 decimal string. 알려 준 것이 없으면 null"),
+                        fieldWithPath("data.items[].reportedCurrency").type(JsonFieldType.STRING).optional().description("조회가 알려 준 승인 금액의 통화 코드. reportedAmount가 null이면 null"),
+                        fieldWithPath("data.items[].reportedProviderReference").type(JsonFieldType.STRING).optional().description("조회가 알려 준 PG 승인 참조. 없으면 null"),
+                        fieldWithPath("data.items[].openedAt").type(JsonFieldType.STRING).description("payment가 넘긴 시각(ISO-8601 UTC)"),
                         fieldWithPath("error").type(JsonFieldType.NULL).description("성공 응답에서는 null"),
                     ),
                 ),
