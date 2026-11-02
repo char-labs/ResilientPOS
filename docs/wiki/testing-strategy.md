@@ -65,7 +65,7 @@ Repository 제외는 비즈니스 통합 테스트의 실제 persistence 사용�
 - 새 세션에서 Claude `/agents`와 스킬 목록, Codex의 사용 가능한 에이전트/스킬 목록을 확인한다. 사용자 홈의 전역 설정·권한·모델은 바꾸지 않는다.
 
 ## 도입 상태와 근거
-이번 PR은 스킬·에이전트·테스트 정책 설치다. REST Docs와 Fixture Monkey 의존성, 테스트 fixture factory, 첫 Controller 문서 테스트는 아직 없다. 최초 기능 PR에 포함해 실제 빌드로 검증한다.
+REST Docs와 Fixture Monkey 의존성은 `build.gradle.kts`에 있다. 공용 Fixture Monkey 인스턴스는 `src/test/kotlin/com/resilientpos/TestFixtureMonkey.kt`이고, Controller 문서 테스트는 `*ControllerTest`다(예: `ReconciliationCaseOwnerControllerTest`).
 - [Codex 스킬 위치](https://learn.chatgpt.com/docs/build-skills), [커스텀 에이전트](https://learn.chatgpt.com/docs/agent-configuration/subagents)
 - [Claude 스킬](https://code.claude.com/docs/en/skills), [에이전트와 skills 주입](https://code.claude.com/docs/en/sub-agents)
 - [Spring REST Docs](https://docs.spring.io/spring-restdocs/docs/current/reference/htmlsingle/): MockMvc 테스트에서 검증한 API로 스니펫을 생성한다.

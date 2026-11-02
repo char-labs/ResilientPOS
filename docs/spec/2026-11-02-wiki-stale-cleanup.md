@@ -67,3 +67,13 @@ README와 `docs/wiki`에 지금 main(fc36227)의 코드와 다른 문장이 남�
 
 ## 결과
 개발 전 작성. 개발 후 실행 결과와 변경 이유를 추가한다.
+
+범위 절의 고칠 곳을 모두 고쳤다. 2026-11-02 실행 결과는 아래와 같다.
+
+- **모듈 의존 대조.** fc36227에서 §6.5의 임시 테스트를 돌려 간선을 모듈 쌍·종류로 묶었다. 문서에 없던 간선은 `reconciliation → payment`·`store`(`USES_COMPONENT`), `order → store`(`USES_COMPONENT`, `OrderOwnerController`), `reconciliation → contract`·`terminal`·`owner`·`foundation`·`platform`, `order → owner`였다. 이것들을 아키텍처 §6.3과 README 그래프에 넣었다. 임시 테스트는 지웠다.
+- **reconciliation 대조.** `ReconciliationManagement`(`open`·`resolve`), `PaymentReconciliationRequestedListener`, `ReconciliationCase`(여는 전이는 `MANUAL_REVIEW`까지 가고 이벤트를 내지 않는다), `ReconciliationCaseStatus`(`AUTO_REPAIRED` 전이 없음), `PaymentManagement.resolveUnknown`·`resolveFromReconciliation`, `UnknownPaymentResolver`(넘긴 시도 제외)를 읽고 §2·§3.3·§5.3·§5.4·§6.1을 맞췄다.
+- **고치지 않고 남긴 것.** 사실로 확인할 수 없거나 판단이 섞인 문장이다.
+  - [도메인 모델](../wiki/domain-model.md) §8 표의 "모듈 9개가 비어 있는 지금 나누면 담길 코드보다 빌드 코드가 많다". 모듈이 비어 있지 않은 것은 사실이지만, 이 문장은 Gradle 분할을 미루는 판단 근거다. 새 근거를 정하는 일은 이 PR 범위가 아니다.
+  - [아키텍처](../wiki/architecture.md) 머리말의 기준 커밋. §1·§3.1·§3.2·§4는 fc36227에서 줄마다 다시 대조하지 않았으므로 기준을 808aed9로 두고, 다시 대조한 절만 fc36227로 적었다.
+- 링크 확인: 바꾼 파일 7개의 상대 링크 대상과 `#앵커`를 스크립트로 확인했고 깨진 것이 없었다.
+- `python3 scripts/check_pr.py --base origin/main --worktree`: PASS.

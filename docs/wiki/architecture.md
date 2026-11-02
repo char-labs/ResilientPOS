@@ -2,7 +2,7 @@
 
 요청이 서버 안에서 어디를 지나는지, Kafka 메시지가 어디서 생기고 실패하면 어떻게 되는지, 도메인을 어떻게 찾았는지(이벤트 스토밍), Spring Modulith 모듈을 어떻게 나눴는지를 한곳에 모은 페이지다. 요약 도식(전체 흐름, 모듈 의존 그래프)은 [README의 아키텍처 절](../../README.md#아키텍처)에 있고 여기서는 상세를 다룬다.
 
-기준은 main 808aed9의 코드다. 호출 순서는 각 클래스의 소스에서, 모듈 의존은 `ApplicationModules.of(ResilientPosApplication::class.java)` 출력에서 옮겼다(§6.5). 규칙의 정본은 [도메인 모델](domain-model.md)이고 이 페이지는 그 규칙이 코드에서 어떻게 보이는지를 그림으로 보여 준다. 규칙이 바뀌면 도메인 모델을 먼저 고치고 이 페이지의 그림을 맞춘다.
+기준은 main 808aed9의 코드이고, reconciliation이 들어간 곳(§2·§3.3·§5.3·§5.4)과 모듈 표·의존(§6)은 fc36227에서 다시 대조했다. 호출 순서는 각 클래스의 소스에서, 모듈 의존은 `ApplicationModules.of(ResilientPosApplication::class.java)` 출력에서 옮겼다(§6.5). 규칙의 정본은 [도메인 모델](domain-model.md)이고 이 페이지는 그 규칙이 코드에서 어떻게 보이는지를 그림으로 보여 준다. 규칙이 바뀌면 도메인 모델을 먼저 고치고 이 페이지의 그림을 맞춘다.
 
 ## 1. 요청 처리 단계
 
@@ -21,17 +21,18 @@
 
 ## 2. Kafka 메시지가 생기는 곳
 
-모듈 사이 이벤트는 넷이고 모두 Kafka를 거친다. 같은 모듈 안에서 받는 `AttemptCreated`도 재시도·DLT를 같은 경로로 받으려고 Kafka를 거친다([도메인 모델 §4.3](domain-model.md#43-이벤트-전달과-저장-형식)).
+모듈 사이 이벤트는 다섯이고 모두 Kafka를 거친다. 같은 모듈 안에서 받는 `AttemptCreated`도 재시도·DLT를 같은 경로로 받으려고 Kafka를 거친다([도메인 모델 §4.3](domain-model.md#43-이벤트-전달과-저장-형식)).
 
 | 이벤트 | 발행 지점(Facade 메서드) | 토픽 | consumer(모듈) | consumer가 부르는 Facade |
 |---|---|---|---|---|
 | `contract.OrderPaymentRequested` | `OrderCommandFacade.requestCheckout`(HTTP checkout, sync `REQUEST_CHECKOUT` 항목) | `order.payment-requested` | `OrderPaymentRequestedListener`(payment) | `PaymentManagement.createAttempt` |
 | `payment.PaymentEvent.AttemptCreated` | `PaymentManagement.createAttempt`, `retryAuthorization`(재결제) | `payment.attempt-created` | `PaymentAttemptCreatedListener`(payment) | `PaymentManagement.authorize` |
-| `contract.PaymentApproved` | `PaymentManagement.authorize`(승인 결과), `resolveUnknown`(조회로 승인 확정), `createAttempt`(0원 주문) | `payment.approved` | `PaymentApprovedListener`(order) | `OrderCommandFacade.markPaid` |
+| `contract.PaymentApproved` | `PaymentManagement.authorize`(승인 결과), `resolveUnknown`(조회로 승인 확정), `createAttempt`(0원 주문), `resolveFromReconciliation`(점주의 대조 해소로 승인) | `payment.approved` | `PaymentApprovedListener`(order) | `OrderCommandFacade.markPaid` |
 | `contract.OrderPaid` | `OrderCommandFacade.markPaid` | `order.paid` | `OrderPaidListener`(fulfillment) | `FulfillmentCommandFacade.createFulfillment` |
+| `contract.PaymentReconciliationRequested` | `PaymentManagement.resolveUnknown`(조회로 확정하지 못한 시도를 넘김) | `payment.reconciliation-requested` | `PaymentReconciliationRequestedListener`(reconciliation) | `ReconciliationManagement.open` |
 
 - 토픽은 `application.yaml`의 `resilientpos.kafka.topics` 목록으로 앱이 기동할 때 만들고, 토픽마다 DLT(`이름.DLT`)를 함께 만든다(`platform.KafkaConfiguration`).
-- 발행하지만 Kafka로 가지 않는 이벤트도 있다. `OrderEvent.Created`, `PaymentEvent.Declined`, `PaymentEvent.Unknown`은 받는 쪽이 없어 발행 기록도 남지 않는다. 거절·불명이어도 주문은 `CHECKOUT_REQUESTED`에 머물고, 거절은 단말이 재결제(`POST /v1/payment-attempts/{paymentId}/retry`)로, 불명은 `payment`가 provider 조회로 푼다(§3.3).
+- 발행하지만 Kafka로 가지 않는 이벤트도 있다. `OrderEvent.Created`, `PaymentEvent.Declined`, `PaymentEvent.Unknown`은 받는 쪽이 없어 발행 기록도 남지 않는다. 거절·불명이어도 주문은 `CHECKOUT_REQUESTED`에 머물고, 거절은 단말이 재결제(`POST /v1/payment-attempts/{paymentId}/retry`)로, 불명은 `payment`가 provider 조회로 풀고, 풀지 못하면 reconciliation case로 넘긴다(§3.3).
 
 ## 3. 대표 흐름
 
@@ -137,25 +138,32 @@ sequenceDiagram
 
     S->>DB: UNKNOWN 승인 시도 수 세기 → gauge payment.attempt.unknown
     S->>L: executeWithLockNoTx("payment:unknown-resolve")
-    S->>DB: UNKNOWN 승인 시도 id 최대 100건(지난 주기 커서 다음부터)
+    S->>DB: 넘기지 않은 UNKNOWN 승인 시도 id 최대 100건(지난 주기 커서 다음부터)
     loop 한 건씩
         S->>P: resolveUnknown(paymentId)
         P->>PG: 결과 조회. 트랜잭션 밖
-        alt 승인으로 확인
+        alt 같은 금액의 승인으로 확인
             P->>DB: 행 잠금 → 아직 UNKNOWN이면 APPROVED + PaymentApproved 발행 기록
             P-)K: payment.approved (§3.2처럼 주문이 PAID가 된다)
         else 거절로 확인
             P->>DB: 행 잠금 → DECLINED(재결제 대상)
+        else 금액이 다른 승인
+            P->>DB: 행 잠금 → 넘김 기록 + PaymentReconciliationRequested 발행 기록
+            P-)K: payment.reconciliation-requested
         else 조회로도 모름
-            P-->>S: 아무것도 쓰지 않는다(WARN 로그)
+            P->>DB: 행 잠금 → 조회 횟수 +1(WARN 로그)
+            opt 횟수가 상한에 닿았다
+                P->>DB: 넘김 기록 + PaymentReconciliationRequested 발행 기록
+                P-)K: payment.reconciliation-requested
+            end
         end
     end
 ```
 
 - 모든 pod에서 돌고 Redis 락이 pod 사이를 줄 세운다. 락은 중복 조회를 줄이는 완화 수단이다. 락이 풀려 겹쳐도 조회는 읽기이고, 같은 확정이 두 번 적용되는 일은 행을 잠근 뒤 `UNKNOWN`을 다시 확인하는 데서 막힌다.
 - 한 건이 실패하면 ERROR 로그를 남기고 다음 건으로 간다. 그 건은 다음 주기에 다시 잡힌다.
-- 조회로도 확정되지 않는 건을 넘겨받을 reconciliation case는 아직 없다. `max(payment_attempt_unknown) > 0`이 한 시간 넘게 이어지면 사람이 provider 콘솔에서 확인한다([관측성](observability.md)).
-- 근거: [payment-unknown-resolution](../spec/2026-10-01-payment-unknown-resolution.md).
+- 조회로 확정하지 못한 시도는 reconciliation case로 넘긴다. 조회가 불명인 채 횟수가 상한(`resilientpos.payment.unknown-query-limit`)에 닿았거나, 조회가 시도와 다른 금액의 승인을 알려 준 경우다. 넘김과 발행 기록이 한 커밋이고, 넘긴 시도는 대상 조회가 더 고르지 않는다. `reconciliation`의 consumer가 `paymentId`로 멱등하게 case를 열고, 점주가 PG 화면에서 확인한 결론으로 해소하면(`POST /owner/v1/stores/{storeId}/reconciliation-cases/{caseId}/resolve`) 같은 트랜잭션에서 `PaymentManagement.resolveFromReconciliation`이 시도를 확정한다([도메인 모델 §4.6](domain-model.md#46-컨텍스트-사이-동기-쓰기는-sync-intake와-대조-해소-둘만-한-트랜잭션으로)).
+- 근거: [payment-unknown-resolution](../spec/2026-10-01-payment-unknown-resolution.md), [payment-reconciliation-case](../spec/2026-10-20-payment-reconciliation-case.md).
 
 ## 4. 실패 경로: 재시도, DLT, 주기 재전송
 
@@ -228,7 +236,7 @@ flowchart TB
 | 외부 소비자가 생긴 이벤트만 Kafka로 | 모듈 사이 이벤트 넷을 모두 Kafka로 | 여러 pod 운영과 재시도·순서·DLT를 브로커 표준 수단에 맡기려고 앞당겼다. 대가는 로컬·테스트에 브로커가 필요한 것이다(도메인 모델 §8) |
 | order 상태 `OFFLINE_CREATED → SYNCED → PAYMENT_PENDING` | 첫 상태는 `OPEN` | 오프라인 생성 여부는 `sync`가 소유하는 사실이다(도메인 모델 §8) |
 | `PaymentDeclined → [MarkOrderPaymentFailed]` | 거절은 `payment`에 남고 주문은 `CHECKOUT_REQUESTED`에 머문다 | 그 회차의 결제가 아직 끝나지 않았고 재결제는 같은 회차의 새 시도다(도메인 모델 §2) |
-| `PaymentUnknown → [OpenReconciliationCase]` | `payment`의 주기 작업이 provider 조회로 확정 | reconciliation case는 아직 없다([payment-unknown-resolution](../spec/2026-10-01-payment-unknown-resolution.md)) |
+| `PaymentUnknown → [OpenReconciliationCase]` | `payment`의 주기 작업이 provider 조회로 먼저 확정하고, 확정하지 못한 시도만 `PaymentReconciliationRequested`로 case에 넘긴다 | 넘기는 조건은 조회 상한과 금액 불일치 둘이다. 상한 안에서 조회로 결말이 나면 case를 만들지 않는다([payment-unknown-resolution](../spec/2026-10-01-payment-unknown-resolution.md), [payment-reconciliation-case](../spec/2026-10-20-payment-reconciliation-case.md)) |
 | context 7개 | `owner`(점주 계정)와 `catalog`(매장 메뉴)를 더해 9개 | 점주가 자기 매장의 단말을 관리하는 API가 생겼다([operator-authentication](../spec/2026-10-06-operator-authentication.md)). 메뉴 정본이 없어 점주가 가격을 바꿀 수 없고 같은 매장 단말이 같은 메뉴를 본다는 보장이 없었다. 주문 line은 메뉴와 대조하지 않는다([menu-catalog](../spec/2026-10-26-menu-catalog.md)) |
 
 ### 5.4 지금 코드에 있는 것과 없는 것
@@ -243,7 +251,7 @@ flowchart TB
 | `MarkOrderPaid → OrderPaid` | 있다 |
 | `ReceiveSyncBatch` → duplicate·gap·conflict·accepted | 있다(항목별 `DUPLICATE`·`GAP`·`CONFLICT`·`APPLIED`·`REJECTED`). `SyncGapDetected`·`SyncConflictDetected`·`SyncOperationApplied` 이벤트는 없고 응답과 WARN 로그로 드러난다 |
 | `CreateKitchenTicket → KitchenTicketCreated` | `Fulfillment` 생성은 있고 이벤트는 내지 않는다. `ReceiptDelivery`는 없다 |
-| reconciliation의 `OpenCase` 등 | 없다. 모듈은 비어 있다 |
+| reconciliation의 `OpenCase`·`ResolveCase` | 있다. 넘김 사실을 받아 case를 열고(`ReconciliationManagement.open`), 점주가 해소한다(`resolve`). 근거는 case를 열 때 함께 담아 `AttachEvidence`는 따로 없다. 자동 조치(`ProposeRepair`·`ApproveRepair`, 상태 `AUTO_REPAIRED`로 가는 전이)는 없고 모든 case가 `MANUAL_REVIEW`로 간다. `ReconciliationCaseResolved` 이벤트는 내지 않고, 해소 결과는 `payment`의 `PaymentApproved`·`PaymentEvent.Declined`다 |
 | `ChangeStorePolicy` | 없다. 매장 생성·조회만 있다 |
 
 ## 6. Spring Modulith 모듈
@@ -257,13 +265,13 @@ flowchart TB
 | `owner` | bounded context | 점주 계정(이메일, 비밀번호 해시), 가입, 로그인 실패 제한 | `OwnerManagement`, `OwnerCommand`, `OwnerId` |
 | `store` | bounded context | 매장과 소유 점주. 판매 정책은 아직 없다 | `StoreManagement`, `StoreCommand`, `StoreView`, `StoreId` |
 | `terminal` | bounded context | 단말 코드, 소속 매장, 활성화, credential 회전 이력, 단말 인증, 단말별 동시 요청 상한, 단말·매장 빈도 상한 | `TerminalManagement`, `TerminalQueryFacade`, `TerminalCommand`, `TerminalQuery`, `TerminalView`, `TerminalId`, `TerminalCode`, `TerminalStatus`, `AuthenticatedTerminal` |
-| `order` | bounded context | 주문 line, checkout 금액, 주문 lifecycle | `OrderCommandFacade`, `OrderCommand`, `OrderEvent`, `OrderId`, `ClientOrderId`, `OrderStatus` |
+| `order` | bounded context | 주문 line, checkout 금액, 주문 lifecycle | `OrderCommandFacade`, `OrderQueryFacade`, `OrderCommand`, `OrderQuery`, `OrderDetailView`, `OrderSummaryView`, `OrderEvent`, `OrderId`, `ClientOrderId`, `OrderStatus` |
 | `payment` | bounded context | 결제 시도, provider 결과 적용, 결제 정본 상태 | `PaymentManagement`, `PaymentQueryFacade`, `PaymentCommand`, `PaymentQuery`, `PaymentAttemptView`, `PaymentEvent`, `PaymentId`, `PaymentAttemptStatus` |
 | `sync` | bounded context | 단말 watermark, operation 접수·중복 제거, gap·conflict 판정 | 없음. HTTP endpoint만 있다 |
 | `fulfillment` | bounded context | 결제된 주문의 이행 | 없음. `OrderPaid`를 소비할 뿐이다 |
-| `reconciliation` | bounded context | 불일치 case(예정) | 없음. 아직 비어 있다 |
+| `reconciliation` | bounded context | `payment`가 넘긴 결제 시도의 불일치 case(근거, 규칙 버전, 점주의 해소 기록) | `ReconciliationManagement`, `ReconciliationQueryFacade`, `ReconciliationCommand`, `ReconciliationQuery`, `ReconciliationCaseView`, `ReconciliationCaseId`, `ReconciliationCaseStatus`, `ReconciliationDecision` |
 | `catalog` | bounded context | 매장 메뉴의 정본(코드·이름·가격·분류, 통화 하나). 주문 line은 메뉴와 대조하지 않는다 | `MenuManagement`, `MenuCommand`, `MenuView` |
-| `contract` | 계약 | 모듈을 건너가는 이벤트. 업무 규칙과 상태가 없다 | `OrderPaymentRequested`, `PaymentApproved`, `OrderPaid`, `PaymentAttemptKind` |
+| `contract` | 계약 | 모듈을 건너가는 이벤트. 업무 규칙과 상태가 없다 | `OrderPaymentRequested`, `PaymentApproved`, `OrderPaid`, `PaymentReconciliationRequested`, `PaymentAttemptKind`, `PaymentReconciliationReason`, `PaymentUnknownReason` |
 | `foundation` | 공유 커널 | 프레임워크 없는 값 타입과 모델링 원시 타입 | `Money`, `DomainEvent`, `Transition`, `DomainException`, `IdentifierGenerator` |
 | `platform` | 공용 인프라 | 트랜잭션(`Tx`), 분산 락(`Lock`), 엔티티 기반 클래스, 조회 실행기, 응답 envelope·오류 변환, 점주·운영자 Security 체인, Kafka 구성, 발행 기록 재전송·metric, DLT 재투입·폐기 표시 API와 기록, 미처리 DLT metric | `Tx`, `Lock`, `BaseEntity`, `JdslQueryExecutor` 등 |
 
@@ -273,7 +281,7 @@ flowchart TB
 ### 6.2 contract 모듈
 
 - `order`가 `OrderPaymentRequested`를 내고 `payment`가 받으며, `payment`가 `PaymentApproved`를 내고 `order`가 받는다. 이벤트를 각자 모듈에 두면 `order ↔ payment`가 서로를 의존해 Modulith 순환 검사에 걸린다. 그래서 둘이 함께 의존하는 `contract`에 둔다.
-- `contract`는 그 이벤트를 쓰는 모듈(`order`·`payment`·`fulfillment`)의 타입을 들지 않는다. `orderId`를 `order.OrderId`가 아니라 raw `UUID`로 드는 이유다. `StoreId`·`TerminalId`는 `contract`에 의존하지 않는 모듈의 타입이라 순환이 생기지 않아 그대로 든다(`OrderPaid` KDoc).
+- `contract`는 그 이벤트를 쓰는 모듈(`order`·`payment`·`fulfillment`·`reconciliation`)의 타입을 들지 않는다. `orderId`를 `order.OrderId`가 아니라 raw `UUID`로 드는 이유다. `StoreId`·`TerminalId`는 `contract`에 의존하지 않는 모듈의 타입이라 순환이 생기지 않아 그대로 든다(`OrderPaid` KDoc).
 - 소비자가 없는 이벤트는 소유 모듈에 남는다(`OrderEvent.Created`, `PaymentEvent.Declined`·`Unknown`). 같은 모듈 안에서만 도는 `PaymentEvent.AttemptCreated`도 `payment`에 있다.
 
 ### 6.3 모듈 의존
@@ -283,21 +291,23 @@ flowchart TB
 | 출발 → 도착 | 종류 | 대표 타입 |
 |---|---|---|
 | `sync` → `order` | 동기 호출 | `SyncCommandFacade`가 `OrderCommandFacade.createInCallerTransaction`·`requestCheckout`을 항목 트랜잭션 안에서 부른다. `OrderCommand`, `OrderId`, `ClientOrderId` |
-| `terminal` → `store` | 동기 호출(읽기) | 점주 단말 관리 Controller(`TerminalOwnerController`)가 `StoreManagement.requireOwned`로 매장 소유를 먼저 확인한다. `StoreId` |
+| `reconciliation` → `payment` | 동기 호출 | `ReconciliationManagement.resolve`가 자기 트랜잭션 안에서 `PaymentManagement.resolveFromReconciliation`을 부른다. `PaymentCommand`, `PaymentId`, `PaymentAttemptStatus` |
+| `terminal`·`order`·`reconciliation` → `store` | 동기 호출(읽기) | 점주용 Controller(`TerminalOwnerController`, `OrderOwnerController`, `ReconciliationCaseOwnerController`)가 `StoreManagement.requireOwned`로 매장 소유를 먼저 확인한다. `StoreId` |
 | `catalog` → `store` | 동기 호출(읽기) | `MenuManagement`가 점주의 메뉴 조회·교체 전에 `StoreManagement.requireOwned`로 매장 소유를 확인한다. `StoreId` |
 | `order` → `contract` | 이벤트 | 발행 `OrderPaymentRequested`·`OrderPaid`, 소비 `PaymentApproved`·`PaymentAttemptKind` |
-| `payment` → `contract` | 이벤트 | 소비 `OrderPaymentRequested`, 발행 `PaymentApproved` |
+| `payment` → `contract` | 이벤트 | 소비 `OrderPaymentRequested`, 발행 `PaymentApproved`·`PaymentReconciliationRequested` |
 | `fulfillment` → `contract` | 이벤트 | 소비 `OrderPaid` |
+| `reconciliation` → `contract` | 이벤트 | 소비 `PaymentReconciliationRequested`, 그 필드 `PaymentReconciliationReason`·`PaymentUnknownReason` |
 | `contract` → `store`, `terminal` | 값 타입 | 이벤트 필드 `StoreId`, `TerminalId` |
-| `order`·`payment`·`sync` → `store`, `terminal` | 값 타입 | `StoreId`, `TerminalId`, Controller 파라미터 `AuthenticatedTerminal` |
+| `order`·`payment`·`sync`·`reconciliation` → `store`, `terminal` | 값 타입 | `StoreId`, `TerminalId`, Controller 파라미터 `AuthenticatedTerminal` |
 | `catalog` → `terminal` | 값 타입 | 단말 메뉴 조회 Controller 파라미터 `AuthenticatedTerminal` |
-| `store` → `owner`, `terminal` → `owner`, `catalog` → `owner` | 값 타입 | `OwnerId` |
-| 모든 모듈(`foundation`·`reconciliation` 제외) → `foundation` | 값 타입 | `Money`, `DomainEvent`, `Transition`, `DomainException`, `IdentifierGenerator` |
-| 업무 모듈 8개(`reconciliation` 제외) → `platform` | 인프라 | `Tx`, `Lock`, `BaseEntity`, `JdslQueryExecutor`, `logger` |
+| `store`·`terminal`·`catalog`·`order`·`reconciliation` → `owner` | 값 타입 | `OwnerId` |
+| 모든 모듈(`foundation` 제외) → `foundation` | 값 타입 | `Money`, `DomainEvent`, `Transition`, `DomainException`, `IdentifierGenerator` |
+| 업무 모듈 9개 → `platform` | 인프라 | `Tx`, `Lock`, `BaseEntity`, `JdslQueryExecutor`, `logger` |
 
-- 출력에 없는 간선도 사실이다. `order`와 `payment`는 서로 의존하지 않는다. `payment`·`fulfillment`·`sync`·`reconciliation`·`catalog`에 의존하는 모듈은 없다. `order`는 `catalog`를 모른다. `platform`은 `foundation`에만 의존한다. `KafkaConfiguration`이 토픽 이름을 이벤트 클래스 상수가 아니라 설정 목록에서 읽는 것도 `platform → payment` 간선을 만들지 않으려는 것이다.
+- 출력에 없는 간선도 사실이다. `order`와 `payment`는 서로 의존하지 않는다. `payment`에 의존하는 모듈은 `reconciliation` 하나이고, `fulfillment`·`sync`·`reconciliation`·`catalog`에 의존하는 모듈은 없다. `order`는 `catalog`를 모른다. `platform`은 `foundation`에만 의존한다. `KafkaConfiguration`이 토픽 이름을 이벤트 클래스 상수가 아니라 설정 목록에서 읽는 것도 `platform → payment` 간선을 만들지 않으려는 것이다.
 - Modulith 출력의 의존 종류는 `DEFAULT`(타입 참조)와 `USES_COMPONENT`(Spring 빈 주입) 두 가지다. 모듈 사이 consumer가 `@ApplicationModuleListener`가 아니라 `@KafkaListener`라서 Modulith는 이벤트 수신을 `EVENT_LISTENER` 의존으로 보지 못하고, 이벤트 간선은 `contract` 타입 참조(`DEFAULT`)로 나온다.
-- 모듈 사이 동기 호출은 위 세 줄(`USES_COMPONENT`)뿐이다. 그 밖의 모듈 사이 변경은 이벤트다.
+- 모듈 사이 동기 호출은 위 표의 `동기 호출` 줄(`USES_COMPONENT`)뿐이다. 상태를 바꾸는 것은 `sync → order`와 `reconciliation → payment` 둘이고, `→ store`는 매장 소유를 확인하는 읽기다. 그 밖의 모듈 사이 변경은 이벤트다.
 
 ### 6.4 의존 규칙을 지키는 테스트
 
@@ -328,7 +338,7 @@ modules.forEach { module ->
 }
 ```
 
-808aed9(Spring Modulith 2.1.1)에서 이 출력을 모듈 쌍과 종류로 묶은 결과가 §6.3이다.
+fc36227(Spring Modulith 2.1.2)에서 이 출력을 모듈 쌍과 종류로 묶은 결과가 §6.3이다.
 
 ## 관련 문서
 - [도메인 모델](domain-model.md): 용어, bounded context 요약, 이벤트 전달·트랜잭션·락 규칙의 정본
