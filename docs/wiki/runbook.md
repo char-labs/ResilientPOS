@@ -142,6 +142,7 @@
 - **먼저 볼 것.** Loki에서 `{service_name="ResilientPOS"} |= "빈도 상한으로 거절했다 scope=store"`로 거절 줄의 `storeId`를 본다(scope별 10초에 한 줄). 줄의 `terminalId`는 매장 bucket이 빈 순간 막힌 단말이라 원인이 아닐 수 있다. 같은 매장의 `scope=terminal` 줄에 한 `terminalId`가 되풀이되면 그 단말이 자기 상한까지 보내고 있다. 그런 줄 없이 여러 단말이 막혀 있으면 단말들이 각자 상한 안에서 합쳐 매장 bucket을 비운 것이니 그 매장의 등록 단말 수를 본다.
 - **조치.** 고장 단말이면 매장에 그 단말의 재시작이나 업데이트를 요청한다(`Retry-After`를 지키는지, 같은 sync 배치를 되풀이하는지). 정상 단말이 많은 매장이면 매장 상한 값(`resilientpos.rate-limit.store.*`)을 다시 정한다. 값은 spec 결정 6의 조건(매장 capacity는 매장 단말 수 × 단말 capacity 이상)을 따른다.
 - **하지 말 것.** 상한을 크게 올리거나 꺼서 알림을 끄지 않는다. 매장 bucket은 한 매장의 단말들이 다른 매장 몫의 처리량을 쓰지 못하게 하는 장치다.
+- **조회 거절(알림 없음).** 매장 단말들의 결제 상태 표시가 멈췄다는 문의가 오면 `sum by (scope) (increase(inbound_rate_limited_total{application="ResilientPOS", scope=~"read_terminal|read_store"}[5m]))`로 조회 bucket 거절을 보고, Loki `{service_name="ResilientPOS"} |= "빈도 상한으로 거절했다 scope=read_"`로 `storeId`·`terminalId`를 본다. `scope=read_terminal` 줄에 한 단말이 되풀이되면 그 단말이 폴링 계약(동시 자리 3·6건, 2초·30초 간격)을 어긴 것이다. `scope=read_store`가 이어지면 위와 같이 매장의 등록 단말 수를 보고 값(`resilientpos.rate-limit.read.store.*`)을 다시 정한다. 조회 거절은 판매(sync·주문·checkout)를 막지 않는다. 계약은 [order-status-polling](../spec/2026-11-02-order-status-polling.md) 결정 2·3이다.
 
 ## HttpLatencyAboveTarget
 
