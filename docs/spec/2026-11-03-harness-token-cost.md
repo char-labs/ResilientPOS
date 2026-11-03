@@ -82,7 +82,7 @@
 
 한계:
 - 재현은 1건이다. spec에 원래 결과 절이 들어 있어 실제보다 쉬운 과제였고, grill 같은 대화 단계는 측정하지 않았다.
-- `resilientpos-orchestrator`(볼트)는 리뷰·게이트도 집행 위임으로 보고 tier를 메인 이하로 묶으며, dispatch마다 `model`을 명시한다. 호출 때 넘긴 `model`은 frontmatter보다 우선하므로, orchestrator가 dispatch한 게이트는 메인이 Sonnet이면 Sonnet으로 돌 수 있다. Opus 게이트 전제는 multi-review와 직접 호출처럼 `model`을 넘기지 않는 경로에서만 성립한다.
+- `resilientpos-orchestrator`(볼트)는 리뷰·게이트도 집행 위임으로 보고 tier를 메인 이하로 묶으며, dispatch마다 `model`을 명시한다. 호출 때 넘긴 `model`은 frontmatter보다 우선하므로, orchestrator가 dispatch한 게이트는 메인이 Sonnet이면 Sonnet으로 돌 수 있다. Opus 게이트 전제는 multi-review와 직접 호출처럼 `model`을 넘기지 않는 경로에서만 성립한다. 사용자 결정(2026-11-03): 볼트 orchestrator에 "리뷰·게이트 dispatch는 정의의 frontmatter tier를 따른다"는 예외를 사용자가 넣는다. 이 PR은 볼트를 고치지 않으며, 그 예외가 들어가기 전에는 orchestrator 경유 게이트가 Sonnet일 수 있다.
 
 ## 제외
 - 사용자 전역 파일(`~/.claude/settings.json`, `~/.claude/rules`)과 Obsidian 볼트. 볼트 스킬 여러 곳이 `.claude/settings.json`을 gitignore된 개인 파일로 안내한다: `resilientpos-setup`(`SKILL.md`, `references/statusline.md`·`git-hooks.md`·`develop-workflow.md`·`fleta.md`), `resilientpos-git`(`SKILL.md`, `references/cli-reference.md`), `resilientpos-workflow`(`SKILL.md`, `README.md`), `resilientpos-implement`(`SKILL.md`), `resilientpos-orchestrator`(`references/worktree-lifecycle.md`). 이 PR 뒤에는 개인 hook·statusLine을 `.claude/settings.local.json`에 써야 하며, 사용자가 볼트에서 고친다. 그 전까지 `resilientpos-setup`을 실행하지 않는다(사용자가 명시 호출할 때만 도는 스킬이다). 메인 체크아웃에는 `.claude/settings.json`이 없어서 setup이 이미 쓴 개인 설정은 없다. 다른 checkout에 추적되지 않는 `.claude/settings.json`이 있으면 이 PR을 pull할 때 git이 덮어쓰기를 거절하므로, 먼저 `settings.local.json`으로 옮긴다.
