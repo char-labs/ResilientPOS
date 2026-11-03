@@ -62,7 +62,7 @@ Claude 정의(`agents/*.md`)와 역할은 같고 형식만 다르다. Codex TOML
 스킬 description이 같은 요청에 경합할 때의 선행 규칙:
 - 요구사항·설계가 아직 합의되지 않았으면 `resilientpos-grill`이 먼저다. `resilientpos-develop`·`resilientpos-orchestrator`는 합의 뒤에 진입한다.
 - 커밋/push 요청은 `resilientpos-git`이 절차를, `resilientpos-commit-push`가 범위 판단(commit-only vs push, staged 범위, spec 첫 커밋 보존)을 맡아 함께 로드된다.
-- 지침·스킬 파일 검토는 `workflow-reviewer`, 구현 코드 검토는 `code-reviewer`·`resilientpos-review`다. 백엔드 운영 리스크(정합성, 멱등성, 응답 속도, 보안, AOP 리팩토링 여지 등)는 `spring-backend-specialist`가 더 깊게 점검한다. 사용자가 명시적으로 요청할 때와 `resilientpos-multi-review`가 `src/main` Kotlin 변경을 코드 리뷰할 때(diff 범위로 좁혀) 쓰고, 그 밖에는 `code-reviewer`가 "잠재적 문제" 항목에서 계속 본다.
+- 지침·스킬 파일 검토는 `workflow-reviewer`, 구현 코드 검토는 `code-reviewer`·`resilientpos-review`다. 백엔드 운영 리스크(정합성, 멱등성, 응답 속도, 보안, AOP 리팩토링 여지 등)는 `spring-backend-specialist`가 더 깊게 점검한다. 사용자가 명시적으로 요청할 때와 `resilientpos-multi-review`가 `src/main`·`build.gradle.kts` 변경을 코드 리뷰할 때(diff 범위로 좁혀) 쓰고, 그 밖에는 `code-reviewer`가 "잠재적 문제" 항목에서 계속 본다.
 - `resilientpos-setup`과 `resilientpos-develop-auto`는 사용자가 명시 호출할 때만 실행한다. 두 스킬은 `disable-model-invocation: true`라 description이 세션 컨텍스트에 올라가지 않는다(`user-invocable: false`는 `/` 메뉴만 숨기고 description은 계속 로드된다).
 
 ## 하네스 설정
@@ -71,7 +71,7 @@ Claude 정의(`agents/*.md`)와 역할은 같고 형식만 다르다. Codex TOML
 - `claudeMdExcludes`: 전역 `~/.claude/rules/ecc/kotlin/*.md`를 뺀다. `**/*.kt`에 걸리는 Android·KMP 지침이라 이 Spring 백엔드에 맞지 않고 저장소 Kotlin rules와 겹친다. 패턴 `**/.claude/rules/ecc/kotlin/**`에는 홈 경로가 없다. 배열은 settings 계층 사이에서 합쳐지므로 local 설정으로 되돌릴 수 없다.
 - `enabledPlugins`: 이 저장소에서 쓰지 않는 플러그인(`claw-hwp`, `kordoc`, `taste-skill`, `ui-ux-pro-max`, `impeccable`)을 끈다. 설치되지 않은 머신에서는 아무 일도 하지 않는다. 다시 켜려면 local 설정에 `true`를 둔다.
 - `autoCompactWindow: 300000`: 기본값(1M 모델 약 967K)이나 user 설정보다 이르게 compact한다. 서브에이전트도 이 창을 물려받는다. compact 뒤에는 대화 중 결정이 요약으로 줄고 `paths:` rules는 해당 파일을 다시 읽을 때까지 빠지므로, 합의는 spec 파일에 남긴다. 세션 중 `/autocompact`는 user 설정에 저장되어 이 값에 막힌다. 한 세션만 바꾸려면 `claude --autocompact 400k`로 시작하고, 계속 바꾸려면 local 설정에 둔다. env `CLAUDE_CODE_AUTO_COMPACT_WINDOW`는 이 플래그보다 우선해 덮을 길을 막으므로 쓰지 않는다.
-- `model: "sonnet"`, `advisorModel: "opus"`: 메인 세션을 Sonnet으로 돌리고 Claude가 필요할 때 Opus advisor에 자문한다. Sonnet이 놓치는 결함은 PR 전 Opus 게이트가 잡는다는 전제다. 그 게이트는 `resilientpos-multi-review`의 `reviewer-claude`와, `src/main` Kotlin이 바뀐 코드 리뷰에서 함께 도는 `spring-backend-specialist`다. orchestrator를 거치면 `code-reviewer`가 돈다. advisor를 부르면 Opus가 문맥을 캐시 없이 읽는다. 세션 중 `/model`·`/advisor`는 user 설정에 저장되어 이 값에 막힌다. Opus로 시작하려면 `claude --model opus`를 쓰고, 계속 바꾸려면 local 설정에 `model`을 둔다. advisor를 끄려면 local 설정 `env`에 `CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1`을 둔다.
+- `model: "sonnet"`, `advisorModel: "opus"`: 메인 세션을 Sonnet으로 돌리고 Claude가 필요할 때 Opus advisor에 자문한다. Sonnet이 놓치는 결함은 PR 전 Opus 게이트가 잡는다는 전제다. 그 게이트는 `resilientpos-multi-review`의 `reviewer-claude`와, `src/main`·`build.gradle.kts`가 바뀐 코드 리뷰에서 함께 도는 `spring-backend-specialist`다. orchestrator를 거치면 `code-reviewer`가 돈다. advisor를 부르면 Opus가 문맥을 캐시 없이 읽는다. 세션 중 `/model`·`/advisor`는 user 설정에 저장되어 이 값에 막힌다. Opus로 시작하려면 `claude --model opus`를 쓰고, 계속 바꾸려면 local 설정에 `model`을 둔다. advisor를 끄려면 local 설정 `env`에 `CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1`을 둔다.
 
 ## 유지와 확인
 지침 변경 시 중복·충돌·폐기된 명령을 제거하고 관련 wiki를 갱신한다. 사용자 전역 지침을 프로젝트 규칙으로 복제하지 않는다.

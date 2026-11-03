@@ -77,10 +77,12 @@
 
 대가와 전제:
 - Sonnet이 놓치는 P2급 결함은 PR 전 Opus 게이트가 잡는다고 전제한다. 이번 A/B에서 Sonnet 쪽 P2 세 건을 찾은 것은 명시 호출한 `spring-backend-specialist`였다. 그런데 이 리뷰어는 요청할 때만 쓰게 되어 있어서, 평소 PR 전에는 `resilientpos-multi-review`의 `reviewer-claude` 하나만 Opus로 돌았다. 사용자 결정(2026-11-03, "토큰을 아끼면서 효과를 최대로")에 따라 볼트 multi-review에 조건부 백엔드 리뷰를 넣었다.
-  - `src/main/**/*.kt`가 바뀐 코드 리뷰(PR 전·Phase 4)에서만 `spring-backend-specialist`를 함께 띄운다. 설계 리뷰와 문서·테스트만 바뀐 PR에서는 띄우지 않는다.
-  - MainAgent는 `git diff`를 `.review/backend.diff`로 저장만 하고 읽지 않는다. 리뷰어에게는 경로·base·spec과 `범위: diff`만 넘긴다. `model`은 넘기지 않아 frontmatter `opus`로 돈다.
-  - `범위: diff`이면 리뷰어가 사실 수집(빌드 파일, 마이그레이션 대조표, wiki 전체)을 diff가 닿는 것으로 좁히고, P0~P2만 자세히 보고한다.
-  - 대가: 그런 PR마다 Opus 리뷰가 한 번 더 든다. 사실 수집을 좁혀서 diff 밖 스키마 제약 위반은 놓칠 수 있다. 이 장치가 P2를 찾는 비율은 아직 재지 않았다.
+  - `src/main`(마이그레이션·설정 포함)이나 `build.gradle.kts`가 바뀐 코드 리뷰(PR 전·Phase 4)에서만 `spring-backend-specialist`를 함께 띄운다. 설계 리뷰와 문서·테스트만 바뀐 PR에서는 띄우지 않는다.
+  - develop 흐름은 구현을 PR 직전에 커밋하므로, 판정과 diff는 커밋하지 않은 작업 트리와 추적되지 않은 새 파일까지 base와 비교한다. base는 요청 값, 없으면 `git merge-base origin/main HEAD`이고, 둘 다 안 되면 "미실행: base 미정"으로 남긴다.
+  - MainAgent는 diff를 `.review/backend.diff`로 저장만 하고 읽지 않는다. 테스트는 본문 없이 바뀐 경로만 덧붙인다. 리뷰어에게는 경로·base·spec과 `범위: diff`만 넘긴다. `model`은 넘기지 않아 frontmatter `opus`로 돈다.
+  - `범위: diff`이면 리뷰어가 사실 수집(빌드 파일, 마이그레이션 대조표, wiki 전체)을 diff가 닿는 것으로 좁히고, P0~P2만 자세히 보고한다. DTO·엔티티만 바뀌어도 대응 마이그레이션은 Grep으로 찾아 대조한다.
+  - 재리뷰에서는 앞선 리뷰가 P0·P1을 냈고 수정이 `src/main`·빌드에 닿을 때만 다시 띄운다.
+  - 대가: 그런 PR마다 Opus 리뷰가 한 번 더 든다. 사실 수집을 좁혀서 diff 밖 스키마 제약 위반은 놓칠 수 있고, 테스트는 경로만 받으므로 리뷰어가 읽지 않은 테스트의 결함은 놓칠 수 있다. 이 장치가 P2를 찾는 비율은 아직 재지 않았다.
   - orchestrator 경유 게이트는 `code-reviewer`(frontmatter `opus`)다.
 - 메인 세션의 판단(grill 심문, 설계, 리뷰 결과 채택)도 Sonnet이 한다. advisor는 Claude가 부를 때만 돌고, B에서는 한 번도 불리지 않았다.
 - advisor를 부르면 그 호출은 Opus가 문맥을 캐시 없이 읽으므로 한 번에 수만 토큰이 든다.
@@ -96,7 +98,7 @@
 - 사용자 전역 파일(`~/.claude/settings.json`, `~/.claude/rules`).
 - Obsidian 볼트는 이 PR diff 밖이며, 사용자 요청으로 이 세션에서 아래를 고쳤다(`workflow-reviewer` 검토 후 반영). 볼트 스킬 여러 곳이 `.claude/settings.json`을 gitignore된 개인 파일로 안내한다: `resilientpos-setup`(`SKILL.md`, `references/statusline.md`·`git-hooks.md`·`develop-workflow.md`·`fleta.md`), `resilientpos-git`(`SKILL.md`, `references/cli-reference.md`), `resilientpos-workflow`(`SKILL.md`, `README.md`), `resilientpos-implement`(`SKILL.md`), `resilientpos-orchestrator`(`references/worktree-lifecycle.md`). 개인 hook·statusLine을 쓰는 대상을 `.claude/settings.local.json`으로 바꾸고, 공유 `.claude/settings.json`에는 hook·statusLine을 두지 않는다고 적었다.
   - orchestrator `SKILL.md §역할 기준 원칙`에 리뷰·게이트 예외를 넣고 `model-routing.md`·`delegation-patterns.md`·`autonomous-driving.md`·`merge-coordinator.md`와 볼트 `README.md`를 맞췄다. 게이트는 tier 상한을 받지 않고 최상위 일반 tier로 돈다. frontmatter가 그 tier인 에이전트는 `model`을 넘기지 않고, 그 밖은 명시하며, 외부 CLI 래퍼는 예외 밖이다. "자문 경로 비활성" 블록은 Claude Code advisor 도구와 별개라고 적었다.
-  - multi-review에 위 조건부 백엔드 리뷰를 넣고 `spring-backend-specialist` 정의에 `범위: diff` 모드를 더했다.
+  - multi-review에 위 조건부 백엔드 리뷰를 넣고 `spring-backend-specialist` 정의에 `범위: diff` 모드를 더했다. `workflow-reviewer`가 FAIL로 지적한 세 가지(커밋 전 구현을 보지 못함, base 결정 방법 없음, Kotlin 외 백엔드 변경 누락)와 경고(테스트 경로, DTO만 바뀐 경우의 마이그레이션 대조, 재리뷰 조건, develop-auto 재리뷰 담당, `.review/` gitignore 서술)를 반영했다.
 - 메인 체크아웃에는 `.claude/settings.json`이 없어서 setup이 이미 쓴 개인 설정은 없다. 다른 checkout에 추적되지 않는 `.claude/settings.json`이 있으면 이 PR을 pull할 때 git이 덮어쓰기를 거절하므로, 먼저 `settings.local.json`으로 옮긴다.
 - 저장소 Kotlin rules 네 개의 내용·`paths:` 축소.
 - `orca-agent-view@inline`과 사용자가 판단할 플러그인들.
