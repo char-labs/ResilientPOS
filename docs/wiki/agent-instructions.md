@@ -29,7 +29,7 @@ diff를 오염시키지 않고, 볼트 동기화로 기기 간에 공유되며, 
 링크가 저장소 안에 있으므로 스킬은 이 저장소에서 작업할 때만 적용된다.
 링크와 복사본은 `make bootstrap`이 부르는 `scripts/link_claude.py`가 실행 시점에 홈 경로를 풀어 만든다.
 커밋되는 파일에 기기별 절대 경로가 들어가지 않고, 볼트가 없으면 안내만 남기고 정상 종료한다.
-네 경로는 `.gitignore` 대상(`.claude/` 통째)이며, 로컬 검사는 추적하지 않는 경로를 제외하므로 심볼릭 링크 오류가
+네 경로는 `.gitignore` 대상(`.claude/*`·`.codex/`, 체크인하는 `.claude/settings.json`만 예외)이며, 로컬 검사는 추적하지 않는 경로를 제외하므로 심볼릭 링크 오류가
 발생하지 않는다. 링크를 gitignore에서 빼면 검사가 즉시 실패한다.
 
 ## Codex 에이전트
@@ -49,7 +49,7 @@ Claude 정의(`agents/*.md`)와 역할은 같고 형식만 다르다. Codex TOML
 
 ## 에이전트 모델 배정과 스킬 선행 규칙
 2026-09-13 전체 이식 시 사용자가 정한 기준이다. 원본 플러그인은 대부분 `model: opus` 고정이었으나 역할별 가성비로 바꿨다.
-정본은 볼트 `agents/*.md`의 `model:`이고, `resilientpos-orchestrator`가 dispatch 할 때는 "집행 위임 tier ≤ 메인 tier" 상한이 우선한다.
+정본은 볼트 `agents/*.md`의 `model:`이고, `resilientpos-orchestrator`가 dispatch 할 때는 "집행 위임 tier ≤ 메인 tier" 상한이 우선한다. 리뷰·게이트는 예외로 상한을 받지 않고 최상위 tier로 돈다. frontmatter가 `opus`인 에이전트는 dispatch에 `model`을 넘기지 않고, 그 밖의 에이전트를 게이트로 쓰면 `opus`를 명시한다. 외부 CLI 래퍼는 예외 밖이다.
 
 | 등급 | 기준 | 에이전트 |
 |---|---|---|
@@ -57,13 +57,21 @@ Claude 정의(`agents/*.md`)와 역할은 같고 형식만 다르다. Codex TOML
 | `sonnet` | 구현 실행자, 절차가 정해진 분석·생성·진단 | `tdd-driver`, `test-oracle`, `codebase-analyzer`, `document-analyzer`, `rules-generator` |
 | `haiku` | 외부 CLI 결과를 포장만 하는 래퍼 | `architect-codex/gemini`, `reviewer-codex/gemini` |
 
-배정의 근거는 [Anthropic 어드바이저 도구 문서](https://platform.claude.com/docs/ko/agents-and-tools/tool-use/advisor-tool)의 측정이다. 값싼 실행자 모델에 상위 어드바이저 모델을 붙이면 상위 모델 단독과 비슷한 품질을 같거나 낮은 비용으로 내고, 실행자 역량이 어드바이저에 가까울수록 이점이 줄어든다. 이 저장소의 오케스트레이션은 구현 앞뒤에 `opus` 게이트(설계 검증 `spec-validator`·`architect-*`, 사후 검토 `code-reviewer`·QA)를 두므로 그 게이트가 어드바이저 역할이고, 구현 실행자 `tdd-driver`는 `sonnet`이다(2026-09-13, 처음 `opus`로 정했던 것을 문서 근거로 조정). 게이트 없이 `tdd-driver`를 단독 호출하는 되돌리기 비용이 큰 변경이면 호출자가 dispatch 시 `model`을 `opus`로 올린다. 볼트 `resilientpos-orchestrator`의 자문 경로도 같은 문서를 원형으로 삼아 단발 자문 허용, 권고 80단어 상한, 메인 tier 조건부 시작/종료 자문으로 맞췄다.
+배정은 [Anthropic 어드바이저 도구 문서](https://platform.claude.com/docs/ko/agents-and-tools/tool-use/advisor-tool)의 측정을 유추해 정했다. 값싼 실행자 모델에 상위 어드바이저 모델을 붙이면 상위 모델 단독과 비슷한 품질을 같거나 낮은 비용으로 내고, 실행자 역량이 어드바이저에 가까울수록 이점이 줄어든다. advisor 도구 자체는 2026-11-03부터 켠다. 메인 세션은 Sonnet이고 advisor는 Opus다([하네스 설정](#하네스-설정)). Claude Code는 `/advisor`, settings의 `advisorModel`, `--advisor`로 advisor를 켜며, 서브에이전트가 설정된 advisor를 물려받아 자기 모델과의 조합을 따로 검사한다([Claude Code advisor](https://code.claude.com/docs/en/advisor.md)). 서브에이전트 모델은 호출 때 넘긴 `model`, frontmatter `model`, `CLAUDE_CODE_SUBAGENT_MODEL` 순으로 정해지므로(2.1.251 이후, `CLAUDE_CODE_SUBAGENT_MODEL_FORCE`가 꺼져 있을 때), 메인이 Sonnet이어도 `model`을 넘기지 않고 부른 `opus` 게이트는 Opus로 돈다([sub-agents](https://code.claude.com/docs/en/sub-agents.md#choose-a-model)). 이 저장소의 오케스트레이션은 구현 앞뒤에 `opus` 게이트(설계 검증 `spec-validator`·`architect-claude`, 사후 검토 `code-reviewer`·QA)를 두므로 그 게이트가 어드바이저 역할이고, 구현 실행자 `tdd-driver`는 `sonnet`이다(2026-09-13, 처음 `opus`로 정했던 것을 문서 근거로 조정). 게이트 없이 `tdd-driver`를 단독 호출하는 되돌리기 비용이 큰 변경이면 호출자가 dispatch 시 `model`을 `opus`로 올린다. 볼트 `resilientpos-orchestrator`의 자문 경로도 같은 문서를 원형으로 삼아 단발 자문 허용, 권고 80단어 상한, 메인 tier 조건부 시작/종료 자문으로 맞췄다.
 
 스킬 description이 같은 요청에 경합할 때의 선행 규칙:
 - 요구사항·설계가 아직 합의되지 않았으면 `resilientpos-grill`이 먼저다. `resilientpos-develop`·`resilientpos-orchestrator`는 합의 뒤에 진입한다.
 - 커밋/push 요청은 `resilientpos-git`이 절차를, `resilientpos-commit-push`가 범위 판단(commit-only vs push, staged 범위, spec 첫 커밋 보존)을 맡아 함께 로드된다.
-- 지침·스킬 파일 검토는 `workflow-reviewer`, 구현 코드 검토는 `code-reviewer`·`resilientpos-review`다. 백엔드 운영 리스크(정합성, 멱등성, 응답 속도, 보안, AOP 리팩토링 여지 등)는 `spring-backend-specialist`가 더 깊게 점검하지만 사용자가 명시적으로 요청할 때만 쓰고, 그런 요청이 없으면 `code-reviewer`가 "잠재적 문제" 항목에서 계속 본다.
+- 지침·스킬 파일 검토는 `workflow-reviewer`, 구현 코드 검토는 `code-reviewer`·`resilientpos-review`다. 백엔드 운영 리스크(정합성, 멱등성, 응답 속도, 보안, AOP 리팩토링 여지 등)는 `spring-backend-specialist`가 더 깊게 점검한다. 사용자가 명시적으로 요청할 때와 `resilientpos-multi-review`가 `src/main`·`build.gradle.kts` 변경을 코드 리뷰할 때(diff 범위로 좁혀) 쓰고, 그 밖에는 `code-reviewer`가 "잠재적 문제" 항목에서 계속 본다.
 - `resilientpos-setup`과 `resilientpos-develop-auto`는 사용자가 명시 호출할 때만 실행한다. 두 스킬은 `disable-model-invocation: true`라 description이 세션 컨텍스트에 올라가지 않는다(`user-invocable: false`는 `/` 메뉴만 숨기고 description은 계속 로드된다).
+
+## 하네스 설정
+저장소에 체크인하는 `.claude/settings.json`은 이 저장소의 Claude Code 세션에만 적용된다. project 설정은 user 설정(`~/.claude/settings.json`)보다 우선하고 `.claude/settings.local.json`보다는 아래다([settings 우선순위](https://code.claude.com/docs/en/settings.md#settings-precedence)). 개인 예외는 `.claude/settings.local.json`에 두며, worktree에서는 메인 체크아웃 루트의 local 파일이 쓰인다([local 파일 위치](https://code.claude.com/docs/en/settings.md#where-claude-code-keeps-the-local-file-in-a-git-repository)). 추적되지 않는 개인 `.claude/settings.json`이 이미 있는 checkout은 pull 전에 그 내용을 `settings.local.json`으로 옮긴다. 키를 고른 근거와 실측은 [harness-token-cost](../spec/2026-11-03-harness-token-cost.md)에 있다.
+
+- `claudeMdExcludes`: 전역 `~/.claude/rules/ecc/kotlin/*.md`를 뺀다. `**/*.kt`에 걸리는 Android·KMP 지침이라 이 Spring 백엔드에 맞지 않고 저장소 Kotlin rules와 겹친다. 패턴 `**/.claude/rules/ecc/kotlin/**`에는 홈 경로가 없다. 배열은 settings 계층 사이에서 합쳐지므로 local 설정으로 되돌릴 수 없다.
+- `enabledPlugins`: 이 저장소에서 쓰지 않는 플러그인(`claw-hwp`, `kordoc`, `taste-skill`, `ui-ux-pro-max`, `impeccable`)을 끈다. 설치되지 않은 머신에서는 아무 일도 하지 않는다. 다시 켜려면 local 설정에 `true`를 둔다.
+- `autoCompactWindow: 300000`: 기본값(1M 모델 약 967K)이나 user 설정보다 이르게 compact한다. 서브에이전트도 이 창을 물려받는다. compact 뒤에는 대화 중 결정이 요약으로 줄고 `paths:` rules는 해당 파일을 다시 읽을 때까지 빠지므로, 합의는 spec 파일에 남긴다. 세션 중 `/autocompact`는 user 설정에 저장되어 이 값에 막힌다. 한 세션만 바꾸려면 `claude --autocompact 400k`로 시작하고, 계속 바꾸려면 local 설정에 둔다. env `CLAUDE_CODE_AUTO_COMPACT_WINDOW`는 이 플래그보다 우선해 덮을 길을 막으므로 쓰지 않는다.
+- `model: "sonnet"`, `advisorModel: "opus"`: 메인 세션을 Sonnet으로 돌리고 Claude가 필요할 때 Opus advisor에 자문한다. Sonnet이 놓치는 결함은 PR 전 Opus 게이트가 잡는다는 전제다. 그 게이트는 `resilientpos-multi-review`의 `reviewer-claude`와, `src/main`·`build.gradle.kts`가 바뀐 코드 리뷰에서 함께 도는 `spring-backend-specialist`다. orchestrator를 거치면 `code-reviewer`가 돈다. advisor를 부르면 Opus가 문맥을 캐시 없이 읽는다. 세션 중 `/model`·`/advisor`는 user 설정에 저장되어 이 값에 막힌다. Opus로 시작하려면 `claude --model opus`를 쓰고, 계속 바꾸려면 local 설정에 `model`을 둔다. advisor를 끄려면 local 설정 `env`에 `CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1`을 둔다.
 
 ## 유지와 확인
 지침 변경 시 중복·충돌·폐기된 명령을 제거하고 관련 wiki를 갱신한다. 사용자 전역 지침을 프로젝트 규칙으로 복제하지 않는다.
