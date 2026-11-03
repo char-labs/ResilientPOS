@@ -97,3 +97,19 @@
 | `.kt` 프롬프트 modelUsage 합계 | 148,149 | 146,983 |
 
 init 이벤트의 플러그인에 `claw-hwp`·`kordoc`이 있고, 스킬에 `claw-hwp:hwp`·`kordoc:kordoc`이 있다. `taste-skill`·`ui-ux-pro-max`·`impeccable`은 이미 빠져 있다. 메인 체크아웃의 `.claude/settings.local.json`(worktree도 이 파일을 쓴다)이 이 셋을 이미 끄고 있기 때문이다. 그래서 이 머신에서 이 셋을 project 설정으로 끄는 효과는 없고, 이 파일이 없는 머신과 기여자에게만 효과가 있다.
+
+### 설정 후 측정(2026-11-03)
+| 측정 | 설정 전(1회/2회) | 설정 후(1회/2회) | 차이 |
+|---|---|---|---|
+| 시작 문맥(첫 호출) | 56,182 / 56,182 | 55,945 / 55,945 | -237 |
+| `.kt` 프롬프트 첫 호출 | 55,480 / 55,480 | 55,980 / 55,980 | +500 |
+| `.kt` 읽은 뒤 호출 | 92,669 / 91,503 | 86,587 / 86,587 | -4.9k~-6.1k |
+| `.kt` 읽기로 는 문맥(둘째 호출 - 첫 호출) | 37,189 / 36,023 | 30,607 / 30,607 | -5.4k~-6.6k |
+| `.kt` 프롬프트 modelUsage 합계 | 148,149 / 146,983 | 142,567 / 142,567 | -4.4k~-5.6k |
+
+- 시작 문맥이 237 준 것은 끈 `claw-hwp`·`kordoc` 스킬 설명 몫이다. `.kt` 프롬프트 첫 호출이 500 는 원인은 설정 전후 실행마다 바뀌는 SessionStart hook 출력으로 보이며 확인하지 않았다. 그래서 `.kt` 효과는 같은 실행 안의 차이(둘째 호출 - 첫 호출)로 본다.
+- init 이벤트: 설정 뒤 플러그인 목록에서 `claw-hwp`·`kordoc`이 빠지고 나머지 16개는 그대로다. 스킬 목록에 `claw-hwp:hwp`·`kordoc:kordoc`이 없다.
+- 실린 rules: `.kt`를 읽힌 뒤 문맥에 실린 파일 경로를 모델에게 나열시켰다. 설정이 없으면 `~/.claude/rules/ecc/kotlin/` 다섯 파일과 저장소 Kotlin rules가 실린다. 설정이 있으면 `ecc/kotlin`은 없고, 저장소 `engineering-principles`·`implementation-principles`·`effective-java-for-kotlin`·`kotlin-idioms-and-design-patterns`·`domain-modeling-kotlin`은 그대로 실린다. 전역 `ecc/common`도 그대로다.
+- compact 기준: `claude -p "/context"`의 분모가 설정이 없으면 `400k`, 있으면 `300k`다. project의 최상위 `autoCompactWindow`가 사용자 `modelSettings`의 모델별 값을 이긴다.
+- 다른 머신에 없는 키: `--settings`로 없는 플러그인 키(`nonexistent-plugin@nowhere: false`)와 없는 경로의 `claudeMdExcludes`를 주어도 경고 없이 정상 응답했다.
+- `.gitignore`: `git check-ignore`로 `.claude/skills`·`.claude/agents`·`.claude/rules/*`·`.claude/settings.local.json`·`.claude/settings.json.bak-*`가 계속 무시되고 `.claude/settings.json`만 추적됨을 확인했다.

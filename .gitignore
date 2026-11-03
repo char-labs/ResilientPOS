@@ -41,7 +41,8 @@ out/
 
 ### LLM 개발 도구 (정본은 Obsidian 볼트, make bootstrap 으로 링크 생성) ###
 .agents/
-.claude/
+.claude/*
+!.claude/settings.json
 .codex/
 
 ### 워크플로우 스킬의 휘발성 산출물 (커밋하지 않음) ###

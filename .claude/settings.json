@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "claudeMdExcludes": [
+    "**/.claude/rules/ecc/kotlin/**"
+  ],
+  "enabledPlugins": {
+    "claw-hwp@claw-hwp": false,
+    "taste-skill@taste-skill": false,
+    "ui-ux-pro-max@ui-ux-pro-max-skill": false,
+    "impeccable@impeccable": false,
+    "kordoc@synced": false
+  },
+  "autoCompactWindow": 300000
+}
