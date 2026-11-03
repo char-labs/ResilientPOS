@@ -58,7 +58,7 @@ Claude에서 `/이름`, Codex에서 `$이름`으로 호출한다. 자연어 요�
 | `git-utils` CLI | 없음 | 모든 CLI 호출을 동등한 plain `git`/`gh` 절차로 풀어 썼다 |
 | `codex` CLI | **있음** (0.154.0) | 2026-09-14에 `codex exec`로 프로젝트 서브에이전트 스폰까지 검증했다. `architect-codex`·`reviewer-codex`가 실제로 실행되므로 Multi-LLM 경로는 Claude + Codex 2개로 돈다 |
 | `gemini` CLI | 없음 | `*-gemini` 래퍼 3개는 "미실행"을 반환한다. 합의 규칙은 실행된 LLM 수를 분모로 재해석하므로 현재는 2개 기준이다 |
-| hook 스크립트(`detect-ralph-state.sh`, `develop-phase-gate.cjs`, Default Branch Guard, statusline 엔트리) | `resilientpos-setup`이 Claude Code settings 편집 절차와 대체 셸을 제공한다. `.claude/settings.json`은 체크인하는 공유 설정이므로 개인 hook·statusLine은 `.claude/settings.local.json`(gitignore)에 둔다. 볼트 setup 스킬이 아직 `.claude/settings.json`에 쓰도록 적혀 있으므로, 고치기 전에는 실행하지 않는다. 미등록 상태에서는 에이전트가 같은 조건을 직접 확인한다(soft gate) |
+| hook 스크립트(`detect-ralph-state.sh`, `develop-phase-gate.cjs`, Default Branch Guard, statusline 엔트리) | `resilientpos-setup`이 Claude Code settings 편집 절차와 대체 셸을 제공한다. `.claude/settings.json`은 체크인하는 공유 설정이므로 개인 hook·statusLine은 `.claude/settings.local.json`(gitignore)에 둔다. 미등록 상태에서는 에이전트가 같은 조건을 직접 확인한다(soft gate) |
 | GitHub Actions | PR 게이트로 빌드, Flyway 버전 검사, 의존성 취약점 검사(Dependency submission·Dependency review)를 쓴다([개발 규칙](development-workflow.md)). `check-ci`는 이 워크플로 결과를 조회하고, spec 이력은 로컬 `check_pr.py` 결과를 함께 제시한다 |
 
 ### 계약 조정 상태

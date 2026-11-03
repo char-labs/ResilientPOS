@@ -49,7 +49,7 @@ Claude 정의(`agents/*.md`)와 역할은 같고 형식만 다르다. Codex TOML
 
 ## 에이전트 모델 배정과 스킬 선행 규칙
 2026-09-13 전체 이식 시 사용자가 정한 기준이다. 원본 플러그인은 대부분 `model: opus` 고정이었으나 역할별 가성비로 바꿨다.
-정본은 볼트 `agents/*.md`의 `model:`이고, `resilientpos-orchestrator`가 dispatch 할 때는 "집행 위임 tier ≤ 메인 tier" 상한이 우선한다.
+정본은 볼트 `agents/*.md`의 `model:`이고, `resilientpos-orchestrator`가 dispatch 할 때는 "집행 위임 tier ≤ 메인 tier" 상한이 우선한다. 리뷰·게이트는 예외로 상한을 받지 않고 최상위 tier로 돈다. frontmatter에 `model:`이 있으면 dispatch에 `model`을 넘기지 않는다.
 
 | 등급 | 기준 | 에이전트 |
 |---|---|---|

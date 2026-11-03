@@ -23,7 +23,8 @@
 **wiki**
 - [LLM 지침 설계 근거](../wiki/agent-instructions.md)의 "에이전트 모델 배정과 스킬 선행 규칙" 절 배정 근거 문단은 advisor 도구 문서를 근거로 들지만, 실제로는 advisor를 켠 적이 없다. 그래서 지금 사실로 고친다. Claude Code에서는 `/advisor`·`advisorModel`·`--advisor`로 advisor를 켤 수 있고 서브에이전트가 이를 물려받는다([advisor 문서](https://code.claude.com/docs/en/advisor.md)). 여기에 이 PR의 결정을 더한다.
 - 같은 문서에 "하네스 설정" 절을 두어 `.claude/settings.json`의 위치, 키마다 하는 일, 개인 예외(`.claude/settings.local.json`) 방법, 기존 개인 `.claude/settings.json`의 이전 방법을 적는다. 수치와 선택 근거는 이 spec에만 두고 wiki는 링크한다. "스킬·에이전트 정본의 위치" 절의 "`.claude/` 통째" 문구도 고친다. 지침 로딩과 모델 배정을 다루는 문서라 개발 절차 문서(`development-workflow.md`)보다 이 문서가 맞다.
-- [차용한 스킬과 사용법](../wiki/borrowed-workflows.md)의 hook 스크립트 행은 `.claude/settings.json`을 "로컬, gitignore"라고 적는다. 이 PR 뒤에는 틀린 말이라서 고치고, 볼트 setup 스킬을 고치기 전에는 실행하지 않는다고 적는다.
+- [차용한 스킬과 사용법](../wiki/borrowed-workflows.md)의 hook 스크립트 행은 `.claude/settings.json`을 "로컬, gitignore"라고 적는다. 이 PR 뒤에는 틀린 말이라서 고친다.
+- [LLM 지침 설계 근거](../wiki/agent-instructions.md) 모델 배정 절의 orchestrator tier 상한 문장에 리뷰·게이트 예외를 더한다.
 
 ### 자동 compact 기준
 공식 문서에서 확인한 사실(Claude Code 2.1.312, 2026-11-03):
@@ -82,10 +83,10 @@
 
 한계:
 - 재현은 1건이다. spec에 원래 결과 절이 들어 있어 실제보다 쉬운 과제였고, grill 같은 대화 단계는 측정하지 않았다.
-- `resilientpos-orchestrator`(볼트)는 리뷰·게이트도 집행 위임으로 보고 tier를 메인 이하로 묶으며, dispatch마다 `model`을 명시한다. 호출 때 넘긴 `model`은 frontmatter보다 우선하므로, orchestrator가 dispatch한 게이트는 메인이 Sonnet이면 Sonnet으로 돌 수 있다. Opus 게이트 전제는 multi-review와 직접 호출처럼 `model`을 넘기지 않는 경로에서만 성립한다. 사용자 결정(2026-11-03): 볼트 orchestrator에 "리뷰·게이트 dispatch는 정의의 frontmatter tier를 따른다"는 예외를 사용자가 넣는다. 이 PR은 볼트를 고치지 않으며, 그 예외가 들어가기 전에는 orchestrator 경유 게이트가 Sonnet일 수 있다.
+- `resilientpos-orchestrator`(볼트)는 리뷰·게이트도 집행 위임으로 보고 tier를 메인 이하로 묶으며, dispatch마다 `model`을 명시한다. 호출 때 넘긴 `model`은 frontmatter보다 우선하므로, orchestrator가 dispatch한 게이트는 메인이 Sonnet이면 Sonnet으로 돌 수 있다. Opus 게이트 전제는 multi-review와 직접 호출처럼 `model`을 넘기지 않는 경로에서만 성립한다. 사용자 결정(2026-11-03)에 따라 볼트 orchestrator `SKILL.md §역할 기준 원칙`에 리뷰·게이트 예외를 넣었다. 게이트는 tier 상한을 받지 않고 최상위 tier로 돈다. frontmatter에 `model:`이 있으면 dispatch에 `model`을 넘기지 않는다. 같은 예외를 `model-routing.md`·`delegation-patterns.md`에도 반영했다. 그 스킬의 "자문 경로 비활성" 블록은 스킬 자체의 자문 조회 경로이며, Claude Code advisor 도구와 별개라고 적었다.
 
 ## 제외
-- 사용자 전역 파일(`~/.claude/settings.json`, `~/.claude/rules`)과 Obsidian 볼트. 볼트 스킬 여러 곳이 `.claude/settings.json`을 gitignore된 개인 파일로 안내한다: `resilientpos-setup`(`SKILL.md`, `references/statusline.md`·`git-hooks.md`·`develop-workflow.md`·`fleta.md`), `resilientpos-git`(`SKILL.md`, `references/cli-reference.md`), `resilientpos-workflow`(`SKILL.md`, `README.md`), `resilientpos-implement`(`SKILL.md`), `resilientpos-orchestrator`(`references/worktree-lifecycle.md`). 이 PR 뒤에는 개인 hook·statusLine을 `.claude/settings.local.json`에 써야 하며, 사용자가 볼트에서 고친다. 그 전까지 `resilientpos-setup`을 실행하지 않는다(사용자가 명시 호출할 때만 도는 스킬이다). 메인 체크아웃에는 `.claude/settings.json`이 없어서 setup이 이미 쓴 개인 설정은 없다. 다른 checkout에 추적되지 않는 `.claude/settings.json`이 있으면 이 PR을 pull할 때 git이 덮어쓰기를 거절하므로, 먼저 `settings.local.json`으로 옮긴다.
+- 사용자 전역 파일(`~/.claude/settings.json`, `~/.claude/rules`). Obsidian 볼트는 이 PR diff 밖이다. 볼트 스킬 여러 곳이 `.claude/settings.json`을 gitignore된 개인 파일로 안내한다: `resilientpos-setup`(`SKILL.md`, `references/statusline.md`·`git-hooks.md`·`develop-workflow.md`·`fleta.md`), `resilientpos-git`(`SKILL.md`, `references/cli-reference.md`), `resilientpos-workflow`(`SKILL.md`, `README.md`), `resilientpos-implement`(`SKILL.md`), `resilientpos-orchestrator`(`references/worktree-lifecycle.md`). 사용자 요청으로 이 세션에서 볼트도 고쳤다. 개인 hook·statusLine을 쓰는 대상을 `.claude/settings.local.json`으로 바꾸고, 충돌 확인은 공유 `.claude/settings.json`을 읽기만 하게 했다. 볼트는 저장소 밖이라 이 PR diff에 없다. 메인 체크아웃에는 `.claude/settings.json`이 없어서 setup이 이미 쓴 개인 설정은 없다. 다른 checkout에 추적되지 않는 `.claude/settings.json`이 있으면 이 PR을 pull할 때 git이 덮어쓰기를 거절하므로, 먼저 `settings.local.json`으로 옮긴다.
 - 저장소 Kotlin rules 네 개의 내용·`paths:` 축소.
 - `orca-agent-view@inline`과 사용자가 판단할 플러그인들.
 - 애플리케이션 코드 변경, 하네스 스크립트 동작 변경.
