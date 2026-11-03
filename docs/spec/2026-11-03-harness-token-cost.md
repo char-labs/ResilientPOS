@@ -12,7 +12,7 @@
 - `claudeMdExcludes`로 전역 `~/.claude/rules/ecc/kotlin/*.md` 다섯 파일을 뺀다. 이 다섯 파일은 `paths: **/*.kt`로 실리는 Android·KMP 지침(ViewModel, Room, Ktor, ProGuard, WebView, Turbine)이라 이 Spring 백엔드에 맞지 않고, 저장소 Kotlin rules 네 개(볼트 복사본)와 겹친다. 패턴은 `**/.claude/rules/ecc/kotlin/**`이다. 홈 경로를 적지 않으므로 다른 기여자 머신에도 그대로 맞고, 그 경로가 없는 머신에서는 아무것도 빼지 않는다. 저장소 `.claude/rules` 아래에는 `ecc/`가 없어서 저장소 rules는 빠지지 않는다. 저장소 Kotlin rules 네 개는 그대로 둔다(2026-10-01 실측에서 줄일 곳이 없었다).
 - `enabledPlugins`로 이 저장소 transcript에서 사용이 0회였던 플러그인을 끈다: `claw-hwp@claw-hwp`, `taste-skill@taste-skill`, `ui-ux-pro-max@ui-ux-pro-max-skill`, `impeccable@impeccable`, `kordoc@synced`. 공식 문서상 project 설정이 user 설정보다 우선하므로 user의 `true`를 덮는다. synced 플러그인도 끌 수 있다. 사용자 설정의 `data@synced: false`가 `claude plugin list`에 disabled로 나온다. `orca-agent-view@inline`은 Orca 연동이고 요청 목록에 없어서 건드리지 않는다. eli5·humanize-korean·superpowers·ponytail·warp·security-guidance·LSP·i-have-adhd도 건드리지 않는다.
 - `autoCompactWindow`를 `300000`으로 둔다. 근거와 대가는 아래 "자동 compact 기준" 절에 적는다.
-- advisor(Sonnet 메인 + Opus advisor)는 사용자가 A/B로 실측하고 있다. 결과가 채택이면 이 PR에 `advisorModel` 등을 더하고, 기각이면 제외 절에 실측 근거를 적는다. 결과가 오기 전에는 PR을 만들지 않는다.
+- `model: "sonnet"`과 `advisorModel: "opus"`로 메인 세션을 Sonnet으로, advisor를 Opus로 둔다. 근거와 대가는 아래 "advisor 결정" 절에 적는다.
 
 **`.gitignore`**
 - `.claude/` 전체 무시를 `/.claude/*`, `!/.claude/settings.json`, `*/**/.claude/`로 바꾼다. 볼트 링크(`skills`·`agents`), 복사본 `rules`, `settings.local.json`, 백업 파일은 계속 무시한다. `.claude/*`처럼 가운데에 `/`가 있는 패턴은 루트에만 걸리므로, 하위 디렉터리의 `.claude/`는 `*/**/.claude/`로 계속 무시한다. 같은 절 제목에 체크인 예외를 적는다.
@@ -49,6 +49,41 @@
   300k에서는 긴 구현 세션이 한 번만 compact하면서 누적 입력을 34~53% 덜 읽고, 짧은 문서 세션은 compact하지 않는다. 200k는 절감이 조금 더 크지만 문서 세션까지 compact하고 긴 세션은 두 번 compact한다. 250k와 300k는 compact 횟수가 같고 절감도 비슷하다. 그래서 compact가 덜 일찍 오는 300k를 고른다. 두 긴 세션은 호출의 절반쯤(57/123, 76/159)에서 처음 300k에 닿는다. 그 시점이 spec 커밋보다 뒤인지는 세지 않았다. 세션 중반이라는 것만 확인했다.
 - **대가.** compact 뒤에는 대화 중의 결정이 요약으로 줄고, `.kt` rules는 `.kt`를 다시 읽을 때까지 문맥에서 빠진다. 합의는 spec 파일이 디스크에 남기므로 되살릴 수 있다. spec 작성 전 grill 도중에 300k를 넘기는 세션이라면 대화만으로 남은 합의를 잃을 수 있다. 이런 세션은 `claude --autocompact 400k`로 시작하거나 `.claude/settings.local.json`에 `autoCompactWindow`를 둔다. user 설정이 없는 기여자에게는 기본값(약 967K)에서 300k로 바뀌는 것이라 변화가 더 크다.
 
+### advisor 결정
+사용자가 A/B 실측(2026-11-03, 오케스트레이터 세션이 수행) 뒤 Sonnet 메인 + Opus advisor 채택을 결정했다. 수치는 그 보고를 그대로 옮긴다.
+
+| 항목 | A: Opus 단독 | B: Sonnet 메인 + `advisorModel` opus |
+|---|---|---|
+| 호출 | 50 | 39 |
+| cache read | 980만 | 623만 |
+| cache write | 23.7만 | 18.9만 |
+| output | 4.9만 | 4.7만 |
+| 시간 | 약 18분 | 약 17분 |
+| 테스트 | 926건 통과 | 926건 통과 |
+| `check_pr.py` | PASS | PASS |
+
+- 대상: #117을 base 5e5721a3에서 같은 spec으로 두 세션이 다시 구현했다. B는 worktree `settings.local.json`으로 advisor를 켰다. transcript에 advisor 도구가 available로 실렸지만 B는 한 번도 부르지 않았다.
+- 단가: smoke test 기준으로 Sonnet 단가는 Opus의 약 절반이고, 비용은 약 1/3로 추정한다. 공식 가격표로는 확인하지 않았다. smoke test에서 advisor 자문 1회는 Opus가 문맥 약 43k를 캐시 없이 읽었다.
+- 품질: `spring-backend-specialist` 블라인드 리뷰에서 둘 다 P0·P1이 없었다. Opus 쪽이 약간 낫다. Sonnet 쪽에만 P2 세 건과 k6 burst submetric 누락이 있었다.
+  - 빈도 limiter 예외를 `RuntimeException`만 잡아 자리가 샐 수 있다.
+  - 비동기 재진입을 실제 asyncDispatch 없이 검증했다.
+  - GET pattern 가드가 메서드 조건이 빈 매핑을 거르지 않는다.
+
+공식 문서에서 확인한 사실(Claude Code 2.1.312):
+- [`model`](https://code.claude.com/docs/en/settings-reference.md#model)은 어느 settings 파일에나 둘 수 있다. project 설정의 `model`은 user 설정과 `/model`로 저장한 기본값보다 우선하고 실행마다 다시 적용된다([model-config](https://code.claude.com/docs/en/model-config.md)). `--model`과 `ANTHROPIC_MODEL`은 이 키보다 우선한다.
+- [`advisorModel`](https://code.claude.com/docs/en/settings-reference.md#advisormodel)은 어느 settings 파일에나 둘 수 있고 `opus` 같은 별칭을 받는다. Sonnet 5.5 메인에는 Opus 5 이후가 advisor로 받아들여진다. 서브에이전트는 설정된 advisor를 물려받아 자기 모델과의 조합을 따로 검사한다([advisor](https://code.claude.com/docs/en/advisor.md#choose-an-advisor-model)). `CLAUDE_CODE_DISABLE_ADVISOR_TOOL`이 켜져 있으면 이 키로 다시 켤 수 없다.
+- 서브에이전트 모델은 호출 때 넘긴 `model`, 정의의 `model` frontmatter, `CLAUDE_CODE_SUBAGENT_MODEL` 순으로 정해진다([sub-agents](https://code.claude.com/docs/en/sub-agents.md#choose-a-model)). 메인 모델을 바꿔도 frontmatter가 `opus`인 에이전트는 호출 때 `model`을 넘기지 않으면 Opus로 돈다.
+
+대가와 전제:
+- Sonnet이 놓치는 P2급 결함은 PR 전 Opus 게이트가 잡는다고 전제한다. 이 게이트는 `resilientpos-multi-review`의 `reviewer-claude`, `spring-backend-specialist`, `code-reviewer`이며 모두 frontmatter가 `opus`다. 이번 A/B에서도 Opus 리뷰가 Sonnet 쪽 P2 세 건을 찾았다.
+- 메인 세션의 판단(grill 심문, 설계, 리뷰 결과 채택)도 Sonnet이 한다. advisor는 Claude가 부를 때만 돌고, B에서는 한 번도 불리지 않았다.
+- advisor를 부르면 그 호출은 Opus가 문맥을 캐시 없이 읽으므로 한 번에 수만 토큰이 든다.
+- Opus를 쓰려는 세션은 `claude --model opus`로 시작하거나 `.claude/settings.local.json`에 `model`을 둔다.
+
+한계:
+- 재현은 1건이다. spec에 원래 결과 절이 들어 있어 실제보다 쉬운 과제였고, grill 같은 대화 단계는 측정하지 않았다.
+- `resilientpos-orchestrator`(볼트)는 리뷰·게이트도 집행 위임으로 보고 tier를 메인 이하로 묶으며, dispatch마다 `model`을 명시한다. 호출 때 넘긴 `model`은 frontmatter보다 우선하므로, orchestrator가 dispatch한 게이트는 메인이 Sonnet이면 Sonnet으로 돌 수 있다. Opus 게이트 전제는 multi-review와 직접 호출처럼 `model`을 넘기지 않는 경로에서만 성립한다.
+
 ## 제외
 - 사용자 전역 파일(`~/.claude/settings.json`, `~/.claude/rules`)과 Obsidian 볼트. 볼트 스킬 여러 곳이 `.claude/settings.json`을 gitignore된 개인 파일로 안내한다: `resilientpos-setup`(`SKILL.md`, `references/statusline.md`·`git-hooks.md`·`develop-workflow.md`·`fleta.md`), `resilientpos-git`(`SKILL.md`, `references/cli-reference.md`), `resilientpos-workflow`(`SKILL.md`, `README.md`), `resilientpos-implement`(`SKILL.md`), `resilientpos-orchestrator`(`references/worktree-lifecycle.md`). 이 PR 뒤에는 개인 hook·statusLine을 `.claude/settings.local.json`에 써야 하며, 사용자가 볼트에서 고친다. 그 전까지 `resilientpos-setup`을 실행하지 않는다(사용자가 명시 호출할 때만 도는 스킬이다). 메인 체크아웃에는 `.claude/settings.json`이 없어서 setup이 이미 쓴 개인 설정은 없다. 다른 checkout에 추적되지 않는 `.claude/settings.json`이 있으면 이 PR을 pull할 때 git이 덮어쓰기를 거절하므로, 먼저 `settings.local.json`으로 옮긴다.
 - 저장소 Kotlin rules 네 개의 내용·`paths:` 축소.
@@ -70,6 +105,7 @@
 - 같은 worktree, 같은 프롬프트의 headless 측정에서 `.kt` 읽기로 늘어나는 문맥이 설정 전보다 준다.
 - 설정 뒤 세션에서 전역 `ecc/kotlin` 다섯 파일은 실리지 않고 저장소 Kotlin rules 네 개는 `.kt` 읽기 때 계속 실린다.
 - 설정 뒤 init 이벤트에서 끈 다섯 플러그인이 빠지고 건드리지 않은 플러그인은 남는다.
+- 이 저장소 세션의 메인 모델이 Sonnet 5.5가 되고 Opus 5.5 advisor가 첨부된다.
 - 이 저장소 세션의 compact 기준이 300k가 된다. 사용자 `modelSettings`의 400k가 이기지 않는다.
 - wiki가 지금 사실(advisor를 켜는 방법과 상속, 하네스 설정의 위치와 이유)과 맞는다.
 - `python3 scripts/check_pr.py --base origin/main --worktree`가 통과하고, 제출 전 `--worktree` 없는 실행도 통과한다.
@@ -119,3 +155,8 @@ init 이벤트의 플러그인에 `claw-hwp`·`kordoc`이 있고, 스킬에 `cla
 - compact 기준: `claude -p "/context"`의 분모가 설정이 없으면 `400k`, 있으면 `300k`다. project의 최상위 `autoCompactWindow`가 사용자 `modelSettings`의 모델별 값을 이긴다.
 - 다른 머신에 없는 키: `--settings`로 없는 플러그인 키(`nonexistent-plugin@nowhere: false`)와 없는 경로의 `claudeMdExcludes`를 주어도 경고 없이 정상 응답했다.
 - `.gitignore`: `git check-ignore`로 `.claude/skills`·`.claude/agents`·`.claude/rules/*`·`.claude/settings.local.json`·`.claude/settings.json.bak-*`가 계속 무시되고 `.claude/settings.json`만 추적됨을 확인했다. 첫 구현(`.claude/*`)은 `src/main/.claude/x`를 무시하지 못했다(리뷰 지적). `*/**/.claude/`를 더한 뒤 무시됨을 확인했다.
+
+### advisor 설정 후 측정(2026-11-03)
+- 같은 두 프롬프트에서 `modelUsage`의 모델이 `claude-sonnet-5-5`이고 init 이벤트의 `model`도 `claude-sonnet-5-5`다. user 설정의 `model: opus`를 project 설정이 덮었다.
+- 그 세션의 transcript에 `{"type":"advisor_tool","available":true,"model":"claude-opus-5-5","toolChange":"add"}` 첨부와 advisor 도구 안내가 실렸다. 두 프롬프트 모두 advisor를 부르지 않았다.
+- 시작 문맥은 57,333이다(Opus 설정 후 55,945). advisor 도구 안내 몫으로 보며 따로 분리하지는 않았다. `.kt` 프롬프트는 57,368 → 87,975(+30,607)로 `ecc/kotlin` 제외 효과가 그대로다.
