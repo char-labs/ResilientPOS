@@ -39,10 +39,11 @@ out/
 ### Kotlin ###
 .kotlin
 
-### LLM 개발 도구 (정본은 Obsidian 볼트, make bootstrap 으로 링크 생성) ###
+### LLM 개발 도구 (정본은 Obsidian 볼트, make bootstrap 으로 링크 생성. 공유 설정 .claude/settings.json만 추적) ###
 .agents/
-.claude/*
-!.claude/settings.json
+/.claude/*
+!/.claude/settings.json
+*/**/.claude/
 .codex/
 
 ### 워크플로우 스킬의 휘발성 산출물 (커밋하지 않음) ###

@@ -9,18 +9,21 @@
 요구사항은 사용자와 합의했다. `resilientpos-grill`은 아래 재진술을 확인하는 데만 썼다.
 
 **`.claude/settings.json`(새 파일, 체크인)**
-- `claudeMdExcludes`로 전역 `~/.claude/rules/ecc/kotlin/*.md` 다섯 파일을 뺀다. 이 다섯 파일은 `paths: **/*.kt`로 실리는 Android·KMP 지침(ViewModel, Room, Ktor, ProGuard, WebView, Turbine)이라 이 Spring 백엔드에 맞지 않고, 저장소 Kotlin rules 네 개(볼트 복사본)와 겹친다. 패턴은 `**/.claude/rules/ecc/kotlin/**`이다. 홈 경로를 적지 않으므로 다른 기여자 머신에도 그대로 맞고, 그 경로가 없는 머신에서는 아무것도 빼지 않는다. 저장소 `.claude/rules` 아래에는 `ecc/`가 없어서 저장소 rules는 빠지지 않는다. 저장소 rules 네 개는 그대로 둔다(2026-10-01 실측에서 줄일 곳이 없었다).
+- `claudeMdExcludes`로 전역 `~/.claude/rules/ecc/kotlin/*.md` 다섯 파일을 뺀다. 이 다섯 파일은 `paths: **/*.kt`로 실리는 Android·KMP 지침(ViewModel, Room, Ktor, ProGuard, WebView, Turbine)이라 이 Spring 백엔드에 맞지 않고, 저장소 Kotlin rules 네 개(볼트 복사본)와 겹친다. 패턴은 `**/.claude/rules/ecc/kotlin/**`이다. 홈 경로를 적지 않으므로 다른 기여자 머신에도 그대로 맞고, 그 경로가 없는 머신에서는 아무것도 빼지 않는다. 저장소 `.claude/rules` 아래에는 `ecc/`가 없어서 저장소 rules는 빠지지 않는다. 저장소 Kotlin rules 네 개는 그대로 둔다(2026-10-01 실측에서 줄일 곳이 없었다).
 - `enabledPlugins`로 이 저장소 transcript에서 사용이 0회였던 플러그인을 끈다: `claw-hwp@claw-hwp`, `taste-skill@taste-skill`, `ui-ux-pro-max@ui-ux-pro-max-skill`, `impeccable@impeccable`, `kordoc@synced`. 공식 문서상 project 설정이 user 설정보다 우선하므로 user의 `true`를 덮는다. synced 플러그인도 끌 수 있다. 사용자 설정의 `data@synced: false`가 `claude plugin list`에 disabled로 나온다. `orca-agent-view@inline`은 Orca 연동이고 요청 목록에 없어서 건드리지 않는다. eli5·humanize-korean·superpowers·ponytail·warp·security-guidance·LSP·i-have-adhd도 건드리지 않는다.
 - `autoCompactWindow`를 `300000`으로 둔다. 근거와 대가는 아래 "자동 compact 기준" 절에 적는다.
 - advisor(Sonnet 메인 + Opus advisor)는 사용자가 A/B로 실측하고 있다. 결과가 채택이면 이 PR에 `advisorModel` 등을 더하고, 기각이면 제외 절에 실측 근거를 적는다. 결과가 오기 전에는 PR을 만들지 않는다.
 
 **`.gitignore`**
-- `.claude/` 전체 무시를 `.claude/*`와 `!.claude/settings.json`으로 바꾼다. 볼트 링크(`skills`·`agents`), 복사본 `rules`, `settings.local.json`, 백업 파일은 계속 무시한다.
+- `.claude/` 전체 무시를 `/.claude/*`, `!/.claude/settings.json`, `*/**/.claude/`로 바꾼다. 볼트 링크(`skills`·`agents`), 복사본 `rules`, `settings.local.json`, 백업 파일은 계속 무시한다. `.claude/*`처럼 가운데에 `/`가 있는 패턴은 루트에만 걸리므로, 하위 디렉터리의 `.claude/`는 `*/**/.claude/`로 계속 무시한다. 같은 절 제목에 체크인 예외를 적는다.
+
+**`scripts/link_claude.py`**
+- docstring의 "`.claude`와 `.codex`는 `.gitignore` 대상"을 체크인 예외에 맞춰 고친다. 동작은 바꾸지 않는다.
 
 **wiki**
-- [LLM 지침 설계 근거](../wiki/agent-instructions.md)의 모델 배정 근거 문단(60행)은 advisor 도구 문서를 근거로 들지만, 실제로는 advisor를 켠 적이 없다. 그래서 지금 사실로 고친다. Claude Code에서는 `/advisor`·`advisorModel`·`--advisor`로 advisor를 켤 수 있고 서브에이전트가 이를 물려받는다([advisor 문서](https://code.claude.com/docs/en/advisor.md)). 여기에 이 PR의 결정을 더한다.
-- 같은 문서에 "하네스 설정" 절을 두어 `.claude/settings.json`의 위치, 키마다의 이유, 개인 예외(`.claude/settings.local.json`) 방법을 적는다. 지침 로딩과 모델 배정을 다루는 문서라 개발 절차 문서(`development-workflow.md`)보다 이 문서가 맞다.
-- [차용한 스킬과 사용법](../wiki/borrowed-workflows.md) 61행은 `.claude/settings.json`을 "로컬, gitignore"라고 적는다. 이 PR 뒤에는 틀린 말이라서 고친다.
+- [LLM 지침 설계 근거](../wiki/agent-instructions.md)의 "에이전트 모델 배정과 스킬 선행 규칙" 절 배정 근거 문단은 advisor 도구 문서를 근거로 들지만, 실제로는 advisor를 켠 적이 없다. 그래서 지금 사실로 고친다. Claude Code에서는 `/advisor`·`advisorModel`·`--advisor`로 advisor를 켤 수 있고 서브에이전트가 이를 물려받는다([advisor 문서](https://code.claude.com/docs/en/advisor.md)). 여기에 이 PR의 결정을 더한다.
+- 같은 문서에 "하네스 설정" 절을 두어 `.claude/settings.json`의 위치, 키마다 하는 일, 개인 예외(`.claude/settings.local.json`) 방법, 기존 개인 `.claude/settings.json`의 이전 방법을 적는다. 수치와 선택 근거는 이 spec에만 두고 wiki는 링크한다. "스킬·에이전트 정본의 위치" 절의 "`.claude/` 통째" 문구도 고친다. 지침 로딩과 모델 배정을 다루는 문서라 개발 절차 문서(`development-workflow.md`)보다 이 문서가 맞다.
+- [차용한 스킬과 사용법](../wiki/borrowed-workflows.md)의 hook 스크립트 행은 `.claude/settings.json`을 "로컬, gitignore"라고 적는다. 이 PR 뒤에는 틀린 말이라서 고치고, 볼트 setup 스킬을 고치기 전에는 실행하지 않는다고 적는다.
 
 ### 자동 compact 기준
 공식 문서에서 확인한 사실(Claude Code 2.1.312, 2026-11-03):
@@ -28,26 +31,29 @@
 - [`CLAUDE_CODE_AUTO_COMPACT_WINDOW`](https://code.claude.com/docs/en/env-vars.md)는 같은 창을 env로 정한다. 단위는 토큰이고, 접미사 없는 숫자는 그대로 토큰 수다(`200`은 200토큰). [model-config](https://code.claude.com/docs/en/model-config.md#set-the-auto-compact-window)는 이 변수를 "스크립트와 클라우드 환경"용으로 안내한다.
 - [`CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`](https://code.claude.com/docs/en/env-vars.md)는 auto-compact 창의 몇 퍼센트(1~100)에서 compact할지를 정한다. 기본 퍼센트보다 큰 값은 무시된다. 그 기본 퍼센트는 문서에 없다.
 - Opus 4.7 이후처럼 1M window를 쓰는 모델은 기본적으로 약 967K에서 compact한다. 사용자 설정 `modelSettings`가 `claude-opus-5-5`와 `claude-sonnet-5-5`에 `autoCompactWindow: 400000`을 두고 있어서, 지금 세션은 400k에서 compact한다.
-- [compact 뒤에 남는 것](https://code.claude.com/docs/en/context-window.md#what-survives-compaction): 루트 CLAUDE.md(`@AGENTS.md`)와 `paths:` 없는 rules는 디스크에서 다시 싣는다. 호출한 스킬 본문은 스킬당 5,000토큰·전체 25,000토큰까지 다시 싣는다. 대화 중의 결정과 `paths:` rules(`.kt` rules)는 요약에 흡수된다.
+- [compact 뒤에 남는 것](https://code.claude.com/docs/en/context-window.md#what-survives-compaction): 루트 CLAUDE.md(`@AGENTS.md`)와 `paths:` 없는 rules는 디스크에서 다시 싣는다. 호출한 스킬 본문은 스킬당 5,000토큰·전체 25,000토큰까지, 최근 파일 일부도 다시 싣는다. 대화 중의 결정과 `paths:` rules(`.kt` rules)는 요약에 흡수된다.
+- 세션 중 `/autocompact`는 user `modelSettings`에 저장되며, 더 높은 scope가 창을 정하면 저장만 되고 세션에는 그 scope의 창이 남는다. 그래서 이 저장소에서 `/autocompact`로는 기준을 바꿀 수 없다.
+- 서브에이전트는 세션의 compact 창을 물려받고, frontmatter `autoCompactWindow`로 더 낮출 수만 있다([sub-agents](https://code.claude.com/docs/en/sub-agents.md#subagent-auto-compact-window)). 300k를 넘는 서브에이전트는 드물어 영향이 작다.
+- `claudeMdExcludes` 배열은 settings 계층 사이에서 합쳐진다([memory](https://code.claude.com/docs/en/memory.md#exclude-specific-claude-md-files)). 그래서 local 설정으로 project의 제외를 되돌릴 수 없다.
 
 선택:
 - **env 대신 settings 키를 쓴다.** `CLAUDE_CODE_AUTO_COMPACT_WINDOW`는 `--autocompact`보다 우선하므로, 체크인하면 기여자가 한 세션만 기준을 바꿀 길이 막힌다. `autoCompactWindow`는 `--autocompact`와 `.claude/settings.local.json`으로 덮을 수 있다. `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`는 기본 퍼센트가 문서에 없어서 값을 토큰으로 계산할 수 없으므로 쓰지 않는다.
-- **값은 300000이다.** 세 세션의 메인 Opus 호출별 문맥(input+cache read+cache creation)으로 시뮬레이션했다. compact 뒤 문맥은 첫 호출 문맥에 요약 15k를 더한 값으로 두고, 이후 증가분은 원래대로 더했다. compact 호출 한 번은 그 시점 문맥을 한 번 더 읽는 것으로 셌다. compact가 잃은 맥락을 다시 읽는 비용은 넣지 않았으므로 절감률은 상한이다.
+- **값은 300000이다.** 세 세션의 메인 Opus 호출별 문맥(input+cache read+cache creation)으로 시뮬레이션했다. compact 뒤 문맥은 첫 호출 문맥에 요약 15k를 더한 값으로 두고, 이후 증가분은 원래대로 더했다. compact 호출 한 번은 그 시점 문맥을 한 번 더 읽는 것으로 셌다. 요약 15k는 가정이다. 재주입(스킬 본문·최근 파일)을 넣은 보수 가정(첫 문맥 + 65k)도 함께 냈다. compact가 잃은 맥락을 다시 읽는 비용은 넣지 않았다. 수치는 입력 토큰 수 기준이며 요금 기준이 아니다. compact는 cache read(낮은 단가)를 줄이는 대신 요약 출력과 새 prefix의 cache 쓰기를 더한다.
 
-| 세션(호출 수, 원래 누적) | 200k | 250k | 300k | 400k(지금) |
-|---|---|---|---|---|
-| order-status-polling(123, 27.1M) | 2회, -70% | 1회, -52% | 1회, -53% | 0회 |
-| query-measurement(159, 40.2M) | 2회, -53% | 1회, -48% | 1회, -44% | 0회 |
-| wiki-stale-cleanup(58, 9.8M) | 1회, -20% | 0회 | 0회 | 0회 |
+| 세션(호출 수, 원래 누적) | 300k 첫 도달 호출 | 200k | 250k | 300k | 400k(지금) |
+|---|---|---|---|---|---|
+| order-status-polling(123, 27.1M) | 57번째 | 2회, -70%(보수 -48%) | 1회, -52%(-36%) | 1회, -53%(-40%) | 0회 |
+| query-measurement(159, 40.2M) | 76번째 | 2회, -53%(보수 3회 -44%) | 1회, -48%(-34%) | 1회, -44%(-34%) | 0회 |
+| wiki-stale-cleanup(58, 9.8M) | 도달 안 함 | 1회, -20%(-10%) | 0회 | 0회 | 0회 |
 
-  300k에서는 긴 구현 세션이 한 번만 compact하면서 누적 입력의 절반 가까이를 덜 읽고, 짧은 문서 세션은 compact하지 않는다. 200k는 절감이 조금 더 크지만 문서 세션까지 compact하고 긴 세션은 두 번 compact한다. 250k와 300k는 compact 횟수가 같고 절감도 비슷하다. 그래서 grill·spec 작성이 끝난 뒤 구현 중에만 compact가 오도록 더 큰 300k를 고른다. 세 세션 모두 첫 문맥이 68k 근처이고 grill·spec 합의는 세션 앞부분에서 끝난다.
-- **대가.** compact 뒤에는 대화 중의 결정이 요약으로 줄고, `.kt` rules는 `.kt`를 다시 읽을 때까지 문맥에서 빠진다. 합의는 spec 파일이 디스크에 남기므로 되살릴 수 있다. spec 작성 전 grill 도중에 300k를 넘기는 세션이라면 대화만으로 남은 합의를 잃을 수 있다. 이런 세션은 `claude --autocompact 400k`로 시작하거나 `.claude/settings.local.json`에 `autoCompactWindow`를 둔다.
+  300k에서는 긴 구현 세션이 한 번만 compact하면서 누적 입력을 34~53% 덜 읽고, 짧은 문서 세션은 compact하지 않는다. 200k는 절감이 조금 더 크지만 문서 세션까지 compact하고 긴 세션은 두 번 compact한다. 250k와 300k는 compact 횟수가 같고 절감도 비슷하다. 그래서 compact가 덜 일찍 오는 300k를 고른다. 두 긴 세션은 호출의 절반쯤(57/123, 76/159)에서 처음 300k에 닿는다. 그 시점이 spec 커밋보다 뒤인지는 세지 않았다. 세션 중반이라는 것만 확인했다.
+- **대가.** compact 뒤에는 대화 중의 결정이 요약으로 줄고, `.kt` rules는 `.kt`를 다시 읽을 때까지 문맥에서 빠진다. 합의는 spec 파일이 디스크에 남기므로 되살릴 수 있다. spec 작성 전 grill 도중에 300k를 넘기는 세션이라면 대화만으로 남은 합의를 잃을 수 있다. 이런 세션은 `claude --autocompact 400k`로 시작하거나 `.claude/settings.local.json`에 `autoCompactWindow`를 둔다. user 설정이 없는 기여자에게는 기본값(약 967K)에서 300k로 바뀌는 것이라 변화가 더 크다.
 
 ## 제외
-- 사용자 전역 파일(`~/.claude/settings.json`, `~/.claude/rules`)과 Obsidian 볼트. 볼트 `resilientpos-setup` 스킬은 `.claude/settings.json`을 gitignore된 개인 파일로 보고 hook·statusLine을 쓴다. 이 PR 뒤에는 그 개인 설정을 `.claude/settings.local.json`에 써야 하며, 사용자가 볼트에서 고친다. 메인 체크아웃에는 `.claude/settings.json`이 없어서 setup이 이미 쓴 개인 설정은 없다.
-- 저장소 `.claude/rules` 네 개의 내용·`paths:` 축소.
+- 사용자 전역 파일(`~/.claude/settings.json`, `~/.claude/rules`)과 Obsidian 볼트. 볼트 스킬 여러 곳이 `.claude/settings.json`을 gitignore된 개인 파일로 안내한다: `resilientpos-setup`(`SKILL.md`, `references/statusline.md`·`git-hooks.md`·`develop-workflow.md`·`fleta.md`), `resilientpos-git`(`SKILL.md`, `references/cli-reference.md`), `resilientpos-workflow`(`SKILL.md`, `README.md`), `resilientpos-implement`(`SKILL.md`), `resilientpos-orchestrator`(`references/worktree-lifecycle.md`). 이 PR 뒤에는 개인 hook·statusLine을 `.claude/settings.local.json`에 써야 하며, 사용자가 볼트에서 고친다. 그 전까지 `resilientpos-setup`을 실행하지 않는다(사용자가 명시 호출할 때만 도는 스킬이다). 메인 체크아웃에는 `.claude/settings.json`이 없어서 setup이 이미 쓴 개인 설정은 없다. 다른 checkout에 추적되지 않는 `.claude/settings.json`이 있으면 이 PR을 pull할 때 git이 덮어쓰기를 거절하므로, 먼저 `settings.local.json`으로 옮긴다.
+- 저장소 Kotlin rules 네 개의 내용·`paths:` 축소.
 - `orca-agent-view@inline`과 사용자가 판단할 플러그인들.
-- 애플리케이션 코드·하네스 스크립트 변경.
+- 애플리케이션 코드 변경, 하네스 스크립트 동작 변경.
 
 ## 관련 문서
 없음
@@ -55,13 +61,14 @@
 ## 변경 경로
 - .claude/settings.json
 - .gitignore
+- scripts/link_claude.py
 - docs/wiki/agent-instructions.md
 - docs/wiki/borrowed-workflows.md
 
 ## 인수 조건
-- `.claude/settings.json`이 git에 추적되고 `.claude/skills`·`.claude/agents`·`.claude/rules`·`.claude/settings.local.json`은 계속 무시된다(`git check-ignore`).
-- 같은 worktree, 같은 프롬프트의 headless 측정에서 `.kt` 읽기 뒤 문맥이 설정 전보다 줄고, 시작 문맥이 끈 플러그인 몫만큼 준다.
-- 설정 뒤 세션에서 전역 `ecc/kotlin` 다섯 파일은 실리지 않고 저장소 rules 네 개는 `.kt` 읽기 때 계속 실린다.
+- `.claude/settings.json`이 git에 추적되고 `.claude/skills`·`.claude/agents`·`.claude/rules`·`.claude/settings.local.json`은 계속 무시되고, 하위 디렉터리의 `.claude/`(예: `src/main/.claude/x`)도 무시된다(`git check-ignore`).
+- 같은 worktree, 같은 프롬프트의 headless 측정에서 `.kt` 읽기로 늘어나는 문맥이 설정 전보다 준다.
+- 설정 뒤 세션에서 전역 `ecc/kotlin` 다섯 파일은 실리지 않고 저장소 Kotlin rules 네 개는 `.kt` 읽기 때 계속 실린다.
 - 설정 뒤 init 이벤트에서 끈 다섯 플러그인이 빠지고 건드리지 않은 플러그인은 남는다.
 - 이 저장소 세션의 compact 기준이 300k가 된다. 사용자 `modelSettings`의 400k가 이기지 않는다.
 - wiki가 지금 사실(advisor를 켜는 방법과 상속, 하네스 설정의 위치와 이유)과 맞는다.
@@ -72,7 +79,7 @@
 - 시작: `claude -p "OK라고만 답해"`
 - `.kt`: `claude -p "src/main/kotlin/com/resilientpos/foundation/DomainException.kt 를 읽고 OK라고만 답해" --allowedTools Read`
 - 권한 우회 옵션은 쓰지 않는다.
-- 문서만 바뀌고 하네스 스크립트·애플리케이션 코드를 바꾸지 않으므로 `./gradlew test`와 하네스 unittest는 돌리지 않는다.
+- `scripts/link_claude.py`의 docstring을 고치므로 `python3 -m unittest discover -s scripts -p 'test_*.py'`를 돌린다. 애플리케이션 코드를 바꾸지 않으므로 `./gradlew test`는 돌리지 않는다.
 
 ## Wiki 영향
 - [LLM 지침 설계 근거](../wiki/agent-instructions.md): 모델 배정 근거 문단을 고치고 하네스 설정 절을 더한다.
@@ -86,7 +93,6 @@
 설정·문서 작업이라 적용하지 않는다. 검증은 headless 실측으로 한다.
 
 ## 결과
-개발 전 작성. 개발 후 실행 결과와 변경 이유를 추가한다.
 
 ### 설정 전 측정(2026-11-03)
 | 측정 | 1회 | 2회 |
@@ -96,7 +102,7 @@
 | `.kt` 읽은 뒤 호출 | 92,669 | 91,503 |
 | `.kt` 프롬프트 modelUsage 합계 | 148,149 | 146,983 |
 
-init 이벤트의 플러그인에 `claw-hwp`·`kordoc`이 있고, 스킬에 `claw-hwp:hwp`·`kordoc:kordoc`이 있다. `taste-skill`·`ui-ux-pro-max`·`impeccable`은 이미 빠져 있다. 메인 체크아웃의 `.claude/settings.local.json`(worktree도 이 파일을 쓴다)이 이 셋을 이미 끄고 있기 때문이다. 그래서 이 머신에서 이 셋을 project 설정으로 끄는 효과는 없고, 이 파일이 없는 머신과 기여자에게만 효과가 있다.
+init 이벤트의 플러그인에 `claw-hwp`·`kordoc`이 있고, 스킬에 `claw-hwp:hwp`·`kordoc:kordoc`이 있다. `taste-skill`·`ui-ux-pro-max`·`impeccable`은 이미 빠져 있다. 메인 체크아웃의 `.claude/settings.local.json`(worktree도 이 파일을 쓴다)이 이 셋을 이미 끄고 있기 때문이다. worktree에서는 메인 체크아웃 루트의 local 파일을 쓴다([settings](https://code.claude.com/docs/en/settings.md#where-claude-code-keeps-the-local-file-in-a-git-repository)). 그래서 이 머신에서 이 셋을 project 설정으로 끄는 효과는 없고, 이 파일이 없는 머신과 기여자에게만 효과가 있다.
 
 ### 설정 후 측정(2026-11-03)
 | 측정 | 설정 전(1회/2회) | 설정 후(1회/2회) | 차이 |
@@ -107,9 +113,9 @@ init 이벤트의 플러그인에 `claw-hwp`·`kordoc`이 있고, 스킬에 `cla
 | `.kt` 읽기로 는 문맥(둘째 호출 - 첫 호출) | 37,189 / 36,023 | 30,607 / 30,607 | -5.4k~-6.6k |
 | `.kt` 프롬프트 modelUsage 합계 | 148,149 / 146,983 | 142,567 / 142,567 | -4.4k~-5.6k |
 
-- 시작 문맥이 237 준 것은 끈 `claw-hwp`·`kordoc` 스킬 설명 몫이다. `.kt` 프롬프트 첫 호출이 500 는 원인은 설정 전후 실행마다 바뀌는 SessionStart hook 출력으로 보이며 확인하지 않았다. 그래서 `.kt` 효과는 같은 실행 안의 차이(둘째 호출 - 첫 호출)로 본다.
+- 시작 문맥 -237은 같은 측정의 `.kt` 첫 호출 +500(원인 미확인)보다 작아서 끈 플러그인의 효과로 판정하지 않는다. 플러그인 효과는 init 이벤트로 판정한다. `.kt` 효과는 같은 실행 안의 차이(둘째 호출 - 첫 호출)로 본다.
 - init 이벤트: 설정 뒤 플러그인 목록에서 `claw-hwp`·`kordoc`이 빠지고 나머지 16개는 그대로다. 스킬 목록에 `claw-hwp:hwp`·`kordoc:kordoc`이 없다.
 - 실린 rules: `.kt`를 읽힌 뒤 문맥에 실린 파일 경로를 모델에게 나열시켰다. 설정이 없으면 `~/.claude/rules/ecc/kotlin/` 다섯 파일과 저장소 Kotlin rules가 실린다. 설정이 있으면 `ecc/kotlin`은 없고, 저장소 `engineering-principles`·`implementation-principles`·`effective-java-for-kotlin`·`kotlin-idioms-and-design-patterns`·`domain-modeling-kotlin`은 그대로 실린다. 전역 `ecc/common`도 그대로다.
 - compact 기준: `claude -p "/context"`의 분모가 설정이 없으면 `400k`, 있으면 `300k`다. project의 최상위 `autoCompactWindow`가 사용자 `modelSettings`의 모델별 값을 이긴다.
 - 다른 머신에 없는 키: `--settings`로 없는 플러그인 키(`nonexistent-plugin@nowhere: false`)와 없는 경로의 `claudeMdExcludes`를 주어도 경고 없이 정상 응답했다.
-- `.gitignore`: `git check-ignore`로 `.claude/skills`·`.claude/agents`·`.claude/rules/*`·`.claude/settings.local.json`·`.claude/settings.json.bak-*`가 계속 무시되고 `.claude/settings.json`만 추적됨을 확인했다.
+- `.gitignore`: `git check-ignore`로 `.claude/skills`·`.claude/agents`·`.claude/rules/*`·`.claude/settings.local.json`·`.claude/settings.json.bak-*`가 계속 무시되고 `.claude/settings.json`만 추적됨을 확인했다. 첫 구현(`.claude/*`)은 `src/main/.claude/x`를 무시하지 못했다(리뷰 지적). `*/**/.claude/`를 더한 뒤 무시됨을 확인했다.

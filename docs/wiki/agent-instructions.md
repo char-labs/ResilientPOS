@@ -29,7 +29,7 @@ diff를 오염시키지 않고, 볼트 동기화로 기기 간에 공유되며, 
 링크가 저장소 안에 있으므로 스킬은 이 저장소에서 작업할 때만 적용된다.
 링크와 복사본은 `make bootstrap`이 부르는 `scripts/link_claude.py`가 실행 시점에 홈 경로를 풀어 만든다.
 커밋되는 파일에 기기별 절대 경로가 들어가지 않고, 볼트가 없으면 안내만 남기고 정상 종료한다.
-네 경로는 `.gitignore` 대상(`.claude/*`, 체크인하는 `.claude/settings.json`만 예외)이며, 로컬 검사는 추적하지 않는 경로를 제외하므로 심볼릭 링크 오류가
+네 경로는 `.gitignore` 대상(`.claude/*`·`.codex/`, 체크인하는 `.claude/settings.json`만 예외)이며, 로컬 검사는 추적하지 않는 경로를 제외하므로 심볼릭 링크 오류가
 발생하지 않는다. 링크를 gitignore에서 빼면 검사가 즉시 실패한다.
 
 ## Codex 에이전트
@@ -66,11 +66,11 @@ Claude 정의(`agents/*.md`)와 역할은 같고 형식만 다르다. Codex TOML
 - `resilientpos-setup`과 `resilientpos-develop-auto`는 사용자가 명시 호출할 때만 실행한다. 두 스킬은 `disable-model-invocation: true`라 description이 세션 컨텍스트에 올라가지 않는다(`user-invocable: false`는 `/` 메뉴만 숨기고 description은 계속 로드된다).
 
 ## 하네스 설정
-저장소에 체크인하는 `.claude/settings.json`은 이 저장소의 Claude Code 세션에만 적용된다. 공식 문서상 project 설정은 user 설정(`~/.claude/settings.json`)보다 우선하고 `.claude/settings.local.json`보다는 아래다([settings 우선순위](https://code.claude.com/docs/en/settings.md#settings-precedence)). 그래서 개인 예외는 `.claude/settings.local.json`에 둔다. worktree에서는 메인 체크아웃의 local 파일이 쓰인다. 2026-11-03 세 세션의 transcript를 보면 토큰 대부분이 Opus 메인 세션의 매 호출 문맥이라, 문맥을 줄이는 키만 둔다([harness-token-cost](../spec/2026-11-03-harness-token-cost.md)).
+저장소에 체크인하는 `.claude/settings.json`은 이 저장소의 Claude Code 세션에만 적용된다. project 설정은 user 설정(`~/.claude/settings.json`)보다 우선하고 `.claude/settings.local.json`보다는 아래다([settings 우선순위](https://code.claude.com/docs/en/settings.md#settings-precedence)). 개인 예외는 `.claude/settings.local.json`에 두며, worktree에서는 메인 체크아웃 루트의 local 파일이 쓰인다([local 파일 위치](https://code.claude.com/docs/en/settings.md#where-claude-code-keeps-the-local-file-in-a-git-repository)). 추적되지 않는 개인 `.claude/settings.json`이 이미 있는 checkout은 pull 전에 그 내용을 `settings.local.json`으로 옮긴다. 키를 고른 근거와 실측은 [harness-token-cost](../spec/2026-11-03-harness-token-cost.md)에 있다.
 
-- `claudeMdExcludes`: 전역 `~/.claude/rules/ecc/kotlin/*.md`를 뺀다. 이 파일들은 `**/*.kt`에 걸리는 Android·KMP 지침이라 이 Spring 백엔드에 맞지 않고, 저장소 Kotlin rules와 겹친다. 패턴은 `**/.claude/rules/ecc/kotlin/**`이고 홈 경로를 적지 않는다. `.kt`를 처음 읽을 때 문맥이 6.6k 덜 는다.
-- `enabledPlugins`: 이 저장소에서 쓰지 않는 플러그인(`claw-hwp`, `kordoc`, `taste-skill`, `ui-ux-pro-max`, `impeccable`)을 끈다. 설치되지 않은 머신에서는 아무 일도 하지 않는다.
-- `autoCompactWindow: 300000`: 사용자 설정의 모델별 400k보다 먼저 compact한다. 긴 구현 세션이 한 번 compact하는 대신 누적 입력을 크게 줄이고, grill·spec 합의가 끝나는 세션 앞부분에서는 compact하지 않도록 고른 값이다. compact 뒤에는 대화 중 결정이 요약으로 줄고 `paths:` rules는 해당 파일을 다시 읽을 때까지 빠지므로, 합의는 spec 파일에 남긴다. 한 세션만 늦추려면 `claude --autocompact 400k`로 시작한다. env `CLAUDE_CODE_AUTO_COMPACT_WINDOW`는 이 플래그보다 우선해 덮을 길을 막으므로 쓰지 않는다.
+- `claudeMdExcludes`: 전역 `~/.claude/rules/ecc/kotlin/*.md`를 뺀다. `**/*.kt`에 걸리는 Android·KMP 지침이라 이 Spring 백엔드에 맞지 않고 저장소 Kotlin rules와 겹친다. 패턴 `**/.claude/rules/ecc/kotlin/**`에는 홈 경로가 없다. 배열은 settings 계층 사이에서 합쳐지므로 local 설정으로 되돌릴 수 없다.
+- `enabledPlugins`: 이 저장소에서 쓰지 않는 플러그인(`claw-hwp`, `kordoc`, `taste-skill`, `ui-ux-pro-max`, `impeccable`)을 끈다. 설치되지 않은 머신에서는 아무 일도 하지 않는다. 다시 켜려면 local 설정에 `true`를 둔다.
+- `autoCompactWindow: 300000`: 기본값(1M 모델 약 967K)이나 user 설정보다 이르게 compact한다. 서브에이전트도 이 창을 물려받는다. compact 뒤에는 대화 중 결정이 요약으로 줄고 `paths:` rules는 해당 파일을 다시 읽을 때까지 빠지므로, 합의는 spec 파일에 남긴다. 세션 중 `/autocompact`는 user 설정에 저장되어 이 값에 막힌다. 한 세션만 바꾸려면 `claude --autocompact 400k`로 시작하고, 계속 바꾸려면 local 설정에 둔다. env `CLAUDE_CODE_AUTO_COMPACT_WINDOW`는 이 플래그보다 우선해 덮을 길을 막으므로 쓰지 않는다.
 - advisor: 켜지 않는다. A/B 실측 결과에 따라 이 줄을 고친다.
 
 ## 유지와 확인
