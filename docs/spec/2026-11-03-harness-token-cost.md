@@ -3,7 +3,7 @@
 ## 목적
 이 저장소의 Claude Code 세션은 토큰 대부분을 Opus 메인 세션의 매 호출 문맥에 쓴다. 2026-11-02~03 세 세션(조회 Phase 2·4, 문서 정리)의 transcript를 보면 메인 Opus 340호출의 cache read가 7,550만으로 서브에이전트 전체의 약 5배다. 호출당 문맥은 중앙값 약 20만, 최대 36만이다. 첫 호출 문맥은 약 68k이고, `.kt`를 처음 읽을 때 한 번에 35~52k가 는다. 사용자 설정이 Opus 5.5의 compact 기준을 400k로 두고 있어서 세 세션 모두 한 번도 compact하지 않았다. hook 출력은 세션당 수천 토큰이라 원인이 아니다.
 
-이 PR은 저장소에 체크인하는 `.claude/settings.json`으로 이 저장소의 세션만 바꾼다. 사용자가 직접 요청했고(2026-11-03) GitHub 이슈는 없다.
+이 PR은 저장소에 체크인하는 `.claude/settings.json`으로 이 저장소의 세션만 바꾼다. 실린 문맥을 줄이고, 메인 세션을 Sonnet + Opus advisor로 바꿔 단가를 낮춘다. 사용자가 직접 요청했고(2026-11-03) GitHub 이슈는 없다.
 
 ## 범위
 요구사항은 사용자와 합의했다. `resilientpos-grill`은 아래 재진술을 확인하는 데만 썼다.
@@ -76,17 +76,28 @@
 - 서브에이전트 모델은 호출 때 넘긴 `model`, 정의의 `model` frontmatter, `CLAUDE_CODE_SUBAGENT_MODEL` 순으로 정해진다([sub-agents](https://code.claude.com/docs/en/sub-agents.md#choose-a-model)). 메인 모델을 바꿔도 frontmatter가 `opus`인 에이전트는 호출 때 `model`을 넘기지 않으면 Opus로 돈다.
 
 대가와 전제:
-- Sonnet이 놓치는 P2급 결함은 PR 전 Opus 게이트가 잡는다고 전제한다. 이 게이트는 `resilientpos-multi-review`의 `reviewer-claude`, `spring-backend-specialist`, `code-reviewer`이며 모두 frontmatter가 `opus`다. 이번 A/B에서도 Opus 리뷰가 Sonnet 쪽 P2 세 건을 찾았다.
+- Sonnet이 놓치는 P2급 결함은 PR 전 Opus 게이트가 잡는다고 전제한다. 이번 A/B에서 Sonnet 쪽 P2 세 건을 찾은 것은 명시 호출한 `spring-backend-specialist`였다. 그런데 이 리뷰어는 요청할 때만 쓰게 되어 있어서, 평소 PR 전에는 `resilientpos-multi-review`의 `reviewer-claude` 하나만 Opus로 돌았다. 사용자 결정(2026-11-03, "토큰을 아끼면서 효과를 최대로")에 따라 볼트 multi-review에 조건부 백엔드 리뷰를 넣었다.
+  - `src/main/**/*.kt`가 바뀐 코드 리뷰(PR 전·Phase 4)에서만 `spring-backend-specialist`를 함께 띄운다. 설계 리뷰와 문서·테스트만 바뀐 PR에서는 띄우지 않는다.
+  - MainAgent는 `git diff`를 `.review/backend.diff`로 저장만 하고 읽지 않는다. 리뷰어에게는 경로·base·spec과 `범위: diff`만 넘긴다. `model`은 넘기지 않아 frontmatter `opus`로 돈다.
+  - `범위: diff`이면 리뷰어가 사실 수집(빌드 파일, 마이그레이션 대조표, wiki 전체)을 diff가 닿는 것으로 좁히고, P0~P2만 자세히 보고한다.
+  - 대가: 그런 PR마다 Opus 리뷰가 한 번 더 든다. 사실 수집을 좁혀서 diff 밖 스키마 제약 위반은 놓칠 수 있다. 이 장치가 P2를 찾는 비율은 아직 재지 않았다.
+  - orchestrator 경유 게이트는 `code-reviewer`(frontmatter `opus`)다.
 - 메인 세션의 판단(grill 심문, 설계, 리뷰 결과 채택)도 Sonnet이 한다. advisor는 Claude가 부를 때만 돌고, B에서는 한 번도 불리지 않았다.
 - advisor를 부르면 그 호출은 Opus가 문맥을 캐시 없이 읽으므로 한 번에 수만 토큰이 든다.
-- Opus를 쓰려는 세션은 `claude --model opus`로 시작하거나 `.claude/settings.local.json`에 `model`을 둔다.
+- Opus를 쓰려는 세션은 `claude --model opus`로 시작하거나 `.claude/settings.local.json`에 `model`을 둔다. 세션 중 `/model`·`/advisor`는 user 설정에 저장되어 project 값에 막힌다. advisor만 끄려면 local 설정 `env`에 `CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1`을 둔다.
 
 한계:
 - 재현은 1건이다. spec에 원래 결과 절이 들어 있어 실제보다 쉬운 과제였고, grill 같은 대화 단계는 측정하지 않았다.
-- `resilientpos-orchestrator`(볼트)는 리뷰·게이트도 집행 위임으로 보고 tier를 메인 이하로 묶으며, dispatch마다 `model`을 명시한다. 호출 때 넘긴 `model`은 frontmatter보다 우선하므로, orchestrator가 dispatch한 게이트는 메인이 Sonnet이면 Sonnet으로 돌 수 있다. Opus 게이트 전제는 multi-review와 직접 호출처럼 `model`을 넘기지 않는 경로에서만 성립한다. 사용자 결정(2026-11-03)에 따라 볼트 orchestrator `SKILL.md §역할 기준 원칙`에 리뷰·게이트 예외를 넣었다. 게이트는 tier 상한을 받지 않고 최상위 tier로 돈다. frontmatter에 `model:`이 있으면 dispatch에 `model`을 넘기지 않는다. 같은 예외를 `model-routing.md`·`delegation-patterns.md`에도 반영했다. 그 스킬의 "자문 경로 비활성" 블록은 스킬 자체의 자문 조회 경로이며, Claude Code advisor 도구와 별개라고 적었다. 같은 예외를 `autonomous-driving.md`·`merge-coordinator.md`와 볼트 `README.md` 모델 배정 문단에도 맞췄다. 예외는 frontmatter가 최상위 일반 tier인 에이전트만 `model`을 넘기지 않는다. 그 밖의 에이전트와 일반 sub-agent는 최상위 일반 tier를 명시하고, 외부 CLI 래퍼는 예외 밖이다. 볼트 수정은 `workflow-reviewer`가 검토했다(WARN, HIGH 1·MEDIUM 5·LOW 5건 모두 반영).
+- 볼트 수정(아래 제외 절)은 저장소 diff 밖이라 PR 리뷰로 대조할 수 없다. 볼트를 동기화하지 않은 머신에는 orchestrator 게이트 예외와 multi-review의 백엔드 리뷰가 없다.
+- 서브에이전트 모델 순서는 2.1.251 이후, `CLAUDE_CODE_SUBAGENT_MODEL_FORCE`가 꺼져 있을 때의 동작이다. 그 이전 버전이나 FORCE를 켠 환경에서는 사용자 env `CLAUDE_CODE_SUBAGENT_MODEL=sonnet`이 게이트까지 Sonnet으로 바꾼다.
+- advisor는 Anthropic API에서만 쓸 수 있고 feature flag 조회가 필요하다. `DISABLE_TELEMETRY`처럼 조회를 끄는 환경에서는 advisor 없는 Sonnet 단독이 된다. 서브에이전트도 advisor를 물려받으므로, 서브에이전트가 자문을 부르면 비용 추정 밖의 Opus 호출이 생긴다.
 
 ## 제외
-- 사용자 전역 파일(`~/.claude/settings.json`, `~/.claude/rules`). Obsidian 볼트는 이 PR diff 밖이다. 볼트 스킬 여러 곳이 `.claude/settings.json`을 gitignore된 개인 파일로 안내한다: `resilientpos-setup`(`SKILL.md`, `references/statusline.md`·`git-hooks.md`·`develop-workflow.md`·`fleta.md`), `resilientpos-git`(`SKILL.md`, `references/cli-reference.md`), `resilientpos-workflow`(`SKILL.md`, `README.md`), `resilientpos-implement`(`SKILL.md`), `resilientpos-orchestrator`(`references/worktree-lifecycle.md`). 사용자 요청으로 이 세션에서 볼트도 고쳤다. 개인 hook·statusLine을 쓰는 대상을 `.claude/settings.local.json`으로 바꾸고, 충돌 확인은 공유 `.claude/settings.json`을 읽기만 하게 했다. 볼트는 저장소 밖이라 이 PR diff에 없다. 메인 체크아웃에는 `.claude/settings.json`이 없어서 setup이 이미 쓴 개인 설정은 없다. 다른 checkout에 추적되지 않는 `.claude/settings.json`이 있으면 이 PR을 pull할 때 git이 덮어쓰기를 거절하므로, 먼저 `settings.local.json`으로 옮긴다.
+- 사용자 전역 파일(`~/.claude/settings.json`, `~/.claude/rules`).
+- Obsidian 볼트는 이 PR diff 밖이며, 사용자 요청으로 이 세션에서 아래를 고쳤다(`workflow-reviewer` 검토 후 반영). 볼트 스킬 여러 곳이 `.claude/settings.json`을 gitignore된 개인 파일로 안내한다: `resilientpos-setup`(`SKILL.md`, `references/statusline.md`·`git-hooks.md`·`develop-workflow.md`·`fleta.md`), `resilientpos-git`(`SKILL.md`, `references/cli-reference.md`), `resilientpos-workflow`(`SKILL.md`, `README.md`), `resilientpos-implement`(`SKILL.md`), `resilientpos-orchestrator`(`references/worktree-lifecycle.md`). 개인 hook·statusLine을 쓰는 대상을 `.claude/settings.local.json`으로 바꾸고, 공유 `.claude/settings.json`에는 hook·statusLine을 두지 않는다고 적었다.
+  - orchestrator `SKILL.md §역할 기준 원칙`에 리뷰·게이트 예외를 넣고 `model-routing.md`·`delegation-patterns.md`·`autonomous-driving.md`·`merge-coordinator.md`와 볼트 `README.md`를 맞췄다. 게이트는 tier 상한을 받지 않고 최상위 일반 tier로 돈다. frontmatter가 그 tier인 에이전트는 `model`을 넘기지 않고, 그 밖은 명시하며, 외부 CLI 래퍼는 예외 밖이다. "자문 경로 비활성" 블록은 Claude Code advisor 도구와 별개라고 적었다.
+  - multi-review에 위 조건부 백엔드 리뷰를 넣고 `spring-backend-specialist` 정의에 `범위: diff` 모드를 더했다.
+- 메인 체크아웃에는 `.claude/settings.json`이 없어서 setup이 이미 쓴 개인 설정은 없다. 다른 checkout에 추적되지 않는 `.claude/settings.json`이 있으면 이 PR을 pull할 때 git이 덮어쓰기를 거절하므로, 먼저 `settings.local.json`으로 옮긴다.
 - 저장소 Kotlin rules 네 개의 내용·`paths:` 축소.
 - `orca-agent-view@inline`과 사용자가 판단할 플러그인들.
 - 애플리케이션 코드 변경, 하네스 스크립트 동작 변경.
@@ -112,7 +123,7 @@
 - `python3 scripts/check_pr.py --base origin/main --worktree`가 통과하고, 제출 전 `--worktree` 없는 실행도 통과한다.
 
 ## 검증
-측정 조건은 이 worktree(origin/main d891a4a8), Claude Code 2.1.312, Opus 5.5 기본 모델이다. 각 프롬프트를 설정 전후 두 번씩 돌리고 `--output-format stream-json --verbose`의 호출별 usage(input+cache read+cache creation)와 init 이벤트를 비교한다.
+측정 조건은 이 worktree(origin/main d891a4a8), Claude Code 2.1.312다. 메인 모델은 advisor 설정 전 Opus 5.5, 설정 후 Sonnet 5.5다. 각 프롬프트를 설정 전후 두 번씩 돌리고 `--output-format stream-json --verbose`의 호출별 usage(input+cache read+cache creation)와 init 이벤트를 비교한다.
 - 시작: `claude -p "OK라고만 답해"`
 - `.kt`: `claude -p "src/main/kotlin/com/resilientpos/foundation/DomainException.kt 를 읽고 OK라고만 답해" --allowedTools Read`
 - 권한 우회 옵션은 쓰지 않는다.
@@ -121,6 +132,7 @@
 ## Wiki 영향
 - [LLM 지침 설계 근거](../wiki/agent-instructions.md): 모델 배정 근거 문단을 고치고 하네스 설정 절을 더한다.
 - [차용한 스킬과 사용법](../wiki/borrowed-workflows.md): `.claude/settings.json`이 체크인 파일이 되었음을 반영한다.
+- [LLM 지침 설계 근거](../wiki/agent-instructions.md) 모델 배정 절: orchestrator tier 상한의 리뷰·게이트 예외와 `spring-backend-specialist`의 조건부 사용을 적는다.
 - 요구사항 영향 없음: 애플리케이션 동작·도메인·API는 바뀌지 않는다. 에이전트 세션이 싣는 지침과 플러그인, compact 시점만 바뀐다.
 
 ## 분할 계획
@@ -161,3 +173,5 @@ init 이벤트의 플러그인에 `claw-hwp`·`kordoc`이 있고, 스킬에 `cla
 - 같은 두 프롬프트에서 `modelUsage`의 모델이 `claude-sonnet-5-5`이고 init 이벤트의 `model`도 `claude-sonnet-5-5`다. user 설정의 `model: opus`를 project 설정이 덮었다.
 - 그 세션의 transcript에 `{"type":"advisor_tool","available":true,"model":"claude-opus-5-5","toolChange":"add"}` 첨부와 advisor 도구 안내가 실렸다. 두 프롬프트 모두 advisor를 부르지 않았다.
 - 시작 문맥은 57,333이다(Opus 설정 후 55,945). advisor 도구 안내 몫으로 보며 따로 분리하지는 않았다. `.kt` 프롬프트는 57,368 → 87,975(+30,607)로 `ecc/kotlin` 제외 효과가 그대로다.
+- Sonnet 메인에서 `claude -p "/context"`의 분모는 `300k`로, compact 기준이 그대로다.
+- `--settings`로 `env`에 `CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1`을 주면 transcript에 `advisor_tool` 첨부가 없다(기본 실행 1건, 끈 실행 0건).
